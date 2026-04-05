@@ -1,135 +1,299 @@
-# ContextEdge — Technical blueprint
+# ContextEdge - Technical Blueprint
 
-**Scope:** Architecture, component map, frontend summary, and **logical data model**. Detailed HTTP documentation lives in [**API.md**](API.md). Operations (Docker, migrations, troubleshooting) live in [**RUNBOOK.md**](RUNBOOK.md).
+**Scope:** Current implementation architecture, subsystem map, core flows, design patterns, and logical data model.
 
-**Related:** [Product PRD](../STANDALONE_OPERATIONAL_MEMORY_PRD.md) · [Implementation plan](../CONTEXTEDGE_IMPLEMENTATION_PLAN.md)
+Detailed HTTP behavior lives in [API.md](API.md). First-time local onboarding lives in [SETUP_GUIDE.md](SETUP_GUIDE.md). Operations, Docker, workers, and troubleshooting live in [RUNBOOK.md](RUNBOOK.md). Migration caveats live in [MIGRATIONS.md](MIGRATIONS.md).
+
+**Related:** [Product PRD](../STANDALONE_OPERATIONAL_MEMORY_PRD.md) | [Implementation plan](../CONTEXTEDGE_IMPLEMENTATION_PLAN.md)
 
 ---
 
 ## 1. Purpose
 
-ContextEdge ingests operational evidence from multiple systems (tickets, chat, email, KBs), normalizes and enriches it, derives patterns and episodes, and produces **governed, versioned playbooks** suitable for human review and **runtime retrieval** (match, explain, fetch by `stable_key`, feedback). See [API.md — Runtime](API.md#runtime) for endpoint and policy details.
+ContextEdge ingests operational evidence from external systems, normalizes it into tenant-scoped evidence records, derives episodes and patterns, and turns governed knowledge into versioned playbooks that can be retrieved at runtime.
+
+The codebase is implementation-first. This document describes what the repository currently does, not the aspirational end state from the phased plan.
 
 ---
 
-## 2. Documentation map
+## 2. Documentation Map
 
-| Document | Contents |
+| Document | Focus |
 | --- | --- |
-| [**API.md**](API.md) | Auth headers, `/api/v1` router index, runtime risk/domain rules, policies and drift endpoints, observability URLs |
-| [**RUNBOOK.md**](RUNBOOK.md) | Env checklist, Docker/Make, Alembic, workers, health, logs, common failures |
-| [**MIGRATIONS.md**](MIGRATIONS.md) | Alembic `0001` behavior, reproducibility, operational mitigations |
-| **This file** | Architecture diagram, backend layout, frontend stack, entity groups, known gaps |
+| [SETUP_GUIDE.md](SETUP_GUIDE.md) | First-time local setup, Docker-first and host-run workflows |
+| [API.md](API.md) | Auth headers, router index, runtime semantics, policy and drift endpoints |
+| [RUNBOOK.md](RUNBOOK.md) | Environment, Docker, Make targets, migrations, health checks, workers |
+| [MIGRATIONS.md](MIGRATIONS.md) | Alembic `0001` caveat, reproducibility, operational mitigations |
+| This file | Architecture, flows, package map, design patterns, data model |
 
 ---
 
-## 3. High-level architecture
+## 3. System Characteristics
+
+- **Architecture style:** modular monolith
+- **API framework:** FastAPI with routers mounted under `/api/v1`
+- **Persistence:** PostgreSQL with pgvector
+- **Async model:** async SQLAlchemy on HTTP and worker service code paths
+- **Background execution:** Celery with Redis broker/result backend
+- **Frontend:** Next.js 16 App Router dashboard
+- **Storage model:** relational source of truth in Postgres, Redis for short-lived runtime explain cache, optional S3-compatible object storage for larger artifacts
+- **Tenancy:** tenant-scoped models and auth claims drive isolation throughout the stack
+- **Governance:** playbooks are lifecycle-managed and runtime only serves published versions
+
+---
+
+## 4. High-Level Architecture
 
 ```mermaid
 flowchart LR
-  subgraph clients [Clients]
+  subgraph clients[Clients]
     UI[Next.js dashboard]
-    SA[Service accounts / integrations]
+    SA[Service integrations]
   end
 
-  subgraph api [FastAPI]
-    R1[Admin / CRUD routers]
-    R2[Runtime router]
+  subgraph api[FastAPI]
+    AUTH[JWT / service-token auth]
+    CRUD[Admin and CRUD routers]
+    RT[Runtime router]
   end
 
-  subgraph workers [Celery]
-    W1[sync]
-    W2[hydration / extraction / pattern / evaluation]
+  subgraph workers[Celery workers]
+    SYNC[Sync and backfill]
+    EXT[Normalize / enrich]
+    PAT[Pattern and playbook tasks]
+    EVAL[Evaluation and drift tasks]
   end
 
-  UI -->|JWT| R1
-  UI -->|JWT| R2
-  SA -->|X-Service-Token or JWT| R2
+  subgraph data[Data plane]
+    PG[(PostgreSQL + pgvector)]
+    REDIS[(Redis)]
+    S3[(MinIO / S3)]
+  end
 
-  R1 --> PG[(PostgreSQL + pgvector)]
-  R2 --> PG
-  R1 --> Redis[(Redis)]
-  R2 --> Redis
+  UI --> AUTH
+  SA --> AUTH
+  AUTH --> CRUD
+  AUTH --> RT
 
-  workers --> PG
-  workers --> Redis
-  workers --> S3[(MinIO / S3)]
-  R1 --> S3
+  CRUD --> PG
+  RT --> PG
+  RT --> REDIS
+
+  SYNC --> PG
+  EXT --> PG
+  PAT --> PG
+  EVAL --> PG
+
+  SYNC --> REDIS
+  EXT --> REDIS
+  PAT --> REDIS
+  EVAL --> REDIS
+
+  CRUD --> S3
+  workers --> S3
 ```
 
-- **Modular monolith**: `contextedge.main` mounts routers under **`/api/v1`**.
-- **Async SQLAlchemy** on the request path; **sync** database URL for Celery and Alembic.
-- **Redis**: Celery broker/result backend and **runtime match** cache for explain (see [API.md](API.md)).
-- **MinIO**: S3-compatible storage for evidence blobs; endpoint configurable ([RUNBOOK.md](RUNBOOK.md)).
+### Request / worker split
+
+- **HTTP path:** validation, auth, routing, service orchestration, DB commit, JSON response
+- **Worker path:** Celery task -> `run_async(...)` session wrapper -> async service function -> DB commit/rollback
+- **Shared domain logic:** kept in `services/`, `search/`, `connectors/`, and model-layer constraints rather than in routers or task wrappers
 
 ---
 
-## 4. Backend package map
+## 5. Core Runtime Flow
 
-| Area | Path (under `backend/src/contextedge/`) |
-| --- | --- |
-| App factory, CORS, metrics | `main.py`, `config.py` |
-| DB session | `database.py` |
-| Auth deps | `deps.py`, `security_tokens.py` |
-| HTTP middleware | `middleware/request_context.py`, `request_audit.py`, `audit.py`, `auth.py` |
-| REST routers | `api/v1/*.py` |
-| ORM | `models/*.py` |
-| Pydantic IO | `schemas/*.py` |
-| Connectors | `connectors/` (Teams, Gmail, ServiceNow, Jira SM, `base.py`, `registry.py`) |
-| Search / rank | `search/` (`hybrid_ranker`, `risk_policy`, `pg_fts`, `vector_search`) |
-| Graph | `graph/` |
-| AI | `ai/` (provider, embeddings, classifiers, extractors, generators) |
-| Domain services | `services/*.py` |
-| Celery | `workers/celery_app.py`, `*_tasks.py` |
+Runtime retrieval is intentionally narrower than the admin surface.
 
----
+```mermaid
+sequenceDiagram
+  participant Caller
+  participant RuntimeAPI as /api/v1/runtime
+  participant Ranker as hybrid_ranker
+  participant PG as PostgreSQL
+  participant Redis
 
-## 5. Frontend application
+  Caller->>RuntimeAPI: POST /match
+  RuntimeAPI->>RuntimeAPI: auth + role/domain scope
+  RuntimeAPI->>Ranker: rank_playbooks(...)
+  Ranker->>PG: approved playbooks + latest published version
+  Ranker->>PG: FTS + semantic + graph signals
+  Ranker-->>RuntimeAPI: ranked results
+  RuntimeAPI->>Redis: cache explain payload
+  RuntimeAPI-->>Caller: match_id + results + filters_applied
 
-- **Stack**: Next.js 15 (App Router), React, Tailwind, shadcn/ui, TanStack Query.
-- **API client**: `frontend/src/lib/api.ts` — `NEXT_PUBLIC_API_URL` (default `http://localhost:8000`), Bearer token from `localStorage`.
-- **Representative routes**: `overview`, `sources`, `evidence`, `episodes`, `patterns`, `playbooks`, `evaluations`, `drift`, `policies`, `runtime`, `settings`, `audit`, `sync`.
+  Caller->>RuntimeAPI: GET /explain/{match_id}
+  RuntimeAPI->>Redis: fetch cached payload
+  RuntimeAPI-->>Caller: query context + score breakdown
+```
 
----
+### Current runtime rules
 
-## 6. Data model (entity groups)
-
-Logical groups (exports in `models/__init__.py`):
-
-1. **Tenant core**: `Tenant`, `Workspace`, `Domain`, `User`, `RoleBinding`, `AuditLog`
-2. **Ingestion**: `Source`, `SourceObject`, `SourceCredential`, `SyncCheckpoint`, `SyncRun`
-3. **Evidence**: `RawEvidenceObject`, `EvidenceItem`, `Thread`, `AttachmentArtifact`
-4. **Identity / episodes**: `CanonicalIdentity`, `IdentityAlias`, `CorrelationEdge`, `Episode`, `EpisodeStep`
-5. **Patterns / graph**: `Pattern`, links, `NegativeKnowledgeItem`, `Contradiction`, `GraphEdge`
-6. **Playbooks**: `Playbook`, `PlaybookVersion`, `PlaybookEvidenceLink`, `PlaybookApproval`
-7. **Evaluation / feedback**: `EvaluationDataset`, `EvaluationRun`, `RetrievalFeedback`
-8. **Policies**: `TenantPolicy`
-
-Tenant-scoped tables follow shared isolation patterns (`TenantScopedMixin` where applicable). **Schema migrations:** [RUNBOOK.md — Database migrations](RUNBOOK.md#database-migrations).
+- Human callers authenticate with Bearer JWT.
+- Service integrations may use `X-Service-Token`.
+- Service tokens can carry `allowed_domain_ids`; runtime enforces that allowlist.
+- Risk caps are currently **role-based**, not driven by `TenantPolicy.config`.
+- `GET /runtime/playbooks/{stable_key}` only returns **published** versions.
+- If `current_version_id` points to an unpublished version, runtime falls back to the latest published version.
 
 ---
 
-## 7. Known gaps and evolution
+## 6. Ingestion and Worker Pipeline
 
-The phased [implementation plan](../CONTEXTEDGE_IMPLEMENTATION_PLAN.md) mixes **delivered** and **target** capabilities. Typical follow-ons:
+The ingestion path is now explicitly post-commit and recovery-aware.
 
-- **SSO**: Full OIDC/SAML per tenant, SCIM — partial stubs in `middleware/auth.py`.
-- **Policy `config`**: Retention enforcement, redaction, legal hold beyond FK assignment to sources/evidence.
-- **Observability**: Structured logging and Prometheus are in place; full Grafana/OTel/alerting may be incomplete.
-- **Product UX**: Runtime feedback UI, stricter 404 vs enumeration semantics where required.
+```mermaid
+flowchart TD
+  A[Connector backfill or fetch_changes] --> B[persist_ingestion_events]
+  B --> C[RawEvidenceObject rows]
+  C --> D[claim pending normalize backlog]
+  D --> E[queue normalize_evidence tasks]
+  E --> F[normalize raw -> EvidenceItem]
+  F --> G[inline embedding repair / generation]
+  G --> H[eligible for pgvector semantic search]
+```
 
-Keep the implementation plan’s **Repository status** table aligned with reality.
+### Sync handoff behavior
+
+- Connector output is normalized into `IngestionEvent` records.
+- `persist_ingestion_events(...)` writes `RawEvidenceObject` rows and returns the new raw IDs.
+- `_claim_pending_raw_ids_for_handoff(...)` claims any previously stranded raw IDs from `SourceObject.metadata_extra`, clears that backlog under a row lock, and only then allows queue publication.
+- On partial broker failure, only the unqueued tail is re-added to the source-object backlog.
+- Recovery filtering uses the same normalized body hash as the normalize worker, so deduped raws do not loop forever.
+
+### Normalization behavior
+
+- `normalize_evidence` reads `RawEvidenceObject`, derives title/body/hash, and inserts or dedupes into `EvidenceItem`.
+- Dedupe is hash-based at the application layer and is not yet backed by a database uniqueness constraint.
+- Embeddings are ensured inline on normalization so semantic search sees newly normalized evidence without a second broker hop.
 
 ---
 
-## 8. Document maintenance
+## 7. Governance and Playbook Lifecycle
 
-| Change | Update |
-| --- | --- |
-| New router or auth rule | [API.md](API.md) |
-| Compose, Make, migrations, ops | [RUNBOOK.md](RUNBOOK.md) |
-| New subsystem or diagram | This blueprint |
-| Product intent | PRD |
-| Phase / checklist | [CONTEXTEDGE_IMPLEMENTATION_PLAN.md](../CONTEXTEDGE_IMPLEMENTATION_PLAN.md) |
+Playbooks are governed objects, not free-form documents.
 
-**Last reviewed:** Split into `API.md` + `RUNBOOK.md`; stack Next.js 15, FastAPI `0.1.0`, Alembic through `0004`.
+### Lifecycle states
+
+`candidate -> under_review -> approved -> restricted/deprecated/expired/retired`
+
+Implementation lives in `services/playbook_service.py`.
+
+### Versioning model
+
+- Every playbook has a `stable_key`.
+- Versions are stored in `PlaybookVersion`.
+- `semantic_version` is unique per playbook.
+- Version creation uses retry-on-unique-conflict logic so concurrent auto-allocation does not surface as an internal error.
+- Approval publishes the current version by setting `published_at` and `published_by`.
+- Runtime only ranks approved playbooks that have a published version.
+
+---
+
+## 8. Backend Package Map
+
+| Area | Path under `backend/src/contextedge/` | Responsibility |
+| --- | --- | --- |
+| App bootstrap | `main.py`, `config.py` | App factory, CORS, metrics, settings |
+| Persistence | `database.py`, `models/` | Engine, sessions, ORM |
+| Schemas | `schemas/` | Pydantic request/response models |
+| Auth and request context | `deps.py`, `security_tokens.py`, `middleware/` | JWT, service tokens, request state, auditing |
+| API routers | `api/v1/` | HTTP entry points |
+| Connectors | `connectors/` | Source-specific adapters behind a shared contract |
+| Services | `services/` | Application-layer orchestration and domain logic |
+| Search | `search/` | FTS, vector search, risk gating, hybrid ranking |
+| Graph and patterning | `graph/`, parts of `services/`, `workers/pattern_tasks.py` | Relationship and pattern signals |
+| AI integration | `ai/` | Embeddings, classification, generation helpers |
+| Worker wrappers | `workers/` | Celery tasks and async session bridge |
+
+---
+
+## 9. Frontend Summary
+
+- **Framework:** Next.js 16 App Router
+- **UI stack:** React, Tailwind, shadcn/ui
+- **Data fetching:** TanStack Query
+- **API client:** `frontend/src/lib/api.ts`
+- **Representative route groups:** `overview`, `sources`, `evidence`, `episodes`, `patterns`, `playbooks`, `runtime`, `evaluations`, `drift`, `policies`, `audit`, `sync`
+
+The frontend is a thin client over the FastAPI API. Most business rules remain on the server.
+
+---
+
+## 10. Design Patterns Used
+
+This codebase uses a small number of consistent patterns repeatedly.
+
+| Pattern | Where it appears | Why it is used |
+| --- | --- | --- |
+| **Modular monolith** | `api/`, `services/`, `models/`, `workers/` | Keeps deployment simple while preserving subsystem boundaries |
+| **Adapter pattern** | `connectors/base.py`, concrete connector modules | External systems present different APIs but expose one internal contract |
+| **Registry / factory** | `connectors/registry.py` | Resolves connector implementation from `source_type` without router-level branching |
+| **Dependency injection** | FastAPI `Depends(...)` in `deps.py` | Centralizes auth and DB session construction |
+| **Service layer** | `services/*.py` | Keeps orchestration and business rules out of routers and Celery wrappers |
+| **Command worker pattern** | `workers/*_tasks.py` | Thin task wrappers call explicit service functions with retry policy at the task boundary |
+| **Session wrapper / unit-of-work style** | `database.get_db`, `workers.asyncio_runner.run_async` | Gives request and worker paths symmetrical commit/rollback semantics |
+| **State machine** | `services/playbook_service.py` | Makes lifecycle transitions explicit and enforceable |
+| **Cache-aside** | runtime explain cache in Redis | Keeps runtime explain cheap and bounded by TTL |
+| **Policy gate** | `search/risk_policy.py`, runtime auth checks | Applies caller-based caps before runtime retrieval |
+| **Hybrid scoring pipeline** | `search/hybrid_ranker.py` | Combines FTS, semantic, graph, and freshness signals instead of relying on one retrieval mode |
+| **Claim-before-queue recovery** | `services/sync_worker_service.py` | Prevents recovered backlog from being picked up twice and enables bounded broker-failure recovery |
+| **Retry-on-constraint-conflict** | playbook version allocation | Converts concurrent uniqueness races into deterministic behavior |
+
+---
+
+## 11. Logical Data Model
+
+Primary entity groups:
+
+1. **Tenant core**
+   `Tenant`, `Workspace`, `Domain`, `User`, `RoleBinding`, `AuditLog`
+2. **Source and ingestion**
+   `Source`, `SourceObject`, `SourceCredential`, `SyncCheckpoint`, `SyncRun`
+3. **Evidence**
+   `RawEvidenceObject`, `EvidenceItem`, `Thread`, `AttachmentArtifact`
+4. **Identity and reconstruction**
+   `CanonicalIdentity`, `IdentityAlias`, `CorrelationEdge`, `Episode`, `EpisodeStep`
+5. **Patterns and graph**
+   `Pattern`, `NegativeKnowledgeItem`, `Contradiction`, `GraphEdge`
+6. **Playbooks**
+   `Playbook`, `PlaybookVersion`, `PlaybookEvidenceLink`, `PlaybookApproval`
+7. **Evaluation and runtime feedback**
+   `EvaluationDataset`, `EvaluationRun`, `RetrievalFeedback`
+8. **Policies**
+   `TenantPolicy`
+
+### Important model relationships
+
+- `Source -> SourceObject -> SyncCheckpoint / SyncRun`
+- `RawEvidenceObject -> EvidenceItem` through `raw_object_ref` when not deduped
+- `Playbook -> PlaybookVersion` with `current_version_id` on the parent
+- `PlaybookVersion -> PlaybookEvidenceLink -> EvidenceItem`
+- `PlaybookApproval` records governance actions independently of current lifecycle state
+
+---
+
+## 12. Current Constraints and Tradeoffs
+
+- **Alembic `0001` is not frozen DDL.** See [MIGRATIONS.md](MIGRATIONS.md).
+- **Runtime risk caps are role-based today.** Policies are assignable but not yet the runtime decision engine.
+- **Redis explain cache is best-effort.** Runtime explain depends on a cached `match_id` payload and returns 404 after expiry or cache loss.
+- **Connector orchestration is implemented, but connector completeness varies by source.** The shared contract is stable; source-specific depth differs.
+- **Sync scheduling is not single-flight per `SourceObject`.** Recovery handoff is bounded and claim-before-queue, but overlapping manual backfills or retries against the same object can still create duplicate work.
+- **Evidence dedupe remains application-layer.** Normalize workers dedupe by normalized content hash, but there is no database uniqueness constraint yet on the resulting evidence rows.
+- **Service tokens are tenant-wide unless explicitly scoped.** Omitting `allowed_domain_ids` from `SERVICE_TOKENS_JSON` grants full-tenant runtime access by design.
+
+---
+
+## 13. Maintenance Rules
+
+Update this blueprint when any of the following change:
+
+- subsystem boundaries or new packages
+- worker pipeline shape
+- runtime retrieval or publishing semantics
+- architectural patterns that future contributors need to follow
+
+Update [API.md](API.md) when changing routes, auth headers, or response semantics. Update [SETUP_GUIDE.md](SETUP_GUIDE.md) when onboarding steps change. Update [RUNBOOK.md](RUNBOOK.md) when operational commands, migrations, or deployment requirements change.
+
+**Last reviewed:** 2026-04-05. Codebase includes Alembic revisions through `0005_playbook_version_semantic_unique`.
