@@ -24,7 +24,10 @@ from contextedge.services.source_service import (
     decrypt_credentials,
     discover_source_objects,
 )
-from contextedge.services.sync_ingestion_queue import queue_normalize_raw_objects
+from contextedge.services.sync_ingestion_queue import (
+    NormalizeEnqueueError,
+    queue_normalize_raw_objects,
+)
 
 
 async def run_discovery_job(db: AsyncSession, source_id: uuid.UUID, tenant_id: uuid.UUID) -> dict:
@@ -65,47 +68,219 @@ async def _load_connector(db: AsyncSession, source: Source):
     return get_connector(source.source_type, source.config, decrypted)
 
 
-async def _pending_normalize_raw_ids(
+def _pending_handoff_raw_ids_from_errors(errors: object) -> list[uuid.UUID]:
+    return _coerce_pending_raw_ids(_handoff_value_from_errors(errors).get("pending_raw_ids"))
+
+
+def _coerce_pending_raw_ids(values: object) -> list[uuid.UUID]:
+    if not isinstance(values, list):
+        return []
+
+    raw_ids: list[uuid.UUID] = []
+    seen: set[uuid.UUID] = set()
+    for value in values:
+        try:
+            raw_id = uuid.UUID(str(value))
+        except (TypeError, ValueError):
+            continue
+        if raw_id in seen:
+            continue
+        seen.add(raw_id)
+        raw_ids.append(raw_id)
+    return raw_ids
+
+
+def _handoff_value_from_errors(errors: object) -> dict:
+    if not isinstance(errors, dict):
+        return {}
+
+    handoff = errors.get("handoff")
+    if not isinstance(handoff, dict):
+        return {}
+    return dict(handoff)
+
+
+def _pending_raw_ids_from_source_object(source_object: SourceObject) -> list[uuid.UUID]:
+    metadata = (
+        source_object.metadata_extra if isinstance(source_object.metadata_extra, dict) else {}
+    )
+    return _coerce_pending_raw_ids(metadata.get("pending_normalize_raw_ids"))
+
+
+def _set_pending_raw_ids_on_source_object(
+    source_object: SourceObject,
+    *,
+    raw_ids: list[uuid.UUID],
+    updated_at: datetime | None = None,
+) -> None:
+    metadata = (
+        dict(source_object.metadata_extra)
+        if isinstance(source_object.metadata_extra, dict)
+        else {}
+    )
+    if raw_ids:
+        metadata["pending_normalize_raw_ids"] = [str(raw_id) for raw_id in raw_ids]
+        metadata["pending_normalize_updated_at"] = (updated_at or datetime.now(UTC)).isoformat()
+    else:
+        metadata.pop("pending_normalize_raw_ids", None)
+        metadata.pop("pending_normalize_updated_at", None)
+
+    source_object.metadata_extra = metadata or None
+
+
+def _merge_raw_ids(*groups: list[uuid.UUID]) -> list[uuid.UUID]:
+    merged: list[uuid.UUID] = []
+    seen: set[uuid.UUID] = set()
+    for group in groups:
+        for raw_id in group:
+            if raw_id in seen:
+                continue
+            seen.add(raw_id)
+            merged.append(raw_id)
+    return merged
+
+
+async def _lock_source_object(
     db: AsyncSession,
     *,
     tenant_id: uuid.UUID,
     source_object_id: uuid.UUID,
-) -> list[uuid.UUID]:
-    rows = (
+) -> SourceObject:
+    source_object = (
         await db.execute(
-            select(RawEvidenceObject.id, RawEvidenceObject.raw_payload)
+            select(SourceObject)
             .where(
-                RawEvidenceObject.tenant_id == tenant_id,
-                RawEvidenceObject.source_object_id == source_object_id,
+                SourceObject.id == source_object_id,
+                SourceObject.tenant_id == tenant_id,
             )
-            .order_by(RawEvidenceObject.stored_at.asc())
+            .with_for_update()
         )
-    ).all()
-    if not rows:
+    ).scalar_one_or_none()
+    if not source_object:
+        raise ValueError("source_object_not_found")
+    return source_object
+
+
+async def _filter_already_normalized_raw_ids(
+    db: AsyncSession,
+    *,
+    tenant_id: uuid.UUID,
+    raw_ids: list[uuid.UUID],
+) -> list[uuid.UUID]:
+    if not raw_ids:
         return []
 
-    hash_by_raw_id: dict[uuid.UUID, str] = {
-        raw_id: evidence_content_hash_from_payload(payload) for raw_id, payload in rows
+    raw_rows = (
+        await db.execute(
+            select(RawEvidenceObject.id, RawEvidenceObject.raw_payload).where(
+                RawEvidenceObject.tenant_id == tenant_id,
+                RawEvidenceObject.id.in_(raw_ids),
+            )
+        )
+    ).all()
+    if not raw_rows:
+        return []
+
+    raw_hash_by_id = {
+        raw_id: evidence_content_hash_from_payload(raw_payload)
+        for raw_id, raw_payload in raw_rows
     }
-    hashes = list(set(hash_by_raw_id.values()))
-    existing_hashes: set[str] = set()
-    if hashes:
-        existing_hashes = set(
+    normalized_candidate_ids = list(raw_hash_by_id)
+    normalized_raw_ids = {
+        raw_id
+        for raw_id in (
+            await db.execute(
+                select(EvidenceItem.raw_object_ref).where(
+                    EvidenceItem.tenant_id == tenant_id,
+                    EvidenceItem.raw_object_ref.in_(normalized_candidate_ids),
+                )
+            )
+        ).scalars().all()
+        if raw_id is not None
+    }
+    normalized_hashes: set[str] = set()
+    candidate_hashes = {content_hash for content_hash in raw_hash_by_id.values() if content_hash}
+    if candidate_hashes:
+        normalized_hashes = set(
             (
                 await db.execute(
                     select(EvidenceItem.content_hash).where(
                         EvidenceItem.tenant_id == tenant_id,
-                        EvidenceItem.content_hash.in_(hashes),
+                        EvidenceItem.content_hash.in_(candidate_hashes),
                     )
                 )
-            ).scalars()
+            ).scalars().all()
         )
 
     return [
         raw_id
-        for raw_id, content_hash in hash_by_raw_id.items()
-        if content_hash not in existing_hashes
+        for raw_id in raw_ids
+        if raw_id in raw_hash_by_id
+        and raw_id not in normalized_raw_ids
+        and raw_hash_by_id[raw_id] not in normalized_hashes
     ]
+
+
+async def _reconcile_pending_raw_ids_on_source_object(
+    db: AsyncSession,
+    *,
+    tenant_id: uuid.UUID,
+    source_object_id: uuid.UUID,
+    add_raw_ids: list[uuid.UUID] | None = None,
+    remove_raw_ids: list[uuid.UUID] | None = None,
+    updated_at: datetime | None = None,
+) -> list[uuid.UUID]:
+    source_object = await _lock_source_object(
+        db,
+        tenant_id=tenant_id,
+        source_object_id=source_object_id,
+    )
+    pending_raw_ids = _merge_raw_ids(
+        _pending_raw_ids_from_source_object(source_object),
+        add_raw_ids or [],
+    )
+    if remove_raw_ids:
+        remove_set = set(remove_raw_ids)
+        pending_raw_ids = [raw_id for raw_id in pending_raw_ids if raw_id not in remove_set]
+
+    pending_raw_ids = await _filter_already_normalized_raw_ids(
+        db,
+        tenant_id=tenant_id,
+        raw_ids=pending_raw_ids,
+    )
+    _set_pending_raw_ids_on_source_object(
+        source_object,
+        raw_ids=pending_raw_ids,
+        updated_at=updated_at,
+    )
+    await db.flush()
+    await db.commit()
+    return pending_raw_ids
+
+
+async def _claim_pending_raw_ids_for_handoff(
+    db: AsyncSession,
+    *,
+    tenant_id: uuid.UUID,
+    source_object_id: uuid.UUID,
+    new_raw_ids: list[uuid.UUID],
+) -> tuple[list[uuid.UUID], list[uuid.UUID]]:
+    source_object = await _lock_source_object(
+        db,
+        tenant_id=tenant_id,
+        source_object_id=source_object_id,
+    )
+    recovered_raw_ids = _pending_raw_ids_from_source_object(source_object)
+    pending_raw_ids = await _filter_already_normalized_raw_ids(
+        db,
+        tenant_id=tenant_id,
+        raw_ids=_merge_raw_ids(recovered_raw_ids, new_raw_ids),
+    )
+    if recovered_raw_ids:
+        _set_pending_raw_ids_on_source_object(source_object, raw_ids=[])
+        await db.flush()
+    await db.commit()
+    return pending_raw_ids, recovered_raw_ids
 
 
 async def _commit_and_queue_normalization(
@@ -114,30 +289,71 @@ async def _commit_and_queue_normalization(
     run,
     tenant_id: uuid.UUID,
     source_object_id: uuid.UUID,
+    new_raw_ids: list[uuid.UUID],
 ) -> None:
-    await db.commit()
-    pending_raw_ids = await _pending_normalize_raw_ids(
+    pending_raw_ids, _recovered_raw_ids = await _claim_pending_raw_ids_for_handoff(
         db,
         tenant_id=tenant_id,
         source_object_id=source_object_id,
+        new_raw_ids=new_raw_ids,
     )
     if not pending_raw_ids:
         return
 
     try:
         queue_normalize_raw_objects(pending_raw_ids, tenant_id)
-    except Exception as exc:
+    except NormalizeEnqueueError as exc:
+        unqueued_raw_ids = exc.pending_raw_ids
+        unqueued_raw_id_set = set(unqueued_raw_ids)
+        queued_raw_ids = [
+            raw_id for raw_id in pending_raw_ids if raw_id not in unqueued_raw_id_set
+        ]
         existing_errors = dict(run.errors) if isinstance(run.errors, dict) else {}
+        handoff = _handoff_value_from_errors(existing_errors)
+        handoff.update(
+            {
+                "message": "normalize_enqueue_failed",
+                "detail": str(exc),
+                "pending_raw_count": len(unqueued_raw_ids),
+                "pending_raw_ids": [str(raw_id) for raw_id in unqueued_raw_ids],
+                "attempted_raw_count": len(pending_raw_ids),
+            }
+        )
         run.status = "failed"
         run.completed_at = datetime.now(UTC)
-        existing_errors["handoff"] = {
-            "message": "normalize_enqueue_failed",
-            "detail": str(exc),
-            "pending_raw_count": len(pending_raw_ids),
-        }
+        existing_errors["handoff"] = handoff
         run.errors = existing_errors
-        await db.flush()
-        await db.commit()
+        await _reconcile_pending_raw_ids_on_source_object(
+            db,
+            tenant_id=tenant_id,
+            source_object_id=source_object_id,
+            add_raw_ids=unqueued_raw_ids,
+            remove_raw_ids=queued_raw_ids,
+            updated_at=datetime.now(UTC),
+        )
+        raise
+    except Exception as exc:
+        existing_errors = dict(run.errors) if isinstance(run.errors, dict) else {}
+        handoff = _handoff_value_from_errors(existing_errors)
+        handoff.update(
+            {
+                "message": "normalize_enqueue_failed",
+                "detail": str(exc),
+                "pending_raw_count": len(pending_raw_ids),
+                "pending_raw_ids": [str(raw_id) for raw_id in pending_raw_ids],
+            }
+        )
+        run.status = "failed"
+        run.completed_at = datetime.now(UTC)
+        existing_errors["handoff"] = handoff
+        run.errors = existing_errors
+        await _reconcile_pending_raw_ids_on_source_object(
+            db,
+            tenant_id=tenant_id,
+            source_object_id=source_object_id,
+            add_raw_ids=pending_raw_ids,
+            updated_at=datetime.now(UTC),
+        )
         raise
 
 
@@ -186,7 +402,7 @@ async def run_backfill_job(
     try:
         result = await connector.backfill(so.external_id, so.object_type, window, ck)
         events = list(result.events or [])
-        raw_created, raw_deduped, _new_raw_ids = await persist_ingestion_events(
+        raw_created, raw_deduped, new_raw_ids = await persist_ingestion_events(
             db,
             tenant_id=tenant_id,
             source_id=source.id,
@@ -221,6 +437,7 @@ async def run_backfill_job(
             run=run,
             tenant_id=tenant_id,
             source_object_id=so.id,
+            new_raw_ids=new_raw_ids,
         )
     return {"run_id": str(run.id), "status": run.status}
 
@@ -272,7 +489,7 @@ async def run_incremental_job(
     try:
         result = await connector.fetch_changes(so.external_id, so.object_type, ck)
         events = list(result.events or [])
-        raw_created, raw_deduped, _new_raw_ids = await persist_ingestion_events(
+        raw_created, raw_deduped, new_raw_ids = await persist_ingestion_events(
             db,
             tenant_id=tenant_id,
             source_id=source.id,
@@ -306,5 +523,6 @@ async def run_incremental_job(
             run=run,
             tenant_id=tenant_id,
             source_object_id=so.id,
+            new_raw_ids=new_raw_ids,
         )
     return {"run_id": str(run.id), "status": run.status}
