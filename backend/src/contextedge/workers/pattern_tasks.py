@@ -162,7 +162,7 @@ def generate_playbook_candidate(self, pattern_id: str, tenant_id: str):
             "playbook_confidence": float(llm.get("playbook_confidence") or 0.5),
             "execution_confidence_guidance": llm.get("execution_confidence_guidance"),
         }
-        await create_playbook_version(db, playbook, version_data, owner.id)
+        await create_playbook_version(db, playbook, version_data)
         await db.refresh(playbook)
         return {"status": "ok", "playbook_id": str(playbook.id), "stable_key": stable_key}
 

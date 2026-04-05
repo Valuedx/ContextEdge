@@ -18,6 +18,7 @@ ContextEdge ingests operational evidence from multiple systems (tickets, chat, e
 | --- | --- |
 | [**API.md**](API.md) | Auth headers, `/api/v1` router index, runtime risk/domain rules, policies and drift endpoints, observability URLs |
 | [**RUNBOOK.md**](RUNBOOK.md) | Env checklist, Docker/Make, Alembic, workers, health, logs, common failures |
+| [**MIGRATIONS.md**](MIGRATIONS.md) | Alembic `0001` behavior, reproducibility, operational mitigations |
 | **This file** | Architecture diagram, backend layout, frontend stack, entity groups, known gaps |
 
 ---

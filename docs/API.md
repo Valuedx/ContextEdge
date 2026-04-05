@@ -18,7 +18,8 @@ JWT claims used by the app include `sub` (user id), `tenant_id`, `email`, `roles
 ### Service accounts / integrations
 
 - Header: **`X-Service-Token: <opaque-token>`**
-- Tokens are mapped via environment variable **`SERVICE_TOKENS_JSON`** (see [`.env.example`](../.env.example)) to `tenant_id`, `user_id`, `email`, `roles`.
+- Tokens are mapped via environment variable **`SERVICE_TOKENS_JSON`** (see [`.env.example`](../.env.example)) to `tenant_id`, `user_id`, `email`, `roles`, and optionally **`allowed_domain_ids`** (list of domain UUID strings).
+- When `allowed_domain_ids` is set for a service token, **`/runtime/match`** and **`/runtime/playbooks/{stable_key}`** are limited to those domains plus tenant-wide playbooks (playbook `domain_id` null). Omit the key for full-tenant access; use `[]` for tenant-wide-only.
 - Implementation: `contextedge.security_tokens.service_token_context`, `contextedge.deps.get_current_user`.
 
 ### Request context middleware
@@ -64,7 +65,7 @@ Base path: **`/api/v1/runtime`**. Implementation: `contextedge.api.v1.runtime`.
 | --- | --- | --- |
 | `POST` | `/match` | Build query text from symptoms, entities, optional context; hybrid-rank **approved** playbooks; returns `match_id`, `results`, `filters_applied`, optional `fallback_guidance`. Caches payload in Redis under `runtime:match:{match_id}` (TTL on the order of **1 hour**). |
 | `GET` | `/explain/{match_id}` | Returns cached scoring/context for the same **tenant**. **404** if cache miss or expired; **403** if `tenant_id` does not match. |
-| `GET` | `/playbooks/{stable_key}` | Returns the current **published** playbook version for an **approved** playbook. Query: optional `version`, optional **`domain_id`**. |
+| `GET` | `/playbooks/{stable_key}` | Returns a **published** version only (`published_at` set). Default: if `current_version_id` is unpublished, falls back to the **latest published** version by `published_at`. Query **`version`**: exact semantic version, also must be published. Optional **`domain_id`**. |
 | `POST` | `/feedback` | Records `RetrievalFeedback` for evaluation and analytics. |
 
 ### Risk tier cap (caller-based)
@@ -115,7 +116,8 @@ Model: `TenantPolicy` / table `tenant_policies` (`contextedge.models.policy`).
 
 ## Drift (`/drift`)
 
-- **`GET /api/v1/drift/alerts`** — Drift/freshness signals for the operator UI (`api/v1/drift.py`, `services/drift_service.py`). Behavior may evolve with schedulers and metadata.
+- **`GET /api/v1/drift/alerts`** — Read-only drift/freshness signals for the UI. Does **not** change playbook lifecycle.
+- **Celery `detect_drift`** — Calls `check_playbook_drift`: builds alerts (including `past_expiry` while playbooks are still `approved`), then applies `approved` → `expired` for past `expiry_at`, and returns `alerts`, `alert_count`, and `expired_transition_count`.
 
 ---
 

@@ -26,6 +26,7 @@ dependencies = [
     "python-multipart>=0.0.18",
     "cryptography>=44",
     "boto3>=1.35",
+    "google-auth>=2.29",
     "litellm>=1.55",
     "structlog>=24.4",
     "prometheus-fastapi-instrumentator>=7.0",

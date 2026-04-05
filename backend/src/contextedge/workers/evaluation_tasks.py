@@ -43,13 +43,25 @@ def detect_drift(self, tenant_id: str):
             r = await db.execute(select(Tenant.id))
             tids = [row[0] for row in r.all()]
             merged: list[dict] = []
+            total_expired = 0
             for tid in tids:
-                alerts = await check_playbook_drift(db, tid)
-                merged.extend(alerts)
-            return {"tenants": len(tids), "alerts": merged, "alert_count": len(merged)}
+                pack = await check_playbook_drift(db, tid)
+                merged.extend(pack["alerts"])
+                total_expired += int(pack["expired_transition_count"])
+            return {
+                "tenants": len(tids),
+                "alerts": merged,
+                "alert_count": len(merged),
+                "expired_transition_count": total_expired,
+            }
         tid = uuid.UUID(tenant_id)
-        alerts = await check_playbook_drift(db, tid)
-        return {"tenants": 1, "alerts": alerts, "alert_count": len(alerts)}
+        pack = await check_playbook_drift(db, tid)
+        return {
+            "tenants": 1,
+            "alerts": pack["alerts"],
+            "alert_count": pack["alert_count"],
+            "expired_transition_count": pack["expired_transition_count"],
+        }
 
     try:
         return run_async(work)

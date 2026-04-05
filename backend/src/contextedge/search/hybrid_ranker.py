@@ -2,16 +2,17 @@
 
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from contextedge.ai.provider import generate_embedding
 from contextedge.models.pattern import GraphEdge
-from contextedge.models.playbook import Playbook
+from contextedge.models.playbook import Playbook, PlaybookVersion
 from contextedge.search.pg_fts import search_playbooks_fts
 from contextedge.search.risk_policy import risk_within_cap
-from contextedge.search.vector_search import search_evidence_semantic
+from contextedge.search.vector_search import search_evidence_semantic_for_playbook
 
 
 @dataclass
@@ -63,6 +64,22 @@ async def _graph_score_for_playbook(
     return min(1.0, float(n) / 5.0)
 
 
+async def _latest_published_version_id(
+    db: AsyncSession,
+    playbook_id: uuid.UUID,
+) -> uuid.UUID | None:
+    r = await db.execute(
+        select(PlaybookVersion.id)
+        .where(
+            PlaybookVersion.playbook_id == playbook_id,
+            PlaybookVersion.published_at.is_not(None),
+        )
+        .order_by(PlaybookVersion.published_at.desc())
+        .limit(1)
+    )
+    return r.scalar_one_or_none()
+
+
 async def rank_playbooks(
     db: AsyncSession,
     tenant_id: uuid.UUID,
@@ -74,11 +91,14 @@ async def rank_playbooks(
     *,
     domain_id: uuid.UUID | None = None,
     max_risk_tier: str | None = None,
+    allowed_domain_ids: list[uuid.UUID] | None = None,
 ) -> list[RankedPlaybook]:
     """Rank approved playbooks using hybrid signals.
 
     When ``domain_id`` is set, keep playbooks in that domain or tenant-wide (``domain_id`` NULL).
     When ``max_risk_tier`` is set, drop playbooks above that tier (e.g. cap at ``medium``).
+    When ``allowed_domain_ids`` is set (service tokens), keep only tenant-wide playbooks or those
+    in the allowed set.
     """
     weights = weights or RankingWeights()
 
@@ -95,6 +115,11 @@ async def rank_playbooks(
             for pb in approved_playbooks
             if pb.domain_id is None or pb.domain_id == domain_id
         ]
+    if allowed_domain_ids is not None:
+        allowed = set(allowed_domain_ids)
+        approved_playbooks = [
+            pb for pb in approved_playbooks if pb.domain_id is None or pb.domain_id in allowed
+        ]
     if max_risk_tier is not None:
         approved_playbooks = [
             pb for pb in approved_playbooks if risk_within_cap(pb.risk_tier, max_risk_tier)
@@ -109,20 +134,37 @@ async def rank_playbooks(
         for playbook, rank in fts_results:
             fts_scores[playbook.id] = float(rank) / max_rank
 
-    sem_rows: list = []
+    query_embedding: list[float] | None = None
     if query_text.strip():
         try:
-            sem_rows = await search_evidence_semantic(db, tenant_id, query_text, limit=10)
+            query_embedding = await generate_embedding(query_text)
         except Exception:
-            sem_rows = []
-    semantic_score_global, evidence_hits = _semantic_corpus_score(sem_rows)
+            query_embedding = None
 
     ranked = []
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     for pb in approved_playbooks:
+        pv_id = await _latest_published_version_id(db, pb.id)
+        if pv_id is None:
+            continue
         keyword_score = fts_scores.get(pb.id, 0.0)
         graph_score = await _graph_score_for_playbook(db, tenant_id, pb.id)
-        semantic_score = min(1.0, semantic_score_global * (0.6 + 0.4 * keyword_score))
+        sem_rows: list = []
+        if query_text.strip() and query_embedding is not None:
+            try:
+                sem_rows = await search_evidence_semantic_for_playbook(
+                    db,
+                    tenant_id,
+                    pb.id,
+                    pv_id,
+                    query_text,
+                    limit=10,
+                    query_embedding=query_embedding,
+                )
+            except Exception:
+                sem_rows = []
+        semantic_score_pb, evidence_hits_pb = _semantic_corpus_score(sem_rows)
+        semantic_score = min(1.0, semantic_score_pb * (0.6 + 0.4 * keyword_score))
         quality_score = 0.5
         freshness = _compute_freshness(pb, now)
         recency_score = freshness
@@ -143,7 +185,7 @@ async def rank_playbooks(
             score=total,
             confidence=total,
             freshness_status=freshness_status,
-            evidence_count=evidence_hits,
+            evidence_count=evidence_hits_pb,
             breakdown={
                 "keyword": keyword_score,
                 "semantic": semantic_score,

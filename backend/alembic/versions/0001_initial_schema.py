@@ -1,8 +1,11 @@
 """Initial schema: pgvector + all application tables.
 
-Uses metadata.create_all on upgrade so the first revision matches SQLAlchemy models
-without requiring a live DB at commit time for autogenerate. Prefer follow-up
-revisions with explicit op.create_table for production change control.
+Uses ``Base.metadata.create_all`` on upgrade so the first revision reflects whatever
+models were loaded when this migration **first** ran. That snapshot is **not** replayed
+from this file on later installs if models diverge; always add new Alembic revisions
+for schema changes. For reproducible greenfield installs, prefer restoring from a DB
+dump or replacing this revision with explicit ``op.create_table`` DDL once the schema
+stabilizes. Downgrade uses ``drop_all`` and is destructive.
 """
 
 from typing import Sequence, Union
