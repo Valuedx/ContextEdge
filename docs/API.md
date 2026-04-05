@@ -1,8 +1,13 @@
-# ContextEdge — API reference
+# ContextEdge - API Reference
 
-HTTP API base path: **`/api/v1`**. On a local dev server, **OpenAPI** is at **`http://localhost:8000/docs`** (Swagger UI) and **`http://localhost:8000/redoc`**.
+HTTP API base path: **`/api/v1`**.
 
-For system architecture and domain model, see [Technical blueprint](TECHNICAL_BLUEPRINT.md). For running migrations, Docker, and troubleshooting, see [Runbook](RUNBOOK.md).
+On a local dev server:
+
+- Swagger UI: `http://localhost:8000/docs`
+- ReDoc: `http://localhost:8000/redoc`
+
+For system architecture and the data model, see [TECHNICAL_BLUEPRINT.md](TECHNICAL_BLUEPRINT.md). For first-time local installation, see [SETUP_GUIDE.md](SETUP_GUIDE.md). For operations, migrations, Docker, and troubleshooting, see [RUNBOOK.md](RUNBOOK.md).
 
 ---
 
@@ -10,132 +15,234 @@ For system architecture and domain model, see [Technical blueprint](TECHNICAL_BL
 
 ### Human users (JWT)
 
-1. `POST /api/v1/auth/login` with credentials → JSON including an **access token**.
-2. Send `Authorization: Bearer <access_token>` on subsequent requests.
+1. `POST /api/v1/auth/login` with credentials
+2. Receive a JSON payload containing an access token
+3. Send `Authorization: Bearer <access_token>` on subsequent requests
 
-JWT claims used by the app include `sub` (user id), `tenant_id`, `email`, `roles`, `workspace_ids`.
+JWT claims used by the app include:
 
-### Service accounts / integrations
+- `sub`
+- `tenant_id`
+- `email`
+- `roles`
+- `workspace_ids`
 
-- Header: **`X-Service-Token: <opaque-token>`**
-- Tokens are mapped via environment variable **`SERVICE_TOKENS_JSON`** (see [`.env.example`](../.env.example)) to `tenant_id`, `user_id`, `email`, `roles`, and optionally **`allowed_domain_ids`** (list of domain UUID strings).
-- When `allowed_domain_ids` is set for a service token, **`/runtime/match`** and **`/runtime/playbooks/{stable_key}`** are limited to those domains plus tenant-wide playbooks (playbook `domain_id` null). Omit the key for full-tenant access; use `[]` for tenant-wide-only.
-- Implementation: `contextedge.security_tokens.service_token_context`, `contextedge.deps.get_current_user`.
+### Service accounts and integrations
+
+- Header: `X-Service-Token: <opaque-token>`
+- Tokens are defined in `SERVICE_TOKENS_JSON`
+- Supported fields include `tenant_id`, `user_id`, `email`, `roles`, and optional `allowed_domain_ids`
+
+Runtime-specific behavior:
+
+- If `allowed_domain_ids` is set, `/runtime/match` and `/runtime/playbooks/{stable_key}` are limited to those domains plus tenant-wide playbooks
+- If `allowed_domain_ids` is omitted, the token gets full-tenant runtime access
+- If `allowed_domain_ids` is `[]`, the token is limited to tenant-wide playbooks only
+
+Implementation paths:
+
+- `contextedge.security_tokens.service_token_context`
+- `contextedge.deps.get_current_user`
 
 ### Request context middleware
 
-`TenantContextMiddleware` decodes the same Bearer JWT or service token into `request.state` for auditing and logging. Paths that skip this include `/health`, `/ready`, `/docs`, `/redoc`, `/openapi.json`, `/metrics`, and **`/api/v1/auth/login`**.
+`TenantContextMiddleware` decodes the same Bearer JWT or service token into `request.state` for auditing and logging.
+
+Paths skipped by that middleware include:
+
+- `/health`
+- `/ready`
+- `/docs`
+- `/redoc`
+- `/openapi.json`
+- `/metrics`
+- `/api/v1/auth/login`
 
 ### RBAC
 
-`CurrentUser.has_role` grants all roles if `platform_super_admin` is present. Routes use `require_role(...)` or ad hoc checks (for example policies listing).
+`CurrentUser.has_role(...)` grants all roles if `platform_super_admin` is present. Routes use `require_role(...)` or explicit checks depending on the endpoint.
 
-### SSO / enterprise IdP
+### SSO and enterprise IdP
 
-OIDC/SAML helpers and stubs live in `middleware/auth.py`. Day-to-day development uses JWT from login or seed users, not full per-tenant SSO flows.
+OIDC and SAML helpers remain in `middleware/auth.py`, but normal development still uses login-issued JWTs or seeded users rather than full per-tenant SSO.
 
 ---
 
-## Router index
+## Router Index
 
-Prefixes are relative to **`/api/v1`** (see `contextedge/api/v1/__init__.py`).
+Prefixes are relative to `/api/v1`.
 
 | Prefix | Tag | Concern |
 | --- | --- | --- |
-| `/auth` | auth | Login, tokens |
-| `/tenants`, `/workspaces`, `/domains`, `/users` | … | Multi-tenant admin |
+| `/auth` | auth | Login and token issuance |
+| `/tenants`, `/workspaces`, `/domains`, `/users` | admin | Multi-tenant administration |
 | `/audit-logs` | audit | Audit trail |
-| `/sources`, `/sync-runs` | sources, sync | Connectors and sync |
-| `/evidence`, `/threads`, `/episodes` | … | Evidence and reconstruction |
-| `/patterns`, `/playbooks` | … | Knowledge and governance |
-| `/runtime` | runtime | Match, explain, playbook-by-key, feedback |
-| `/evaluations` | evaluations | Datasets and runs |
-| `/policies` | policies | Tenant policies CRUD + list |
+| `/sources`, `/sync-runs` | sources, sync | Connectors and synchronization |
+| `/evidence`, `/threads`, `/episodes` | evidence | Evidence and reconstruction |
+| `/patterns`, `/playbooks` | knowledge | Patterns, playbooks, governance |
+| `/runtime` | runtime | Match, explain, playbook fetch, feedback |
+| `/evaluations` | evaluations | Datasets and evaluation runs |
+| `/policies` | policies | Tenant policies |
 | `/drift` | drift | Drift alerts |
+
+---
+
+## Sync Operational Note
+
+The sync API is queue-oriented, not single-flight.
+
+- `POST /sources/{source_id}/backfill` and `POST /sync-runs/{run_id}/retry` enqueue work asynchronously.
+- The system does not yet serialize overlapping manual requests for the same `SourceObject`.
+- API clients and operational tooling should avoid issuing concurrent backfills or retries for the same source object.
 
 ---
 
 ## Runtime
 
-Base path: **`/api/v1/runtime`**. Implementation: `contextedge.api.v1.runtime`.
+Base path: `/api/v1/runtime`.
+
+Implementation: `contextedge.api.v1.runtime`.
 
 ### Endpoints
 
 | Method | Path | Description |
 | --- | --- | --- |
-| `POST` | `/match` | Build query text from symptoms, entities, optional context; hybrid-rank **approved** playbooks; returns `match_id`, `results`, `filters_applied`, optional `fallback_guidance`. Caches payload in Redis under `runtime:match:{match_id}` (TTL on the order of **1 hour**). |
-| `GET` | `/explain/{match_id}` | Returns cached scoring/context for the same **tenant**. **404** if cache miss or expired; **403** if `tenant_id` does not match. |
-| `GET` | `/playbooks/{stable_key}` | Returns a **published** version only (`published_at` set). Default: if `current_version_id` is unpublished, falls back to the **latest published** version by `published_at`. Query **`version`**: exact semantic version, also must be published. Optional **`domain_id`**. |
-| `POST` | `/feedback` | Records `RetrievalFeedback` for evaluation and analytics. |
+| `POST` | `/match` | Builds query text from symptoms, entities, and optional context; hybrid-ranks approved playbooks; returns `match_id`, `results`, `filters_applied`, and optional `fallback_guidance` |
+| `GET` | `/explain/{match_id}` | Returns cached scoring and context for the same tenant |
+| `GET` | `/playbooks/{stable_key}` | Returns a published playbook version only |
+| `POST` | `/feedback` | Records `RetrievalFeedback` |
 
-### Risk tier cap (caller-based)
+### Match explain cache
 
-Effective maximum risk tier is derived from **roles** (and principal type), **not** from `tenant_policies.config` in the current implementation:
+- Cached in Redis under `runtime:match:{match_id}`
+- TTL is approximately 1 hour
+- `/runtime/explain/{match_id}` returns `404` if the cache entry is gone
+- `/runtime/explain/{match_id}` returns `403` if the cached payload belongs to another tenant
+
+### Risk tier cap
+
+Effective maximum risk tier is derived from caller role and principal type, not from `TenantPolicy.config`.
 
 | Caller | Effective cap |
 | --- | --- |
-| `platform_super_admin`, `tenant_admin`, `domain_admin` | No cap (all tiers) |
-| `knowledge_manager`, `service_account` | **high** |
-| Other roles | **medium** |
+| `platform_super_admin`, `tenant_admin`, `domain_admin` | No cap |
+| `knowledge_manager`, `service_account` | `high` |
+| Other roles | `medium` |
 
-Tier ordering: `minimal` &lt; `low` &lt; `medium` &lt; `high` &lt; `critical` (`contextedge.search.risk_policy`). Both **`POST /match`** (via `rank_playbooks`) and **`GET /playbooks/{stable_key}`** enforce the cap with `risk_within_cap`.
+Tier ordering:
 
-`POST /match` includes `filters_applied` (for example `max_risk_tier`, `domain_id`, `risk_cap_source`) in the response and in the Redis payload for explain.
+`minimal < low < medium < high < critical`
+
+Implementation path:
+
+- `contextedge.search.risk_policy`
 
 ### Domain scoping
 
-- **Match**: optional `domain_id` in the JSON body. Must belong to the caller’s tenant or the API returns **400**. Passed into `rank_playbooks` to restrict eligible playbooks.
-- **Playbook by key**: optional `domain_id` query parameter. If the playbook has a non-null `domain_id`, it must equal the query value; tenant-wide playbooks (`domain_id` null) remain retrievable when a domain filter is supplied. Invalid cross-tenant domain → **400**; wrong domain for a domain-bound playbook → **403**.
+For `POST /runtime/match`:
 
-### Hybrid ranking (summary)
+- `domain_id` is optional
+- If supplied, it must belong to the caller's tenant
+- If a service token has `allowed_domain_ids`, the requested domain must be in that allowlist
 
-`contextedge.search.hybrid_ranker.rank_playbooks` combines retrieval signals (FTS, vector, and other factors as implemented) and applies **`max_risk_tier`** and **`domain_id`**. Each result can include **`scoring_breakdown`** for transparency.
+For `GET /runtime/playbooks/{stable_key}`:
+
+- `domain_id` is optional
+- If the playbook is domain-bound, it must match the requested domain
+- Tenant-wide playbooks remain accessible when a domain filter is provided
+- Service-token allowlists are enforced here as well
+
+### Published version behavior
+
+- Runtime only returns published versions where `published_at` is set
+- If `current_version_id` points to an unpublished version, runtime falls back to the latest published version
+- Explicit `version=<semantic_version>` also requires that version to be published
+
+### Hybrid ranking summary
+
+`contextedge.search.hybrid_ranker.rank_playbooks(...)` combines:
+
+- keyword / FTS signal
+- semantic evidence signal
+- graph signal
+- quality / freshness / recency heuristics
+- caller-based risk filtering
+- optional domain filtering
+
+Each result can include a `scoring_breakdown`.
 
 ---
 
-## Tenant policies (`/policies`)
+## Policies
 
-Model: `TenantPolicy` / table `tenant_policies` (`contextedge.models.policy`).
+Base path: `/api/v1/policies`.
 
-- **`policy_type`**: `retention` | `classification` | `access` | `approval`
-- Fields: `name`, `description`, JSONB **`config`**, `is_active`, tenant scope
+Model: `TenantPolicy`.
+
+Supported `policy_type` values:
+
+- `retention`
+- `classification`
+- `access`
+- `approval`
+
+Fields include:
+
+- `name`
+- `description`
+- `config`
+- `is_active`
+- tenant scope
 
 ### HTTP surface
 
-- **`GET /policies`**: Returns grouped lists (`retention_policies`, `classification_policies`, `access_policies`, `approval_policies`). Allowed roles: **`tenant_admin`**, **`domain_admin`**, **`knowledge_manager`**.
-- **Create / update / delete**: Implemented in `api/v1/policies.py` with appropriate admin-style checks.
+- `GET /policies` returns grouped lists by policy type
+- CRUD routes are implemented in `api/v1/policies.py`
 
-### Assignments on other resources
+### Current usage
 
-- **Sources**: `classification_policy_id`, `retention_policy_id` on create/update — validated via `contextedge.services.policy_assignment`.
-- **Evidence**: `PATCH` access-policy endpoint and `access_policy_id` on evidence items (see `api/v1/evidence.py`).
-
-**Note:** Assigning policies to sources/evidence is supported; **runtime risk caps** remain **role-based** until product logic reads policy `config`.
-
----
-
-## Drift (`/drift`)
-
-- **`GET /api/v1/drift/alerts`** — Read-only drift/freshness signals for the UI. Does **not** change playbook lifecycle.
-- **Celery `detect_drift`** — Calls `check_playbook_drift`: builds alerts (including `past_expiry` while playbooks are still `approved`), then applies `approved` → `expired` for past `expiry_at`, and returns `alerts`, `alert_count`, and `expired_transition_count`.
+- Sources may reference `classification_policy_id` and `retention_policy_id`
+- Evidence items may reference `access_policy_id`
+- Runtime risk caps are still role-based today
 
 ---
 
-## Observability (HTTP)
+## Drift
 
-- **`GET /health`**, **`GET /ready`** — Liveness-style responses from `main.py`.
-- **`/metrics`** — Prometheus metrics (FastAPI instrumentator).
+Base path: `/api/v1/drift`.
+
+Current behavior:
+
+- `GET /drift/alerts` is read-only and does not mutate lifecycle state
+- Celery drift detection uses `check_playbook_drift(...)`
+- Scheduled drift can mark approved playbooks past `expiry_at` as `expired`
+
+The Celery drift payload includes:
+
+- `alerts`
+- `alert_count`
+- `expired_transition_count`
 
 ---
 
-## Related code paths
+## Observability
+
+HTTP endpoints:
+
+- `GET /health`
+- `GET /ready`
+- `GET /metrics`
+
+---
+
+## Related Code Paths
 
 | Concern | Location |
 | --- | --- |
-| App mount | `contextedge.main` → `include_router(..., prefix="/api/v1")` |
+| App mount | `contextedge.main` |
 | Auth dependency | `contextedge.deps` |
-| Runtime | `contextedge.api.v1.runtime` |
-| Policies | `contextedge.api.v1.policies` |
+| Runtime router | `contextedge.api.v1.runtime` |
+| Policies router | `contextedge.api.v1.policies` |
 | Schemas | `contextedge.schemas.*` |
 
-When you add or rename routers, update the **Router index** in this file and the link from [TECHNICAL_BLUEPRINT.md](TECHNICAL_BLUEPRINT.md).
+When you add or rename routers, update this file and the document map in [TECHNICAL_BLUEPRINT.md](TECHNICAL_BLUEPRINT.md).

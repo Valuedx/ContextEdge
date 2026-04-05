@@ -2,98 +2,117 @@
 
 Operational Memory and Living Playbook Platform.
 
-ContextEdge converts fragmented operational evidence (tickets, chat threads, emails, KBs, alerts) into governed, evidence-backed, machine-usable living playbooks for IT operations troubleshooting.
+ContextEdge turns fragmented operational evidence from tickets, chat, email, and knowledge systems into governed, evidence-backed, versioned playbooks for human review and runtime retrieval.
 
 ## Documentation
 
 | Document | Description |
 | --- | --- |
-| [**Technical blueprint**](docs/TECHNICAL_BLUEPRINT.md) | Architecture, component map, data model, doc index, known gaps |
-| [**API reference**](docs/API.md) | Auth (`Bearer`, `X-Service-Token`), `/api/v1` routers, runtime/policies/drift, observability URLs |
-| [**Runbook**](docs/RUNBOOK.md) | Environment, Docker/Make, Alembic, Celery, health, logs, troubleshooting |
-| [**Implementation plan**](CONTEXTEDGE_IMPLEMENTATION_PLAN.md) | Phased delivery checklist, stack choices, repository notes |
+| [**Setup guide**](docs/SETUP_GUIDE.md) | End-to-end local setup for Docker-first and host-run workflows |
+| [**Technical blueprint**](docs/TECHNICAL_BLUEPRINT.md) | Architecture, component map, design patterns, data model |
+| [**API reference**](docs/API.md) | Auth, `/api/v1` router surface, runtime semantics, observability URLs |
+| [**Runbook**](docs/RUNBOOK.md) | Operational commands, migrations, workers, troubleshooting |
+| [**Implementation plan**](CONTEXTEDGE_IMPLEMENTATION_PLAN.md) | Phased checklist and repository-status planning document |
 | [**Product requirements**](STANDALONE_OPERATIONAL_MEMORY_PRD.md) | Product-level scope and behavior |
 
-OpenAPI for the running API: `http://localhost:8000/docs` (Swagger) or `http://localhost:8000/redoc`.
+OpenAPI for a running local API:
 
-## Architecture
+- Swagger UI: `http://localhost:8000/docs`
+- ReDoc: `http://localhost:8000/redoc`
 
-- **Backend**: Python 3.12+ / FastAPI (modular monolith), SQLAlchemy 2 async + Alembic, structlog, Prometheus metrics (`/metrics`)
-- **Frontend**: Next.js 15 (App Router) / React / Tailwind / shadcn/ui / TanStack Query
-- **Database**: PostgreSQL 16 + pgvector
-- **Queue**: Celery + Redis (sync, hydration, extraction, pattern, evaluation queues)
-- **Object Storage**: MinIO (S3-compatible)
-- **AI/LLM**: LiteLLM (multi-provider: OpenAI, Anthropic, Azure)
-- **Auth**: JWT (`Authorization: Bearer`) for users; optional `X-Service-Token` via `SERVICE_TOKENS_JSON` for integrations (see `.env.example`)
+## Architecture Snapshot
+
+- **Backend:** Python 3.12+, FastAPI, SQLAlchemy 2 async, Alembic, structlog, Prometheus metrics
+- **Frontend:** Next.js 16 App Router, React, Tailwind, shadcn/ui, TanStack Query
+- **Database:** PostgreSQL 16 with pgvector
+- **Queue:** Celery with Redis
+- **Object storage:** MinIO
+- **AI integration:** LiteLLM with provider-specific keys
+- **Auth:** Bearer JWT for users and optional `X-Service-Token` for service integrations
 
 ## Quick Start
 
+The recommended setup flow is documented in [docs/SETUP_GUIDE.md](docs/SETUP_GUIDE.md).
+
+Shortest host-run path:
+
 ```bash
-# 1. Copy environment config
-cp .env.example .env
-
-# 2. Start infrastructure (PostgreSQL, Redis, MinIO)
 make up
-
-# 3. Install backend dependencies
 cd backend && pip install -e ".[dev]"
-
-# 4. Run database migrations
+cd ../frontend && npm install
+cd ..
 make migrate
-
-# 5. Seed development data
 make seed
-
-# 6. Start backend
 make backend-dev
+```
 
-# 7. In another terminal, install and start frontend
-cd frontend && npm install && npm run dev
+Then, in separate terminals:
+
+```bash
+make celery-dev
+make frontend-dev
 ```
 
 ## Development
 
+Common commands:
+
 ```bash
-# Full stack with Docker
-make dev
-
-# Run tests
-make test
-
-# Lint
+make up
+make backend-dev
+make celery-dev
+make celery-beat-dev
+make frontend-dev
+make migrate
+make seed
 make lint
+make test
 ```
+
+Notes:
+
+- `make dev` starts the full Docker development stack.
+- Current Alembic head includes `0005_playbook_version_semantic_unique`.
+- Frontend `npm test` is currently a placeholder script; there is no real frontend unit-test suite yet.
+
+## Known Constraints
+
+- Sync scheduling is not single-flight per source object yet. Avoid overlapping manual backfills or retries for the same object.
+- Evidence dedupe is currently application-layer and hash-based; there is not yet a database uniqueness constraint that hard-prevents duplicate `EvidenceItem` rows under concurrency.
+- Residual operational caveats are tracked in [docs/TECHNICAL_BLUEPRINT.md](docs/TECHNICAL_BLUEPRINT.md) and [docs/RUNBOOK.md](docs/RUNBOOK.md).
 
 ## Project Structure
 
-```
+```text
 docs/
-  TECHNICAL_BLUEPRINT.md   # Architecture + data model (see also API.md, RUNBOOK.md)
-  API.md                   # HTTP API and auth reference
-  RUNBOOK.md               # Operations, migrations, troubleshooting
+  SETUP_GUIDE.md
+  TECHNICAL_BLUEPRINT.md
+  API.md
+  RUNBOOK.md
+  MIGRATIONS.md
 
 backend/
-  alembic/versions/        # Database migrations (run through 0004_* for policies FKs)
+  alembic/versions/
   src/contextedge/
-    api/v1/                # FastAPI route handlers (/api/v1/...)
-    models/                # SQLAlchemy models
-    schemas/               # Pydantic request/response schemas
-    services/              # Business logic
-    connectors/            # Source connector implementations
-    workers/               # Celery task definitions
-    ai/                    # LLM abstraction, classifiers, extractors
-    graph/                 # Pattern/context graph
-    search/                # FTS, vector search, hybrid ranking, risk caps
-    middleware/            # Tenant context, audit, SSO stubs
+    api/v1/
+    models/
+    schemas/
+    services/
+    connectors/
+    workers/
+    ai/
+    graph/
+    search/
+    middleware/
 
 frontend/
   src/
-    app/                   # Next.js App Router pages (dashboard, auth, runtime sandbox)
-    components/            # React components
-    lib/                   # API client, auth, hooks, stores, types
+    app/
+    components/
+    lib/
 ```
 
-## Default Credentials (Dev)
+## Default Development Credentials
 
-- Admin: `admin@contextedge.local` / `admin123`
-- Analyst: `analyst@contextedge.local` / `analyst123`
+- `admin@contextedge.local` / `admin123`
+- `analyst@contextedge.local` / `analyst123`

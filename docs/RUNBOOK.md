@@ -1,176 +1,298 @@
-# ContextEdge — Runbook
+# ContextEdge - Runbook
 
-Operational guide for **local development**, **Docker**, **migrations**, **workers**, and **common failures**. For API behavior and auth headers, see [API reference](API.md). For architecture and data model, see [Technical blueprint](TECHNICAL_BLUEPRINT.md).
+Operational guide for running, maintaining, and troubleshooting ContextEdge after initial setup.
 
----
-
-## Prerequisites
-
-- **Docker** and Docker Compose (for Postgres, Redis, MinIO, optional full stack)
-- **Python 3.12+** and **Node.js** (for host-run backend/frontend)
-- Copy **`.env.example`** → **`.env`** at the repo root and adjust secrets (JWT, `FERNET_KEY`, LLM keys as needed)
+For first-time local installation, use [SETUP_GUIDE.md](SETUP_GUIDE.md). For architecture, see [TECHNICAL_BLUEPRINT.md](TECHNICAL_BLUEPRINT.md). For HTTP behavior and auth semantics, see [API.md](API.md).
 
 ---
 
-## Configuration checklist
+## 1. Scope
 
-Settings load from the environment via **`contextedge.config`** (pydantic-settings). Key groups (see [`.env.example`](../.env.example)):
+This runbook covers:
 
-| Area | Variables (representative) |
+- environment and configuration checks
+- Docker and host-run operational commands
+- migrations and seed data
+- workers and queues
+- health, logs, and troubleshooting
+
+It does not repeat the full onboarding flow from [SETUP_GUIDE.md](SETUP_GUIDE.md).
+
+---
+
+## 2. Prerequisites
+
+- Docker with Compose support
+- Python 3.12+
+- Node.js 20+
+- A populated `.env` file at the repo root
+
+If you are starting from scratch, go to [SETUP_GUIDE.md](SETUP_GUIDE.md) first.
+
+---
+
+## 3. Configuration Checklist
+
+Settings are loaded through `contextedge.config`.
+
+| Area | Representative variables |
 | --- | --- |
-| Database | `DATABASE_URL` (async), `DATABASE_URL_SYNC` |
+| Database | `DATABASE_URL`, `DATABASE_URL_SYNC` |
 | Redis / Celery | `REDIS_URL`, `CELERY_BROKER_URL`, `CELERY_RESULT_BACKEND` |
-| Object storage | `MINIO_*`, bucket name |
+| Object storage | `MINIO_ENDPOINT`, `MINIO_ROOT_USER`, `MINIO_ROOT_PASSWORD`, `MINIO_BUCKET` |
 | Auth | `JWT_SECRET_KEY`, `JWT_ALGORITHM`, `SERVICE_TOKENS_JSON` |
-| Crypto | `FERNET_KEY` (credential encryption) |
-| LLM | `OPENAI_API_KEY`, model defaults, etc. |
-| App | `APP_CORS_ORIGINS`, `APP_DEBUG`, `APP_LOG_LEVEL` |
+| Crypto | `FERNET_KEY` |
+| AI | `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `AZURE_OPENAI_*`, default model names |
+| App | `APP_DEBUG`, `APP_LOG_LEVEL`, `APP_CORS_ORIGINS`, `FRONTEND_URL` |
 
-**Compose note:** `docker-compose.dev.yml` overrides several URLs to use service hostnames (`postgres`, `redis`, `minio`) inside the network; keep `.env` consistent when mixing host and container workflows.
+Compose note:
+
+- `docker-compose.dev.yml` overrides service URLs to use container hostnames such as `postgres`, `redis`, and `minio`.
+- Host-run workflows should use `localhost` values from `.env`.
 
 ---
 
-## Starting infrastructure
+## 4. Starting and Stopping Services
 
-**Postgres (pgvector), Redis, MinIO only:**
+### Infrastructure only
 
 ```bash
 make up
 ```
 
-**Full development stack** (backend, Celery worker, Celery beat, frontend):
+Equivalent:
+
+```bash
+docker compose up -d
+```
+
+### Full Docker development stack
 
 ```bash
 make dev
 ```
 
-- Backend API: `http://localhost:8000`
-- Frontend: `http://localhost:3000`
-- MinIO console: port **9001** (see `docker-compose.yml`)
+Equivalent:
 
-Stop full stack: `make dev-down` or `docker compose -f docker-compose.dev.yml down`.
+```bash
+docker compose -f docker-compose.dev.yml up --build
+```
+
+### Stop stacks
+
+Infrastructure:
+
+```bash
+make down
+```
+
+Full Docker dev stack:
+
+```bash
+make dev-down
+```
+
+Logs:
+
+```bash
+make logs
+```
 
 ---
 
-## Database migrations
+## 5. Database Migrations
 
-Revisions live in **`backend/alembic/versions/`**.
+Revisions live in `backend/alembic/versions/`.
 
 | Revision | Purpose |
 | --- | --- |
-| `0001_initial_schema` | Base schema |
-| `0002_tenant_policies` | `tenant_policies` |
-| `0003_source_policy_fks` | Source → policy FKs |
-| `0004_evidence_access_policy_fk` | Evidence → access policy FK |
+| `0001_initial_schema` | Base schema bootstrap |
+| `0002_tenant_policies` | Tenant policy table |
+| `0003_source_policy_fks` | Source -> policy foreign keys |
+| `0004_evidence_access_policy_fk` | Evidence -> access policy foreign key |
+| `0005_playbook_version_semantic_unique` | Per-playbook semantic version uniqueness and legacy duplicate cleanup |
 
-**Apply all pending migrations:**
+Apply all pending migrations:
 
 ```bash
 make migrate
 ```
 
-(`cd backend && alembic upgrade head`)
+Equivalent:
 
-**Create a new revision** (after model changes):
+```bash
+cd backend
+alembic upgrade head
+```
+
+Create a new migration:
 
 ```bash
 make migrate-new msg="short description"
 ```
 
-**Rollback one step:**
+Rollback one revision:
 
 ```bash
 make migrate-down
 ```
 
-### Practices
+Important notes:
 
-- Prefer **Alembic** for shared and production-like environments; do not rely only on **`seed.py`** creating tables.
-- **`0001_initial_schema`** uses `create_all` against live models; for reproducibility and downgrade caveats see [**Migrations**](MIGRATIONS.md).
-- Ensure **no orphan UUIDs** on new FK columns before applying policy-related migrations (`0003`, `0004`).
-- If the API fails with missing-table errors, confirm migrations have been applied: `alembic current` from `backend/`.
+- Prefer Alembic for shared environments; do not rely on ad hoc table creation.
+- `0001_initial_schema` is not a frozen DDL snapshot. See [MIGRATIONS.md](MIGRATIONS.md).
+- If the API reports missing tables or columns, verify the current Alembic head before debugging application code.
 
 ---
 
-## Seed data (development)
+## 6. Seed Data
+
+Run:
 
 ```bash
 make seed
 ```
 
-Creates dev tenants/users and sample data as implemented in `backend/src/contextedge/seed.py`. Default logins are documented in the root [README](../README.md) (for example `admin@contextedge.local` / `admin123`).
+Equivalent:
+
+```bash
+cd backend
+python -m contextedge.seed
+```
+
+Seeded development users:
+
+- `admin@contextedge.local` / `admin123`
+- `analyst@contextedge.local` / `analyst123`
+
+The seed script is idempotent for the default tenant slug and will skip if the default tenant already exists.
 
 ---
 
-## Running services on the host
+## 7. Host-Run Services
 
-With infrastructure up via `make up`:
+With infrastructure running:
 
 | Goal | Command |
 | --- | --- |
-| API (reload) | `make backend-dev` → Uvicorn on **8000** |
+| API reload server | `make backend-dev` |
 | Celery worker | `make celery-dev` |
 | Celery beat | `make celery-beat-dev` |
-| Frontend | `cd frontend && npm install && npm run dev` |
+| Frontend dev server | `make frontend-dev` |
 
-**Queues** used by worker commands: `default`, `sync`, `hydration`, `extraction`, `pattern`, `evaluation` (see `Makefile` and `docker-compose.dev.yml`).
+Equivalent direct commands:
 
-Workers need reachability to **Postgres**, **Redis**, and **MinIO** using the same logical config as the API.
+- API: `cd backend && uvicorn contextedge.main:app --reload --port 8000`
+- Worker: `cd backend && celery -A contextedge.workers.celery_app worker -l INFO -Q default,sync,hydration,extraction,pattern,evaluation`
+- Beat: `cd backend && celery -A contextedge.workers.celery_app beat -l INFO`
+- Frontend: `cd frontend && npm run dev`
+
+Worker queues currently used:
+
+- `default`
+- `sync`
+- `hydration`
+- `extraction`
+- `pattern`
+- `evaluation`
 
 ---
 
-## Health checks and metrics
+## 8. Health and Observability
 
-| Endpoint | Use |
+| Endpoint | Purpose |
 | --- | --- |
-| `GET http://localhost:8000/health` | Basic liveness |
-| `GET http://localhost:8000/ready` | Readiness-style stub |
-| `GET http://localhost:8000/metrics` | Prometheus scrape target |
+| `GET /health` | Basic liveness |
+| `GET /ready` | Readiness-style stub |
+| `GET /metrics` | Prometheus scrape target |
+
+Local URLs:
+
+- `http://localhost:8000/health`
+- `http://localhost:8000/ready`
+- `http://localhost:8000/metrics`
+
+Logging:
+
+- API uses structlog
+- In debug mode logs are developer-friendly console output
+- Docker logs are available through `make logs`
 
 ---
 
-## Logs
-
-- **API**: structlog to console; JSON when `APP_DEBUG` is false (see `main.py` processors).
-- **Docker**: `make logs` tails `docker-compose.dev.yml` services.
-
----
-
-## Testing and lint
+## 9. Testing and Lint
 
 | Scope | Command |
 | --- | --- |
-| Backend tests | `make test-backend` or `cd backend && pytest` |
+| Backend tests | `make test-backend` or `cd backend && pytest -v` |
 | Frontend tests | `cd frontend && npm test` |
-| Both (if configured) | `make test` |
-| Lint | `make lint` (Ruff + ESLint) |
+| Combined | `make test` |
+| Lint | `make lint` |
 | Format | `make format` |
 
+Current state:
+
+- Backend tests exist but coverage is still limited.
+- Frontend `npm test` is a placeholder script and does not run a real unit-test suite.
+
 ---
 
-## Common issues
+## 10. Operational Caveats
 
-| Symptom | Things to check |
+- Do not trigger overlapping backfills or retries for the same `SourceObject`. Sync recovery is bounded, but there is no single-flight guard that serializes manual sync requests per object.
+- Evidence dedupe is application-layer and based on normalized content hash. If you are stress-testing sync or recovery behavior, verify duplicates in `evidence_items` rather than assuming the database will reject them.
+- Service tokens without `allowed_domain_ids` are tenant-wide for runtime access. Set an explicit allowlist when you want least-privilege behavior.
+
+---
+
+## 11. Common Issues
+
+| Symptom | What to check |
 | --- | --- |
-| **401** / redirect to login (UI) | Token expired or missing; re-login. `JWT_SECRET_KEY` must match between token issuance and validation. |
-| **403** on `/runtime/playbooks/...` | Risk tier above caller cap, or domain mismatch for a domain-scoped playbook. See [API.md — Runtime](API.md#runtime). |
-| **404** on `/runtime/explain/...` | Redis key expired or no prior `POST /match` for that `match_id`; tenant mismatch also returns 403. |
-| **DB errors** / missing columns | Run `make migrate`; confirm `alembic_version` matches head. |
-| **Celery tasks not running** | Worker process up; `CELERY_BROKER_URL` / result backend; Redis reachable. |
-| **MinIO upload failures** | `MINIO_ENDPOINT` (host vs Docker service name), credentials, bucket creation. |
-| **CORS** | `APP_CORS_ORIGINS` includes frontend origin (e.g. `http://localhost:3000`). |
+| Login fails or API returns 401 | JWT secret mismatch, expired token, backend restart required after env change |
+| Runtime returns 403 | Caller risk tier cap, playbook/domain mismatch, or service-token domain allowlist |
+| Runtime explain returns 404 | Redis cache expired or there was no previous `POST /runtime/match` |
+| Missing tables or columns | Run migrations and verify Alembic head |
+| Celery tasks do not execute | Worker not running, Redis misconfigured, broker URL mismatch |
+| MinIO failures | Endpoint, credentials, bucket name, host vs container hostname |
+| Frontend cannot reach API | `NEXT_PUBLIC_API_URL`, backend port, and `APP_CORS_ORIGINS` |
 
 ---
 
-## Production-oriented notes (high level)
+## 12. Local Reset
 
-- Rotate **`JWT_SECRET_KEY`**, **`FERNET_KEY`**, and MinIO credentials; never ship defaults.
-- Run API behind TLS; restrict **`SERVICE_TOKENS_JSON`** to short-lived integration tokens where possible.
-- Scale Celery workers per queue; use beat only once per logical scheduler.
-- Back up Postgres and object storage according to your RPO/RTO; this repo does not ship a full DR playbook.
+To rebuild local state from scratch:
+
+```bash
+docker compose down -v
+docker compose -f docker-compose.dev.yml down -v
+make up
+make migrate
+make seed
+```
+
+This removes Docker volumes for Postgres, Redis, and MinIO data.
 
 ---
 
-## Document maintenance
+## 13. Production-Oriented Notes
 
-When **Makefile targets**, **compose services**, or **migration filenames** change, update this runbook. When **HTTP behavior** changes, update [API.md](API.md).
+- Replace all default secrets before any shared deployment.
+- Run the API behind TLS and a real reverse proxy.
+- Treat `SERVICE_TOKENS_JSON` as a secrets-bearing config surface.
+- Scale Celery workers by queue characteristics rather than as one undifferentiated pool.
+- Back up Postgres and object storage independently.
+
+---
+
+## 14. Maintenance Rules
+
+Update this runbook when:
+
+- Make targets change
+- Docker compose services change
+- worker queues change
+- migration filenames change
+- operational commands or troubleshooting steps change
+
+Update [SETUP_GUIDE.md](SETUP_GUIDE.md) when onboarding steps change. Update [API.md](API.md) when HTTP behavior changes.
