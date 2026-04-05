@@ -1,0 +1,224 @@
+"use client";
+
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import Link from "next/link";
+import { useParams } from "next/navigation";
+import { CheckCircle2, Loader2 } from "lucide-react";
+
+import { PageHeader } from "@/components/common/page-header";
+import {
+  DetailCardGridSkeleton,
+  DetailPageSkeleton,
+} from "@/components/common/detail-page-skeleton";
+import { Skeleton } from "@/components/ui/skeleton";
+import { StatusBadge } from "@/components/common/status-badge";
+import { Button, buttonVariants } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Separator } from "@/components/ui/separator";
+import { api } from "@/lib/api";
+import type { EpisodeDetail, EpisodeStep } from "@/lib/types";
+import { useAuthStore } from "@/lib/stores/auth-store";
+
+function canApproveEpisode(roles: string[]) {
+  return (
+    roles.includes("knowledge_manager") ||
+    roles.includes("platform_super_admin")
+  );
+}
+
+function StepCard({ step }: { step: EpisodeStep }) {
+  return (
+    <div className="rounded-lg border p-4 text-sm">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="font-mono text-xs text-muted-foreground">#{step.step_order}</span>
+        <span className="rounded bg-muted px-2 py-0.5 text-xs">{step.step_type}</span>
+        {step.failed_flag && (
+          <span className="text-xs text-destructive">failed</span>
+        )}
+        {step.successful_flag && (
+          <span className="text-xs text-emerald-600">success</span>
+        )}
+        <span className="text-xs text-muted-foreground">
+          confidence {(step.extraction_confidence * 100).toFixed(0)}%
+        </span>
+      </div>
+      <p className="mt-2 whitespace-pre-wrap">{step.text}</p>
+      {step.observation && (
+        <p className="mt-2 text-muted-foreground italic">{step.observation}</p>
+      )}
+    </div>
+  );
+}
+
+export default function EpisodeDetailPage() {
+  const params = useParams<{ id: string }>();
+  const episodeId = params.id;
+  const qc = useQueryClient();
+  const roles = useAuthStore((s) => s.roles);
+  const showApprove = canApproveEpisode(roles);
+
+  const { data: episode, isLoading, error } = useQuery({
+    queryKey: ["episode", episodeId],
+    queryFn: () => api.get<EpisodeDetail>(`/episodes/${episodeId}`),
+    enabled: !!episodeId,
+  });
+
+  const approveMut = useMutation({
+    mutationFn: () => api.post(`/episodes/${episodeId}/approve`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["episode", episodeId] });
+      qc.invalidateQueries({ queryKey: ["episodes"] });
+    },
+  });
+
+  if (!episodeId) return null;
+
+  if (isLoading) {
+    return (
+      <DetailPageSkeleton actionSlots={2}>
+        <DetailCardGridSkeleton count={2} />
+        <div className="h-px w-full bg-border" />
+        <div className="space-y-3">
+          <Skeleton className="h-6 w-28" />
+          <div className="space-y-3">
+            <div className="rounded-lg border border-black/10 bg-white/40 p-4 dark:border-white/10 dark:bg-white/[0.04]">
+              <Skeleton className="h-4 w-3/4" />
+              <Skeleton className="mt-3 h-16 w-full" />
+            </div>
+            <div className="rounded-lg border border-black/10 bg-white/40 p-4 dark:border-white/10 dark:bg-white/[0.04]">
+              <Skeleton className="h-4 w-3/4" />
+              <Skeleton className="mt-3 h-16 w-full" />
+            </div>
+          </div>
+        </div>
+      </DetailPageSkeleton>
+    );
+  }
+
+  if (error || !episode) {
+    return (
+      <div className="space-y-4">
+        <PageHeader title="Episode" description="Not found." />
+        <p className="text-sm text-destructive">{String((error as Error)?.message || "Missing")}</p>
+        <Link href="/episodes" className={cn(buttonVariants({ variant: "outline" }))}>
+          Back to episodes
+        </Link>
+      </div>
+    );
+  }
+
+  const steps = [...(episode.steps || [])].sort((a, b) => a.step_order - b.step_order);
+
+  return (
+    <div className="space-y-6">
+      <PageHeader
+        title={episode.title}
+        description="Structured troubleshooting timeline with extracted steps."
+        actions={
+          <div className="flex flex-wrap gap-2">
+            <Link href="/episodes" className={cn(buttonVariants({ variant: "outline" }))}>
+              All episodes
+            </Link>
+            {showApprove && episode.reviewer_state !== "approved" && (
+              <Button
+                disabled={approveMut.isPending}
+                onClick={() => approveMut.mutate()}
+              >
+                {approveMut.isPending ? (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                ) : (
+                  <CheckCircle2 className="mr-2 h-4 w-4" />
+                )}
+                Approve episode
+              </Button>
+            )}
+          </div>
+        }
+      />
+
+      <div className="flex flex-wrap gap-2">
+        <StatusBadge status={episode.status} />
+        <StatusBadge status={episode.reviewer_state} />
+        <span className="text-xs text-muted-foreground self-center">
+          Extraction {(episode.extraction_confidence * 100).toFixed(0)}%
+        </span>
+      </div>
+
+      <div className="grid gap-4 md:grid-cols-2">
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Summary</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3 text-sm">
+            {episode.root_cause_summary && (
+              <div>
+                <p className="text-muted-foreground text-xs uppercase tracking-wide">Root cause</p>
+                <p className="mt-1 whitespace-pre-wrap">{episode.root_cause_summary}</p>
+              </div>
+            )}
+            {episode.final_outcome && (
+              <div>
+                <p className="text-muted-foreground text-xs uppercase tracking-wide">Outcome</p>
+                <p className="mt-1 whitespace-pre-wrap">{episode.final_outcome}</p>
+              </div>
+            )}
+            {!episode.root_cause_summary && !episode.final_outcome && (
+              <p className="text-muted-foreground">No summary fields yet.</p>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Links</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2 text-sm">
+            <div>
+              <span className="text-muted-foreground">Domain</span>{" "}
+              <span className="font-mono text-xs">{episode.domain_id ?? "—"}</span>
+            </div>
+            {episode.primary_case_ref && (
+              <div>
+                <span className="text-muted-foreground">Case ref</span>
+                <p className="font-mono text-xs mt-1">{episode.primary_case_ref}</p>
+              </div>
+            )}
+            {episode.evidence_ids && episode.evidence_ids.length > 0 && (
+              <div>
+                <p className="text-muted-foreground text-xs mb-1">Evidence</p>
+                <ul className="space-y-1 max-h-32 overflow-auto">
+                  {episode.evidence_ids.map((eid) => (
+                    <li key={eid}>
+                      <Link
+                        href={`/evidence/${eid}`}
+                        className="font-mono text-xs text-primary hover:underline"
+                      >
+                        {eid}
+                      </Link>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+
+      <Separator />
+
+      <div className="space-y-3">
+        <h3 className="text-lg font-semibold">Steps</h3>
+        {steps.length === 0 ? (
+          <p className="text-sm text-muted-foreground">No steps extracted for this episode.</p>
+        ) : (
+          <div className="space-y-3">
+            {steps.map((s) => (
+              <StepCard key={s.id} step={s} />
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
