@@ -1,4 +1,3 @@
-import hashlib
 import uuid
 
 from sqlalchemy import select
@@ -8,8 +7,21 @@ from contextedge.ai.classifiers.relevance import classify_relevance as run_relev
 from contextedge.ai.embeddings import embed_evidence
 from contextedge.models.episode import EpisodeStep
 from contextedge.models.evidence import EvidenceItem, RawEvidenceObject
+from contextedge.services.evidence_normalization import (
+    evidence_body_from_payload,
+    evidence_content_hash_from_payload,
+    evidence_title_from_payload,
+)
 from contextedge.workers.asyncio_runner import run_async
 from contextedge.workers.celery_app import celery_app
+
+
+async def _ensure_embedding(db: AsyncSession, evidence: EvidenceItem) -> bool:
+    if evidence.embedding is not None:
+        return False
+    evidence.embedding = await embed_evidence(evidence.title, evidence.body_text)
+    await db.flush()
+    return True
 
 
 async def _normalize(db: AsyncSession, raw_object_id: str, tenant_id: uuid.UUID) -> dict:
@@ -19,9 +31,9 @@ async def _normalize(db: AsyncSession, raw_object_id: str, tenant_id: uuid.UUID)
         return {"error": "raw_not_found"}
 
     payload = raw.raw_payload or {}
-    title = payload.get("title") or payload.get("subject") or "Untitled"
-    body = payload.get("body") or payload.get("body_text") or str(payload)[:8000]
-    h = hashlib.sha256(body.encode("utf-8", errors="replace")).hexdigest()
+    title = evidence_title_from_payload(payload)
+    body = evidence_body_from_payload(payload)
+    h = evidence_content_hash_from_payload(payload)
 
     existing = (
         await db.execute(
@@ -32,7 +44,13 @@ async def _normalize(db: AsyncSession, raw_object_id: str, tenant_id: uuid.UUID)
         )
     ).scalar_one_or_none()
     if existing:
-        return {"evidence_id": str(existing.id), "deduped": True}
+        embedded = await _ensure_embedding(db, existing)
+        return {
+            "evidence_id": str(existing.id),
+            "deduped": True,
+            "embedded": existing.embedding is not None,
+            "embedding_repaired": embedded,
+        }
 
     ev = EvidenceItem(
         tenant_id=tenant_id,
@@ -47,7 +65,12 @@ async def _normalize(db: AsyncSession, raw_object_id: str, tenant_id: uuid.UUID)
     )
     db.add(ev)
     await db.flush()
-    return {"evidence_id": str(ev.id), "deduped": False}
+    embedded = await _ensure_embedding(db, ev)
+    return {
+        "evidence_id": str(ev.id),
+        "deduped": False,
+        "embedded": embedded,
+    }
 
 
 async def _classify(db: AsyncSession, evidence_id: str, tenant_id: uuid.UUID) -> dict:
@@ -131,7 +154,12 @@ def normalize_evidence(self, raw_object_id: str, tenant_id: str):
         raise self.retry(exc=exc) from exc
 
 
-@celery_app.task(bind=True, max_retries=3, default_retry_delay=30, name="extraction.classify_relevance")
+@celery_app.task(
+    bind=True,
+    max_retries=3,
+    default_retry_delay=30,
+    name="extraction.classify_relevance",
+)
 def classify_relevance_task(self, evidence_id: str, tenant_id: str):
     tid = uuid.UUID(tenant_id)
 
@@ -157,7 +185,12 @@ def generate_embeddings(self, evidence_id: str, tenant_id: str):
         raise self.retry(exc=exc) from exc
 
 
-@celery_app.task(bind=True, max_retries=3, default_retry_delay=60, name="extraction.reconstruct_episode")
+@celery_app.task(
+    bind=True,
+    max_retries=3,
+    default_retry_delay=60,
+    name="extraction.reconstruct_episode",
+)
 def reconstruct_episode_task(self, correlation_cluster_id: str, tenant_id: str):
     tid = uuid.UUID(tenant_id)
 

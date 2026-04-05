@@ -24,6 +24,7 @@ class CurrentUser:
         roles: list[str],
         workspace_ids: list[UUID] | None = None,
         principal_type: str = "user",
+        allowed_domain_ids: list[UUID] | None = None,
     ):
         self.user_id = user_id
         self.tenant_id = tenant_id
@@ -31,6 +32,7 @@ class CurrentUser:
         self.roles = roles
         self.workspace_ids = workspace_ids
         self.principal_type = principal_type
+        self.allowed_domain_ids = allowed_domain_ids
 
     def has_role(self, role: str) -> bool:
         return role in self.roles or "platform_super_admin" in self.roles
@@ -47,6 +49,9 @@ def _service_principal(token: str) -> CurrentUser | None:
     ctx = service_token_context(token)
     if not ctx:
         return None
+    allowed: list[UUID] | None = None
+    if "allowed_domain_ids" in ctx:
+        allowed = [UUID(x) for x in ctx["allowed_domain_ids"]]
     return CurrentUser(
         user_id=UUID(ctx["user_id"]),
         tenant_id=UUID(ctx["tenant_id"]),
@@ -54,6 +59,7 @@ def _service_principal(token: str) -> CurrentUser | None:
         roles=ctx["roles"],
         workspace_ids=[],
         principal_type="service_account",
+        allowed_domain_ids=allowed,
     )
 
 
@@ -82,6 +88,10 @@ async def get_current_user(
             settings.jwt_secret_key,
             algorithms=[settings.jwt_algorithm],
         )
+        jwt_domains = payload.get("allowed_domain_ids")
+        allowed_jwt: list[UUID] | None = None
+        if isinstance(jwt_domains, list):
+            allowed_jwt = [UUID(str(x)) for x in jwt_domains]
         return CurrentUser(
             user_id=UUID(payload["sub"]),
             tenant_id=UUID(payload["tenant_id"]),
@@ -89,6 +99,7 @@ async def get_current_user(
             roles=payload.get("roles", []),
             workspace_ids=[UUID(w) for w in payload.get("workspace_ids", [])],
             principal_type="user",
+            allowed_domain_ids=allowed_jwt,
         )
     except (JWTError, KeyError, ValueError) as e:
         raise HTTPException(

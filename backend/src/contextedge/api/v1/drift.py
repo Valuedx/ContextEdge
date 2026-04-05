@@ -4,7 +4,7 @@ from fastapi import APIRouter
 from pydantic import BaseModel
 
 from contextedge.deps import AuthUser, DbSession
-from contextedge.services.drift_service import check_playbook_drift
+from contextedge.services.drift_service import list_drift_alerts
 
 router = APIRouter()
 
@@ -17,10 +17,10 @@ class DriftAlertResponse(BaseModel):
 
 
 @router.get("/alerts", response_model=list[DriftAlertResponse])
-async def list_drift_alerts(db: DbSession, user: AuthUser):
+async def get_drift_alerts(db: DbSession, user: AuthUser):
     """Evaluate drift heuristics for this tenant and return playbook-level alerts.
 
-    May transition approved playbooks to ``expired`` when past ``expiry_at``.
+    Read-only: does not change playbook lifecycle. Expiry transitions run on the Celery drift task.
     """
-    raw = await check_playbook_drift(db, user.tenant_id)
+    raw = await list_drift_alerts(db, user.tenant_id)
     return [DriftAlertResponse(**item) for item in raw]

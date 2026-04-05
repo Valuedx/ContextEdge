@@ -86,6 +86,7 @@ make migrate-down
 ### Practices
 
 - Prefer **Alembic** for shared and production-like environments; do not rely only on **`seed.py`** creating tables.
+- **`0001_initial_schema`** uses `create_all` against live models; for reproducibility and downgrade caveats see [**Migrations**](MIGRATIONS.md).
 - Ensure **no orphan UUIDs** on new FK columns before applying policy-related migrations (`0003`, `0004`).
 - If the API fails with missing-table errors, confirm migrations have been applied: `alembic current` from `backend/`.
 

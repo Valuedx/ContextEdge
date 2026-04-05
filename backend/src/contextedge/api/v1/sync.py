@@ -51,7 +51,9 @@ async def retry_sync_run(run_id: UUID, db: DbSession, user: AuthUser):
         raise HTTPException(status_code=404, detail="Sync run not found")
     if run.status not in ("failed", "dead_letter"):
         raise HTTPException(status_code=400, detail="Only failed runs can be retried")
+    if run.source_object_id is None:
+        raise HTTPException(status_code=400, detail="Run has no source object to retry")
 
     from contextedge.workers.sync_tasks import run_incremental_sync
-    run_incremental_sync.delay(str(run.source_object_id), str(user.tenant_id))
+    run_incremental_sync.delay(str(run.source_id), str(run.source_object_id), str(user.tenant_id))
     return {"status": "retry_queued"}

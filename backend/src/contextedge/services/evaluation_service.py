@@ -1,20 +1,33 @@
 """Evaluation replay against the current retrieval pipeline."""
 
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from contextedge.models.evaluation import EvaluationDataset, EvaluationRun
 from contextedge.search.hybrid_ranker import rank_playbooks
 
 
+def evaluation_run_to_dict(run: EvaluationRun) -> dict:
+    """JSON-serializable snapshot for Celery task results."""
+    return {
+        "id": str(run.id),
+        "tenant_id": str(run.tenant_id),
+        "dataset_id": str(run.dataset_id),
+        "status": run.status,
+        "config": run.config or {},
+        "results": run.results,
+        "started_at": run.started_at.isoformat() if run.started_at else None,
+        "completed_at": run.completed_at.isoformat() if run.completed_at else None,
+    }
+
+
 async def execute_evaluation_run(
     db: AsyncSession,
     run_id: uuid.UUID,
     tenant_id: uuid.UUID,
-) -> EvaluationRun:
+) -> dict:
     run = await db.get(EvaluationRun, run_id)
     if not run or run.tenant_id != tenant_id:
         raise ValueError("evaluation_run_not_found")
@@ -23,20 +36,22 @@ async def execute_evaluation_run(
     if not ds or ds.tenant_id != tenant_id:
         raise ValueError("dataset_not_found")
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     run.status = "running"
     run.started_at = now
     await db.flush()
 
     try:
-        return await _execute_evaluation_core(db, run, ds, tenant_id, now)
+        await _execute_evaluation_core(db, run, ds, tenant_id, now)
+        await db.refresh(run)
+        return evaluation_run_to_dict(run)
     except Exception as exc:
         run.status = "failed"
         run.results = {"error": str(exc)}
-        run.completed_at = datetime.now(timezone.utc)
+        run.completed_at = datetime.now(UTC)
         await db.flush()
         await db.refresh(run)
-        return run
+        return evaluation_run_to_dict(run)
 
 
 async def _execute_evaluation_core(
@@ -45,7 +60,7 @@ async def _execute_evaluation_core(
     ds: EvaluationDataset,
     tenant_id: uuid.UUID,
     now: datetime,
-) -> EvaluationRun:
+) -> None:
     cases_out: list[dict] = []
     correct_top1 = 0
     total = 0
@@ -88,8 +103,7 @@ async def _execute_evaluation_core(
         "cases": cases_out,
     }
     run.status = "completed"
-    run.completed_at = datetime.now(timezone.utc)
+    run.completed_at = datetime.now(UTC)
     await db.flush()
     await db.refresh(run)
-    return run
 

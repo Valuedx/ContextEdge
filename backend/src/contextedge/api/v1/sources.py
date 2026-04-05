@@ -254,11 +254,14 @@ async def trigger_backfill(source_id: UUID, body: BackfillRequest, db: DbSession
         action="backfill.requested",
         resource_type="source",
         resource_id=str(source_id),
-        details={"object_ids": [str(i) for i in body.source_object_ids], "window_days": body.window_days},
+        details={
+            "object_ids": [str(i) for i in body.source_object_ids],
+            "window_days": body.window_days,
+        },
     )
 
     from contextedge.workers.sync_tasks import run_backfill
     for obj_id in body.source_object_ids:
-        run_backfill.delay(str(obj_id), str(user.tenant_id), body.window_days)
+        run_backfill.delay(str(source_id), str(obj_id), str(user.tenant_id), body.window_days)
 
     return {"status": "backfill_queued", "object_count": len(body.source_object_ids)}

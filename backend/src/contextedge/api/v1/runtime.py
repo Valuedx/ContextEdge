@@ -24,6 +24,16 @@ router = APIRouter()
 MATCH_CACHE_TTL_SEC = 3600
 
 
+def _service_token_domain_allowlist(user: AuthUser) -> list[uuid.UUID] | None:
+    """When set, service tokens may only use these domains (plus tenant-wide playbooks).
+
+    ``None`` means no domain allowlist (full tenant). ``[]`` means only resources with no domain.
+    """
+    if user.principal_type != "service_account":
+        return None
+    return user.allowed_domain_ids
+
+
 def _effective_max_risk_tier(user: AuthUser) -> str | None:
     """Cap playbook risk tier returned at runtime based on caller role."""
     if user.has_role("platform_super_admin") or user.has_role("tenant_admin"):
@@ -35,6 +45,27 @@ def _effective_max_risk_tier(user: AuthUser) -> str | None:
     if user.principal_type == "service_account":
         return "high"
     return "medium"
+
+
+async def _resolve_runtime_published_version(
+    db: DbSession,
+    playbook: Playbook,
+) -> PlaybookVersion | None:
+    """Resolve a **published** version; ignores unpublished ``current_version_id`` pointers."""
+    if playbook.current_version_id:
+        cur = await db.get(PlaybookVersion, playbook.current_version_id)
+        if cur is not None and cur.published_at is not None:
+            return cur
+    q = await db.execute(
+        select(PlaybookVersion)
+        .where(
+            PlaybookVersion.playbook_id == playbook.id,
+            PlaybookVersion.published_at.is_not(None),
+        )
+        .order_by(PlaybookVersion.published_at.desc())
+        .limit(1)
+    )
+    return q.scalar_one_or_none()
 
 
 async def _assert_domain_in_tenant(
@@ -65,11 +96,21 @@ async def runtime_match(
     if body.domain_id is not None:
         await _assert_domain_in_tenant(db, user.tenant_id, body.domain_id)
 
+    sa_domains = _service_token_domain_allowlist(user)
+    if sa_domains is not None and body.domain_id is not None and body.domain_id not in sa_domains:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="domain_id is not allowed for this service token",
+        )
+
     max_risk = _effective_max_risk_tier(user)
     filters_applied: dict = {
         "domain_id": str(body.domain_id) if body.domain_id else None,
         "max_risk_tier": max_risk,
         "risk_cap_source": "caller_role",
+        "service_token_domain_allowlist": (
+            [str(d) for d in sa_domains] if sa_domains is not None else None
+        ),
     }
 
     ranked = await rank_playbooks(
@@ -81,6 +122,7 @@ async def runtime_match(
         top_k=body.top_k,
         domain_id=body.domain_id,
         max_risk_tier=max_risk,
+        allowed_domain_ids=sa_domains,
     )
 
     match_id = str(uuid.uuid4())
@@ -200,13 +242,39 @@ async def get_runtime_playbook(
             detail="Caller is not allowed to retrieve playbooks at this risk tier",
         )
 
-    if playbook.current_version_id:
-        ver_result = await db.execute(
-            select(PlaybookVersion).where(PlaybookVersion.id == playbook.current_version_id)
+    sa_domains = _service_token_domain_allowlist(user)
+    if sa_domains is not None:
+        if playbook.domain_id is not None and playbook.domain_id not in sa_domains:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Playbook is outside the domain scope for this service token",
+            )
+        if domain_id is not None and domain_id not in sa_domains:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="domain_id is not allowed for this service token",
+            )
+
+    ver: PlaybookVersion | None = None
+    if version:
+        vq = await db.execute(
+            select(PlaybookVersion)
+            .where(
+                PlaybookVersion.playbook_id == playbook.id,
+                PlaybookVersion.semantic_version == version,
+                PlaybookVersion.published_at.is_not(None),
+            )
+            .order_by(PlaybookVersion.published_at.desc(), PlaybookVersion.created_at.desc())
+            .limit(1)
         )
-        ver = ver_result.scalar_one_or_none()
-        if ver:
-            return ver
+        ver = vq.scalars().first()
+        if not ver:
+            raise HTTPException(status_code=404, detail="Published playbook version not found")
+    else:
+        ver = await _resolve_runtime_published_version(db, playbook)
+
+    if ver:
+        return ver
 
     raise HTTPException(status_code=404, detail="No published version found")
 

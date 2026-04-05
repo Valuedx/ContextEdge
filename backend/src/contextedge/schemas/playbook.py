@@ -87,6 +87,12 @@ class PlaybookTransition(BaseModel):
 
 
 class PlaybookVersionCreate(BaseModel):
+    semantic_version: str | None = Field(
+        None,
+        min_length=1,
+        max_length=20,
+        pattern=r"^\d+\.\d+\.\d+$",
+    )
     trigger_conditions: dict = Field(default_factory=dict)
     branching_logic: dict = Field(default_factory=dict)
     inputs: list = Field(default_factory=list)

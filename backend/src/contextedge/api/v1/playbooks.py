@@ -3,7 +3,6 @@ from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Query, status
 from sqlalchemy import select
-from sqlalchemy.orm import selectinload
 
 from contextedge.deps import AuthUser, DbSession
 from contextedge.middleware.audit import log_audit_event
@@ -17,6 +16,7 @@ from contextedge.schemas.playbook import (
     PlaybookVersionResponse,
 )
 from contextedge.services.playbook_service import (
+    DuplicateVersionError,
     InvalidTransitionError,
     create_playbook_version,
     transition_playbook,
@@ -114,7 +114,13 @@ async def transition(playbook_id: UUID, body: PlaybookTransition, db: DbSession,
         raise HTTPException(status_code=404, detail="Playbook not found")
 
     try:
-        playbook = await transition_playbook(db, playbook, body.new_state, user.user_id, body.comments)
+        playbook = await transition_playbook(
+            db,
+            playbook,
+            body.new_state,
+            user.user_id,
+            body.comments,
+        )
     except InvalidTransitionError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -142,8 +148,17 @@ async def list_versions(playbook_id: UUID, db: DbSession, user: AuthUser):
     return result.scalars().all()
 
 
-@router.post("/{playbook_id}/versions", response_model=PlaybookVersionResponse, status_code=status.HTTP_201_CREATED)
-async def create_version(playbook_id: UUID, body: PlaybookVersionCreate, db: DbSession, user: AuthUser):
+@router.post(
+    "/{playbook_id}/versions",
+    response_model=PlaybookVersionResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_version(
+    playbook_id: UUID,
+    body: PlaybookVersionCreate,
+    db: DbSession,
+    user: AuthUser,
+):
     user.require_role("knowledge_manager")
     result = await db.execute(
         select(Playbook).where(Playbook.id == playbook_id, Playbook.tenant_id == user.tenant_id)
@@ -152,5 +167,8 @@ async def create_version(playbook_id: UUID, body: PlaybookVersionCreate, db: DbS
     if not playbook:
         raise HTTPException(status_code=404, detail="Playbook not found")
 
-    version = await create_playbook_version(db, playbook, body.model_dump(), user.user_id)
+    try:
+        version = await create_playbook_version(db, playbook, body.model_dump())
+    except DuplicateVersionError as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
     return version
