@@ -25,6 +25,18 @@ structlog.configure(
 logger = structlog.get_logger()
 
 
+def _cors_origins() -> list[str]:
+    origins: list[str] = []
+
+    for value in [settings.app_cors_origins, settings.frontend_url]:
+        for origin in value.split(","):
+            normalized = origin.strip()
+            if normalized and normalized not in origins:
+                origins.append(normalized)
+
+    return origins or ["http://localhost:3000"]
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     app.state.redis = aioredis.from_url(settings.redis_url, decode_responses=True)
@@ -44,19 +56,18 @@ def create_app() -> FastAPI:
         redoc_url="/redoc",
     )
 
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=settings.app_cors_origins.split(","),
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
-
     from contextedge.middleware.request_audit import RequestAuditMiddleware
     from contextedge.middleware.request_context import TenantContextMiddleware
 
     app.add_middleware(RequestAuditMiddleware)
     app.add_middleware(TenantContextMiddleware)
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=_cors_origins(),
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
     Instrumentator().instrument(app).expose(app)
 

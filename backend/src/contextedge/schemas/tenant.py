@@ -1,7 +1,23 @@
 from datetime import datetime
+from typing import Annotated
 from uuid import UUID
 
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import AfterValidator, BaseModel, Field
+
+
+def _normalize_email(value: str) -> str:
+    email = value.strip().lower()
+    if " " in email or email.count("@") != 1:
+        raise ValueError("Invalid email address")
+
+    local_part, domain = email.split("@", maxsplit=1)
+    if not local_part or not domain or domain.startswith(".") or domain.endswith("."):
+        raise ValueError("Invalid email address")
+
+    return email
+
+
+EmailAddress = Annotated[str, AfterValidator(_normalize_email)]
 
 
 class TenantCreate(BaseModel):
@@ -82,7 +98,7 @@ class DomainResponse(BaseModel):
 
 
 class UserCreate(BaseModel):
-    email: EmailStr
+    email: EmailAddress
     display_name: str = Field(..., min_length=1, max_length=255)
     password: str | None = Field(None, min_length=8)
     external_id: str | None = None
@@ -128,7 +144,7 @@ class RoleBindingResponse(BaseModel):
 
 
 class LoginRequest(BaseModel):
-    email: EmailStr
+    email: EmailAddress
     password: str
 
 

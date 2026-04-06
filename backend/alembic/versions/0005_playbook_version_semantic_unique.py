@@ -55,8 +55,58 @@ def _canonical_duplicate_sort_key(row: dict) -> tuple:
     )
 
 
+def _ensure_alembic_version_column_capacity(bind: sa.Connection, minimum_length: int) -> None:
+    current_length = bind.execute(
+        sa.text(
+            """
+            SELECT character_maximum_length
+            FROM information_schema.columns
+            WHERE table_name = 'alembic_version'
+              AND column_name = 'version_num'
+            ORDER BY CASE WHEN table_schema = current_schema() THEN 0 ELSE 1 END
+            LIMIT 1
+            """
+        )
+    ).scalar_one_or_none()
+
+    if current_length is None or current_length >= minimum_length:
+        return
+
+    op.execute(
+        sa.text(
+            "ALTER TABLE alembic_version ALTER COLUMN version_num TYPE VARCHAR(:length)"
+        ).bindparams(length=minimum_length)
+    )
+
+
+def _has_unique_constraint(
+    inspector: sa.Inspector,
+    table_name: str,
+    constraint_name: str,
+    columns: list[str],
+) -> bool:
+    for constraint in inspector.get_unique_constraints(table_name):
+        if constraint.get("name") != constraint_name:
+            continue
+        if constraint.get("column_names") != columns:
+            continue
+        return True
+
+    for index in inspector.get_indexes(table_name):
+        if index.get("name") != constraint_name:
+            continue
+        if not index.get("unique"):
+            continue
+        if index.get("column_names") != columns:
+            continue
+        return True
+
+    return False
+
+
 def upgrade() -> None:
     bind = op.get_bind()
+    _ensure_alembic_version_column_capacity(bind, 255)
     existing_versions_rows = bind.execute(
         sa.text(
             """
@@ -124,16 +174,30 @@ def upgrade() -> None:
             )
             used_versions.add(candidate)
 
-    op.create_unique_constraint(
-        "uq_playbook_versions_playbook_semantic_version",
+    inspector = sa.inspect(bind)
+    if not _has_unique_constraint(
+        inspector,
         "playbook_versions",
+        "uq_playbook_versions_playbook_semantic_version",
         ["playbook_id", "semantic_version"],
-    )
+    ):
+        op.create_unique_constraint(
+            "uq_playbook_versions_playbook_semantic_version",
+            "playbook_versions",
+            ["playbook_id", "semantic_version"],
+        )
 
 
 def downgrade() -> None:
-    op.drop_constraint(
-        "uq_playbook_versions_playbook_semantic_version",
+    inspector = sa.inspect(op.get_bind())
+    if _has_unique_constraint(
+        inspector,
         "playbook_versions",
-        type_="unique",
-    )
+        "uq_playbook_versions_playbook_semantic_version",
+        ["playbook_id", "semantic_version"],
+    ):
+        op.drop_constraint(
+            "uq_playbook_versions_playbook_semantic_version",
+            "playbook_versions",
+            type_="unique",
+        )

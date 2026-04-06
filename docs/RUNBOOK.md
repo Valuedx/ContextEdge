@@ -157,7 +157,7 @@ Equivalent:
 
 ```bash
 cd backend
-python -m contextedge.seed
+python dev.py seed
 ```
 
 Seeded development users:
@@ -182,10 +182,12 @@ With infrastructure running:
 
 Equivalent direct commands:
 
-- API: `cd backend && uvicorn contextedge.main:app --reload --port 8000`
-- Worker: `cd backend && celery -A contextedge.workers.celery_app worker -l INFO -Q default,sync,hydration,extraction,pattern,evaluation`
-- Beat: `cd backend && celery -A contextedge.workers.celery_app beat -l INFO`
+- API: `cd backend && python dev.py api`
+- Worker: `cd backend && python dev.py worker`
+- Beat: `cd backend && python dev.py beat`
 - Frontend: `cd frontend && npm run dev`
+
+The `python dev.py ...` launcher adds `backend/src` to `PYTHONPATH` automatically and uses the active interpreter. If `contextedge` still cannot be imported, return to [SETUP_GUIDE.md](SETUP_GUIDE.md) and verify the interpreter path, Python version, and dependency install before retrying.
 
 Worker queues currently used:
 
@@ -253,6 +255,7 @@ Current state:
 | Runtime returns 403 | Caller risk tier cap, playbook/domain mismatch, or service-token domain allowlist |
 | Runtime explain returns 404 | Redis cache expired or there was no previous `POST /runtime/match` |
 | Missing tables or columns | Run migrations and verify Alembic head |
+| `ModuleNotFoundError: No module named 'contextedge'` | Start host-run services with `cd backend && python dev.py ...` so `src/` is added automatically. If it still fails, check `python -c "import sys; print(sys.executable); print(sys.version)"` and verify you are using a Python 3.12+ backend virtualenv with dependencies installed |
 | Celery tasks do not execute | Worker not running, Redis misconfigured, broker URL mismatch |
 | MinIO failures | Endpoint, credentials, bucket name, host vs container hostname |
 | Frontend cannot reach API | `NEXT_PUBLIC_API_URL`, backend port, and `APP_CORS_ORIGINS` |

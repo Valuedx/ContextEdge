@@ -38,8 +38,31 @@ Shortest host-run path:
 
 ```bash
 make up
-cd backend && pip install -e ".[dev]"
+cd backend
+python -m venv .venv
+. .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -e ".[dev]"
 cd ../frontend && npm install
+cd ..
+make migrate
+make seed
+make backend-dev
+```
+
+Windows PowerShell equivalent:
+
+```powershell
+make up
+cd backend
+# If `py` is unavailable on your machine, use the full path to a Python 3.12+
+# executable instead.
+py -3.12 -m venv .venv
+.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -e ".[dev]"
+cd ..\frontend
+npm install
 cd ..
 make migrate
 make seed
