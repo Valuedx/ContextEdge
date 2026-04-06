@@ -28,16 +28,16 @@ migrate-down:
 	cd backend && alembic downgrade -1
 
 seed:
-	cd backend && python -m contextedge.seed
+	cd backend && python dev.py seed
 
 backend-dev:
-	cd backend && uvicorn contextedge.main:app --reload --port 8000
+	cd backend && python dev.py api
 
 celery-dev:
-	cd backend && celery -A contextedge.workers.celery_app worker -l INFO -Q default,sync,hydration,extraction,pattern,evaluation
+	cd backend && python dev.py worker
 
 celery-beat-dev:
-	cd backend && celery -A contextedge.workers.celery_app beat -l INFO
+	cd backend && python dev.py beat
 
 # Frontend commands
 frontend-dev:
@@ -48,11 +48,11 @@ frontend-build:
 
 # Testing
 test:
-	cd backend && pytest
+	cd backend && python -m pytest
 	cd frontend && npm test
 
 test-backend:
-	cd backend && pytest -v
+	cd backend && python -m pytest -v
 
 test-frontend:
 	cd frontend && npm test

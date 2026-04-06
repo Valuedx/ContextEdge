@@ -140,7 +140,7 @@ Equivalent:
 
 ```bash
 cd backend
-python -m contextedge.seed
+python dev.py seed
 cd ..
 ```
 
@@ -159,7 +159,7 @@ Equivalent:
 
 ```bash
 cd backend
-uvicorn contextedge.main:app --reload --port 8000
+python dev.py api
 ```
 
 ### Step 7: Start the Celery worker
@@ -172,7 +172,7 @@ Equivalent:
 
 ```bash
 cd backend
-celery -A contextedge.workers.celery_app worker -l INFO -Q default,sync,hydration,extraction,pattern,evaluation
+python dev.py worker
 ```
 
 ### Step 8: Start Celery beat
@@ -185,7 +185,7 @@ Equivalent:
 
 ```bash
 cd backend
-celery -A contextedge.workers.celery_app beat -l INFO
+python dev.py beat
 ```
 
 ### Step 9: Start the frontend

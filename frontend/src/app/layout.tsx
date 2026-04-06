@@ -31,7 +31,10 @@ export default function RootLayout({
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
       suppressHydrationWarning
     >
-      <body className="flex min-h-full flex-col bg-background">
+      <body
+        className="flex min-h-full flex-col bg-background"
+        suppressHydrationWarning
+      >
         <Script
           id="contextedge-theme-init"
           strategy="beforeInteractive"
