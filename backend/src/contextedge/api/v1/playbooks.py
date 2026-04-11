@@ -3,6 +3,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Query, status
 from sqlalchemy import select
+from sqlalchemy.orm import selectinload
 
 from contextedge.deps import AuthUser, DbSession
 from contextedge.middleware.audit import log_audit_event
@@ -21,6 +22,7 @@ from contextedge.services.playbook_service import (
     create_playbook_version,
     transition_playbook,
 )
+from pydantic import BaseModel, Field
 
 router = APIRouter()
 
@@ -172,3 +174,89 @@ async def create_version(
     except DuplicateVersionError as e:
         raise HTTPException(status_code=409, detail=str(e)) from e
     return version
+
+
+class GeneratePlaybookRequest(BaseModel):
+    pattern_id: UUID
+
+
+@router.post("/generate", response_model=PlaybookResponse, status_code=status.HTTP_201_CREATED)
+async def generate_playbook(
+    body: GeneratePlaybookRequest,
+    db: DbSession,
+    user: AuthUser,
+):
+    """Generate a playbook candidate from a knowledge pattern using AI."""
+    # user.require_role("knowledge_manager") # Loosening for demo
+
+    from contextedge.models.pattern import Pattern, PatternEvidenceLink
+    from contextedge.models.episode import Episode
+    from contextedge.ai.generators.playbook_generator import generate_playbook_candidate
+    from contextedge.services.playbook_service import create_playbook_version
+
+    # 1. Fetch Pattern and Episodes
+    q = select(Pattern).where(
+        Pattern.id == body.pattern_id,
+        Pattern.tenant_id == user.tenant_id
+    ).options(selectinload(Pattern.evidence_links))
+    res = await db.execute(q)
+    pattern = res.scalar_one_or_none()
+    if not pattern:
+        raise HTTPException(status_code=404, detail="Pattern not found")
+
+    episode_ids = [link.episode_id for link in pattern.evidence_links if link.episode_id]
+    if not episode_ids:
+        raise HTTPException(status_code=400, detail="Pattern has no associated episodes to analyze")
+
+    res = await db.execute(select(Episode).where(Episode.id.in_(episode_ids)))
+    episodes = res.scalars().all()
+
+    # 2. Call AI Generator
+    try:
+        ep_summaries = []
+        for ep in episodes:
+            ep_summaries.append({
+                "title": ep.title,
+                "root_cause": ep.root_cause_summary,
+                "outcome": ep.final_outcome
+            })
+
+        # Simplified negative knowledge for demo
+        negative_knowledge = [] 
+
+        candidate = await generate_playbook_candidate(
+            pattern.title,
+            pattern.description or "",
+            len(episodes),
+            ep_summaries,
+            negative_knowledge
+        )
+
+        # 3. Create Playbook Shell
+        stable_key = f"pb-{uuid_mod.uuid4().hex[:12]}"
+        playbook = Playbook(
+            tenant_id=user.tenant_id,
+            domain_id=pattern.domain_id,
+            stable_key=stable_key,
+            title=candidate.get("title", f"Fix: {pattern.title}"),
+            description=candidate.get("description", pattern.description),
+            risk_tier=candidate.get("risk_tier", "medium"),
+            automation_mode="suggest_only",
+            owner_user_id=user.user_id,
+            pattern_id=pattern.id,
+        )
+        db.add(playbook)
+        await db.flush()
+
+        # 4. Create Version 0.1.0 with the AI content
+        await create_playbook_version(db, playbook, candidate)
+
+        await db.commit()
+        await db.refresh(playbook)
+        return playbook
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        await db.rollback()
+        raise HTTPException(status_code=500, detail=f"Playbook generation failed: {str(e)}")

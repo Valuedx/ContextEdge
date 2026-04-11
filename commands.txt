@@ -1,0 +1,50 @@
+WSL----->
+cd /mnt/d/ContextEdge/ContextEdge/backend
+source pvenv/bin/activate
+
+Commands to start Servers ------->
+
+*****Start Backend*********
+cd backend
+python dev.py api
+
+*************Start the frontend***************
+cd frontend
+npm run dev
+
+**********Start the Celery worker********
+
+cd backend
+python dev.py worker
+
+
+*************Start Celery beat**************
+
+cd backend
+python dev.py beat
+
+***********start MinIO *******************
+
+cd minio
+minio.exe server data --console-address ":9001"
+
+give me prompt--- now you have manually executed commands here for every step. 
+but i want to do it from frontend to show working pipeline in demo.   
+ so at first step ---Step 1: Ingestion (Data Collection)   
+to fetch dat from local directory show browse option to select local directory or folder. 
+Step 2: Evidence → Threads, at page --http://localhost:3000/evidence  , give me option or command button to create Evidence and show on frontend , at Step 3: Thread → Episode, http://localhost:3000/episodes give me command button , 
+create and fetch episodes and show on webpage .
+
+MINIO_ROOT_USER=contextedge
+MINIO_ROOT_PASSWORD=contextedge-secret
+MINIO_ENDPOINT=localhost:9000
+MINIO_BUCKET=contextedge-evidence
+MINIO_USE_SSL=false 
+
+I've explained why the graph looks simple for now and provided a plan to upgrade it into a professional Incident Cluster visualization.
+
+The new graph will show:
+
+Dots connected by relationship: ------> Pattern → Episode → Users Affected → Log Evidence.
+Color-coding: Different colors for incidents, users, and logs.
+Labels: Real titles and names instead of generic IDs.

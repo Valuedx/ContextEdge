@@ -5,7 +5,7 @@ from pydantic import BaseModel, Field
 
 
 class SourceCreate(BaseModel):
-    source_type: str = Field(..., pattern=r"^(teams|gmail|servicenow|jira_sm|confluence|sharepoint|exchange)$")
+    source_type: str = Field(..., pattern=r"^(local_file|teams|gmail|servicenow|jira_sm|confluence|sharepoint|exchange)$")
     display_name: str = Field(..., min_length=1, max_length=255)
     purpose: str | None = None
     workspace_id: UUID | None = None
@@ -99,3 +99,15 @@ class SyncRunResponse(BaseModel):
 class BackfillRequest(BaseModel):
     source_object_ids: list[UUID]
     window_days: int = Field(90, ge=1, le=365)
+
+
+class LocalFilePayload(BaseModel):
+    filename: str
+    content: str
+    content_type: str = "text/plain"
+    metadata: dict = Field(default_factory=dict)
+
+
+class LocalIngestRequest(BaseModel):
+    source_id: UUID
+    files: list[LocalFilePayload]

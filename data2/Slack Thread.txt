@@ -1,0 +1,22 @@
+{
+  "source": "slack",
+  "channel": "#app-support",
+  "thread_id": "slack-99821",
+  "messages": [
+    {
+      "user": "engineer_1",
+      "timestamp": "2026-04-09T10:20:00Z",
+      "text": "Seeing multiple crashes in billing service after today's patch."
+    },
+    {
+      "user": "engineer_2",
+      "timestamp": "2026-04-09T10:25:10Z",
+      "text": "Looks like null pointer exception in payment module."
+    },
+    {
+      "user": "lead_engineer",
+      "timestamp": "2026-04-09T10:40:45Z",
+      "text": "Rollback patch v2.3.1. Known issue with dependency mismatch."
+    }
+  ]
+}

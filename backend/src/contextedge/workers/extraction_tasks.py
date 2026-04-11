@@ -125,9 +125,9 @@ async def _reconstruct(db: AsyncSession, cluster_id: str, tenant_id: uuid.UUID) 
     if not items:
         return {"error": "no_evidence_found"}
 
-    from contextedge.services.episode_service import create_episode_from_evidence
+    from contextedge.services.episode_service import create_episodes_from_evidence
 
-    episode = await create_episode_from_evidence(
+    created_episodes = await create_episodes_from_evidence(
         db,
         tenant_id=tenant_id,
         domain_id=None,
@@ -135,10 +135,17 @@ async def _reconstruct(db: AsyncSession, cluster_id: str, tenant_id: uuid.UUID) 
         evidence_ids=[uuid.UUID(i["evidence_id"]) for i in items],
     )
     await db.flush()
-    steps = (
-        await db.execute(select(EpisodeStep).where(EpisodeStep.episode_id == episode.id))
-    ).scalars().all()
-    return {"episode_id": str(episode.id), "steps": len(steps)}
+    
+    total_steps = 0
+    for episode in created_episodes:
+        res = await db.execute(select(EpisodeStep).where(EpisodeStep.episode_id == episode.id))
+        total_steps += len(res.scalars().all())
+
+    return {
+        "episode_ids": [str(ep.id) for ep in created_episodes],
+        "count": len(created_episodes),
+        "total_steps": total_steps
+    }
 
 
 @celery_app.task(bind=True, max_retries=3, default_retry_delay=60)
@@ -149,7 +156,10 @@ def normalize_evidence(self, raw_object_id: str, tenant_id: str):
         return await _normalize(db, raw_object_id, tid)
 
     try:
-        return run_async(work)
+        res = run_async(work)
+        if res and "evidence_id" in res:
+            classify_relevance_task.delay(res["evidence_id"], tenant_id)
+        return res
     except Exception as exc:
         raise self.retry(exc=exc) from exc
 

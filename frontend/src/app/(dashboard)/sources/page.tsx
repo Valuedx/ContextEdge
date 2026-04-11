@@ -1,8 +1,9 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ColumnDef } from "@tanstack/react-table";
-import { Plus } from "lucide-react";
+import { Plus, Trash2, Loader2 } from "lucide-react";
+import { toast } from "sonner";
 
 import { PageHeader } from "@/components/common/page-header";
 import { DataTable } from "@/components/common/data-table";
@@ -12,6 +13,43 @@ import { Button } from "@/components/ui/button";
 import { api } from "@/lib/api";
 import type { Source } from "@/lib/types";
 import Link from "next/link";
+
+import { useState } from "react";
+import { AddSourceDialog } from "@/components/sources/add-source-dialog";
+
+function SourceActions({ sourceId, name }: { sourceId: string; name: string }) {
+  const queryClient = useQueryClient();
+  const mutation = useMutation({
+    mutationFn: () => api.delete(`/sources/${sourceId}`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["sources"] });
+      toast.success(`Source "${name}" deleted`);
+    },
+    onError: (err: any) => {
+      toast.error(err.message || "Failed to delete source");
+    },
+  });
+
+  return (
+    <Button
+      variant="ghost"
+      size="icon"
+      className="text-muted-foreground hover:text-destructive"
+      onClick={() => {
+        if (confirm(`Are you sure you want to delete "${name}"? This will also remove all associated evidence logs.`)) {
+          mutation.mutate();
+        }
+      }}
+      disabled={mutation.isPending}
+    >
+      {mutation.isPending ? (
+        <Loader2 className="h-4 w-4 animate-spin" />
+      ) : (
+        <Trash2 className="h-4 w-4" />
+      )}
+    </Button>
+  );
+}
 
 const columns: ColumnDef<Source>[] = [
   {
@@ -40,9 +78,18 @@ const columns: ColumnDef<Source>[] = [
     header: "Created",
     cell: ({ row }) => new Date(row.getValue("created_at")).toLocaleDateString(),
   },
+  {
+    id: "actions",
+    cell: ({ row }) => (
+      <div className="flex justify-end">
+        <SourceActions sourceId={row.original.id} name={row.original.display_name} />
+      </div>
+    ),
+  },
 ];
 
 export default function SourcesPage() {
+  const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
   const { data = [], isLoading } = useQuery<Source[]>({
     queryKey: ["sources"],
     queryFn: () => api.get("/sources"),
@@ -54,12 +101,14 @@ export default function SourcesPage() {
         title="Sources"
         description="Manage connected data sources and their ingestion configuration."
         actions={
-          <Button>
+          <Button onClick={() => setIsAddDialogOpen(true)}>
             <Plus className="mr-2 h-4 w-4" />
             Add Source
           </Button>
         }
       />
+
+      <AddSourceDialog open={isAddDialogOpen} onOpenChange={setIsAddDialogOpen} />
       {isLoading ? (
         <DataTableSkeleton columns={6} />
       ) : data.length === 0 ? (

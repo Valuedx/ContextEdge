@@ -1,0 +1,18 @@
+{
+  "source": "email",
+  "thread_id": "email-77441",
+  "subject": "URGENT: Billing Service Down",
+  "participants": ["support@company.com", "vendor@billing.com"],
+  "messages": [
+    {
+      "from": "support@company.com",
+      "timestamp": "2026-04-09T10:30:00Z",
+      "body": "Service is crashing post deployment. Need urgent help."
+    },
+    {
+      "from": "vendor@billing.com",
+      "timestamp": "2026-04-09T11:00:00Z",
+      "body": "Issue confirmed in patch v2.3.1 due to incompatible library version."
+    }
+  ]
+}

@@ -16,6 +16,12 @@ class PatternResponse(BaseModel):
     active_flag: bool
     contradiction_score: float
     freshness_score: float
+    trigger_conditions: list[str] | None = None
+    core_entities: list[str] | None = None
+    observed_errors: list[str] | None = None
+    root_causes: list[str] | None = None
+    resolution_steps: list[str] | None = None
+    evidence_summary: dict | None = None
     created_at: datetime
     updated_at: datetime
 

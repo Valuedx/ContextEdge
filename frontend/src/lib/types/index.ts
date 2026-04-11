@@ -180,6 +180,12 @@ export interface Pattern {
   active_flag: boolean;
   contradiction_score: number;
   freshness_score: number;
+  trigger_conditions?: string[] | null;
+  core_entities?: string[] | null;
+  observed_errors?: string[] | null;
+  root_causes?: string[] | null;
+  resolution_steps?: string[] | null;
+  evidence_summary?: Record<string, number> | null;
   created_at: string;
   updated_at: string;
 }

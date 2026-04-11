@@ -1,0 +1,23 @@
+{
+  "source": "slack",
+  "channel": "#it-support",
+  "thread_id": "thread_567",
+  "messages": [
+    {
+      "user": "engineer_1",
+      "timestamp": "2026-04-09T10:16:00Z",
+      "text": "Anyone seeing VPN login failures?"
+    },
+    {
+      "user": "engineer_2",
+      "timestamp": "2026-04-09T10:18:00Z",
+      "text": "Yes, seems related to expired tokens."
+    },
+    {
+      "user": "engineer_1",
+      "timestamp": "2026-04-09T10:20:00Z",
+      "text": "Resetting token worked for me."
+    }
+  ],
+  "tags": ["vpn", "incident"]
+}

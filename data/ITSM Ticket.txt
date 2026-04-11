@@ -1,0 +1,21 @@
+{
+  "source": "itsm",
+  "ticket_id": "INC-100234",
+  "created_at": "2026-04-09T10:15:00Z",
+  "updated_at": "2026-04-09T10:45:00Z",
+  "status": "resolved",
+  "priority": "high",
+  "user": {
+    "id": "user_123",
+    "name": "Rahul Sharma",
+    "department": "Finance"
+  },
+  "issue": "Unable to login to VPN",
+  "description": "User reports VPN connection fails with authentication error.",
+  "resolution": "Reset user token and restarted VPN service",
+  "tags": ["vpn", "login", "authentication"],
+  "environment": {
+    "os": "Windows 11",
+    "vpn_version": "5.2.1"
+  }
+}

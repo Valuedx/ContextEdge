@@ -1,0 +1,9 @@
+{
+  "source": "monitoring",
+  "alert_id": "ALERT-9921",
+  "metric": "application_crash_rate",
+  "threshold": ">= 5 crashes/min",
+  "current_value": "12 crashes/min",
+  "status": "Critical",
+  "triggered_at": "2026-04-09T10:19:00Z"
+}

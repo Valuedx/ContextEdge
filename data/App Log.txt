@@ -1,0 +1,4 @@
+2026-04-09 10:12:01 ERROR vpn-service AuthFailure user_id=user_123 reason=token_expired
+2026-04-09 10:12:05 ERROR vpn-service AuthFailure user_id=user_456 reason=token_expired
+2026-04-09 10:12:10 INFO vpn-service RetryAttempt user_id=user_123
+2026-04-09 10:12:15 ERROR vpn-service AuthFailure user_id=user_123 reason=token_expired

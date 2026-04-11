@@ -1,0 +1,13 @@
+{
+  "source": "itsm",
+  "ticket_id": "INC-45821",
+  "created_at": "2026-04-09T10:15:23Z",
+  "priority": "P2",
+  "category": "Application",
+  "service": "Billing Service",
+  "reported_by": "user123",
+  "description": "Billing service crashes immediately after login post latest patch deployment.",
+  "status": "Resolved",
+  "resolution_notes": "Rollback patch v2.3.1 to v2.2.9 resolved the issue.",
+  "assigned_group": "App Support Team"
+}

@@ -1,0 +1,11 @@
+{
+  "source": "monitoring",
+  "alert_id": "alert_456",
+  "timestamp": "2026-04-09T10:12:00Z",
+  "service": "vpn-service",
+  "metric": "auth_failure_rate",
+  "value": 85,
+  "threshold": 50,
+  "severity": "critical",
+  "message": "Authentication failure rate exceeded threshold"
+}

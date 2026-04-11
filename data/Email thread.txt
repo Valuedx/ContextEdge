@@ -1,0 +1,21 @@
+{
+  "source": "email",
+  "mailbox": "support@company.com",
+  "thread_id": "email_thread_789",
+  "emails": [
+    {
+      "from": "user@company.com",
+      "to": "support@company.com",
+      "timestamp": "2026-04-09T10:10:00Z",
+      "subject": "VPN Login Issue",
+      "body": "I cannot connect to VPN since morning."
+    },
+    {
+      "from": "support@company.com",
+      "to": "user@company.com",
+      "timestamp": "2026-04-09T10:30:00Z",
+      "subject": "Re: VPN Login Issue",
+      "body": "Please try resetting your authentication token."
+    }
+  ]
+}

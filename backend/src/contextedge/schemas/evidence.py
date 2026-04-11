@@ -116,3 +116,7 @@ class EvidenceSearchParams(BaseModel):
     to_date: datetime | None = None
     limit: int = Field(50, ge=1, le=200)
     offset: int = Field(0, ge=0)
+
+
+class ReconstructRequest(BaseModel):
+    evidence_ids: list[UUID] | None = None

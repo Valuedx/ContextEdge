@@ -1,0 +1,4 @@
+Apr 09 10:13:01 server1 vpn-service[2345]: authentication failed for user_123
+Apr 09 10:13:05 server1 vpn-service[2345]: token expired detected
+Apr 09 10:13:10 server1 vpn-service[2345]: restart initiated
+Apr 09 10:13:20 server1 vpn-service[2345]: service running normally

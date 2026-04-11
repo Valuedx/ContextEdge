@@ -1,13 +1,19 @@
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, Query
+from datetime import datetime, timedelta, UTC
+from fastapi import APIRouter, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
 from contextedge.deps import AuthUser, DbSession
 from contextedge.middleware.audit import log_audit_event
 from contextedge.models.episode import Episode, EpisodeStep
-from contextedge.schemas.evidence import EpisodeDetail, EpisodeResponse, EpisodeUpdate
+from contextedge.schemas.evidence import (
+    EpisodeDetail,
+    EpisodeResponse,
+    EpisodeUpdate,
+    ReconstructRequest,
+)
 
 router = APIRouter()
 
@@ -106,3 +112,96 @@ async def approve_episode(episode_id: UUID, db: DbSession, user: AuthUser):
         resource_id=str(episode.id),
     )
     return episode
+
+
+@router.post("/reconstruct", status_code=status.HTTP_202_ACCEPTED)
+async def trigger_manual_reconstruction(
+    body: ReconstructRequest,
+    db: DbSession,
+    user: AuthUser,
+):
+    """Manually trigger episode reconstruction from evidence."""
+    user.require_role("domain_admin")
+
+    evidence_ids = body.evidence_ids
+
+    if not evidence_ids:
+        # Fallback: Find all relevant evidence from the last 24 hours
+        from contextedge.models.evidence import EvidenceItem
+        since = datetime.now(UTC) - timedelta(hours=24)
+        q = select(EvidenceItem.id).where(
+            EvidenceItem.tenant_id == user.tenant_id,
+            EvidenceItem.relevance_state.in_(["relevant", "operational"]),
+            EvidenceItem.ingested_at >= since
+        )
+        result = await db.execute(q)
+        evidence_ids = [r for r in result.scalars().all()]
+
+    if not evidence_ids:
+        raise HTTPException(
+            status_code=400,
+            detail="No relevant evidence found to reconstruct an episode."
+        )
+
+    from contextedge.workers.extraction_tasks import _reconstruct
+    cluster_id = ",".join([str(eid) for eid in evidence_ids])
+
+    # Call _reconstruct directly to bypass Celery worker lag on Windows
+    await _reconstruct(db, cluster_id, user.tenant_id)
+
+    await db.commit()
+
+    await log_audit_event(
+        db,
+        tenant_id=user.tenant_id,
+        actor_id=user.user_id,
+        actor_email=user.email,
+        action="episode.reconstruction_triggered",
+        resource_type="episode",
+        resource_id="manual",
+        details={"evidence_count": len(evidence_ids)},
+    )
+
+    return {
+        "status": "reconstruction_queued",
+        "evidence_count": len(evidence_ids),
+        "correlation_id": cluster_id
+    }
+
+
+@router.delete("/{episode_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_episode(episode_id: UUID, db: DbSession, user: AuthUser):
+    """Permanently delete an episode and its steps."""
+    user.require_role("domain_admin")
+
+    episode = (
+        await db.execute(
+            select(Episode).where(Episode.id == episode_id, Episode.tenant_id == user.tenant_id)
+        )
+    ).scalar_one_or_none()
+    if not episode:
+        raise HTTPException(status_code=404, detail="Episode not found")
+
+    from sqlalchemy import delete
+    from contextedge.models.episode import EpisodeStep
+
+    # 1. Delete Episode Steps
+    await db.execute(
+        delete(EpisodeStep).where(EpisodeStep.episode_id == episode_id)
+    )
+
+    # 2. Finally delete the episode itself
+    await db.delete(episode)
+    await db.commit()
+
+    await log_audit_event(
+        db,
+        tenant_id=user.tenant_id,
+        actor_id=user.user_id,
+        actor_email=user.email,
+        action="episode.deleted",
+        resource_type="episode",
+        resource_id=str(episode_id),
+        details={"title": episode.title},
+    )
+    return None

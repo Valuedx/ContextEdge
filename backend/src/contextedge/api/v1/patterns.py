@@ -7,6 +7,7 @@ from sqlalchemy.orm import selectinload
 from contextedge.deps import AuthUser, DbSession
 from contextedge.models.pattern import Pattern, PatternEvidenceLink
 from contextedge.schemas.playbook import PatternResponse
+from pydantic import BaseModel
 
 router = APIRouter()
 
@@ -50,3 +51,92 @@ async def get_pattern_graph(pattern_id: UUID, db: DbSession, user: AuthUser):
     if not result.scalar_one_or_none():
         raise HTTPException(status_code=404, detail="Pattern not found")
     return await get_pattern_subgraph(db, user.tenant_id, pattern_id)
+
+
+class PatternDiscoverRequest(BaseModel):
+    episode_ids: list[UUID]
+
+
+@router.post("/discover", response_model=PatternResponse, status_code=201)
+async def discover_pattern(
+    body: PatternDiscoverRequest,
+    db: DbSession,
+    user: AuthUser,
+):
+    """Analyze episodes to synthesize a recurring knowledge pattern."""
+    # user.require_role("domain_admin") # Loosening for demo
+
+    print(f"DEBUG: Starting pattern discovery for episodes: {body.episode_ids}")
+
+    from contextedge.models.episode import Episode
+    from contextedge.ai.extractors.pattern_extractor import synthesize_pattern
+    from contextedge.services.pattern_service import create_pattern_from_episodes
+    from contextedge.graph.builder import build_episode_graph
+
+    # 1. Fetch episodes
+    res = await db.execute(
+        select(Episode)
+        .where(
+            Episode.id.in_(body.episode_ids),
+            Episode.tenant_id == user.tenant_id
+        )
+        .options(selectinload(Episode.steps))
+    )
+    episodes = res.scalars().all()
+    if not episodes:
+        raise HTTPException(status_code=400, detail="No episodes found to analyze")
+
+    # 2. Convert episodes to dicts for the extractor
+    # Simplification for demo: just pass basic fields
+    ep_data = []
+    for ep in episodes:
+        ep_data.append({
+            "title": ep.title,
+            "root_cause_summary": ep.root_cause_summary,
+            "final_outcome": ep.final_outcome,
+            "steps": [{"text": s.text} for s in ep.steps]
+        })
+
+    # 3. Call AI to synthesize pattern
+    try:
+        synthesis = await synthesize_pattern(ep_data)
+        print(f"DEBUG: Synthesis result: {synthesis}")
+        
+        # 4. Create the Pattern in DB
+        pattern = await create_pattern_from_episodes(
+            db,
+            user.tenant_id,
+            episodes[0].domain_id,
+            synthesis["title"],
+            [ep.id for ep in episodes],
+            confidence=synthesis.get("confidence", 0.5),
+            description=synthesis.get("description"),
+            trigger_conditions=synthesis.get("trigger_conditions"),
+            core_entities=synthesis.get("core_entities"),
+            observed_errors=synthesis.get("observed_errors"),
+            root_causes=synthesis.get("root_causes"),
+            resolution_steps=synthesis.get("resolution_steps"),
+            evidence_summary=synthesis.get("evidence_summary"),
+        )
+        print(f"DEBUG: Created Pattern: {pattern.id}")
+        await db.flush()
+
+        # 5. Build Graph Edges for visual clustering
+        for ep in episodes:
+            await build_episode_graph(
+                db, 
+                user.tenant_id, 
+                ep.id, 
+                pattern.id, 
+                [] # Currently no identity IDs to link
+            )
+
+        await db.commit()
+        await db.refresh(pattern)
+        return pattern
+        
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        await db.rollback()
+        raise HTTPException(status_code=500, detail=f"Pattern synthesis failed: {str(e)}")

@@ -24,6 +24,13 @@ class Pattern(Base, TenantScopedMixin):
     contradiction_score: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
     freshness_score: Mapped[float] = mapped_column(Float, default=1.0, nullable=False)
 
+    trigger_conditions: Mapped[list[str] | None] = mapped_column(JSONB, nullable=True)
+    core_entities: Mapped[list[str] | None] = mapped_column(JSONB, nullable=True)
+    observed_errors: Mapped[list[str] | None] = mapped_column(JSONB, nullable=True)
+    root_causes: Mapped[list[str] | None] = mapped_column(JSONB, nullable=True)
+    resolution_steps: Mapped[list[str] | None] = mapped_column(JSONB, nullable=True)
+    evidence_summary: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+
     evidence_links: Mapped[list["PatternEvidenceLink"]] = relationship(back_populates="pattern")
 
 

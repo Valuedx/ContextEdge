@@ -106,6 +106,7 @@ def main() -> int:
             "INFO",
             "-Q",
             DEFAULT_QUEUES,
+            *(["-P", "solo"] if os.name == "nt" else []),
             *extra_args,
         ],
         "beat": [

@@ -12,7 +12,7 @@ async def embed_evidence(title: str | None, body: str | None) -> list[float]:
         text_parts.append(body[:8000])
     text = "\n\n".join(text_parts) if text_parts else ""
     if not text:
-        return [0.0] * 1536
+        return [0.0] * 3072
     return await generate_embedding(text)
 
 
@@ -29,11 +29,11 @@ async def embed_evidence_batch(items: list[tuple[str | None, str | None]]) -> li
 
     non_empty = [(i, t) for i, t in enumerate(texts) if t]
     if not non_empty:
-        return [[0.0] * 1536 for _ in items]
+        return [[0.0] * 3072 for _ in items]
 
     embeddings_result = await generate_embeddings_batch([t for _, t in non_empty])
 
-    result = [[0.0] * 1536 for _ in items]
+    result = [[0.0] * 3072 for _ in items]
     for (original_idx, _), emb in zip(non_empty, embeddings_result):
         result[original_idx] = emb
     return result

@@ -1,0 +1,16 @@
+{
+  "source": "logs",
+  "service": "billing-service",
+  "log_entries": [
+    {
+      "timestamp": "2026-04-09T10:18:01Z",
+      "level": "ERROR",
+      "message": "NullPointerException at PaymentProcessor.java:145"
+    },
+    {
+      "timestamp": "2026-04-09T10:18:02Z",
+      "level": "ERROR",
+      "message": "Service crashed unexpectedly"
+    }
+  ]
+}

@@ -50,7 +50,7 @@ class EvidenceItem(Base, TenantScopedMixin):
     )
     canonical_entity_refs: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     content_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    embedding = mapped_column(Vector(1536), nullable=True)
+    embedding = mapped_column(Vector(3072), nullable=True)
 
     search_vector = mapped_column(Text, nullable=True)
 

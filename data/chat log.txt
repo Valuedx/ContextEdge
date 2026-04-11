@@ -1,0 +1,3 @@
+[10:16] engineer_1: Anyone seeing VPN login failures?
+[10:18] engineer_2: Yes, seems related to expired tokens.
+[10:20] engineer_1: Resetting token worked for me.

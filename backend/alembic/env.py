@@ -20,6 +20,8 @@ import contextedge.models.source  # noqa: E402, F401
 import contextedge.models.tenant  # noqa: E402, F401
 import contextedge.models.policy  # noqa: E402, F401
 
+from contextedge.config import settings  # noqa: E402
+
 config = context.config
 
 if config.config_file_name is not None:
@@ -27,7 +29,8 @@ if config.config_file_name is not None:
 
 target_metadata = Base.metadata
 
-db_url = os.environ.get("DATABASE_URL_SYNC", config.get_main_option("sqlalchemy.url"))
+# Use the synchronous database URL from settings
+db_url = settings.database_url_sync
 if db_url:
     config.set_main_option("sqlalchemy.url", db_url)
 

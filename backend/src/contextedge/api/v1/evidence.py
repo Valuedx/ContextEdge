@@ -111,3 +111,34 @@ async def update_relevance(
     item.relevance_state = relevance_state
     await db.flush()
     return {"status": "updated"}
+
+
+@router.delete("/{evidence_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_evidence(evidence_id: UUID, db: DbSession, user: AuthUser):
+    """Permanently delete an evidence item."""
+    user.require_role("domain_admin")
+
+    result = await db.execute(
+        select(EvidenceItem).where(
+            EvidenceItem.id == evidence_id,
+            EvidenceItem.tenant_id == user.tenant_id,
+        )
+    )
+    item = result.scalar_one_or_none()
+    if not item:
+        raise HTTPException(status_code=404, detail="Evidence not found")
+
+    await db.delete(item)
+    await db.commit()
+
+    await log_audit_event(
+        db,
+        tenant_id=user.tenant_id,
+        actor_id=user.user_id,
+        actor_email=user.email,
+        action="evidence.deleted",
+        resource_type="evidence",
+        resource_id=str(evidence_id),
+        details={"title": item.title},
+    )
+    return None

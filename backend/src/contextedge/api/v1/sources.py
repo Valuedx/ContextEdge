@@ -9,6 +9,8 @@ from contextedge.models.source import Source, SourceCredential, SourceObject, Sy
 from contextedge.schemas.source import (
     BackfillRequest,
     SourceCreate,
+    LocalFilePayload,
+    LocalIngestRequest,
     SourceObjectApproval,
     SourceObjectResponse,
     SourceResponse,
@@ -21,6 +23,7 @@ from contextedge.services.source_service import (
     encrypt_credentials,
     validate_source_credentials,
 )
+from contextedge.services.evidence_normalization import evidence_content_hash_from_payload
 
 router = APIRouter()
 
@@ -265,3 +268,134 @@ async def trigger_backfill(source_id: UUID, body: BackfillRequest, db: DbSession
         run_backfill.delay(str(source_id), str(obj_id), str(user.tenant_id), body.window_days)
 
     return {"status": "backfill_queued", "object_count": len(body.source_object_ids)}
+
+
+@router.post("/local-ingest", status_code=status.HTTP_201_CREATED)
+async def local_ingest(body: LocalIngestRequest, db: DbSession, user: AuthUser):
+    """Directly ingest local files from the frontend folder picker."""
+    user.require_role("domain_admin")
+
+    source = (
+        await db.execute(
+            select(Source).where(Source.id == body.source_id, Source.tenant_id == user.tenant_id)
+        )
+    ).scalar_one_or_none()
+    if not source:
+        raise HTTPException(status_code=404, detail="Source not found")
+
+    # Mark as connected since it's a local ingest gesture
+    source.auth_status = "connected"
+    source.discovery_status = "completed"
+
+    from contextedge.models.evidence import RawEvidenceObject
+    from contextedge.workers.extraction_tasks import _normalize, classify_relevance_task
+
+    created_ids = []
+    for file in body.files:
+        payload = {
+            "filename": file.filename,
+            "content": file.content,
+            "content_type": file.content_type,
+            "evidence_type": file.metadata.get("evidence_type", "message"),
+            **file.metadata,
+        }
+        
+        # Generate hash and external ID
+        c_hash = evidence_content_hash_from_payload(payload)
+        ext_id = f"local_{source.id}_{file.filename}"
+
+        raw = RawEvidenceObject(
+            tenant_id=user.tenant_id,
+            source_id=source.id,
+            external_id=ext_id,
+            content_hash=c_hash,
+            raw_payload=payload,
+        )
+        db.add(raw)
+        await db.flush()
+        created_ids.append(raw.id)
+
+    # Queue normalization for each file - Run synchronously for local feedback
+    for rid in created_ids:
+        # We call the internal async _normalize directly to bypass Celery worker lag on Windows
+        norm_res = await _normalize(db, str(rid), user.tenant_id)
+        
+        # We must pass the evidence_id (not the raw ID) to the classifier
+        if norm_res and "evidence_id" in norm_res:
+            from contextedge.workers.extraction_tasks import _classify
+            await _classify(db, norm_res["evidence_id"], user.tenant_id)
+
+    await db.commit()
+
+    await log_audit_event(
+        db,
+        tenant_id=user.tenant_id,
+        actor_id=user.user_id,
+        actor_email=user.email,
+        action="source.local_ingest",
+        resource_type="source",
+        resource_id=str(source.id),
+        details={"file_count": len(body.files)},
+    )
+
+    return {"status": "ingested", "count": len(created_ids), "raw_ids": [str(rid) for rid in created_ids]}
+
+
+@router.delete("/{source_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_source(source_id: UUID, db: DbSession, user: AuthUser):
+    """Permanently delete a source and all its associated evidence/logs."""
+    user.require_role("domain_admin")
+
+    source = (
+        await db.execute(
+            select(Source).where(Source.id == source_id, Source.tenant_id == user.tenant_id)
+        )
+    ).scalar_one_or_none()
+    if not source:
+        raise HTTPException(status_code=404, detail="Source not found")
+
+    from sqlalchemy import delete
+    from contextedge.models.evidence import EvidenceItem, RawEvidenceObject
+    from contextedge.models.source import SourceObject, SyncRun
+
+    # 1. Delete Evidence Items
+    await db.execute(
+        delete(EvidenceItem).where(EvidenceItem.source_id == source_id)
+    )
+    
+    # 2. Delete Raw Evidence
+    await db.execute(
+        delete(RawEvidenceObject).where(RawEvidenceObject.source_id == source_id)
+    )
+    
+    # 3. Delete Sync Runs
+    await db.execute(
+        delete(SyncRun).where(SyncRun.source_id == source_id)
+    )
+    
+    # 4. Delete Source Objects
+    await db.execute(
+        delete(SourceObject).where(SourceObject.source_id == source_id)
+    )
+
+    # 5. Delete Source Credentials
+    from contextedge.models.source import SourceCredential
+    await db.execute(
+        delete(SourceCredential).where(SourceCredential.source_id == source_id)
+    )
+
+    # Finally delte the source
+    await db.delete(source)
+    await db.commit()
+
+    await log_audit_event(
+        db,
+        tenant_id=user.tenant_id,
+        actor_id=user.user_id,
+        actor_email=user.email,
+        action="source.deleted",
+        resource_type="source",
+        resource_id=str(source_id),
+        details={"display_name": source.display_name},
+    )
+    return None
