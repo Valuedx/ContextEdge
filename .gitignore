@@ -16,6 +16,8 @@ node_modules/
 .next/
 out/
 
+minio/minio.exe
+
 # Environment
 .env
 .env.local
