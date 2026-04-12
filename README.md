@@ -14,6 +14,7 @@ ContextEdge turns fragmented operational evidence from tickets, chat, email, and
 | [**Runbook**](docs/RUNBOOK.md) | Operational commands, migrations, workers, troubleshooting |
 | [**Implementation plan**](CONTEXTEDGE_IMPLEMENTATION_PLAN.md) | Phased checklist and repository-status planning document |
 | [**Product requirements**](STANDALONE_OPERATIONAL_MEMORY_PRD.md) | Product-level scope and behavior |
+| [**Code wiki**](codewiki/README.md) | Narrative technical blueprints (pipeline, design rationale, code map per subsystem) |
 
 OpenAPI for a running local API:
 

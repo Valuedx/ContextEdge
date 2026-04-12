@@ -5,26 +5,28 @@ This folder holds **technical blueprint explainers**: narrative, business-readab
 ## How to use this wiki
 
 1. Read **[EDITORIAL-GUIDE.md](./EDITORIAL-GUIDE.md)** first for voice, vocabulary, and the **shared example** used across articles.
-2. Follow **[PLAN.md](./PLAN.md)** for the ordered list of planned articles, scope, and primary code anchors.
-3. When an article is written, add it to the index below and link it from related pages.
+2. Skim **[KNOWN_GAPS.md](./KNOWN_GAPS.md)** for registry, worker queue, and dedupe caveats before debugging ingestion.
+3. Follow **[PLAN.md](./PLAN.md)** for writing order, scope, and how pages link.
+4. Start with **[01-end-to-end-pipeline.md](./01-end-to-end-pipeline.md)** if you want one pass over the whole system, then drill into numbered topics.
 
 ## Article index
 
-| Doc | Status |
+| Doc | Description |
 | --- | --- |
-| [EDITORIAL-GUIDE.md](./EDITORIAL-GUIDE.md) | **Ready** — style and recurring scenario |
-| [PLAN.md](./PLAN.md) | **Ready** — backlog and writing order |
-| `01-end-to-end-pipeline.md` | Planned |
-| `02-api-and-request-lifecycle.md` | Planned |
-| `03-ingestion-connectors-and-sync.md` | Planned |
-| `04-evidence-normalization-and-storage.md` | Planned |
-| `05-search-hybrid-and-access.md` | Planned |
-| `06-ai-extraction-and-embeddings.md` | Planned |
-| `07-episodes-patterns-playbooks.md` | Planned |
-| `08-workers-celery-queues.md` | Planned |
-| `09-graph-and-correlation.md` | Planned |
-| `10-governance-sessions-execution-audit.md` | Planned |
-| `11-retention-and-operational-events.md` | Planned |
+| [EDITORIAL-GUIDE.md](./EDITORIAL-GUIDE.md) | Voice, template, **Acme VPN** scenario |
+| [KNOWN_GAPS.md](./KNOWN_GAPS.md) | Connector registry, sync queue, dedupe, retention wiring |
+| [PLAN.md](./PLAN.md) | Scope table, cross-links, maintenance |
+| [01-end-to-end-pipeline.md](./01-end-to-end-pipeline.md) | Full journey: sync → evidence → search → playbooks → audit |
+| [02-api-and-request-lifecycle.md](./02-api-and-request-lifecycle.md) | FastAPI, middleware, JWT/service tokens, audit |
+| [03-ingestion-connectors-and-sync.md](./03-ingestion-connectors-and-sync.md) | Connectors, sync jobs, handoff to normalize |
+| [04-evidence-normalization-and-storage.md](./04-evidence-normalization-and-storage.md) | Raw vs evidence, object store, dedupe, normalize worker |
+| [05-search-hybrid-and-access.md](./05-search-hybrid-and-access.md) | FTS, vectors, hybrid ranker, access and risk |
+| [06-ai-extraction-and-embeddings.md](./06-ai-extraction-and-embeddings.md) | LiteLLM, embeddings, classifiers, extractors |
+| [07-episodes-patterns-playbooks.md](./07-episodes-patterns-playbooks.md) | Episodes, patterns, playbook lifecycle |
+| [08-workers-celery-queues.md](./08-workers-celery-queues.md) | Celery queues, tasks, beat |
+| [09-graph-and-correlation.md](./09-graph-and-correlation.md) | Correlation edges, graph, contradictions |
+| [10-governance-sessions-execution-audit.md](./10-governance-sessions-execution-audit.md) | Sessions, execution safety, audit & events |
+| [11-retention-and-operational-events.md](./11-retention-and-operational-events.md) | Retention, legal hold, memory class, events |
 
 ## Relationship to `docs/`
 
