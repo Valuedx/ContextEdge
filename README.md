@@ -24,11 +24,13 @@ OpenAPI for a running local API:
 
 - **Backend:** Python 3.12+, FastAPI, SQLAlchemy 2 async, Alembic, structlog, Prometheus metrics
 - **Frontend:** Next.js 16 App Router, React, Tailwind, shadcn/ui, TanStack Query
-- **Database:** PostgreSQL 16 with pgvector
-- **Queue:** Celery with Redis
-- **Object storage:** MinIO
-- **AI integration:** LiteLLM with provider-specific keys
+- **Database:** PostgreSQL 16 with pgvector, stored tsvector FTS columns with GIN indexes
+- **Queue:** Celery with Redis (queues: default, sync, hydration, extraction, pattern, evaluation)
+- **Object storage:** MinIO (S3-compatible) for raw evidence offload and attachments
+- **AI integration:** LiteLLM with provider-specific keys (OpenAI, Anthropic, Google/Vertex AI)
 - **Auth:** Bearer JWT for users and optional `X-Service-Token` for service integrations
+- **Graph:** PostgreSQL adjacency table (`graph_edges`) for pattern/entity/contradiction relationships
+- **Decision traces:** Resolution sessions with append-only trace events for runtime audit
 
 ## Quick Start
 
@@ -95,8 +97,9 @@ make test
 Notes:
 
 - `make dev` starts the full Docker development stack.
-- Current Alembic head includes `0005_playbook_version_semantic_unique`.
+- Current Alembic head is `0009_case_links`. Run `make migrate` after pulling to apply any new revisions.
 - Frontend `npm test` is currently a placeholder script; there is no real frontend unit-test suite yet.
+- The backend enforces a non-default `JWT_SECRET_KEY` when `APP_ENV` is not `development`. Set a real secret before deploying to staging or production.
 
 ## Known Constraints
 
@@ -115,18 +118,21 @@ docs/
   MIGRATIONS.md
 
 backend/
-  alembic/versions/
+  alembic/versions/        # 0001..0009 migration chain
   src/contextedge/
-    api/v1/
-    models/
-    schemas/
-    services/
-    connectors/
-    workers/
-    ai/
-    graph/
-    search/
-    middleware/
+    api/v1/                 # FastAPI routers (auth, evidence, episodes, patterns,
+                            #   playbooks, runtime, sessions, evaluations, drift, ...)
+    models/                 # SQLAlchemy ORM (evidence, episode, pattern, playbook,
+                            #   session, policy, evaluation, audit, tenant)
+    schemas/                # Pydantic request/response models
+    services/               # Business logic (playbook lifecycle, retention, correlation,
+                            #   contradiction detection, session/trace, object store, ...)
+    connectors/             # Source-specific ingestion adapters
+    workers/                # Celery tasks (extraction, correlation, pattern, evaluation)
+    ai/                     # LLM provider, extractors, classifiers, generators
+    graph/                  # Context graph builder and query helpers
+    search/                 # Hybrid ranker, FTS, vector search, access control
+    middleware/             # Request audit, tenant context
 
 frontend/
   src/

@@ -1,5 +1,6 @@
 """Best-effort audit trail for mutating API calls (complements explicit `log_audit_event` calls)."""
 
+import json
 import uuid
 
 import structlog
@@ -45,6 +46,8 @@ class RequestAuditMiddleware(BaseHTTPMiddleware):
             status=response.status_code,
             tenant_id=tenant_id,
             user_id=user_id,
+            request_id=getattr(request.state, "request_id", None),
+            correlation_id=getattr(request.state, "correlation_id", None),
         )
 
         if tenant_id and response.status_code < 400:
@@ -52,6 +55,15 @@ class RequestAuditMiddleware(BaseHTTPMiddleware):
                 tid = uuid.UUID(str(tenant_id))
                 aid = uuid.UUID(str(user_id)) if user_id else None
                 action = f"http.{request.method.lower()}.{request.url.path.strip('/').replace('/', '.')[:80]}"
+                details = json.dumps(
+                    {
+                        "path": request.url.path,
+                        "status": response.status_code,
+                        "request_id": getattr(request.state, "request_id", None),
+                        "correlation_id": getattr(request.state, "correlation_id", None),
+                        "causation_id": getattr(request.state, "causation_id", None),
+                    }
+                )
                 with _engine().connect() as conn:
                     conn.execute(
                         text(
@@ -61,7 +73,7 @@ class RequestAuditMiddleware(BaseHTTPMiddleware):
                               resource_type, resource_id, details, ip_address, timestamp
                             ) VALUES (
                               :id, :tenant_id, :actor_id, :actor_email, :action,
-                              'http_request', NULL, NULL, :ip, NOW()
+                              'http_request', NULL, CAST(:details AS JSONB), :ip, NOW()
                             )
                             """
                         ),
@@ -71,6 +83,7 @@ class RequestAuditMiddleware(BaseHTTPMiddleware):
                             "actor_id": str(aid) if aid else None,
                             "actor_email": email,
                             "action": action[:100],
+                            "details": details,
                             "ip": request.client.host if request.client else None,
                         },
                     )

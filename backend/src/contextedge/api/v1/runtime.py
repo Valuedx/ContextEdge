@@ -18,6 +18,9 @@ from contextedge.schemas.playbook import (
 )
 from contextedge.search.hybrid_ranker import rank_playbooks
 from contextedge.search.risk_policy import risk_within_cap
+from contextedge.services.event_log_service import append_operational_event
+from contextedge.services.memory_service import build_runtime_memory_context
+from contextedge.services.session_service import append_trace_event
 
 router = APIRouter()
 
@@ -89,10 +92,6 @@ async def runtime_match(
     user: AuthUser,
 ):
     """Match case context against approved playbooks with hybrid ranking."""
-    query_text = " ".join(body.symptoms + body.entities)
-    if body.context:
-        query_text += " " + body.context
-
     if body.domain_id is not None:
         await _assert_domain_in_tenant(db, user.tenant_id, body.domain_id)
 
@@ -103,6 +102,18 @@ async def runtime_match(
             detail="domain_id is not allowed for this service token",
         )
 
+    memory_context = await build_runtime_memory_context(
+        db,
+        tenant_id=user.tenant_id,
+        symptoms=body.symptoms,
+        entities=body.entities,
+        context=body.context,
+        session_id=body.session_id,
+        domain_id=body.domain_id,
+        top_k=body.top_k,
+    )
+    query_text = memory_context.query_text
+
     max_risk = _effective_max_risk_tier(user)
     filters_applied: dict = {
         "domain_id": str(body.domain_id) if body.domain_id else None,
@@ -112,6 +123,7 @@ async def runtime_match(
             [str(d) for d in sa_domains] if sa_domains is not None else None
         ),
     }
+    filters_applied.update(memory_context.filters_payload())
 
     ranked = await rank_playbooks(
         db,
@@ -123,6 +135,7 @@ async def runtime_match(
         domain_id=body.domain_id,
         max_risk_tier=max_risk,
         allowed_domain_ids=sa_domains,
+        caller_roles=user.roles,
     )
 
     match_id = str(uuid.uuid4())
@@ -135,6 +148,8 @@ async def runtime_match(
                 stable_key=r.playbook.stable_key,
                 match_score=round(r.score, 4),
                 confidence=round(r.confidence, 4),
+                retrieval_score=round(r.score, 4),
+                playbook_confidence=round(r.playbook_confidence, 4),
                 freshness_status=r.freshness_status,
                 evidence_count=r.evidence_count,
                 risk_tier=r.playbook.risk_tier,
@@ -147,9 +162,61 @@ async def runtime_match(
     if not results or (results and results[0].confidence < 0.3):
         fallback = "Low confidence match. Consider manual investigation or broadening search terms."
 
+    if body.session_id is not None:
+        trace = await append_trace_event(
+            db,
+            tenant_id=user.tenant_id,
+            session_id=body.session_id,
+            event_type="retrieve",
+            inputs={
+                "query_text": query_text,
+                "symptoms": body.symptoms,
+                "entities": body.entities,
+                "domain_id": str(body.domain_id) if body.domain_id else None,
+                "memory_summary": memory_context.filters_payload()["memory_summary"],
+            },
+            outputs={
+                "results": [
+                    {
+                        "playbook_id": str(r.playbook.id),
+                        "stable_key": r.playbook.stable_key,
+                        "score": round(r.score, 4),
+                        "playbook_confidence": round(r.playbook_confidence, 4),
+                    }
+                    for r in ranked
+                ],
+                "reasoning_memory": memory_context.reasoning,
+            },
+            confidence=round(ranked[0].confidence, 4) if ranked else None,
+        )
+        if trace is None:
+            raise HTTPException(status_code=404, detail="Session not found")
+
+    await append_operational_event(
+        db,
+        tenant_id=user.tenant_id,
+        actor_id=user.user_id,
+        entity_type="runtime_match",
+        entity_id=match_id,
+        session_id=body.session_id,
+        event_type="runtime.match_completed",
+        payload={
+            "query_text": query_text,
+            "domain_id": str(body.domain_id) if body.domain_id else None,
+            "symptoms": body.symptoms,
+            "entities": body.entities,
+            "result_count": len(results),
+            "top_result": results[0].model_dump(mode="json") if results else None,
+            "fallback_guidance": fallback,
+            "filters_applied": filters_applied,
+            "memory_summary": memory_context.filters_payload()["memory_summary"],
+        },
+    )
+
     payload = {
         "tenant_id": str(user.tenant_id),
         "principal": user.principal_type,
+        "session_id": str(body.session_id) if body.session_id else None,
         "query_text": query_text,
         "symptoms": body.symptoms,
         "entities": body.entities,
@@ -157,6 +224,7 @@ async def runtime_match(
         "results": [m.model_dump(mode="json") for m in results],
         "fallback_guidance": fallback,
         "filters_applied": filters_applied,
+        "memory_summary": memory_context.filters_payload()["memory_summary"],
     }
     try:
         redis = request.app.state.redis
@@ -170,6 +238,7 @@ async def runtime_match(
 
     return RuntimeMatchResponse(
         match_id=match_id,
+        session_id=body.session_id,
         results=results,
         fallback_guidance=fallback,
         filters_applied=filters_applied,

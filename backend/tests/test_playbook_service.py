@@ -1,5 +1,5 @@
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock, Mock, patch
 from uuid import uuid4
 
 import pytest
@@ -19,8 +19,10 @@ async def test_transition_to_approved_publishes_current_version():
     playbook_id = uuid4()
     version_id = uuid4()
     actor_id = uuid4()
+    tenant_id = uuid4()
     playbook = SimpleNamespace(
         id=playbook_id,
+        tenant_id=tenant_id,
         lifecycle_state="under_review",
         current_version_id=version_id,
         approver_user_id=None,
@@ -38,7 +40,11 @@ async def test_transition_to_approved_publishes_current_version():
         flush=AsyncMock(),
     )
 
-    out = await transition_playbook(db, playbook, "approved", actor_id)
+    with (
+        patch("contextedge.services.playbook_service.append_operational_event", AsyncMock()) as event_mock,
+        patch("contextedge.services.playbook_service.promote_playbook_memory", AsyncMock()) as promote_mock,
+    ):
+        out = await transition_playbook(db, playbook, "approved", actor_id)
 
     assert out is playbook
     assert playbook.lifecycle_state == "approved"
@@ -47,12 +53,15 @@ async def test_transition_to_approved_publishes_current_version():
     assert version.published_at is not None
     assert version.published_by == actor_id
     db.flush.assert_awaited()
+    event_mock.assert_awaited_once()
+    promote_mock.assert_awaited_once()
 
 
 @pytest.mark.asyncio
 async def test_transition_to_approved_requires_current_version():
     playbook = SimpleNamespace(
         id=uuid4(),
+        tenant_id=uuid4(),
         lifecycle_state="under_review",
         current_version_id=None,
         approver_user_id=None,
@@ -74,7 +83,7 @@ def test_next_semantic_version_increments_highest_patch():
 
 @pytest.mark.asyncio
 async def test_create_playbook_version_rejects_duplicate_semantic_version():
-    playbook = SimpleNamespace(id=uuid4(), current_version_id=None)
+    playbook = SimpleNamespace(id=uuid4(), tenant_id=uuid4(), current_version_id=None)
     result = Mock()
     result.scalars.return_value.all.return_value = ["0.1.0"]
     db = SimpleNamespace(
@@ -104,7 +113,7 @@ class _NestedTx:
 
 @pytest.mark.asyncio
 async def test_create_playbook_version_maps_integrity_error_to_duplicate():
-    playbook = SimpleNamespace(id=uuid4(), current_version_id=None)
+    playbook = SimpleNamespace(id=uuid4(), tenant_id=uuid4(), current_version_id=None)
     query_result = Mock()
     query_result.scalars.return_value.all.return_value = []
     db = SimpleNamespace(
@@ -127,7 +136,7 @@ async def test_create_playbook_version_maps_integrity_error_to_duplicate():
 
 @pytest.mark.asyncio
 async def test_create_playbook_version_retries_generated_version_after_integrity_error():
-    playbook = SimpleNamespace(id=uuid4(), current_version_id=None)
+    playbook = SimpleNamespace(id=uuid4(), tenant_id=uuid4(), current_version_id=None)
     execute_results = []
     first = Mock()
     first.scalars.return_value.all.return_value = ["0.1.0"]
@@ -161,3 +170,22 @@ async def test_create_playbook_version_retries_generated_version_after_integrity
     )
 
     assert version.semantic_version == "0.1.2"
+
+
+@pytest.mark.asyncio
+async def test_create_playbook_version_emits_operational_event():
+    playbook = SimpleNamespace(id=uuid4(), tenant_id=uuid4(), current_version_id=None)
+    query_result = Mock()
+    query_result.scalars.return_value.all.return_value = []
+    db = SimpleNamespace(
+        execute=AsyncMock(return_value=query_result),
+        add=Mock(),
+        flush=AsyncMock(),
+        begin_nested=Mock(return_value=_NestedTx()),
+    )
+
+    with patch("contextedge.services.playbook_service.append_operational_event", AsyncMock()) as event_mock:
+        version = await create_playbook_version(db, playbook, {"steps": []})
+
+    assert version.playbook_id == playbook.id
+    event_mock.assert_awaited_once()

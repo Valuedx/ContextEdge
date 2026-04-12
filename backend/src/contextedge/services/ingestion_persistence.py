@@ -11,6 +11,9 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from contextedge.models.evidence import RawEvidenceObject
+from contextedge.services.object_store import upload_raw
+
+OFFLOAD_THRESHOLD_BYTES = 32_768
 
 
 async def persist_ingestion_events(
@@ -78,6 +81,10 @@ async def persist_ingestion_events(
         )
         db.add(raw)
         await db.flush()
+        payload_bytes = json.dumps(payload, default=str).encode("utf-8")
+        if len(payload_bytes) > OFFLOAD_THRESHOLD_BYTES:
+            raw.object_storage_key = upload_raw(str(tenant_id), str(raw.id), payload_bytes)
+            raw.raw_payload = {"_offloaded": True, "size_bytes": len(payload_bytes)}
         created += 1
         new_ids.append(raw.id)
 

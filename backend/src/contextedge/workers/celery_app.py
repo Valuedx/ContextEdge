@@ -21,6 +21,8 @@ celery_app.conf.update(
         "contextedge.workers.sync_tasks.*": {"queue": "sync"},
         "contextedge.workers.hydration_tasks.*": {"queue": "hydration"},
         "contextedge.workers.extraction_tasks.*": {"queue": "extraction"},
+        "contextedge.workers.artifact_tasks.*": {"queue": "extraction"},
+        "contextedge.workers.correlation_tasks.*": {"queue": "extraction"},
         "contextedge.workers.pattern_tasks.*": {"queue": "pattern"},
         "contextedge.workers.evaluation_tasks.*": {"queue": "evaluation"},
     },
@@ -31,6 +33,11 @@ celery_app.conf.update(
             "schedule": 21600.0,
             "args": ("all",),
         },
+        "scan-contradictions-every-12h": {
+            "task": "contextedge.workers.evaluation_tasks.scan_contradictions_task",
+            "schedule": 43200.0,
+            "args": ("all",),
+        },
     },
 )
 
@@ -39,6 +46,8 @@ celery_app.autodiscover_tasks(
         "contextedge.workers.sync_tasks",
         "contextedge.workers.hydration_tasks",
         "contextedge.workers.extraction_tasks",
+        "contextedge.workers.artifact_tasks",
+        "contextedge.workers.correlation_tasks",
         "contextedge.workers.pattern_tasks",
         "contextedge.workers.evaluation_tasks",
     ],

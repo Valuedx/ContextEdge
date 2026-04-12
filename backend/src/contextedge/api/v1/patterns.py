@@ -3,13 +3,15 @@ from uuid import UUID
 from fastapi import APIRouter, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
+import structlog
 
 from contextedge.deps import AuthUser, DbSession
-from contextedge.models.pattern import Pattern, PatternEvidenceLink
+from contextedge.models.pattern import Pattern
 from contextedge.schemas.playbook import PatternResponse
 from pydantic import BaseModel
 
 router = APIRouter()
+logger = structlog.get_logger()
 
 
 @router.get("", response_model=list[PatternResponse])
@@ -64,14 +66,13 @@ async def discover_pattern(
     user: AuthUser,
 ):
     """Analyze episodes to synthesize a recurring knowledge pattern."""
-    # user.require_role("domain_admin") # Loosening for demo
-
-    print(f"DEBUG: Starting pattern discovery for episodes: {body.episode_ids}")
+    user.require_role("domain_admin")
 
     from contextedge.models.episode import Episode
     from contextedge.ai.extractors.pattern_extractor import synthesize_pattern
     from contextedge.services.pattern_service import create_pattern_from_episodes
     from contextedge.graph.builder import build_episode_graph
+    from contextedge.services.identity_service import identity_ids_from_refs
 
     # 1. Fetch episodes
     res = await db.execute(
@@ -100,8 +101,7 @@ async def discover_pattern(
     # 3. Call AI to synthesize pattern
     try:
         synthesis = await synthesize_pattern(ep_data)
-        print(f"DEBUG: Synthesis result: {synthesis}")
-        
+
         # 4. Create the Pattern in DB
         pattern = await create_pattern_from_episodes(
             db,
@@ -118,7 +118,6 @@ async def discover_pattern(
             resolution_steps=synthesis.get("resolution_steps"),
             evidence_summary=synthesis.get("evidence_summary"),
         )
-        print(f"DEBUG: Created Pattern: {pattern.id}")
         await db.flush()
 
         # 5. Build Graph Edges for visual clustering
@@ -128,15 +127,18 @@ async def discover_pattern(
                 user.tenant_id, 
                 ep.id, 
                 pattern.id, 
-                [] # Currently no identity IDs to link
+                identity_ids_from_refs(ep.entity_refs),
             )
 
         await db.commit()
         await db.refresh(pattern)
         return pattern
-        
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
+
+    except Exception:
+        logger.exception(
+            "pattern_discovery_failed",
+            tenant_id=str(user.tenant_id),
+            episode_ids=[str(episode_id) for episode_id in body.episode_ids],
+        )
         await db.rollback()
-        raise HTTPException(status_code=500, detail=f"Pattern synthesis failed: {str(e)}")
+        raise HTTPException(status_code=500, detail="Pattern synthesis failed")

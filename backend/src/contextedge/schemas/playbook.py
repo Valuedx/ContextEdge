@@ -115,6 +115,7 @@ class RuntimeMatchRequest(BaseModel):
     entities: list[str] = Field(default_factory=list)
     environment: dict = Field(default_factory=dict)
     context: str | None = None
+    session_id: UUID | None = None
     top_k: int = Field(5, ge=1, le=20)
     domain_id: UUID | None = Field(
         None,
@@ -130,6 +131,8 @@ class RuntimeMatchResult(BaseModel):
     stable_key: str
     match_score: float
     confidence: float
+    retrieval_score: float | None = None
+    playbook_confidence: float | None = None
     freshness_status: str
     evidence_count: int
     risk_tier: str
@@ -139,6 +142,7 @@ class RuntimeMatchResult(BaseModel):
 
 class RuntimeMatchResponse(BaseModel):
     match_id: str
+    session_id: UUID | None = None
     results: list[RuntimeMatchResult]
     fallback_guidance: str | None = None
     filters_applied: dict = Field(

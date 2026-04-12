@@ -1,9 +1,10 @@
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Query, status
-from sqlalchemy import select
+from sqlalchemy import or_, select
 
 from contextedge.deps import AuthUser, DbSession
+from contextedge.middleware.audit import log_audit_event
 from contextedge.models.evidence import EvidenceItem, Thread
 from contextedge.schemas.evidence import (
     EvidenceAccessPolicyUpdate,
@@ -12,6 +13,7 @@ from contextedge.schemas.evidence import (
     ThreadResponse,
 )
 from contextedge.services.policy_assignment import assert_policy_assignment
+from contextedge.search.access_control import resolve_excluded_access_policy_ids
 
 router = APIRouter()
 
@@ -28,7 +30,28 @@ async def search_evidence(
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
 ):
+    excluded_policy_ids = await resolve_excluded_access_policy_ids(db, user.tenant_id, user.roles)
+
+    if query and query.strip():
+        from contextedge.search.pg_fts import search_evidence_fts
+
+        fts_results = await search_evidence_fts(
+            db,
+            user.tenant_id,
+            query.strip(),
+            limit=limit,
+            exclude_policy_ids=excluded_policy_ids,
+        )
+        return [item for item, _rank in fts_results]
+
     q = select(EvidenceItem).where(EvidenceItem.tenant_id == user.tenant_id)
+    if excluded_policy_ids:
+        q = q.where(
+            or_(
+                EvidenceItem.access_policy_id.is_(None),
+                EvidenceItem.access_policy_id.notin_(excluded_policy_ids),
+            )
+        )
     if source_id:
         q = q.where(EvidenceItem.source_id == source_id)
     if relevance_state:
@@ -44,6 +67,7 @@ async def search_evidence(
 
 @router.get("/{evidence_id}", response_model=EvidenceItemDetail)
 async def get_evidence(evidence_id: UUID, db: DbSession, user: AuthUser):
+    excluded_policy_ids = await resolve_excluded_access_policy_ids(db, user.tenant_id, user.roles)
     result = await db.execute(
         select(EvidenceItem).where(
             EvidenceItem.id == evidence_id,
@@ -51,7 +75,9 @@ async def get_evidence(evidence_id: UUID, db: DbSession, user: AuthUser):
         )
     )
     item = result.scalar_one_or_none()
-    if not item:
+    if not item or (
+        excluded_policy_ids and item.access_policy_id in set(excluded_policy_ids)
+    ):
         raise HTTPException(status_code=404, detail="Evidence not found")
     return item
 

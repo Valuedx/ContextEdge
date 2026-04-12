@@ -64,9 +64,10 @@ Important variables in [`.env.example`](/d:/Projects/github/ContextEdge/ContextE
 
 Minimum changes to make before running locally:
 
-- Replace `JWT_SECRET_KEY` with a real random value
+- Replace `JWT_SECRET_KEY` with a real random value (the backend refuses to start with the default when `APP_ENV` is not `development`)
 - Generate and set `FERNET_KEY`
 - Keep host-run URLs on `localhost`
+- Ensure `MINIO_ENDPOINT`, `MINIO_ROOT_USER`, and `MINIO_ROOT_PASSWORD` match your Docker Compose configuration
 
 Generate a Fernet key:
 
@@ -129,6 +130,8 @@ cd backend
 alembic upgrade head
 cd ..
 ```
+
+This applies the full migration chain through `0009_case_links`, creating stored tsvector columns with GIN indexes, resolution session and decision trace tables, and the case links table.
 
 ### Step 5: Seed development data
 
@@ -305,6 +308,9 @@ If `allowed_domain_ids` is omitted, the token gets full-tenant runtime access. I
 - Set `allowed_domain_ids` explicitly on service tokens unless tenant-wide runtime access is intended.
 - Avoid overlapping manual backfills or retries for the same source object while testing sync behavior. The system does not yet serialize those requests per object.
 - Evidence dedupe is currently application-layer. Concurrency or recovery experiments can still produce duplicate evidence rows until hard database constraints are added.
+- MinIO bucket is auto-created on startup. If MinIO is unreachable the backend still starts but logs a warning; raw payload offload will fail until the store is available.
+- The contradiction scanner and correlation worker require Celery beat and at least one worker listening on the `evaluation` and `extraction` queues respectively. Start both `make celery-dev` and `make celery-beat-dev` during development to exercise these features.
+- Access policy filtering is active on evidence search, runtime match, and the evidence detail endpoint. Non-admin roles will not see items attached to restricted access policies.
 
 ---
 
@@ -328,6 +334,7 @@ If `allowed_domain_ids` is omitted, the token gets full-tenant runtime access. I
 Notes:
 
 - `make test` runs backend tests plus a placeholder frontend test script.
+- Backend test suite currently covers 48 tests across security, FTS, retention, episodes, object store, runtime sessions, correlation, contradiction detection, and access-aware retrieval.
 - Frontend `npm test` currently prints a skip message and exits successfully.
 
 ---
@@ -337,11 +344,14 @@ Notes:
 | Problem | Check |
 | --- | --- |
 | API cannot connect to Postgres | `DATABASE_URL`, Postgres container health, port `5432` |
+| Backend crashes with JWT_SECRET_KEY RuntimeError | Set a non-default `JWT_SECRET_KEY` or set `APP_ENV=development` |
 | Celery is idle | `CELERY_BROKER_URL`, Redis reachability, worker process |
 | Frontend cannot call API | `NEXT_PUBLIC_API_URL`, backend port, CORS |
 | MinIO errors | `MINIO_ENDPOINT`, credentials, bucket name |
 | Login fails after env edits | Restart backend to reload settings |
 | Migration failure on fresh DB | Read [MIGRATIONS.md](MIGRATIONS.md) for the `0001` bootstrap caveat |
+| FTS returns empty results | Verify `0007_fts_gin_indexes` is applied (`alembic current`) |
+| Sessions API returns 404 | Verify `0008_resolution_sessions` migration is applied |
 
 ---
 

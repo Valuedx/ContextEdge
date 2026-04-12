@@ -143,14 +143,6 @@ async def trigger_manual_reconstruction(
             detail="No relevant evidence found to reconstruct an episode."
         )
 
-    from contextedge.workers.extraction_tasks import _reconstruct
-    cluster_id = ",".join([str(eid) for eid in evidence_ids])
-
-    # Call _reconstruct directly to bypass Celery worker lag on Windows
-    await _reconstruct(db, cluster_id, user.tenant_id)
-
-    await db.commit()
-
     await log_audit_event(
         db,
         tenant_id=user.tenant_id,
@@ -161,11 +153,16 @@ async def trigger_manual_reconstruction(
         resource_id="manual",
         details={"evidence_count": len(evidence_ids)},
     )
+    await db.commit()
+
+    from contextedge.workers.extraction_tasks import reconstruct_episode_task
+    cluster_id = ",".join([str(eid) for eid in evidence_ids])
+    task = reconstruct_episode_task.delay(cluster_id, str(user.tenant_id))
 
     return {
         "status": "reconstruction_queued",
         "evidence_count": len(evidence_ids),
-        "correlation_id": cluster_id
+        "task_id": task.id,
     }
 
 

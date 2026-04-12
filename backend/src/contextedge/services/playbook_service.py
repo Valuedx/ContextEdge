@@ -9,6 +9,8 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from contextedge.models.playbook import Playbook, PlaybookApproval, PlaybookVersion
+from contextedge.services.event_log_service import append_operational_event
+from contextedge.services.memory_service import promote_playbook_memory
 
 VALID_TRANSITIONS = {
     "candidate": {"under_review"},
@@ -105,6 +107,7 @@ async def transition_playbook(
     """Transition playbook to a new lifecycle state."""
     current = playbook.lifecycle_state
     allowed = VALID_TRANSITIONS.get(current, set())
+    approved_version: PlaybookVersion | None = None
     if new_state not in allowed:
         raise InvalidTransitionError(
             f"Cannot transition from '{current}' to '{new_state}'. Allowed: {allowed}"
@@ -115,6 +118,7 @@ async def transition_playbook(
     if new_state == "approved":
         now = datetime.now(UTC)
         version = await _current_playbook_version(db, playbook)
+        approved_version = version
         playbook.approver_user_id = actor_id
         playbook.last_validated_at = now
         if version.published_at is None:
@@ -131,6 +135,28 @@ async def transition_playbook(
     )
     db.add(approval)
     await db.flush()
+    await append_operational_event(
+        db,
+        tenant_id=playbook.tenant_id,
+        actor_id=actor_id,
+        entity_type="playbook",
+        entity_id=playbook.id,
+        event_type="playbook.transitioned",
+        payload={
+            "from_state": current,
+            "to_state": new_state,
+            "current_version_id": str(playbook.current_version_id) if playbook.current_version_id else None,
+            "approval_id": str(approval.id),
+            "comments": comments,
+        },
+    )
+    if new_state == "approved" and approved_version is not None:
+        await promote_playbook_memory(
+            db,
+            playbook=playbook,
+            version=approved_version,
+            actor_id=actor_id,
+        )
     return playbook
 
 
@@ -173,6 +199,18 @@ async def create_playbook_version(
 
                 playbook.current_version_id = version.id
                 await db.flush()
+            await append_operational_event(
+                db,
+                tenant_id=playbook.tenant_id,
+                entity_type="playbook_version",
+                entity_id=version.id,
+                event_type="playbook.version_created",
+                payload={
+                    "playbook_id": str(playbook.id),
+                    "semantic_version": version.semantic_version,
+                    "playbook_confidence": version.playbook_confidence,
+                },
+            )
             return version
         except IntegrityError as exc:
             if requested_semantic_version is not None:

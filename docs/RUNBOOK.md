@@ -111,6 +111,13 @@ Revisions live in `backend/alembic/versions/`.
 | `0003_source_policy_fks` | Source -> policy foreign keys |
 | `0004_evidence_access_policy_fk` | Evidence -> access policy foreign key |
 | `0005_playbook_version_semantic_unique` | Per-playbook semantic version uniqueness and legacy duplicate cleanup |
+| `0007_fts_gin_indexes` | Stored `search_tsvector` columns and GIN indexes on `evidence_items` and `playbooks` |
+| `0008_resolution_sessions` | `resolution_sessions` and `decision_trace_events` tables for runtime audit trails |
+| `0009_case_links` | `case_links` table for cross-source case correlation |
+| `0010_operational_events` | Append-only event ledger with request, correlation, and causation ids |
+| `0011_execution_governance` | Governed execution runs, step runs, tool invocations, and approval requests |
+| `0012_evidence_identity_links` | Active evidence-to-identity links for normalization, retrieval, and correlation |
+| `0013_attachment_processing` | Attachment parser metadata, extraction status, and extracted-at timestamps |
 
 Apply all pending migrations:
 
@@ -194,9 +201,41 @@ Worker queues currently used:
 - `default`
 - `sync`
 - `hydration`
-- `extraction`
+- `extraction` (also handles artifact extraction and correlation tasks)
 - `pattern`
-- `evaluation`
+- `evaluation` (also handles contradiction scans)
+
+Celery beat scheduled tasks:
+
+| Task | Frequency | Queue |
+| --- | --- | --- |
+| `detect_drift` | Every 6 hours | evaluation |
+| `scan_contradictions_task` | Every 12 hours | evaluation |
+
+### Memory classes and retention
+
+Runtime memory assembly now flows through `backend/src/contextedge/services/memory_service.py`.
+
+- `short_term`: active sessions, current case context, and recent evidence
+- `long_term`: validated patterns, approved playbooks, KB-style evidence, and canonicalized identities
+- `reasoning`: decision traces, execution steps, approvals, and tool/action history
+
+Retention uses the source policy days as the base window and expands by memory class:
+
+- `short_term`: base retention window
+- `reasoning`: `max(base_days * 3, 90 days)`
+- `long_term`: `max(base_days * 6, 180 days)`
+
+`retention_service.py` applies those windows while still honoring legal hold exclusions.
+
+### Attachment extraction
+
+Deterministic artifact extraction is available on the `extraction` queue through `artifact.extract_attachment`.
+
+- Supported first-stage formats: `text/plain`, `.log`, `.txt`, `.json`, `.jsonl`, `.ndjson`, `.srt`, and `.vtt`
+- Artifact binaries are stored in object storage under `artifacts/<tenant>/<evidence>/<artifact>/...`
+- Extracted text is persisted on `attachment_artifacts` and merged back into `evidence_items.body_text` with attachment provenance markers so FTS, embeddings, and episode reconstruction see it
+- OCR-heavy document/image formats are still deferred; this stage is intentionally deterministic
 
 ---
 
@@ -234,7 +273,7 @@ Logging:
 
 Current state:
 
-- Backend tests exist but coverage is still limited.
+- Backend tests cover security hardening (RBAC, JSON parse, config validation), evidence FTS search, retention legal-hold, async episode reconstruction, FTS tsvector usage, object-store helpers, runtime sessions/traces, case correlation, contradiction detection, access-aware retrieval, governed execution, identity resolution, memory lifecycle handling, and deterministic artifact extraction. 72 tests currently pass on the implementation branch.
 - Frontend `npm test` is a placeholder script and does not run a real unit-test suite.
 
 ---
@@ -244,6 +283,7 @@ Current state:
 - Do not trigger overlapping backfills or retries for the same `SourceObject`. Sync recovery is bounded, but there is no single-flight guard that serializes manual sync requests per object.
 - Evidence dedupe is application-layer and based on normalized content hash. If you are stress-testing sync or recovery behavior, verify duplicates in `evidence_items` rather than assuming the database will reject them.
 - Service tokens without `allowed_domain_ids` are tenant-wide for runtime access. Set an explicit allowlist when you want least-privilege behavior.
+- Attachment extraction is deterministic-only in this stage. Do not expect OCR or binary document parsing until a later rollout.
 
 ---
 
@@ -252,13 +292,18 @@ Current state:
 | Symptom | What to check |
 | --- | --- |
 | Login fails or API returns 401 | JWT secret mismatch, expired token, backend restart required after env change |
+| Backend crashes on startup with `RuntimeError` about JWT_SECRET_KEY | Set `JWT_SECRET_KEY` to a non-default value, or set `APP_ENV=development` for local work |
 | Runtime returns 403 | Caller risk tier cap, playbook/domain mismatch, or service-token domain allowlist |
 | Runtime explain returns 404 | Redis cache expired or there was no previous `POST /runtime/match` |
-| Missing tables or columns | Run migrations and verify Alembic head |
+| Missing tables or columns | Run migrations and verify Alembic head (should be `0013_attachment_processing`) |
+| FTS queries return no results | Verify migration `0007_fts_gin_indexes` was applied and `search_tsvector` columns exist |
 | `ModuleNotFoundError: No module named 'contextedge'` | Start host-run services with `cd backend && python dev.py ...` so `src/` is added automatically. If it still fails, check `python -c "import sys; print(sys.executable); print(sys.version)"` and verify you are using a Python 3.12+ backend virtualenv with dependencies installed |
 | Celery tasks do not execute | Worker not running, Redis misconfigured, broker URL mismatch |
 | MinIO failures | Endpoint, credentials, bucket name, host vs container hostname |
+| Object-store offload not working | Verify MinIO is reachable from the worker, check `MINIO_ENDPOINT` and credentials |
+| Attachment extraction stays `pending` or `failed` | Verify the extraction worker is running, the artifact object exists in MinIO/S3, and the attachment is a supported deterministic format |
 | Frontend cannot reach API | `NEXT_PUBLIC_API_URL`, backend port, and `APP_CORS_ORIGINS` |
+| Contradiction scan is slow or expensive | Reduce scan frequency in `celery_app.py` beat schedule, or limit to specific domains |
 
 ---
 
@@ -280,11 +325,14 @@ This removes Docker volumes for Postgres, Redis, and MinIO data.
 
 ## 13. Production-Oriented Notes
 
-- Replace all default secrets before any shared deployment.
+- Replace all default secrets before any shared deployment. The backend will refuse to start with the default `JWT_SECRET_KEY` when `APP_ENV` is not `development`.
 - Run the API behind TLS and a real reverse proxy.
 - Treat `SERVICE_TOKENS_JSON` as a secrets-bearing config surface.
 - Scale Celery workers by queue characteristics rather than as one undifferentiated pool.
 - Back up Postgres and object storage independently.
+- MinIO bucket is auto-created on startup if missing; verify credentials and endpoint when running against a shared or production S3-compatible store.
+- Access policies filter evidence and playbook results at retrieval time. Admin roles (`platform_super_admin`, `tenant_admin`, `domain_admin`) bypass access policy filtering. Non-admin roles will not see evidence or playbooks attached to restricted access policies.
+- Contradiction scanning uses LLM calls. Monitor cost and latency for the 12-hour beat schedule; adjust the cron interval or batch size in `celery_app.py` as the KB grows.
 
 ---
 

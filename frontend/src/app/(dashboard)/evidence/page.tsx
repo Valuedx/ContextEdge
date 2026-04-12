@@ -11,7 +11,9 @@ import { StatusBadge } from "@/components/common/status-badge";
 import { api } from "@/lib/api";
 import type { EvidenceItem } from "@/lib/types";
 import Link from "next/link";
+import { useState } from "react";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
 
 function EvidenceActions({ evidenceId, title }: { evidenceId: string; title: string }) {
@@ -88,14 +90,47 @@ const columns: ColumnDef<EvidenceItem>[] = [
 ];
 
 export default function EvidencePage() {
+  const [search, setSearch] = useState("");
+  const [appliedQuery, setAppliedQuery] = useState("");
+
   const { data = [], isLoading } = useQuery<EvidenceItem[]>({
-    queryKey: ["evidence"],
-    queryFn: () => api.get("/evidence"),
+    queryKey: ["evidence", appliedQuery],
+    queryFn: () =>
+      api.get(
+        "/evidence",
+        appliedQuery.trim() ? { query: appliedQuery.trim() } : undefined,
+      ),
   });
 
   return (
     <div className="space-y-6">
       <PageHeader title="Evidence Explorer" description="Search and browse operational evidence across all sources." />
+      <div className="flex max-w-xl flex-col gap-2 sm:flex-row sm:items-center">
+        <Input
+          placeholder="Full-text search (optional)…"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") setAppliedQuery(search.trim());
+          }}
+          className="font-mono text-sm"
+        />
+        <div className="flex shrink-0 gap-2">
+          <Button type="button" variant="secondary" onClick={() => setAppliedQuery(search.trim())}>
+            Search
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => {
+              setSearch("");
+              setAppliedQuery("");
+            }}
+          >
+            Clear
+          </Button>
+        </div>
+      </div>
       {isLoading ? (
         <DataTableSkeleton columns={5} />
       ) : (

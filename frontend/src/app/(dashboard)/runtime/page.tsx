@@ -35,6 +35,7 @@ export default function RuntimePage() {
   const [domainId, setDomainId] = useState("");
   const [topK, setTopK] = useState("5");
   const [environmentText, setEnvironmentText] = useState("{}");
+  const [sessionId, setSessionId] = useState("");
   const [formError, setFormError] = useState<string | null>(null);
 
   const [match, setMatch] = useState<RuntimeMatchResponse | null>(null);
@@ -68,6 +69,10 @@ export default function RuntimePage() {
       if (did && !UUID_RE.test(did)) {
         throw new Error("domain_id must be a valid UUID or empty");
       }
+      const sid = sessionId.trim();
+      if (sid && !UUID_RE.test(sid)) {
+        throw new Error("session_id must be a valid UUID or empty");
+      }
       const body: Record<string, unknown> = {
         symptoms: linesToList(symptomsText),
         entities: linesToList(entitiesText),
@@ -76,6 +81,7 @@ export default function RuntimePage() {
         top_k: k,
       };
       if (did) body.domain_id = did;
+      if (sid) body.session_id = sid;
       return api.post<RuntimeMatchResponse>("/runtime/match", body);
     },
     onSuccess: (data) => {
@@ -156,7 +162,7 @@ export default function RuntimePage() {
               onChange={(e) => setContext(e.target.value)}
             />
           </div>
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             <div className="space-y-2">
               <Label htmlFor="domain">Domain id (optional)</Label>
               <Input
@@ -165,6 +171,16 @@ export default function RuntimePage() {
                 placeholder="00000000-0000-0000-0000-000000000000"
                 value={domainId}
                 onChange={(e) => setDomainId(e.target.value)}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="session">Resolution session id (optional)</Label>
+              <Input
+                id="session"
+                className="font-mono text-xs"
+                placeholder="From POST /api/v1/sessions — enables decision traces"
+                value={sessionId}
+                onChange={(e) => setSessionId(e.target.value)}
               />
             </div>
             <div className="space-y-2">
@@ -231,6 +247,11 @@ export default function RuntimePage() {
                 match_id
               </p>
               <p className="font-mono text-sm">{match.match_id}</p>
+              {match.session_id ? (
+                <p className="mt-1 font-mono text-xs text-muted-foreground">
+                  session_id {match.session_id}
+                </p>
+              ) : null}
             </div>
             <div>
               <p className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
@@ -271,6 +292,12 @@ export default function RuntimePage() {
                     <div className="mt-2 flex flex-wrap gap-3 text-xs text-muted-foreground">
                       <span>score {r.match_score}</span>
                       <span>confidence {r.confidence}</span>
+                      {r.retrieval_score != null ? (
+                        <span>retrieval {r.retrieval_score}</span>
+                      ) : null}
+                      {r.playbook_confidence != null ? (
+                        <span>playbook conf. {r.playbook_confidence}</span>
+                      ) : null}
                       <span>{r.freshness_status}</span>
                       <span>{r.automation_mode}</span>
                     </div>

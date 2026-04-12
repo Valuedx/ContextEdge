@@ -1,30 +1,32 @@
 """LLM provider abstraction using LiteLLM for multi-provider support."""
 
 import json
+import os
 from typing import Any
 
-import os
 import litellm
+import structlog
 
 from contextedge.config import settings
 
 litellm.set_verbose = False
+logger = structlog.get_logger()
 
 # Ensure Google API Key is set for LiteLLM
 if settings.google_api_key:
-    prefix = settings.google_api_key[:10]
-    print(f"DEBUG: Using Google API Key starting with: {prefix}...")
     os.environ["GOOGLE_API_KEY"] = settings.google_api_key
+    logger.debug("google_api_key_configured")
 
 # Support Vertex AI via service account
 if settings.google_application_credentials:
-    print(f"DEBUG: Using Vertex AI credentials: {settings.google_application_credentials}")
     os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = settings.google_application_credentials
     os.environ["VERTEX_LOCATION"] = settings.location
-    # LiteLLM also looks for vertex_project but usually can derive from JSON key.
-    # If it fails, we may need to parse the JSON for the project_id.
+    logger.debug(
+        "vertex_ai_credentials_configured",
+        path=settings.google_application_credentials,
+    )
 else:
-    print("DEBUG: No Vertex AI (Google Application Credentials) found.")
+    logger.debug("vertex_ai_credentials_not_found")
 
 # Enable retries for transient errors (e.g., 503 Service Unavailable)
 litellm.num_retries = 5
@@ -77,7 +79,16 @@ async def llm_complete_json(
         temperature=temperature,
         response_format={"type": "json_object"},
     )
-    return json.loads(result)
+    try:
+        return json.loads(result)
+    except json.JSONDecodeError as exc:
+        logger.error(
+            "llm_json_parse_failed",
+            task=task,
+            model=model or get_model_for_task(task),
+            raw=result[:500],
+        )
+        raise ValueError(f"LLM returned invalid JSON for task '{task}'") from exc
 
 
 async def generate_embedding(text: str, model: str | None = None) -> list[float]:

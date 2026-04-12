@@ -2,6 +2,7 @@ import uuid
 
 import structlog
 
+from contextedge.services.contradiction_service import scan_contradictions
 from contextedge.services.drift_service import check_playbook_drift
 from contextedge.services.evaluation_service import execute_evaluation_run
 from contextedge.workers.asyncio_runner import run_async
@@ -67,4 +68,40 @@ def detect_drift(self, tenant_id: str):
         return run_async(work)
     except Exception as exc:
         logger.exception("drift.check_failed", tenant_id=tenant_id, error=str(exc))
+        raise self.retry(exc=exc) from exc
+
+
+@celery_app.task(bind=True, max_retries=1, default_retry_delay=300)
+def scan_contradictions_task(self, tenant_id: str):
+    """Scan approved playbooks against KB evidence for contradictions."""
+    from sqlalchemy import select
+
+    from contextedge.models.tenant import Tenant
+
+    async def work(db):
+        if tenant_id == "all":
+            r = await db.execute(select(Tenant.id))
+            tids = [row[0] for row in r.all()]
+            totals = {
+                "tenants": len(tids),
+                "playbooks_scanned": 0,
+                "kb_items_scanned": 0,
+                "candidate_pairs_scanned": 0,
+                "contradictions_created": 0,
+                "contradictions_updated": 0,
+            }
+            for tid in tids:
+                pack = await scan_contradictions(db, tid)
+                for key in totals:
+                    if key == "tenants":
+                        continue
+                    totals[key] += int(pack.get(key, 0))
+            return totals
+
+        return {"tenants": 1, **(await scan_contradictions(db, uuid.UUID(tenant_id)))}
+
+    try:
+        return run_async(work)
+    except Exception as exc:
+        logger.exception("contradiction.scan_failed", tenant_id=tenant_id, error=str(exc))
         raise self.retry(exc=exc) from exc

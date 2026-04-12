@@ -6,10 +6,16 @@ Handles retention policies, legal holds, and data lifecycle management.
 import uuid
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from contextedge.models.evidence import EvidenceItem, RawEvidenceObject
+from contextedge.services.memory_service import (
+    LONG_TERM_MEMORY,
+    SHORT_TERM_MEMORY,
+    classify_evidence_memory_class,
+    memory_retention_windows,
+)
 
 import structlog
 
@@ -26,11 +32,15 @@ async def apply_retention_policy(
 
     Items under legal hold are excluded.
     """
-    cutoff = datetime.now(timezone.utc) - timedelta(days=retention_days)
+    now = datetime.now(timezone.utc)
+    windows = memory_retention_windows(retention_days)
 
     q = select(EvidenceItem).where(
         EvidenceItem.tenant_id == tenant_id,
-        EvidenceItem.ingested_at < cutoff,
+        or_(
+            EvidenceItem.sensitivity_label.is_(None),
+            EvidenceItem.sensitivity_label != "legal_hold",
+        ),
     )
     if source_class:
         q = q.where(EvidenceItem.evidence_type == source_class)
@@ -39,16 +49,26 @@ async def apply_retention_policy(
     items = result.scalars().all()
 
     archived = 0
+    archived_by_memory_class = {
+        SHORT_TERM_MEMORY: 0,
+        LONG_TERM_MEMORY: 0,
+    }
     for item in items:
+        memory_class = classify_evidence_memory_class(item)
+        cutoff = now - timedelta(days=windows[memory_class])
+        if item.ingested_at >= cutoff:
+            continue
         item.relevance_state = "archived"
         archived += 1
+        archived_by_memory_class[memory_class] = archived_by_memory_class.get(memory_class, 0) + 1
 
     await db.flush()
     logger.info(
         "retention.applied",
         tenant_id=str(tenant_id),
         archived=archived,
-        cutoff=cutoff.isoformat(),
+        retention_windows=windows,
+        archived_by_memory_class=archived_by_memory_class,
     )
     return archived
 

@@ -288,7 +288,8 @@ async def local_ingest(body: LocalIngestRequest, db: DbSession, user: AuthUser):
     source.discovery_status = "completed"
 
     from contextedge.models.evidence import RawEvidenceObject
-    from contextedge.workers.extraction_tasks import _normalize, classify_relevance_task
+    from contextedge.services.artifact_extraction_service import process_attachment_artifact
+    from contextedge.workers.extraction_tasks import _normalize
 
     created_ids = []
     for file in body.files:
@@ -319,8 +320,15 @@ async def local_ingest(body: LocalIngestRequest, db: DbSession, user: AuthUser):
     for rid in created_ids:
         # We call the internal async _normalize directly to bypass Celery worker lag on Windows
         norm_res = await _normalize(db, str(rid), user.tenant_id)
-        
-        # We must pass the evidence_id (not the raw ID) to the classifier
+
+        if norm_res and norm_res.get("attachment_ids"):
+            for artifact_id in norm_res["attachment_ids"]:
+                await process_attachment_artifact(
+                    db,
+                    artifact_id=UUID(str(artifact_id)),
+                    tenant_id=user.tenant_id,
+                )
+
         if norm_res and "evidence_id" in norm_res:
             from contextedge.workers.extraction_tasks import _classify
             await _classify(db, norm_res["evidence_id"], user.tenant_id)

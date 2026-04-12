@@ -4,6 +4,7 @@ from uuid import UUID
 from fastapi import APIRouter, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
+import structlog
 
 from contextedge.deps import AuthUser, DbSession
 from contextedge.middleware.audit import log_audit_event
@@ -25,6 +26,7 @@ from contextedge.services.playbook_service import (
 from pydantic import BaseModel, Field
 
 router = APIRouter()
+logger = structlog.get_logger()
 
 
 @router.get("", response_model=list[PlaybookResponse])
@@ -187,12 +189,14 @@ async def generate_playbook(
     user: AuthUser,
 ):
     """Generate a playbook candidate from a knowledge pattern using AI."""
-    # user.require_role("knowledge_manager") # Loosening for demo
+    user.require_role("knowledge_manager")
 
-    from contextedge.models.pattern import Pattern, PatternEvidenceLink
+    from contextedge.models.pattern import NegativeKnowledgeItem, Pattern
     from contextedge.models.episode import Episode
     from contextedge.ai.generators.playbook_generator import generate_playbook_candidate
     from contextedge.services.playbook_service import create_playbook_version
+    from contextedge.services.identity_service import identity_ids_from_refs
+    from contextedge.graph.builder import link_node_to_identities
 
     # 1. Fetch Pattern and Episodes
     q = select(Pattern).where(
@@ -221,8 +225,16 @@ async def generate_playbook(
                 "outcome": ep.final_outcome
             })
 
-        # Simplified negative knowledge for demo
-        negative_knowledge = [] 
+        nk_r = await db.execute(
+            select(NegativeKnowledgeItem).where(
+                NegativeKnowledgeItem.tenant_id == user.tenant_id,
+                NegativeKnowledgeItem.domain_id == pattern.domain_id,
+            ).limit(20)
+        )
+        negative_knowledge = [
+            f"{row.step_text} ({row.failure_reason or 'no reason'})"
+            for row in nk_r.scalars().all()
+        ]
 
         candidate = await generate_playbook_candidate(
             pattern.title,
@@ -250,13 +262,27 @@ async def generate_playbook(
 
         # 4. Create Version 0.1.0 with the AI content
         await create_playbook_version(db, playbook, candidate)
+        identity_ids = []
+        for episode in episodes:
+            identity_ids.extend(identity_ids_from_refs(episode.entity_refs))
+        await link_node_to_identities(
+            db,
+            user.tenant_id,
+            "playbook",
+            playbook.id,
+            identity_ids,
+            edge_type="references_identity",
+        )
 
         await db.commit()
         await db.refresh(playbook)
         return playbook
 
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
+    except Exception:
+        logger.exception(
+            "playbook_generation_failed",
+            tenant_id=str(user.tenant_id),
+            pattern_id=str(body.pattern_id),
+        )
         await db.rollback()
-        raise HTTPException(status_code=500, detail=f"Playbook generation failed: {str(e)}")
+        raise HTTPException(status_code=500, detail="Playbook generation failed")

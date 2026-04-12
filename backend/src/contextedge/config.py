@@ -69,3 +69,9 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+if settings.app_env != "development" and settings.jwt_secret_key == "change-me-in-production":
+    raise RuntimeError(
+        "JWT_SECRET_KEY must be changed from the default value in non-development environments. "
+        "Set JWT_SECRET_KEY in your .env or environment variables."
+    )

@@ -8,6 +8,8 @@ from contextedge.models.episode import Episode
 from contextedge.models.pattern import NegativeKnowledgeItem, Pattern, PatternEvidenceLink
 from contextedge.models.playbook import Playbook
 from contextedge.models.tenant import User
+from contextedge.graph.builder import link_node_to_identities
+from contextedge.services.identity_service import identity_ids_from_refs
 from contextedge.services.pattern_service import create_pattern_from_episodes
 from contextedge.services.playbook_service import create_playbook_version
 from contextedge.workers.asyncio_runner import run_async
@@ -163,6 +165,17 @@ def generate_playbook_candidate(self, pattern_id: str, tenant_id: str):
             "execution_confidence_guidance": llm.get("execution_confidence_guidance"),
         }
         await create_playbook_version(db, playbook, version_data)
+        identity_ids = []
+        for episode in episodes:
+            identity_ids.extend(identity_ids_from_refs(episode.entity_refs))
+        await link_node_to_identities(
+            db,
+            tid,
+            "playbook",
+            playbook.id,
+            identity_ids,
+            edge_type="references_identity",
+        )
         await db.refresh(playbook)
         return {"status": "ok", "playbook_id": str(playbook.id), "stable_key": stable_key}
 

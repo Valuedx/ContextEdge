@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import DateTime, Float, ForeignKey, String, Text, UniqueConstraint, func
-from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from contextedge.models.base import Base, TenantScopedMixin
@@ -31,6 +31,7 @@ class Playbook(Base, TenantScopedMixin):
     stable_key: Mapped[str] = mapped_column(String(255), nullable=False, unique=True, index=True)
     title: Mapped[str] = mapped_column(String(500), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    search_tsvector: Mapped[object | None] = mapped_column(TSVECTOR, nullable=True)
     lifecycle_state: Mapped[str] = mapped_column(
         String(30),
         default="candidate",

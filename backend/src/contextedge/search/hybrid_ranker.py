@@ -10,9 +10,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from contextedge.ai.provider import generate_embedding
 from contextedge.models.pattern import GraphEdge
 from contextedge.models.playbook import Playbook, PlaybookVersion
+from contextedge.search.access_control import resolve_excluded_access_policy_ids
 from contextedge.search.pg_fts import search_playbooks_fts
 from contextedge.search.risk_policy import risk_within_cap
 from contextedge.search.vector_search import search_evidence_semantic_for_playbook
+from contextedge.services.identity_service import resolve_identity_ids_for_terms
 
 
 @dataclass
@@ -21,6 +23,7 @@ class RankingWeights:
     semantic: float = 0.30
     graph_distance: float = 0.15
     evidence_quality: float = 0.10
+    identity: float = 0.05
     recency: float = 0.10
     freshness: float = 0.05
     negative_penalty: float = 0.05
@@ -31,6 +34,7 @@ class RankedPlaybook:
     playbook: Playbook
     score: float
     confidence: float
+    playbook_confidence: float
     freshness_status: str
     evidence_count: int
     breakdown: dict = field(default_factory=dict)
@@ -64,6 +68,26 @@ async def _graph_score_for_playbook(
     return min(1.0, float(n) / 5.0)
 
 
+async def _identity_score_for_playbook(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    playbook_id: uuid.UUID,
+    identity_ids: set[uuid.UUID],
+) -> float:
+    if not identity_ids:
+        return 0.0
+    q = select(func.count(func.distinct(GraphEdge.target_node_id))).where(
+        GraphEdge.tenant_id == tenant_id,
+        GraphEdge.source_node_type == "playbook",
+        GraphEdge.source_node_id == playbook_id,
+        GraphEdge.target_node_type == "identity",
+        GraphEdge.edge_type == "references_identity",
+        GraphEdge.target_node_id.in_(tuple(identity_ids)),
+    )
+    hits = (await db.execute(q)).scalar() or 0
+    return min(1.0, float(hits) / max(1, len(identity_ids)))
+
+
 async def _latest_published_version_id(
     db: AsyncSession,
     playbook_id: uuid.UUID,
@@ -92,6 +116,7 @@ async def rank_playbooks(
     domain_id: uuid.UUID | None = None,
     max_risk_tier: str | None = None,
     allowed_domain_ids: list[uuid.UUID] | None = None,
+    caller_roles: list[str] | None = None,
 ) -> list[RankedPlaybook]:
     """Rank approved playbooks using hybrid signals.
 
@@ -101,6 +126,7 @@ async def rank_playbooks(
     in the allowed set.
     """
     weights = weights or RankingWeights()
+    excluded_policy_ids = await resolve_excluded_access_policy_ids(db, tenant_id, caller_roles)
 
     approved_result = await db.execute(
         select(Playbook).where(
@@ -127,6 +153,8 @@ async def rank_playbooks(
     if not approved_playbooks:
         return []
 
+    query_identity_ids = await resolve_identity_ids_for_terms(db, tenant_id, entities or [])
+
     fts_scores: dict[uuid.UUID, float] = {}
     if query_text.strip():
         fts_results = await search_playbooks_fts(db, tenant_id, query_text, limit=50)
@@ -147,8 +175,15 @@ async def rank_playbooks(
         pv_id = await _latest_published_version_id(db, pb.id)
         if pv_id is None:
             continue
+        pv = await db.get(PlaybookVersion, pv_id)
         keyword_score = fts_scores.get(pb.id, 0.0)
         graph_score = await _graph_score_for_playbook(db, tenant_id, pb.id)
+        identity_score = await _identity_score_for_playbook(
+            db,
+            tenant_id,
+            pb.id,
+            query_identity_ids,
+        )
         sem_rows: list = []
         if query_text.strip() and query_embedding is not None:
             try:
@@ -160,6 +195,7 @@ async def rank_playbooks(
                     query_text,
                     limit=10,
                     query_embedding=query_embedding,
+                    exclude_policy_ids=excluded_policy_ids,
                 )
             except Exception:
                 sem_rows = []
@@ -168,12 +204,14 @@ async def rank_playbooks(
         quality_score = 0.5
         freshness = _compute_freshness(pb, now)
         recency_score = freshness
+        playbook_confidence = float(pv.playbook_confidence) if pv is not None else 0.0
 
         total = (
             weights.keyword * keyword_score
             + weights.semantic * semantic_score
             + weights.graph_distance * graph_score
             + weights.evidence_quality * quality_score
+            + weights.identity * identity_score
             + weights.recency * recency_score
             + weights.freshness * freshness
         )
@@ -184,6 +222,7 @@ async def rank_playbooks(
             playbook=pb,
             score=total,
             confidence=total,
+            playbook_confidence=playbook_confidence,
             freshness_status=freshness_status,
             evidence_count=evidence_hits_pb,
             breakdown={
@@ -191,6 +230,7 @@ async def rank_playbooks(
                 "semantic": semantic_score,
                 "graph": graph_score,
                 "quality": quality_score,
+                "identity": identity_score,
                 "recency": recency_score,
                 "freshness": freshness,
             },

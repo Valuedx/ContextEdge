@@ -2,10 +2,32 @@
 
 import uuid
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from contextedge.ai.extractors.episode_extractor import reconstruct_episode
 from contextedge.models.episode import Episode, EpisodeStep
+from contextedge.models.evidence import EvidenceItem
+
+
+def _merge_identity_refs(values: list[dict | None]) -> dict | None:
+    merged: list[dict] = []
+    seen: set[str] = set()
+    for refs in values:
+        identities = (refs or {}).get("identities")
+        if not isinstance(identities, list):
+            continue
+        for item in identities:
+            if not isinstance(item, dict):
+                continue
+            canonical_id = item.get("canonical_id")
+            if not canonical_id or canonical_id in seen:
+                continue
+            seen.add(str(canonical_id))
+            merged.append(item)
+    if not merged:
+        return None
+    return {"identities": merged}
 
 
 async def create_episodes_from_evidence(
@@ -17,6 +39,10 @@ async def create_episodes_from_evidence(
 ) -> list[Episode]:
     """Run LLM extraction and create one or more episodes with steps."""
     extracted_episodes = await reconstruct_episode(evidence_items)
+    evidence_result = await db.execute(
+        select(EvidenceItem.canonical_entity_refs).where(EvidenceItem.id.in_(evidence_ids))
+    )
+    entity_refs = _merge_identity_refs([row[0] for row in evidence_result.all()])
     
     created_episodes = []
 
@@ -31,6 +57,7 @@ async def create_episodes_from_evidence(
             final_outcome=ep_data.get("final_outcome"),
             reviewer_state="pending_review",
             evidence_ids=[str(eid) for eid in evidence_ids],
+            entity_refs=entity_refs,
         )
         db.add(episode)
         await db.flush()

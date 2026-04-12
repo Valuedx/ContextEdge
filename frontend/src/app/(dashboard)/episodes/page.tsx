@@ -9,7 +9,7 @@ import { DataTable } from "@/components/common/data-table";
 import { DataTableSkeleton } from "@/components/common/data-table-skeleton";
 import { StatusBadge } from "@/components/common/status-badge";
 import { api } from "@/lib/api";
-import type { Episode } from "@/lib/types";
+import type { Episode, EpisodeReconstructQueuedResponse } from "@/lib/types";
 import Link from "next/link";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
@@ -125,7 +125,6 @@ const columns: ColumnDef<Episode>[] = [
 ];
 
 export default function EpisodesPage() {
-  const queryClient = useQueryClient();
   const [isReconstructing, setIsReconstructing] = useState(false);
   
   const { data = [], isLoading } = useQuery<Episode[]>({
@@ -136,10 +135,11 @@ export default function EpisodesPage() {
   const handleReconstruct = async () => {
     try {
       setIsReconstructing(true);
-      const res = await api.post("/episodes/reconstruct", {});
-      toast.success(`Reconstruction complete: ${res.evidence_count} items synthesized!`);
-      // Refresh immediately since the backend is now synchronous
-      queryClient.invalidateQueries({ queryKey: ["episodes"] });
+      const res = await api.post<EpisodeReconstructQueuedResponse>("/episodes/reconstruct", {});
+      const tid = res.task_id ? `${res.task_id.slice(0, 8)}…` : "unknown";
+      toast.success(
+        `Reconstruction queued for ${res.evidence_count} evidence item(s). Celery task ${tid} — refresh episodes after the worker finishes.`,
+      );
     } catch (err: any) {
       toast.error(err.message || "Failed to trigger reconstruction");
     } finally {

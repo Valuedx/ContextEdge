@@ -24,6 +24,9 @@ class ApiClient {
     if (token) {
       headers["Authorization"] = `Bearer ${token}`;
     }
+    if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+      headers["X-Request-ID"] = crypto.randomUUID();
+    }
 
     const res = await fetch(`${this.baseUrl}${path}`, {
       ...options,
@@ -39,8 +42,27 @@ class ApiClient {
     }
 
     if (!res.ok) {
-      const body = await res.json().catch(() => ({}));
-      throw new Error(body.detail || `Request failed: ${res.status}`);
+      const body = (await res.json().catch(() => ({}))) as {
+        detail?: string | unknown;
+      };
+      const detail = body.detail;
+      let message: string;
+      if (typeof detail === "string") {
+        message = detail;
+      } else if (Array.isArray(detail)) {
+        message = detail
+          .map((d) =>
+            typeof d === "object" && d !== null && "msg" in d
+              ? String((d as { msg: string }).msg)
+              : JSON.stringify(d),
+          )
+          .join("; ");
+      } else if (detail != null) {
+        message = JSON.stringify(detail);
+      } else {
+        message = `Request failed: ${res.status}`;
+      }
+      throw new Error(message);
     }
 
     if (res.status === 204) return undefined as T;

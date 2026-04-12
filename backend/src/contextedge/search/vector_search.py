@@ -2,7 +2,7 @@
 
 import uuid
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from contextedge.ai.provider import generate_embedding
@@ -17,6 +17,7 @@ async def search_evidence_semantic(
     limit: int = 20,
     *,
     query_embedding: list[float] | None = None,
+    exclude_policy_ids: list[uuid.UUID] | None = None,
 ) -> list[tuple]:
     """Semantic search evidence items using pgvector cosine similarity."""
     emb = query_embedding if query_embedding is not None else await generate_embedding(query_text)
@@ -33,6 +34,13 @@ async def search_evidence_semantic(
         .order_by("distance")
         .limit(limit)
     )
+    if exclude_policy_ids:
+        stmt = stmt.where(
+            or_(
+                EvidenceItem.access_policy_id.is_(None),
+                EvidenceItem.access_policy_id.notin_(exclude_policy_ids),
+            )
+        )
     result = await db.execute(stmt)
     return result.all()
 
@@ -46,6 +54,7 @@ async def search_evidence_semantic_for_playbook(
     limit: int = 10,
     *,
     query_embedding: list[float] | None = None,
+    exclude_policy_ids: list[uuid.UUID] | None = None,
 ) -> list[tuple]:
     """Semantic search for evidence linked to one **published** playbook version."""
     emb = query_embedding if query_embedding is not None else await generate_embedding(query_text)
@@ -71,5 +80,12 @@ async def search_evidence_semantic_for_playbook(
         .order_by("distance")
         .limit(limit)
     )
+    if exclude_policy_ids:
+        stmt = stmt.where(
+            or_(
+                EvidenceItem.access_policy_id.is_(None),
+                EvidenceItem.access_policy_id.notin_(exclude_policy_ids),
+            )
+        )
     result = await db.execute(stmt)
     return result.all()

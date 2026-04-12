@@ -1,5 +1,7 @@
+import json
 import uuid
 
+import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -7,13 +9,21 @@ from contextedge.ai.classifiers.relevance import classify_relevance as run_relev
 from contextedge.ai.embeddings import embed_evidence
 from contextedge.models.episode import EpisodeStep
 from contextedge.models.evidence import EvidenceItem, RawEvidenceObject
+from contextedge.services.artifact_extraction_service import (
+    load_raw_payload,
+    register_attachment_artifacts,
+)
 from contextedge.services.evidence_normalization import (
     evidence_body_from_payload,
     evidence_content_hash_from_payload,
     evidence_title_from_payload,
 )
+from contextedge.services.identity_service import link_evidence_identities
 from contextedge.workers.asyncio_runner import run_async
 from contextedge.workers.celery_app import celery_app
+from contextedge.workers.correlation_tasks import correlate_evidence
+
+logger = structlog.get_logger()
 
 
 async def _ensure_embedding(db: AsyncSession, evidence: EvidenceItem) -> bool:
@@ -30,10 +40,22 @@ async def _normalize(db: AsyncSession, raw_object_id: str, tenant_id: uuid.UUID)
     if not raw or raw.tenant_id != tenant_id:
         return {"error": "raw_not_found"}
 
-    payload = raw.raw_payload or {}
+    try:
+        payload = await load_raw_payload(raw)
+    except ValueError:
+        return {"error": "raw_payload_offloaded_without_storage_key"}
+
     title = evidence_title_from_payload(payload)
     body = evidence_body_from_payload(payload)
     h = evidence_content_hash_from_payload(payload)
+    identity_content = "\n".join(
+        part for part in [
+            title or "",
+            body or "",
+            json.dumps(payload, default=str)[:2000] if payload else "",
+        ]
+        if part and part.strip()
+    )
 
     existing = (
         await db.execute(
@@ -45,11 +67,39 @@ async def _normalize(db: AsyncSession, raw_object_id: str, tenant_id: uuid.UUID)
     ).scalar_one_or_none()
     if existing:
         embedded = await _ensure_embedding(db, existing)
+        identity_count = None
+        if not ((existing.canonical_entity_refs or {}).get("identities")) and identity_content.strip():
+            try:
+                refs = await link_evidence_identities(
+                    db,
+                    tenant_id=tenant_id,
+                    evidence=existing,
+                    content=identity_content,
+                    source_id=raw.source_id,
+                    source_metadata={"raw_object_id": str(raw.id)},
+                )
+                identity_count = len(refs)
+            except Exception as exc:
+                logger.warning(
+                    "identity_resolution_failed",
+                    tenant_id=str(tenant_id),
+                    raw_object_id=str(raw.id),
+                    evidence_id=str(existing.id),
+                    error=str(exc),
+                )
+        attachments = await register_attachment_artifacts(
+            db,
+            tenant_id=tenant_id,
+            evidence=existing,
+            payload=payload,
+        )
         return {
             "evidence_id": str(existing.id),
             "deduped": True,
             "embedded": existing.embedding is not None,
             "embedding_repaired": embedded,
+            "identity_count": identity_count,
+            "attachment_ids": [str(artifact.id) for artifact in attachments],
         }
 
     ev = EvidenceItem(
@@ -65,11 +115,39 @@ async def _normalize(db: AsyncSession, raw_object_id: str, tenant_id: uuid.UUID)
     )
     db.add(ev)
     await db.flush()
+    identity_count = 0
+    if identity_content.strip():
+        try:
+            refs = await link_evidence_identities(
+                db,
+                tenant_id=tenant_id,
+                evidence=ev,
+                content=identity_content,
+                source_id=raw.source_id,
+                source_metadata={"raw_object_id": str(raw.id)},
+            )
+            identity_count = len(refs)
+        except Exception as exc:
+            logger.warning(
+                "identity_resolution_failed",
+                tenant_id=str(tenant_id),
+                raw_object_id=str(raw.id),
+                evidence_id=str(ev.id),
+                error=str(exc),
+            )
+    attachments = await register_attachment_artifacts(
+        db,
+        tenant_id=tenant_id,
+        evidence=ev,
+        payload=payload,
+    )
     embedded = await _ensure_embedding(db, ev)
     return {
         "evidence_id": str(ev.id),
         "deduped": False,
         "embedded": embedded,
+        "identity_count": identity_count,
+        "attachment_ids": [str(artifact.id) for artifact in attachments],
     }
 
 
@@ -158,7 +236,15 @@ def normalize_evidence(self, raw_object_id: str, tenant_id: str):
     try:
         res = run_async(work)
         if res and "evidence_id" in res:
-            classify_relevance_task.delay(res["evidence_id"], tenant_id)
+            attachment_ids = [artifact_id for artifact_id in (res.get("attachment_ids") or []) if artifact_id]
+            if attachment_ids:
+                from contextedge.workers.artifact_tasks import extract_attachment_artifact
+
+                for artifact_id in attachment_ids:
+                    extract_attachment_artifact.delay(artifact_id, tenant_id)
+            else:
+                classify_relevance_task.delay(res["evidence_id"], tenant_id)
+                correlate_evidence.delay(res["evidence_id"], tenant_id)
         return res
     except Exception as exc:
         raise self.retry(exc=exc) from exc

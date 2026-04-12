@@ -320,6 +320,8 @@ export interface RuntimeMatchResult {
   stable_key: string;
   match_score: number;
   confidence: number;
+  retrieval_score?: number | null;
+  playbook_confidence?: number | null;
   freshness_status: string;
   evidence_count: number;
   risk_tier: string;
@@ -329,9 +331,17 @@ export interface RuntimeMatchResult {
 
 export interface RuntimeMatchResponse {
   match_id: string;
+  session_id?: string | null;
   results: RuntimeMatchResult[];
   fallback_guidance: string | null;
   filters_applied: Record<string, unknown>;
+}
+
+/** POST /episodes/reconstruct — 202 Accepted */
+export interface EpisodeReconstructQueuedResponse {
+  status: string;
+  evidence_count: number;
+  task_id: string;
 }
 
 /** GET /runtime/explain/{match_id} */

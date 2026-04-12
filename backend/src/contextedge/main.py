@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from prometheus_fastapi_instrumentator import Instrumentator
 
 from contextedge.config import settings
+from contextedge.services.object_store import ensure_bucket
 
 structlog.configure(
     processors=[
@@ -40,6 +41,11 @@ def _cors_origins() -> list[str]:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     app.state.redis = aioredis.from_url(settings.redis_url, decode_responses=True)
+    try:
+        ensure_bucket()
+        logger.info("object_store_bucket_ready", bucket=settings.minio_bucket)
+    except Exception as exc:
+        logger.warning("object_store_bucket_check_failed", error=str(exc))
     logger.info("startup", database=settings.database_url.split("@")[-1])
     yield
     await app.state.redis.close()
