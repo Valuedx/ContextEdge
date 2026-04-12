@@ -12,13 +12,14 @@ def _register_connectors():
     from contextedge.connectors.servicenow.connector import ServiceNowConnector
     from contextedge.connectors.jira_sm.connector import JiraSmConnector
 
-    # CONNECTOR_CLASSES.update({
-    #     "teams": TeamsConnector,
-    #     "gmail": GmailConnector,
-    #     "servicenow": ServiceNowConnector,
-    #     "jira_sm": JiraSmConnector,
-    # })
-    pass
+    CONNECTOR_CLASSES.update(
+        {
+            "teams": TeamsConnector,
+            "gmail": GmailConnector,
+            "servicenow": ServiceNowConnector,
+            "jira_sm": JiraSmConnector,
+        }
+    )
 
 
 def get_connector(source_type: str, source_config: dict[str, Any], credentials: dict[str, Any]) -> BaseConnector:

@@ -5,7 +5,7 @@ This folder holds **technical blueprint explainers**: narrative, business-readab
 ## How to use this wiki
 
 1. Read **[EDITORIAL-GUIDE.md](./EDITORIAL-GUIDE.md)** first for voice, vocabulary, and the **shared example** used across articles.
-2. Skim **[KNOWN_GAPS.md](./KNOWN_GAPS.md)** for registry, worker queue, and dedupe caveats before debugging ingestion.
+2. Skim **[KNOWN_GAPS.md](./KNOWN_GAPS.md)** for worker queues, dedupe, retention wiring, and how to add new connector types.
 3. Follow **[PLAN.md](./PLAN.md)** for writing order, scope, and how pages link.
 4. Start with **[01-end-to-end-pipeline.md](./01-end-to-end-pipeline.md)** if you want one pass over the whole system, then drill into numbered topics.
 
@@ -14,7 +14,7 @@ This folder holds **technical blueprint explainers**: narrative, business-readab
 | Doc | Description |
 | --- | --- |
 | [EDITORIAL-GUIDE.md](./EDITORIAL-GUIDE.md) | Voice, template, **Acme VPN** scenario |
-| [KNOWN_GAPS.md](./KNOWN_GAPS.md) | Connector registry, sync queue, dedupe, retention wiring |
+| [KNOWN_GAPS.md](./KNOWN_GAPS.md) | Sync queue, dedupe, retention, extending connectors beyond built-ins |
 | [PLAN.md](./PLAN.md) | Scope table, cross-links, maintenance |
 | [01-end-to-end-pipeline.md](./01-end-to-end-pipeline.md) | Full journey: sync → evidence → search → playbooks → audit |
 | [02-api-and-request-lifecycle.md](./02-api-and-request-lifecycle.md) | FastAPI, middleware, JWT/service tokens, audit |

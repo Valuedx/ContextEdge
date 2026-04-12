@@ -2,13 +2,9 @@
 
 Short list of **implementation gaps** and **operational caveats** called out in the codewiki and root documentation. Use this when something “should work” but does not in your environment.
 
-## Connector registry not populated
+## Adding a new connector type
 
-In `backend/src/contextedge/connectors/registry.py`, `_register_connectors()` imports vendor connector classes but the `CONNECTOR_CLASSES.update({...})` block is **commented out**. Until it is enabled (or replaced with dynamic registration), `get_connector(source_type, ...)` raises **Unknown source type** for all types—even though concrete classes exist under `connectors/`.
-
-**Impact:** `run_backfill_job`, `run_incremental_job`, and `run_discovery_job` fail at connector construction unless you register types.
-
-**Fix direction:** Uncomment and maintain the `source_type` → class map, or register connectors in application startup.
+Built-in types `teams`, `gmail`, `servicenow`, and `jira_sm` are registered in `backend/src/contextedge/connectors/registry.py`. New vendors still need a class under `connectors/` and an entry in `CONNECTOR_CLASSES.update(...)` (or equivalent registration).
 
 ## Sync requires a worker on the `sync` queue
 

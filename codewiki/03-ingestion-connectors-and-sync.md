@@ -12,7 +12,7 @@ Your organization connects Jira, ServiceNow, Teams, Gmail, or similar. Each conn
 
 1. **Connector contract** — `BaseConnector` in `connectors/base.py` defines the adapter surface: `validate_credentials`, `discover_objects`, `backfill`, `fetch_changes`, and optional thread hydration types (`IngestionEvent`, `Checkpoint`, `BackfillResult`, `ChangeResult`). Concrete implementations live under `connectors/<vendor>/connector.py`.
 
-2. **Registry** — `get_connector(source_type, source_config, credentials)` in `connectors/registry.py` maps a string `source_type` to a class. The registry lazily imports connector classes. **Note:** registering concrete classes in `CONNECTOR_CLASSES` is required for `get_connector` to succeed; if registration is commented, unknown types raise—operators should align config with registered types.
+2. **Registry** — `get_connector(source_type, source_config, credentials)` in `connectors/registry.py` maps a string `source_type` to a class. `_register_connectors()` lazily imports and registers `teams`, `gmail`, `servicenow`, and `jira_sm`. New connector types need a module plus an entry in `CONNECTOR_CLASSES`.
 
 3. **Credentials and discovery** — `sync_worker_service` loads the active `SourceCredential`, decrypts payload via `source_service.decrypt_credentials`, and builds a connector. `run_discovery_job` creates a `SyncRun`, calls `discover_source_objects`, and records status. `run_backfill_job` and `run_incremental_job` drive `backfill` / `fetch_changes` over date windows and checkpoints.
 
@@ -24,7 +24,7 @@ Your organization connects Jira, ServiceNow, Teams, Gmail, or similar. Each conn
 
 7. **Sources API** — `api/v1/sources.py` (with `source_service`) manages source CRUD, credentials, and **backfill** via `run_backfill.delay(...)` per selected source object.
 
-Residual caveats (empty connector registry, sync queue workers, dedupe): see [KNOWN_GAPS.md](./KNOWN_GAPS.md).
+Residual caveats (sync queue in prod, dedupe): see [KNOWN_GAPS.md](./KNOWN_GAPS.md).
 
 ## Design decisions
 
