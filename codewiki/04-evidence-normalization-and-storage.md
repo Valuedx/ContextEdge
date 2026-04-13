@@ -52,4 +52,5 @@ Three raws with the same VPN error text collapse to one `EvidenceItem` after nor
 
 - [03-ingestion-connectors-and-sync.md](./03-ingestion-connectors-and-sync.md) — where raws are created  
 - [06-ai-extraction-and-embeddings.md](./06-ai-extraction-and-embeddings.md) — models behind embed and classify  
+- [12-identity-resolution-and-thread-hydration.md](./12-identity-resolution-and-thread-hydration.md) — canonical entity extraction and alias matching that runs after normalization  
 - [`docs/TECHNICAL_BLUEPRINT.md`](../docs/TECHNICAL_BLUEPRINT.md) — ingestion diagram  

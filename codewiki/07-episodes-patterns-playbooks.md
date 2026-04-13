@@ -64,4 +64,5 @@ One **episode** consolidates Acme’s duplicate tickets and chat; a **pattern** 
 
 - [06-ai-extraction-and-embeddings.md](./06-ai-extraction-and-embeddings.md) — how episode text is produced  
 - [08-workers-celery-queues.md](./08-workers-celery-queues.md) — `cluster_episodes`, `generate_playbook_candidate`  
+- [13-evaluation-drift-and-feedback.md](./13-evaluation-drift-and-feedback.md) — how approved playbooks are monitored for drift and quality  
 - [`docs/TECHNICAL_BLUEPRINT.md`](../docs/TECHNICAL_BLUEPRINT.md) — governance section  

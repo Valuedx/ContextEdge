@@ -62,3 +62,4 @@ Incidents rarely live in one ticket. Analysts need “show me everything related
 - [05-search-hybrid-and-access.md](./05-search-hybrid-and-access.md) — graph signals in ranking  
 - [07-episodes-patterns-playbooks.md](./07-episodes-patterns-playbooks.md) — approved playbook content  
 - [08-workers-celery-queues.md](./08-workers-celery-queues.md) — `scan_contradictions_task`  
+- [12-identity-resolution-and-thread-hydration.md](./12-identity-resolution-and-thread-hydration.md) — `link_node_to_identities` and identity graph edges  

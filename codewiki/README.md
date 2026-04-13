@@ -27,6 +27,8 @@ This folder holds **technical blueprint explainers**: narrative, business-readab
 | [09-graph-and-correlation.md](./09-graph-and-correlation.md) | Correlation edges, graph, contradictions |
 | [10-governance-sessions-execution-audit.md](./10-governance-sessions-execution-audit.md) | Sessions, execution safety, audit & events |
 | [11-retention-and-operational-events.md](./11-retention-and-operational-events.md) | Retention, legal hold, memory class, events |
+| [12-identity-resolution-and-thread-hydration.md](./12-identity-resolution-and-thread-hydration.md) | Canonical entities, alias matching, lazy thread fetch |
+| [13-evaluation-drift-and-feedback.md](./13-evaluation-drift-and-feedback.md) | Offline eval runs, drift alerts, retrieval feedback loop |
 
 ## Relationship to `docs/`
 

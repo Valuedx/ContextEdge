@@ -24,6 +24,8 @@ This document was the **backlog and writing order** for markdown articles in `co
 | 9 | [09-graph-and-correlation.md](./09-graph-and-correlation.md) | Correlation edges, graph, contradictions | `graph/builder.py`, `graph/queries.py`, `services/correlation_service.py`, `services/contradiction_service.py` |
 | 10 | [10-governance-sessions-execution-audit.md](./10-governance-sessions-execution-audit.md) | Sessions, execution, audit, operational events | `services/session_service.py`, `services/execution_service.py`, `middleware/audit.py`, `middleware/request_audit.py`, `services/event_log_service.py`, `api/v1/sessions.py`, `api/v1/execution.py` |
 | 11 | [11-retention-and-operational-events.md](./11-retention-and-operational-events.md) | Retention, legal hold, memory class | `services/retention_service.py`, `services/memory_service.py`, `models/events.py`, `schemas/tenant.py` |
+| 12 | [12-identity-resolution-and-thread-hydration.md](./12-identity-resolution-and-thread-hydration.md) | Canonical identities, alias matching, thread hydration | `services/identity_service.py`, `ai/extractors/identity_extractor.py`, `workers/hydration_tasks.py`, `models/episode.py` (`CanonicalIdentity`, `IdentityAlias`, `EvidenceIdentityLink`) |
+| 13 | [13-evaluation-drift-and-feedback.md](./13-evaluation-drift-and-feedback.md) | Offline eval runs, drift alerts, retrieval feedback | `services/evaluation_service.py`, `services/drift_service.py`, `workers/evaluation_tasks.py`, `models/evaluation.py` |
 
 ## Per-article checklist (for future edits)
 
@@ -52,6 +54,8 @@ flowchart LR
   P9[09 Graph correlation]
   P10[10 Governance audit]
   P11[11 Retention events]
+  P12[12 Identity hydration]
+  P13[13 Eval drift feedback]
   P1 --> P2
   P1 --> P3
   P3 --> P4
@@ -65,6 +69,12 @@ flowchart LR
   P7 --> P10
   P4 --> P11
   P10 --> P11
+  P4 --> P12
+  P6 --> P12
+  P9 --> P12
+  P7 --> P13
+  P5 --> P13
+  P8 --> P13
 ```
 
 ## Maintenance
@@ -78,3 +88,5 @@ flowchart LR
 - [x] Every planned article exists in `codewiki/`.
 - [x] [README.md](./README.md) lists each file with a one-line description.
 - [x] Mermaid (or equivalent) diagram in **01** and **08**.
+- [x] **12** — identity resolution, alias matching, thread hydration.
+- [x] **13** — offline evaluation, drift detection, retrieval feedback loop.
