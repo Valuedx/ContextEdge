@@ -374,3 +374,139 @@ export interface RuntimePlaybookVersion {
   published_by: string | null;
   created_at: string;
 }
+
+// ── New API surface ───────────────────────────────────────────────────────
+
+export interface Notification {
+  id: string;
+  tenant_id: string;
+  user_id: string | null;
+  notification_type: string;
+  title: string;
+  body: string;
+  metadata: Record<string, unknown>;
+  is_read: boolean;
+  read_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface Contradiction {
+  id: string;
+  tenant_id: string;
+  source_a_ref: string;
+  source_b_ref: string;
+  contradiction_type: string;
+  description: string | null;
+  resolution_status: string;
+  resolved_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface NegativeKnowledgeItem {
+  id: string;
+  tenant_id: string;
+  domain_id: string | null;
+  step_text: string;
+  failure_reason: string | null;
+  status: string;
+  evidence_refs: unknown[] | null;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface IdentityAlias {
+  id: string;
+  canonical_identity_id: string;
+  alias_text: string;
+  source_id: string | null;
+  confidence: number;
+  created_by: string | null;
+  created_at: string;
+}
+
+export interface CanonicalIdentity {
+  id: string;
+  tenant_id: string;
+  entity_type: string;
+  canonical_name: string;
+  metadata_extra: Record<string, unknown> | null;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+  aliases: IdentityAlias[];
+}
+
+export interface CorrelationEdge {
+  id: string;
+  tenant_id: string;
+  source_evidence_id: string;
+  target_evidence_id: string;
+  correlation_type: string;
+  confidence: number;
+  explanation: string | null;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AttachmentArtifact {
+  id: string;
+  evidence_id: string;
+  tenant_id: string;
+  file_name: string | null;
+  mime_type: string | null;
+  extraction_status: string;
+  extracted_text: string | null;
+  object_store_key: string | null;
+  created_at: string;
+}
+
+export interface PatternEvidenceLink {
+  id: string;
+  pattern_id: string;
+  episode_id: string | null;
+  evidence_id: string | null;
+  link_type: string;
+  weight: number;
+  created_at: string;
+}
+
+export interface RetrievalFeedback {
+  id: string;
+  tenant_id: string;
+  match_id: string | null;
+  playbook_id: string | null;
+  feedback_type: string;
+  details: Record<string, unknown> | null;
+  submitted_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PlaybookVersionDiff {
+  playbook_id: string;
+  base_version_id: string | null;
+  base_semantic_version: string | null;
+  target_version_id: string;
+  target_semantic_version: string;
+  changed_fields: string[];
+  unified_diff: string;
+}
+
+export interface PendingApproval {
+  id: string;
+  execution_run_id: string;
+  step_run_id: string | null;
+  requested_by: string;
+  requested_action: string;
+  safety_class: string;
+  context: Record<string, unknown>;
+  status: string;
+  decided_by: string | null;
+  decided_at: string | null;
+  decision_comment: string | null;
+  created_at: string;
+}

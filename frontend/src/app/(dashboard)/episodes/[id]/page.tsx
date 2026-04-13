@@ -3,7 +3,8 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { CheckCircle2, Loader2 } from "lucide-react";
+import { CheckCircle2, Loader2, Pencil, X, Check } from "lucide-react";
+import { useState } from "react";
 
 import { PageHeader } from "@/components/common/page-header";
 import {
@@ -16,6 +17,8 @@ import { Button, buttonVariants } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
+import { Textarea } from "@/components/ui/textarea";
+import { Input } from "@/components/ui/input";
 import { api } from "@/lib/api";
 import type { EpisodeDetail, EpisodeStep } from "@/lib/types";
 import { useAuthStore } from "@/lib/stores/auth-store";
@@ -27,25 +30,90 @@ function canApproveEpisode(roles: string[]) {
   );
 }
 
-function StepCard({ step }: { step: EpisodeStep }) {
+function StepCard({
+  step,
+  episodeId,
+  canEdit,
+}: {
+  step: EpisodeStep;
+  episodeId: string;
+  canEdit: boolean;
+}) {
+  const qc = useQueryClient();
+  const [editing, setEditing] = useState(false);
+  const [text, setText] = useState(step.text);
+  const [observation, setObservation] = useState(step.observation ?? "");
+
+  const mut = useMutation({
+    mutationFn: () =>
+      api.patch(`/episodes/${episodeId}/steps/${step.id}`, {
+        text: text.trim() || undefined,
+        observation: observation.trim() || null,
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["episode", episodeId] });
+      setEditing(false);
+    },
+  });
+
   return (
     <div className="rounded-lg border p-4 text-sm">
       <div className="flex flex-wrap items-center gap-2">
         <span className="font-mono text-xs text-muted-foreground">#{step.step_order}</span>
         <span className="rounded bg-muted px-2 py-0.5 text-xs">{step.step_type}</span>
-        {step.failed_flag && (
-          <span className="text-xs text-destructive">failed</span>
-        )}
-        {step.successful_flag && (
-          <span className="text-xs text-emerald-600">success</span>
-        )}
+        {step.failed_flag && <span className="text-xs text-destructive">failed</span>}
+        {step.successful_flag && <span className="text-xs text-emerald-600">success</span>}
         <span className="text-xs text-muted-foreground">
           confidence {(step.extraction_confidence * 100).toFixed(0)}%
         </span>
+        {canEdit && !editing && (
+          <Button
+            variant="ghost"
+            size="icon"
+            className="ml-auto h-6 w-6"
+            onClick={() => setEditing(true)}
+          >
+            <Pencil className="h-3 w-3" />
+          </Button>
+        )}
       </div>
-      <p className="mt-2 whitespace-pre-wrap">{step.text}</p>
-      {step.observation && (
-        <p className="mt-2 text-muted-foreground italic">{step.observation}</p>
+
+      {editing ? (
+        <div className="mt-2 space-y-2">
+          <Textarea
+            rows={3}
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            className="text-sm"
+          />
+          <Input
+            placeholder="Observation (optional)"
+            value={observation}
+            onChange={(e) => setObservation(e.target.value)}
+            className="text-sm"
+          />
+          <div className="flex gap-2">
+            <Button size="sm" disabled={mut.isPending} onClick={() => mut.mutate()}>
+              <Check className="mr-1 h-3 w-3" />
+              {mut.isPending ? "Saving…" : "Save"}
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => { setEditing(false); setText(step.text); setObservation(step.observation ?? ""); }}
+            >
+              <X className="mr-1 h-3 w-3" />
+              Cancel
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <>
+          <p className="mt-2 whitespace-pre-wrap">{step.text}</p>
+          {step.observation && (
+            <p className="mt-2 text-muted-foreground italic">{step.observation}</p>
+          )}
+        </>
       )}
     </div>
   );
@@ -214,7 +282,7 @@ export default function EpisodeDetailPage() {
         ) : (
           <div className="space-y-3">
             {steps.map((s) => (
-              <StepCard key={s.id} step={s} />
+              <StepCard key={s.id} step={s} episodeId={episodeId} canEdit={showApprove} />
             ))}
           </div>
         )}

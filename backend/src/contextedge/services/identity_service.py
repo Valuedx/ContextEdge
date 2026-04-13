@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import uuid
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from contextedge.ai.extractors.identity_extractor import extract_identities
 from contextedge.graph.builder import link_node_to_identities
 from contextedge.models.episode import CanonicalIdentity, EvidenceIdentityLink, IdentityAlias
 from contextedge.models.evidence import EvidenceItem
+from contextedge.models.pattern import GraphEdge
 from contextedge.services.event_log_service import append_operational_event
 
 
@@ -267,3 +268,117 @@ async def find_related_evidence_ids_by_identity_ids(
         stmt = stmt.where(EvidenceIdentityLink.evidence_id != exclude_evidence_id)
     result = await db.execute(stmt)
     return set(result.scalars().all())
+
+
+async def merge_canonical_identities(
+    db: AsyncSession,
+    *,
+    tenant_id: uuid.UUID,
+    primary_identity_id: uuid.UUID,
+    duplicate_identity_id: uuid.UUID,
+    actor_id: uuid.UUID | None = None,
+) -> CanonicalIdentity | None:
+    if primary_identity_id == duplicate_identity_id:
+        return None
+
+    primary = await db.get(CanonicalIdentity, primary_identity_id)
+    duplicate = await db.get(CanonicalIdentity, duplicate_identity_id)
+    if (
+        primary is None
+        or duplicate is None
+        or primary.tenant_id != tenant_id
+        or duplicate.tenant_id != tenant_id
+    ):
+        return None
+
+    alias_result = await db.execute(
+        select(IdentityAlias).where(
+            IdentityAlias.canonical_identity_id.in_((primary.id, duplicate.id))
+        )
+    )
+    aliases = list(alias_result.scalars().all())
+    existing_aliases = {
+        _normalize_term(primary.canonical_name),
+        *(
+            _normalize_term(alias.alias_text)
+            for alias in aliases
+            if alias.canonical_identity_id == primary.id
+        ),
+    }
+    for alias in aliases:
+        if alias.canonical_identity_id != duplicate.id:
+            continue
+        normalized = _normalize_term(alias.alias_text)
+        if normalized in existing_aliases:
+            await db.delete(alias)
+            continue
+        alias.canonical_identity_id = primary.id
+        existing_aliases.add(normalized)
+
+    duplicate_name = _normalize_term(duplicate.canonical_name)
+    if duplicate_name not in existing_aliases:
+        db.add(
+            IdentityAlias(
+                canonical_identity_id=primary.id,
+                alias_text=duplicate.canonical_name,
+                source_id=None,
+                confidence=1.0,
+                created_by="merge",
+            )
+        )
+
+    existing_primary_result = await db.execute(
+        select(EvidenceIdentityLink.evidence_id).where(
+            EvidenceIdentityLink.tenant_id == tenant_id,
+            EvidenceIdentityLink.identity_id == primary.id,
+        )
+    )
+    primary_evidence_ids = set(existing_primary_result.scalars().all())
+    duplicate_links_result = await db.execute(
+        select(EvidenceIdentityLink).where(
+            EvidenceIdentityLink.tenant_id == tenant_id,
+            EvidenceIdentityLink.identity_id == duplicate.id,
+        )
+    )
+    for link in duplicate_links_result.scalars().all():
+        if link.evidence_id in primary_evidence_ids:
+            await db.delete(link)
+            continue
+        link.identity_id = primary.id
+        primary_evidence_ids.add(link.evidence_id)
+
+    edges_result = await db.execute(
+        select(GraphEdge).where(
+            GraphEdge.tenant_id == tenant_id,
+            or_(
+                (GraphEdge.source_node_type == "identity") & (GraphEdge.source_node_id == duplicate.id),
+                (GraphEdge.target_node_type == "identity") & (GraphEdge.target_node_id == duplicate.id),
+            ),
+        )
+    )
+    for edge in edges_result.scalars().all():
+        if edge.source_node_type == "identity" and edge.source_node_id == duplicate.id:
+            edge.source_node_id = primary.id
+        if edge.target_node_type == "identity" and edge.target_node_id == duplicate.id:
+            edge.target_node_id = primary.id
+
+    duplicate.is_active = False
+    merged_metadata = dict(duplicate.metadata_extra or {})
+    merged_metadata["merged_into"] = str(primary.id)
+    duplicate.metadata_extra = merged_metadata
+
+    await db.flush()
+    await append_operational_event(
+        db,
+        tenant_id=tenant_id,
+        actor_id=actor_id,
+        entity_type="canonical_identity",
+        entity_id=primary.id,
+        event_type="identity.merged",
+        payload={
+            "primary_identity_id": str(primary.id),
+            "duplicate_identity_id": str(duplicate.id),
+        },
+    )
+    await db.refresh(primary)
+    return primary

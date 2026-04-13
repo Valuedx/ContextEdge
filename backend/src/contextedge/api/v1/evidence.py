@@ -5,8 +5,9 @@ from sqlalchemy import or_, select
 
 from contextedge.deps import AuthUser, DbSession
 from contextedge.middleware.audit import log_audit_event
-from contextedge.models.evidence import EvidenceItem, Thread
+from contextedge.models.evidence import AttachmentArtifact, EvidenceItem, Thread
 from contextedge.schemas.evidence import (
+    AttachmentArtifactResponse,
     EvidenceAccessPolicyUpdate,
     EvidenceItemDetail,
     EvidenceItemResponse,
@@ -80,6 +81,29 @@ async def get_evidence(evidence_id: UUID, db: DbSession, user: AuthUser):
     ):
         raise HTTPException(status_code=404, detail="Evidence not found")
     return item
+
+
+@router.get("/{evidence_id}/attachments", response_model=list[AttachmentArtifactResponse])
+async def list_evidence_attachments(evidence_id: UUID, db: DbSession, user: AuthUser):
+    excluded_policy_ids = await resolve_excluded_access_policy_ids(db, user.tenant_id, user.roles)
+    result = await db.execute(
+        select(EvidenceItem).where(
+            EvidenceItem.id == evidence_id,
+            EvidenceItem.tenant_id == user.tenant_id,
+        )
+    )
+    item = result.scalar_one_or_none()
+    if not item or (
+        excluded_policy_ids and item.access_policy_id in set(excluded_policy_ids)
+    ):
+        raise HTTPException(status_code=404, detail="Evidence not found")
+
+    attachments = await db.execute(
+        select(AttachmentArtifact)
+        .where(AttachmentArtifact.evidence_id == evidence_id)
+        .order_by(AttachmentArtifact.created_at.asc(), AttachmentArtifact.filename.asc())
+    )
+    return attachments.scalars().all()
 
 
 @router.patch(

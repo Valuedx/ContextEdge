@@ -16,6 +16,7 @@ from contextedge.schemas.playbook import (
     RuntimeMatchResponse,
     RuntimeMatchResult,
 )
+from contextedge.schemas.review import RetrievalFeedbackResponse
 from contextedge.search.hybrid_ranker import rank_playbooks
 from contextedge.search.risk_policy import risk_within_cap
 from contextedge.services.event_log_service import append_operational_event
@@ -362,3 +363,25 @@ async def submit_feedback(body: FeedbackSubmission, db: DbSession, user: AuthUse
     db.add(feedback)
     await db.flush()
     return {"status": "feedback_recorded", "id": str(feedback.id)}
+
+
+@router.get("/feedback", response_model=list[RetrievalFeedbackResponse])
+async def list_feedback(
+    db: DbSession,
+    user: AuthUser,
+    playbook_id: uuid.UUID | None = None,
+    feedback_type: str | None = None,
+    match_id: str | None = None,
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+):
+    stmt = select(RetrievalFeedback).where(RetrievalFeedback.tenant_id == user.tenant_id)
+    if playbook_id is not None:
+        stmt = stmt.where(RetrievalFeedback.playbook_id == playbook_id)
+    if feedback_type is not None:
+        stmt = stmt.where(RetrievalFeedback.feedback_type == feedback_type)
+    if match_id is not None:
+        stmt = stmt.where(RetrievalFeedback.match_id == match_id)
+    stmt = stmt.order_by(RetrievalFeedback.created_at.desc()).limit(limit).offset(offset)
+    result = await db.execute(stmt)
+    return result.scalars().all()

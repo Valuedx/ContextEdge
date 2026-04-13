@@ -32,6 +32,94 @@ import { Textarea } from "@/components/ui/textarea";
 import { api } from "@/lib/api";
 import type { EvaluationDataset, EvaluationRun } from "@/lib/types";
 import { useAuthStore } from "@/lib/stores/auth-store";
+import { CheckCircle, XCircle } from "lucide-react";
+import { Separator } from "@/components/ui/separator";
+
+interface EvalCase {
+  expected_stable_key: string | null;
+  top_stable_key: string | null;
+  top1_hit: boolean;
+  top_k: Array<{ stable_key: string; score: number }>;
+}
+
+function EvalRunResults({ run, onClose }: { run: EvaluationRun; onClose: () => void }) {
+  const r = run.results as {
+    case_count?: number;
+    top1_accuracy?: number;
+    cases?: EvalCase[];
+    error?: string;
+  } | null;
+
+  return (
+    <Card>
+      <CardHeader className="flex flex-row items-center justify-between">
+        <CardTitle className="text-base">
+          Run results <span className="font-mono text-xs font-normal text-muted-foreground ml-2">{run.id.slice(0, 8)}…</span>
+        </CardTitle>
+        <Button variant="outline" size="sm" onClick={onClose}>Close</Button>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {!r ? (
+          <p className="text-sm text-muted-foreground">No results yet — run is {run.status}.</p>
+        ) : r.error ? (
+          <p className="text-sm text-destructive">Error: {r.error}</p>
+        ) : (
+          <>
+            <div className="flex flex-wrap gap-6 text-sm">
+              <div>
+                <p className="text-xs text-muted-foreground">Cases</p>
+                <p className="text-2xl font-bold">{r.case_count ?? 0}</p>
+              </div>
+              <div>
+                <p className="text-xs text-muted-foreground">Top-1 accuracy</p>
+                <p className="text-2xl font-bold">
+                  {r.top1_accuracy != null ? (r.top1_accuracy * 100).toFixed(1) + "%" : "—"}
+                </p>
+              </div>
+            </div>
+            {Array.isArray(r.cases) && r.cases.length > 0 && (
+              <>
+                <Separator />
+                <div className="overflow-auto">
+                  <table className="w-full text-xs">
+                    <thead>
+                      <tr className="border-b text-left text-muted-foreground">
+                        <th className="pb-2 pr-4">#</th>
+                        <th className="pb-2 pr-4">Expected</th>
+                        <th className="pb-2 pr-4">Got</th>
+                        <th className="pb-2 pr-4">Hit</th>
+                        <th className="pb-2">Top-5 scores</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {r.cases.map((c, i) => (
+                        <tr key={i} className="border-b last:border-0">
+                          <td className="py-1.5 pr-4 text-muted-foreground">{i + 1}</td>
+                          <td className="py-1.5 pr-4 font-mono">{c.expected_stable_key ?? "—"}</td>
+                          <td className="py-1.5 pr-4 font-mono">{c.top_stable_key ?? "—"}</td>
+                          <td className="py-1.5 pr-4">
+                            {c.top1_hit ? (
+                              <CheckCircle className="h-4 w-4 text-green-500" />
+                            ) : (
+                              <XCircle className="h-4 w-4 text-destructive" />
+                            )}
+                          </td>
+                          <td className="py-1.5 text-muted-foreground">
+                            {c.top_k.slice(0, 5).map((k) => `${k.stable_key}(${k.score.toFixed(2)})`).join(", ")}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </>
+            )}
+          </>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
 
 function canManageEval(roles: string[]) {
   return roles.includes("knowledge_manager") || roles.includes("platform_super_admin");
@@ -288,19 +376,7 @@ export default function EvaluationsPage() {
                 data={runs}
               />
               {expandedRun && (
-                <Card>
-                  <CardHeader className="flex flex-row items-center justify-between">
-                    <CardTitle className="text-base">Run {expandedRun.id}</CardTitle>
-                    <Button variant="outline" size="sm" onClick={() => setExpandedRun(null)}>
-                      Close
-                    </Button>
-                  </CardHeader>
-                  <CardContent>
-                    <pre className="max-h-80 overflow-auto rounded-md bg-muted p-3 text-xs">
-                      {JSON.stringify(expandedRun.results ?? { note: "No results yet" }, null, 2)}
-                    </pre>
-                  </CardContent>
-                </Card>
+                <EvalRunResults run={expandedRun} onClose={() => setExpandedRun(null)} />
               )}
             </>
           )}

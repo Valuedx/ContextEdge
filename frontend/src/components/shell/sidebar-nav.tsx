@@ -17,6 +17,12 @@ import {
   Shield,
   ClipboardList,
   Settings,
+  Layers,
+  AlertTriangle,
+  BrainCircuit,
+  Fingerprint,
+  Share2,
+  PlayCircle,
 } from "lucide-react";
 
 const navItems = [
@@ -27,8 +33,14 @@ const navItems = [
   { label: "Episodes", href: "/episodes", icon: GitBranch },
   { label: "Patterns", href: "/patterns", icon: Network },
   { label: "Playbooks", href: "/playbooks", icon: BookOpen },
+  { label: "Sessions", href: "/sessions", icon: Layers },
   { label: "Evaluations", href: "/evaluations", icon: FlaskConical },
   { label: "Runtime", href: "/runtime", icon: Radio },
+  { label: "Execution", href: "/execution", icon: PlayCircle },
+  { label: "Contradictions", href: "/contradictions", icon: AlertTriangle },
+  { label: "Neg. Knowledge", href: "/negative-knowledge", icon: BrainCircuit },
+  { label: "Identities", href: "/identities", icon: Fingerprint },
+  { label: "Correlations", href: "/correlations", icon: Share2 },
   { label: "Drift", href: "/drift", icon: Activity },
   { label: "Policies", href: "/policies", icon: Shield },
   { label: "Audit Log", href: "/audit", icon: ClipboardList },

@@ -1,4 +1,7 @@
+import difflib
+import json
 import uuid as uuid_mod
+from datetime import UTC, datetime
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Query, status
@@ -11,12 +14,15 @@ from contextedge.middleware.audit import log_audit_event
 from contextedge.models.playbook import Playbook, PlaybookVersion
 from contextedge.schemas.playbook import (
     PlaybookCreate,
+    PlaybookRollbackRequest,
     PlaybookResponse,
     PlaybookTransition,
     PlaybookUpdate,
     PlaybookVersionCreate,
+    PlaybookVersionDiffResponse,
     PlaybookVersionResponse,
 )
+from contextedge.services.policy_assignment import assert_policy_assignment
 from contextedge.services.playbook_service import (
     DuplicateVersionError,
     InvalidTransitionError,
@@ -27,6 +33,40 @@ from pydantic import BaseModel, Field
 
 router = APIRouter()
 logger = structlog.get_logger()
+
+
+def _version_payload(version: PlaybookVersion) -> dict:
+    return {
+        "trigger_conditions": version.trigger_conditions or {},
+        "branching_logic": version.branching_logic or {},
+        "inputs": version.inputs or [],
+        "outputs": version.outputs or [],
+        "steps": version.steps or [],
+        "rollback_notes": version.rollback_notes,
+        "evidence_refs": version.evidence_refs,
+        "playbook_confidence": version.playbook_confidence,
+        "execution_confidence_guidance": version.execution_confidence_guidance,
+    }
+
+
+def _version_diff(base: PlaybookVersion | None, target: PlaybookVersion) -> tuple[list[str], str]:
+    base_payload = _version_payload(base) if base is not None else {}
+    target_payload = _version_payload(target)
+    changed_fields = sorted(
+        key
+        for key in set(base_payload) | set(target_payload)
+        if base_payload.get(key) != target_payload.get(key)
+    )
+    diff = "\n".join(
+        difflib.unified_diff(
+            json.dumps(base_payload, indent=2, sort_keys=True).splitlines(),
+            json.dumps(target_payload, indent=2, sort_keys=True).splitlines(),
+            fromfile=base.semantic_version if base is not None else "none",
+            tofile=target.semantic_version,
+            lineterm="",
+        )
+    )
+    return changed_fields, diff
 
 
 @router.get("", response_model=list[PlaybookResponse])
@@ -51,6 +91,7 @@ async def list_playbooks(
 @router.post("", response_model=PlaybookResponse, status_code=status.HTTP_201_CREATED)
 async def create_playbook(body: PlaybookCreate, db: DbSession, user: AuthUser):
     user.require_role("knowledge_manager")
+    await assert_policy_assignment(db, user.tenant_id, body.approval_policy_id, "approval")
     stable_key = f"pb-{uuid_mod.uuid4().hex[:12]}"
     playbook = Playbook(
         tenant_id=user.tenant_id,
@@ -60,6 +101,7 @@ async def create_playbook(body: PlaybookCreate, db: DbSession, user: AuthUser):
         description=body.description,
         risk_tier=body.risk_tier,
         automation_mode=body.automation_mode,
+        approval_policy_id=body.approval_policy_id,
         owner_user_id=user.user_id,
         pattern_id=body.pattern_id,
     )
@@ -100,7 +142,15 @@ async def update_playbook(playbook_id: UUID, body: PlaybookUpdate, db: DbSession
     if not playbook:
         raise HTTPException(status_code=404, detail="Playbook not found")
 
-    for field, value in body.model_dump(exclude_unset=True).items():
+    update_data = body.model_dump(exclude_unset=True)
+    if "approval_policy_id" in update_data:
+        await assert_policy_assignment(
+            db,
+            user.tenant_id,
+            update_data["approval_policy_id"],
+            "approval",
+        )
+    for field, value in update_data.items():
         setattr(playbook, field, value)
     await db.flush()
     await db.refresh(playbook)
@@ -175,6 +225,112 @@ async def create_version(
         version = await create_playbook_version(db, playbook, body.model_dump())
     except DuplicateVersionError as e:
         raise HTTPException(status_code=409, detail=str(e)) from e
+    return version
+
+
+@router.get(
+    "/{playbook_id}/versions/{version_id}/diff",
+    response_model=PlaybookVersionDiffResponse,
+)
+async def get_playbook_version_diff(
+    playbook_id: UUID,
+    version_id: UUID,
+    db: DbSession,
+    user: AuthUser,
+    base_version_id: UUID | None = None,
+):
+    playbook = (
+        await db.execute(
+            select(Playbook).where(Playbook.id == playbook_id, Playbook.tenant_id == user.tenant_id)
+        )
+    ).scalar_one_or_none()
+    if not playbook:
+        raise HTTPException(status_code=404, detail="Playbook not found")
+
+    target = (
+        await db.execute(
+            select(PlaybookVersion).where(
+                PlaybookVersion.id == version_id,
+                PlaybookVersion.playbook_id == playbook_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if not target:
+        raise HTTPException(status_code=404, detail="Playbook version not found")
+
+    base: PlaybookVersion | None = None
+    if base_version_id is not None:
+        base = (
+            await db.execute(
+                select(PlaybookVersion).where(
+                    PlaybookVersion.id == base_version_id,
+                    PlaybookVersion.playbook_id == playbook_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if not base:
+            raise HTTPException(status_code=404, detail="Base playbook version not found")
+    elif playbook.current_version_id and playbook.current_version_id != target.id:
+        base = await db.get(PlaybookVersion, playbook.current_version_id)
+    else:
+        base = (
+            await db.execute(
+                select(PlaybookVersion)
+                .where(
+                    PlaybookVersion.playbook_id == playbook_id,
+                    PlaybookVersion.id != target.id,
+                )
+                .order_by(PlaybookVersion.created_at.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+
+    changed_fields, unified_diff = _version_diff(base, target)
+    return PlaybookVersionDiffResponse(
+        playbook_id=playbook_id,
+        base_version_id=base.id if base else None,
+        base_semantic_version=base.semantic_version if base else None,
+        target_version_id=target.id,
+        target_semantic_version=target.semantic_version,
+        changed_fields=changed_fields,
+        unified_diff=unified_diff,
+    )
+
+
+@router.post("/{playbook_id}/rollback", response_model=PlaybookVersionResponse)
+async def rollback_playbook(
+    playbook_id: UUID,
+    body: PlaybookRollbackRequest,
+    db: DbSession,
+    user: AuthUser,
+):
+    user.require_role("knowledge_manager")
+    playbook = (
+        await db.execute(
+            select(Playbook).where(Playbook.id == playbook_id, Playbook.tenant_id == user.tenant_id)
+        )
+    ).scalar_one_or_none()
+    if not playbook:
+        raise HTTPException(status_code=404, detail="Playbook not found")
+
+    target = (
+        await db.execute(
+            select(PlaybookVersion).where(
+                PlaybookVersion.id == body.target_version_id,
+                PlaybookVersion.playbook_id == playbook_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if not target:
+        raise HTTPException(status_code=404, detail="Playbook version not found")
+
+    version_data = _version_payload(target)
+    if target.rollback_notes:
+        version_data["rollback_notes"] = target.rollback_notes
+    version = await create_playbook_version(db, playbook, version_data)
+    if playbook.lifecycle_state == "approved":
+        version.published_at = version.published_at or datetime.now(UTC)
+        version.published_by = version.published_by or user.user_id
     return version
 
 

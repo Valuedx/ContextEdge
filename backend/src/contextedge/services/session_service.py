@@ -73,6 +73,31 @@ async def get_resolution_session(
     return result.scalar_one_or_none()
 
 
+async def list_resolution_sessions(
+    db: AsyncSession,
+    *,
+    tenant_id: uuid.UUID,
+    status: str | None = None,
+    domain_id: uuid.UUID | None = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> list[ResolutionSession]:
+    stmt = (
+        select(ResolutionSession)
+        .where(ResolutionSession.tenant_id == tenant_id)
+        .options(selectinload(ResolutionSession.trace_events))
+        .order_by(ResolutionSession.created_at.desc())
+        .limit(limit)
+        .offset(offset)
+    )
+    if status is not None:
+        stmt = stmt.where(ResolutionSession.status == status)
+    if domain_id is not None:
+        stmt = stmt.where(ResolutionSession.domain_id == domain_id)
+    result = await db.execute(stmt)
+    return list(result.scalars().all())
+
+
 async def append_trace_event(
     db: AsyncSession,
     *,

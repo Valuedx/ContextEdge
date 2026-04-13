@@ -5,7 +5,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ColumnDef } from "@tanstack/react-table";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { Loader2, RefreshCw } from "lucide-react";
+import { Loader2, RefreshCw, KeyRound } from "lucide-react";
+import { toast } from "sonner";
 
 import { PageHeader } from "@/components/common/page-header";
 import {
@@ -112,6 +113,15 @@ export default function SourceDetailPage() {
     },
   });
 
+  const rotateCredsMut = useMutation({
+    mutationFn: () => api.post(`/sources/${id}/credentials/rotate`, {}),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["source", id] });
+      toast.success("Credential rotation initiated");
+    },
+    onError: (err: any) => toast.error(err.message || "Rotation failed"),
+  });
+
   const srvRetention = source?.retention_policy_id ?? null;
   const srvClassification = source?.classification_policy_id ?? null;
   const retentionId = draftRetention !== undefined ? draftRetention : srvRetention;
@@ -181,6 +191,20 @@ export default function SourceDetailPage() {
             >
               Discovery inventory
             </Link>
+            {canDiscover && (
+              <Button
+                variant="outline"
+                disabled={rotateCredsMut.isPending}
+                onClick={() => rotateCredsMut.mutate()}
+              >
+                {rotateCredsMut.isPending ? (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                ) : (
+                  <KeyRound className="mr-2 h-4 w-4" />
+                )}
+                Rotate credentials
+              </Button>
+            )}
             {canDiscover && (
               <Button
                 disabled={discoverMut.isPending}

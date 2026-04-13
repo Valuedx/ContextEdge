@@ -1,6 +1,6 @@
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Query, status
 
 from contextedge.deps import AuthUser, DbSession
 from contextedge.schemas.session import (
@@ -14,9 +14,29 @@ from contextedge.services.session_service import (
     close_resolution_session,
     create_resolution_session,
     get_resolution_session,
+    list_resolution_sessions,
 )
 
 router = APIRouter()
+
+
+@router.get("", response_model=list[ResolutionSessionResponse])
+async def list_sessions(
+    db: DbSession,
+    user: AuthUser,
+    status_filter: str | None = Query(None, alias="status"),
+    domain_id: UUID | None = None,
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+):
+    return await list_resolution_sessions(
+        db,
+        tenant_id=user.tenant_id,
+        status=status_filter,
+        domain_id=domain_id,
+        limit=limit,
+        offset=offset,
+    )
 
 
 @router.post("", response_model=ResolutionSessionResponse, status_code=status.HTTP_201_CREATED)

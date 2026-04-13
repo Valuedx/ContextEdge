@@ -15,6 +15,8 @@ import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { PatternGraph } from "@/components/patterns/pattern-graph";
+import { usePagination } from "@/lib/hooks/use-pagination";
+import { PaginationControls } from "@/components/common/pagination-controls";
 
 function PatternActions({ patternId, title }: { patternId: string; title: string }) {
   const router = useRouter();
@@ -85,9 +87,10 @@ const columns: ColumnDef<Pattern>[] = [
 ];
 
 export default function PatternsPage() {
+  const pg = usePagination(50);
   const { data = [], isLoading } = useQuery<Pattern[]>({
-    queryKey: ["patterns"],
-    queryFn: () => api.get("/patterns"),
+    queryKey: ["patterns", pg.page],
+    queryFn: () => api.get("/patterns", pg.params),
   });
 
   return (
@@ -110,7 +113,16 @@ export default function PatternsPage() {
           {isLoading ? (
             <DataTableSkeleton columns={6} />
           ) : (
-            <DataTable columns={columns} data={data} />
+            <>
+              <DataTable columns={columns} data={data} />
+              <PaginationControls
+                page={pg.page}
+                pageSize={pg.pageSize}
+                count={data.length}
+                onPrev={pg.prevPage}
+                onNext={pg.nextPage}
+              />
+            </>
           )}
         </TabsContent>
 

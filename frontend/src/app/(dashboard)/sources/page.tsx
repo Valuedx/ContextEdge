@@ -16,6 +16,8 @@ import Link from "next/link";
 
 import { useState } from "react";
 import { AddSourceDialog } from "@/components/sources/add-source-dialog";
+import { usePagination } from "@/lib/hooks/use-pagination";
+import { PaginationControls } from "@/components/common/pagination-controls";
 
 function SourceActions({ sourceId, name }: { sourceId: string; name: string }) {
   const queryClient = useQueryClient();
@@ -90,9 +92,10 @@ const columns: ColumnDef<Source>[] = [
 
 export default function SourcesPage() {
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
+  const pg = usePagination(50);
   const { data = [], isLoading } = useQuery<Source[]>({
-    queryKey: ["sources"],
-    queryFn: () => api.get("/sources"),
+    queryKey: ["sources", pg.page],
+    queryFn: () => api.get("/sources", pg.params),
   });
 
   return (
@@ -116,7 +119,16 @@ export default function SourcesPage() {
           No sources configured yet. Add your first source to begin ingestion.
         </div>
       ) : (
-        <DataTable columns={columns} data={data} />
+        <>
+          <DataTable columns={columns} data={data} />
+          <PaginationControls
+            page={pg.page}
+            pageSize={pg.pageSize}
+            count={data.length}
+            onPrev={pg.prevPage}
+            onNext={pg.nextPage}
+          />
+        </>
       )}
     </div>
   );

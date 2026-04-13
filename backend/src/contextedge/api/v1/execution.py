@@ -1,8 +1,10 @@
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Query, status
+from sqlalchemy import select
 
 from contextedge.deps import AuthUser, DbSession
+from contextedge.models.execution import ApprovalRequest
 from contextedge.schemas.execution import (
     ApprovalDecision,
     ApprovalRequestResponse,
@@ -148,3 +150,22 @@ async def decide_on_approval(
         raise HTTPException(status_code=404, detail="Approval request not found")
     await db.commit()
     return req
+
+
+@router.get("/approvals/pending", response_model=list[ApprovalRequestResponse])
+async def list_pending_approvals(
+    db: DbSession,
+    user: AuthUser,
+    limit: int = Query(50, ge=1, le=200),
+):
+    user.require_role("domain_admin")
+    result = await db.execute(
+        select(ApprovalRequest)
+        .where(
+            ApprovalRequest.tenant_id == user.tenant_id,
+            ApprovalRequest.status == "pending",
+        )
+        .order_by(ApprovalRequest.created_at.desc())
+        .limit(limit)
+    )
+    return result.scalars().all()

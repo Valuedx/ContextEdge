@@ -11,11 +11,14 @@ from contextedge.models.base import Base  # noqa: E402
 
 # Import all model modules so Base.metadata is complete for autogenerate / migrations.
 import contextedge.models.audit  # noqa: E402, F401
+import contextedge.models.events  # noqa: E402, F401
 import contextedge.models.episode  # noqa: E402, F401
 import contextedge.models.evaluation  # noqa: E402, F401
 import contextedge.models.evidence  # noqa: E402, F401
 import contextedge.models.pattern  # noqa: E402, F401
 import contextedge.models.playbook  # noqa: E402, F401
+import contextedge.models.session  # noqa: E402, F401
+import contextedge.models.execution  # noqa: E402, F401
 import contextedge.models.source  # noqa: E402, F401
 import contextedge.models.tenant  # noqa: E402, F401
 import contextedge.models.policy  # noqa: E402, F401

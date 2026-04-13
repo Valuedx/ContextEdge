@@ -25,8 +25,10 @@ import {
 } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { api } from "@/lib/api";
-import type { EvidenceItemDetail, PoliciesOverview, ThreadSummary } from "@/lib/types";
+import type { AttachmentArtifact, EvidenceItemDetail, PoliciesOverview, ThreadSummary } from "@/lib/types";
 import { useAuthStore } from "@/lib/stores/auth-store";
+import { Loader2, Paperclip, RefreshCw } from "lucide-react";
+import { toast } from "sonner";
 
 const POLICY_NONE = "__none__";
 
@@ -66,6 +68,21 @@ export default function EvidenceDetailPage() {
     queryKey: ["thread", item?.thread_id],
     queryFn: () => api.get<ThreadSummary>(`/threads/${item!.thread_id}`),
     enabled: !!item?.thread_id,
+  });
+
+  const { data: attachments = [] } = useQuery<AttachmentArtifact[]>({
+    queryKey: ["evidence-attachments", evidenceId],
+    queryFn: () => api.get(`/evidence/${evidenceId}/attachments`),
+    enabled: !!evidenceId,
+  });
+
+  const hydrateMut = useMutation({
+    mutationFn: () => api.post(`/threads/${item!.thread_id}/hydrate`, {}),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["thread", item?.thread_id] });
+      toast.success("Thread hydration queued");
+    },
+    onError: (err: any) => toast.error(err.message || "Hydration failed"),
   });
 
   const { data: policiesData } = useQuery({
@@ -241,12 +258,27 @@ export default function EvidenceDetailPage() {
             <CardHeader>
               <CardTitle className="text-base">Thread context</CardTitle>
             </CardHeader>
-            <CardContent className="space-y-2 text-sm">
+            <CardContent className="space-y-3 text-sm">
               <p className="font-medium">{thread.title || thread.external_thread_id}</p>
               <p className="text-muted-foreground">
                 {thread.message_count} messages · {thread.participant_count} participants
               </p>
               <StatusBadge status={thread.hydration_status} />
+              {thread.hydration_status !== "hydrated" && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={hydrateMut.isPending}
+                  onClick={() => hydrateMut.mutate()}
+                >
+                  {hydrateMut.isPending ? (
+                    <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
+                  )}
+                  Hydrate thread
+                </Button>
+              )}
             </CardContent>
           </Card>
         )}
@@ -285,6 +317,39 @@ export default function EvidenceDetailPage() {
               <pre className="overflow-auto rounded-md bg-muted p-3 text-xs">
                 {JSON.stringify(item.canonical_entity_refs, null, 2)}
               </pre>
+            </CardContent>
+          </Card>
+        </>
+      )}
+
+      {attachments.length > 0 && (
+        <>
+          <Separator />
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base flex items-center gap-2">
+                <Paperclip className="h-4 w-4" />
+                Attachments
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <ul className="space-y-2">
+                {attachments.map((a) => (
+                  <li key={a.id} className="flex flex-wrap items-center gap-3 rounded-md border px-3 py-2 text-sm">
+                    <span className="font-medium truncate max-w-xs">{a.file_name ?? "Unnamed file"}</span>
+                    <span className="text-xs text-muted-foreground">{a.mime_type ?? "—"}</span>
+                    <StatusBadge status={a.extraction_status} />
+                    {a.extracted_text && (
+                      <details className="w-full mt-1">
+                        <summary className="cursor-pointer text-xs text-primary">View extracted text</summary>
+                        <pre className="mt-1 max-h-40 overflow-auto rounded-md bg-muted p-2 text-xs whitespace-pre-wrap">
+                          {a.extracted_text}
+                        </pre>
+                      </details>
+                    )}
+                  </li>
+                ))}
+              </ul>
             </CardContent>
           </Card>
         </>

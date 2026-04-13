@@ -111,3 +111,19 @@ class LocalFilePayload(BaseModel):
 class LocalIngestRequest(BaseModel):
     source_id: UUID
     files: list[LocalFilePayload]
+
+
+class CredentialRotateRequest(BaseModel):
+    credentials: dict = Field(default_factory=dict)
+    auth_type: str | None = None
+
+
+class SourceCredentialResponse(BaseModel):
+    id: UUID
+    source_id: UUID
+    auth_type: str
+    status: str
+    rotated_at: datetime | None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}

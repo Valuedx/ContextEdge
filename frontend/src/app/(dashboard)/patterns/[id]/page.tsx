@@ -1,33 +1,126 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 import { useParams } from "next/navigation";
+import { useState } from "react";
+import { toast } from "sonner";
 import { PageHeader } from "@/components/common/page-header";
 import {
   DetailPageSkeleton,
   DetailStatCardsSkeleton,
   DetailWideCardSkeleton,
 } from "@/components/common/detail-page-skeleton";
-import { buttonVariants } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle,
+} from "@/components/ui/dialog";
+import { Label } from "@/components/ui/label";
+import { Input } from "@/components/ui/input";
 import { api } from "@/lib/api";
-import type { Pattern, PatternSubgraph } from "@/lib/types";
+import type { Pattern, PatternEvidenceLink, PatternSubgraph } from "@/lib/types";
 
-import { DetailsList } from "@/components/common/details-list";
 import { PatternGraph } from "@/components/patterns/pattern-graph";
-import { AlertCircle, Zap, Shield, Bug, Lightbulb, StepForward, Activity } from "lucide-react";
+import { AlertCircle, Zap, Shield, Bug, Lightbulb, StepForward, Activity, Link2, Plus, Trash2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { Separator } from "@/components/ui/separator";
+
+const LINK_TYPES = ["supports", "contradicts", "derives", "anchors", "illustrates"];
+
+function AddLinkDialog({ patternId, onClose }: { patternId: string; onClose: () => void }) {
+  const qc = useQueryClient();
+  const [evidenceId, setEvidenceId] = useState("");
+  const [linkType, setLinkType] = useState("supports");
+  const [weight, setWeight] = useState("1.0");
+
+  const mut = useMutation({
+    mutationFn: () =>
+      api.post(`/patterns/${patternId}/evidence-links`, {
+        evidence_id: evidenceId.trim() || undefined,
+        link_type: linkType,
+        weight: parseFloat(weight) || 1.0,
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["pattern-evidence-links", patternId] });
+      toast.success("Evidence link added");
+      onClose();
+    },
+    onError: (err: any) => toast.error(err.message || "Add failed"),
+  });
+
+  return (
+    <DialogContent>
+      <DialogHeader>
+        <DialogTitle>Add evidence link</DialogTitle>
+      </DialogHeader>
+      <div className="space-y-4 text-sm">
+        <div>
+          <Label htmlFor="ev-id">Evidence ID</Label>
+          <Input
+            id="ev-id"
+            className="mt-1 font-mono text-xs"
+            value={evidenceId}
+            onChange={(e) => setEvidenceId(e.target.value)}
+            placeholder="UUID"
+          />
+        </div>
+        <div>
+          <Label>Link type</Label>
+          <select
+            className="mt-1 w-full rounded-md border bg-background px-3 py-2 text-sm"
+            value={linkType}
+            onChange={(e) => setLinkType(e.target.value)}
+          >
+            {LINK_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+          </select>
+        </div>
+        <div>
+          <Label htmlFor="lk-weight">Weight</Label>
+          <Input
+            id="lk-weight"
+            type="number"
+            min="0"
+            step="0.1"
+            className="mt-1"
+            value={weight}
+            onChange={(e) => setWeight(e.target.value)}
+          />
+        </div>
+      </div>
+      <DialogFooter>
+        <Button variant="outline" onClick={onClose}>Cancel</Button>
+        <Button disabled={mut.isPending || !evidenceId.trim()} onClick={() => mut.mutate()}>
+          {mut.isPending ? "Adding…" : "Add"}
+        </Button>
+      </DialogFooter>
+    </DialogContent>
+  );
+}
 
 export default function PatternDetailPage() {
   const params = useParams<{ id: string }>();
   const patternId = params.id;
+  const qc = useQueryClient();
+  const [addLinkOpen, setAddLinkOpen] = useState(false);
 
   const { data: pattern, isLoading, error } = useQuery({
     queryKey: ["pattern", patternId],
     queryFn: () => api.get<Pattern>(`/patterns/${patternId}`),
     enabled: !!patternId,
+  });
+
+  const { data: evidenceLinks = [] } = useQuery<PatternEvidenceLink[]>({
+    queryKey: ["pattern-evidence-links", patternId],
+    queryFn: () => api.get(`/patterns/${patternId}/evidence-links`),
+    enabled: !!patternId,
+  });
+
+  const delLink = useMutation({
+    mutationFn: (linkId: string) => api.delete(`/patterns/${patternId}/evidence-links/${linkId}`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["pattern-evidence-links", patternId] }),
+    onError: (err: any) => toast.error(err.message || "Delete failed"),
   });
 
   if (!patternId) return null;
@@ -242,6 +335,52 @@ export default function PatternDetailPage() {
           )}
         </div>
       </div>
+
+      <Separator />
+
+      <div className="space-y-4">
+        <div className="flex items-center justify-between">
+          <h3 className="text-lg font-semibold flex items-center gap-2">
+            <Link2 className="h-4 w-4" /> Evidence links
+          </h3>
+          <Button size="sm" onClick={() => setAddLinkOpen(true)}>
+            <Plus className="mr-1.5 h-3.5 w-3.5" />
+            Add link
+          </Button>
+        </div>
+        {evidenceLinks.length === 0 ? (
+          <p className="text-sm text-muted-foreground">No evidence links yet.</p>
+        ) : (
+          <div className="space-y-2">
+            {evidenceLinks.map((lk) => (
+              <div key={lk.id} className="flex items-center justify-between rounded-md border px-3 py-2 text-sm">
+                <div className="flex items-center gap-3 min-w-0">
+                  <Badge variant="outline" className="text-xs shrink-0">{lk.link_type}</Badge>
+                  <span className="font-mono text-xs truncate text-muted-foreground">
+                    {lk.evidence_id ?? lk.episode_id ?? "—"}
+                  </span>
+                  <span className="text-xs text-muted-foreground shrink-0">w={lk.weight.toFixed(1)}</span>
+                </div>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-7 w-7 shrink-0"
+                  disabled={delLink.isPending}
+                  onClick={() => delLink.mutate(lk.id)}
+                >
+                  <Trash2 className="h-3.5 w-3.5 text-destructive" />
+                </Button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <Dialog open={addLinkOpen} onOpenChange={(o) => { if (!o) setAddLinkOpen(false); }}>
+        {addLinkOpen && patternId && (
+          <AddLinkDialog patternId={patternId} onClose={() => setAddLinkOpen(false)} />
+        )}
+      </Dialog>
     </div>
   );
 }

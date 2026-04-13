@@ -1,6 +1,8 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
+import { usePagination } from "@/lib/hooks/use-pagination";
+import { PaginationControls } from "@/components/common/pagination-controls";
 import { ColumnDef } from "@tanstack/react-table";
 import { Plus } from "lucide-react";
 
@@ -8,7 +10,8 @@ import { PageHeader } from "@/components/common/page-header";
 import { DataTable } from "@/components/common/data-table";
 import { DataTableSkeleton } from "@/components/common/data-table-skeleton";
 import { StatusBadge } from "@/components/common/status-badge";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 import { api } from "@/lib/api";
 import type { Playbook } from "@/lib/types";
 import Link from "next/link";
@@ -46,9 +49,10 @@ const columns: ColumnDef<Playbook>[] = [
 ];
 
 export default function PlaybooksPage() {
+  const pg = usePagination(50);
   const { data = [], isLoading } = useQuery<Playbook[]>({
-    queryKey: ["playbooks"],
-    queryFn: () => api.get("/playbooks"),
+    queryKey: ["playbooks", pg.page],
+    queryFn: () => api.get("/playbooks", pg.params),
   });
 
   return (
@@ -57,16 +61,25 @@ export default function PlaybooksPage() {
         title="Playbooks"
         description="Governed living playbooks and candidate review queue."
         actions={
-          <Button>
+          <Link href="/patterns" className={cn(buttonVariants(), "")}>
             <Plus className="mr-2 h-4 w-4" />
-            New Playbook
-          </Button>
+            Generate from Pattern
+          </Link>
         }
       />
       {isLoading ? (
         <DataTableSkeleton columns={5} />
       ) : (
-        <DataTable columns={columns} data={data} />
+        <>
+          <DataTable columns={columns} data={data} />
+          <PaginationControls
+            page={pg.page}
+            pageSize={pg.pageSize}
+            count={data.length}
+            onPrev={pg.prevPage}
+            onNext={pg.nextPage}
+          />
+        </>
       )}
     </div>
   );

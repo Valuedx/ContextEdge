@@ -1,7 +1,7 @@
 from contextedge.models.base import Base, TenantScopedMixin
 from contextedge.models.tenant import Tenant, Workspace, Domain, User, RoleBinding
 from contextedge.models.audit import AuditLog
-from contextedge.models.events import OperationalEvent
+from contextedge.models.events import Notification, OperationalEvent
 from contextedge.models.source import Source, SourceObject, SourceCredential, SyncCheckpoint, SyncRun
 from contextedge.models.evidence import RawEvidenceObject, EvidenceItem, Thread, AttachmentArtifact
 from contextedge.models.episode import (
@@ -24,7 +24,7 @@ __all__ = [
     "Base", "TenantScopedMixin",
     "Tenant", "Workspace", "Domain", "User", "RoleBinding",
     "AuditLog",
-    "OperationalEvent",
+    "OperationalEvent", "Notification",
     "Source", "SourceObject", "SourceCredential", "SyncCheckpoint", "SyncRun",
     "RawEvidenceObject", "EvidenceItem", "Thread", "AttachmentArtifact",
     "CanonicalIdentity", "IdentityAlias", "EvidenceIdentityLink", "CorrelationEdge", "Episode", "EpisodeStep",

@@ -1,6 +1,6 @@
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, status
 from sqlalchemy import select
 
 from contextedge.deps import AuthUser, DbSession
@@ -49,3 +49,32 @@ async def get_thread_evidence(thread_id: UUID, db: DbSession, user: AuthUser):
         ).order_by(EvidenceItem.created_at_source)
     )
     return result.scalars().all()
+
+
+@router.post("/{thread_id}/hydrate", status_code=status.HTTP_202_ACCEPTED)
+async def trigger_thread_hydration(
+    thread_id: UUID,
+    db: DbSession,
+    user: AuthUser,
+):
+    result = await db.execute(
+        select(Thread).where(Thread.id == thread_id, Thread.tenant_id == user.tenant_id)
+    )
+    thread = result.scalar_one_or_none()
+    if not thread:
+        raise HTTPException(status_code=404, detail="Thread not found")
+
+    from contextedge.workers.hydration_tasks import hydrate_thread
+
+    thread.hydration_status = "queued"
+    await db.flush()
+    task = hydrate_thread.delay(
+        thread.external_thread_id,
+        str(thread.source_id),
+        str(user.tenant_id),
+    )
+    return {
+        "status": "hydration_queued",
+        "thread_id": str(thread.id),
+        "task_id": task.id,
+    }

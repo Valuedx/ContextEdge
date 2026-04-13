@@ -8,7 +8,9 @@ from contextedge.middleware.audit import log_audit_event
 from contextedge.models.source import Source, SourceCredential, SourceObject, SyncRun
 from contextedge.schemas.source import (
     BackfillRequest,
+    CredentialRotateRequest,
     SourceCreate,
+    SourceCredentialResponse,
     LocalFilePayload,
     LocalIngestRequest,
     SourceObjectApproval,
@@ -21,6 +23,7 @@ from contextedge.services.policy_assignment import assert_policy_assignment
 from contextedge.services.source_service import (
     discover_source_objects,
     encrypt_credentials,
+    rotate_source_credentials,
     validate_source_credentials,
 )
 from contextedge.services.evidence_normalization import evidence_content_hash_from_payload
@@ -268,6 +271,44 @@ async def trigger_backfill(source_id: UUID, body: BackfillRequest, db: DbSession
         run_backfill.delay(str(source_id), str(obj_id), str(user.tenant_id), body.window_days)
 
     return {"status": "backfill_queued", "object_count": len(body.source_object_ids)}
+
+
+@router.post("/{source_id}/credentials/rotate", response_model=SourceCredentialResponse)
+async def rotate_credentials(
+    source_id: UUID,
+    body: CredentialRotateRequest,
+    db: DbSession,
+    user: AuthUser,
+):
+    user.require_role("domain_admin")
+    source = (
+        await db.execute(
+            select(Source).where(Source.id == source_id, Source.tenant_id == user.tenant_id)
+        )
+    ).scalar_one_or_none()
+    if not source:
+        raise HTTPException(status_code=404, detail="Source not found")
+
+    try:
+        credential = await rotate_source_credentials(
+            db,
+            source,
+            credentials=body.credentials,
+            auth_type=body.auth_type,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    await log_audit_event(
+        db,
+        tenant_id=user.tenant_id,
+        actor_id=user.user_id,
+        actor_email=user.email,
+        action="source.credentials_rotated",
+        resource_type="source",
+        resource_id=str(source.id),
+    )
+    return credential
 
 
 @router.post("/local-ingest", status_code=status.HTTP_201_CREATED)

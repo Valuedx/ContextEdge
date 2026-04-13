@@ -11,6 +11,8 @@ from contextedge.models.episode import Episode, EpisodeStep
 from contextedge.schemas.evidence import (
     EpisodeDetail,
     EpisodeResponse,
+    EpisodeStepResponse,
+    EpisodeStepUpdate,
     EpisodeUpdate,
     ReconstructRequest,
 )
@@ -84,6 +86,47 @@ async def update_episode(
         details=update_data,
     )
     return episode
+
+
+@router.patch("/{episode_id}/steps/{step_id}", response_model=EpisodeStepResponse)
+async def update_episode_step(
+    episode_id: UUID,
+    step_id: UUID,
+    body: EpisodeStepUpdate,
+    db: DbSession,
+    user: AuthUser,
+):
+    step = (
+        await db.execute(
+            select(EpisodeStep)
+            .join(Episode, Episode.id == EpisodeStep.episode_id)
+            .where(
+                EpisodeStep.id == step_id,
+                EpisodeStep.episode_id == episode_id,
+                Episode.tenant_id == user.tenant_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if not step:
+        raise HTTPException(status_code=404, detail="Episode step not found")
+
+    update_data = body.model_dump(exclude_unset=True)
+    for field, value in update_data.items():
+        setattr(step, field, value)
+    await db.flush()
+    await db.refresh(step)
+
+    await log_audit_event(
+        db,
+        tenant_id=user.tenant_id,
+        actor_id=user.user_id,
+        actor_email=user.email,
+        action="episode_step.updated",
+        resource_type="episode_step",
+        resource_id=str(step.id),
+        details=update_data,
+    )
+    return step
 
 
 @router.post("/{episode_id}/approve", response_model=EpisodeResponse)

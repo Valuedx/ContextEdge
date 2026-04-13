@@ -38,6 +38,7 @@ class PlaybookResponse(BaseModel):
     lifecycle_state: str
     risk_tier: str
     automation_mode: str
+    approval_policy_id: UUID | None
     owner_user_id: UUID
     reviewer_user_id: UUID | None
     approver_user_id: UUID | None
@@ -77,6 +78,7 @@ class PlaybookCreate(BaseModel):
     risk_tier: str = "medium"
     automation_mode: str = "suggest_only"
     pattern_id: UUID | None = None
+    approval_policy_id: UUID | None = None
 
 
 class PlaybookUpdate(BaseModel):
@@ -84,6 +86,7 @@ class PlaybookUpdate(BaseModel):
     description: str | None = None
     risk_tier: str | None = None
     automation_mode: str | None = None
+    approval_policy_id: UUID | None = None
     reviewer_user_id: UUID | None = None
 
 
@@ -167,3 +170,17 @@ class FeedbackSubmission(BaseModel):
     playbook_id: UUID | None = None
     feedback_type: str
     details: dict = Field(default_factory=dict)
+
+
+class PlaybookRollbackRequest(BaseModel):
+    target_version_id: UUID
+
+
+class PlaybookVersionDiffResponse(BaseModel):
+    playbook_id: UUID
+    base_version_id: UUID | None
+    base_semantic_version: str | None
+    target_version_id: UUID
+    target_semantic_version: str
+    changed_fields: list[str] = Field(default_factory=list)
+    unified_diff: str

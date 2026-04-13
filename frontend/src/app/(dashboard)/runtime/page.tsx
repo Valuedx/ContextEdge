@@ -1,6 +1,6 @@
 "use client";
 
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import Link from "next/link";
 import { useState } from "react";
 
@@ -11,8 +11,13 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Badge } from "@/components/ui/badge";
+import { PaginationControls } from "@/components/common/pagination-controls";
+import { usePagination } from "@/lib/hooks/use-pagination";
 import { api } from "@/lib/api";
 import type {
+  RetrievalFeedback,
   RuntimeExplainResponse,
   RuntimeMatchResponse,
   RuntimePlaybookVersion,
@@ -27,6 +32,60 @@ function linesToList(text: string): string[] {
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function FeedbackTab() {
+  const pg = usePagination(50);
+
+  const { data: feedbacks = [], isLoading } = useQuery<RetrievalFeedback[]>({
+    queryKey: ["runtime-feedback", pg.page],
+    queryFn: () => api.get("/runtime/feedback", pg.params),
+  });
+
+  return (
+    <div className="space-y-4">
+      {isLoading ? (
+        <p className="text-sm text-muted-foreground">Loading feedback…</p>
+      ) : feedbacks.length === 0 ? (
+        <div className="rounded-md border p-10 text-center text-sm text-muted-foreground">
+          No feedback submitted yet.
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {feedbacks.map((fb) => (
+            <div key={fb.id} className="rounded-md border px-4 py-3 text-sm space-y-1">
+              <div className="flex flex-wrap items-center gap-2">
+                <Badge variant="outline" className="text-xs">{fb.feedback_type}</Badge>
+                {fb.playbook_id && (
+                  <Link href={`/playbooks/${fb.playbook_id}`} className="font-mono text-xs text-primary hover:underline">
+                    {fb.playbook_id}
+                  </Link>
+                )}
+                {fb.match_id && (
+                  <span className="font-mono text-xs text-muted-foreground">{fb.match_id}</span>
+                )}
+                <span className="ml-auto text-xs text-muted-foreground">
+                  {new Date(fb.created_at).toLocaleString()}
+                </span>
+              </div>
+              {fb.details && Object.keys(fb.details).length > 0 && (
+                <pre className="rounded-md bg-muted p-2 text-xs overflow-auto max-h-24">
+                  {JSON.stringify(fb.details, null, 2)}
+                </pre>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+      <PaginationControls
+        page={pg.page}
+        pageSize={pg.pageSize}
+        count={feedbacks.length}
+        onPrev={pg.prevPage}
+        onNext={pg.nextPage}
+      />
+    </div>
+  );
+}
 
 export default function RuntimePage() {
   const [symptomsText, setSymptomsText] = useState("VPN drops\npacket loss");
@@ -120,9 +179,21 @@ export default function RuntimePage() {
   return (
     <div className="space-y-6">
       <PageHeader
-        title="Runtime sandbox"
+        title="Runtime"
         description="Call the live retrieval ranker with your JWT. Domain scope and risk caps match production behavior for your role. Explain requires Redis to have cached the match."
       />
+
+      <Tabs defaultValue="sandbox">
+        <TabsList>
+          <TabsTrigger value="sandbox">Sandbox</TabsTrigger>
+          <TabsTrigger value="feedback">Feedback</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="feedback" className="mt-4">
+          <FeedbackTab />
+        </TabsContent>
+
+        <TabsContent value="sandbox" className="mt-4 space-y-6">
 
       <Card>
         <CardHeader>
@@ -388,6 +459,9 @@ export default function RuntimePage() {
           )}
         </CardContent>
       </Card>
+
+        </TabsContent>
+      </Tabs>
     </div>
   );
 }

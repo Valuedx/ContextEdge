@@ -228,6 +228,7 @@ async def scan_contradictions(
                 if created:
                     contradictions_created += 1
                     await send_notification(
+                        db,
                         tenant_id,
                         None,
                         NotificationType.CONTRADICTION_ALERT,

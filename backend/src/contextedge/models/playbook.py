@@ -40,6 +40,11 @@ class Playbook(Base, TenantScopedMixin):
     )
     risk_tier: Mapped[str] = mapped_column(String(20), default="medium", nullable=False)
     automation_mode: Mapped[str] = mapped_column(String(30), default="suggest_only", nullable=False)
+    approval_policy_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("tenant_policies.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     owner_user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     reviewer_user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     approver_user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)

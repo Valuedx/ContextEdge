@@ -15,6 +15,8 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 import { useRouter } from "next/navigation";
+import { usePagination } from "@/lib/hooks/use-pagination";
+import { PaginationControls } from "@/components/common/pagination-controls";
 
 function EpisodeActions({ episodeId, title }: { episodeId: string; title: string }) {
   const queryClient = useQueryClient();
@@ -126,10 +128,11 @@ const columns: ColumnDef<Episode>[] = [
 
 export default function EpisodesPage() {
   const [isReconstructing, setIsReconstructing] = useState(false);
-  
+  const pg = usePagination(50);
+
   const { data = [], isLoading } = useQuery<Episode[]>({
-    queryKey: ["episodes"],
-    queryFn: () => api.get("/episodes"),
+    queryKey: ["episodes", pg.page],
+    queryFn: () => api.get("/episodes", pg.params),
   });
 
   const handleReconstruct = async () => {
@@ -170,7 +173,16 @@ export default function EpisodesPage() {
       {isLoading ? (
         <DataTableSkeleton columns={5} />
       ) : (
-        <DataTable columns={columns} data={data} />
+        <>
+          <DataTable columns={columns} data={data} />
+          <PaginationControls
+            page={pg.page}
+            pageSize={pg.pageSize}
+            count={data.length}
+            onPrev={pg.prevPage}
+            onNext={pg.nextPage}
+          />
+        </>
       )}
     </div>
   );

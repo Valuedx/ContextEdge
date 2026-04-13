@@ -1,8 +1,12 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 import { useParams } from "next/navigation";
+import { useState } from "react";
+import { toast } from "sonner";
+import { Loader2 } from "lucide-react";
+
 import { PageHeader } from "@/components/common/page-header";
 import {
   DetailPageSkeleton,
@@ -10,16 +14,201 @@ import {
 } from "@/components/common/detail-page-skeleton";
 import { Skeleton } from "@/components/ui/skeleton";
 import { StatusBadge } from "@/components/common/status-badge";
-import { buttonVariants } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Textarea } from "@/components/ui/textarea";
+import { Label } from "@/components/ui/label";
 import { api } from "@/lib/api";
-import type { Playbook, PlaybookVersion } from "@/lib/types";
+import type { Playbook, PlaybookVersion, PlaybookVersionDiff } from "@/lib/types";
+import { useAuthStore } from "@/lib/stores/auth-store";
+import { GitCompare, RotateCcw } from "lucide-react";
+
+// Allowed forward transitions per lifecycle state (mirrors backend VALID_TRANSITIONS)
+const TRANSITIONS: Record<string, string[]> = {
+  candidate: ["under_review", "retired"],
+  under_review: ["approved", "candidate", "retired"],
+  approved: ["deprecated", "expired", "retired"],
+  restricted: ["approved", "deprecated", "retired"],
+  deprecated: ["retired"],
+  expired: ["under_review", "retired"],
+  retired: [],
+};
+
+function canTransition(roles: string[]) {
+  return (
+    roles.includes("playbook_reviewer") ||
+    roles.includes("knowledge_manager") ||
+    roles.includes("tenant_admin") ||
+    roles.includes("platform_super_admin")
+  );
+}
+
+function TransitionDialog({
+  playbook,
+  onClose,
+}: {
+  playbook: Playbook;
+  onClose: () => void;
+}) {
+  const qc = useQueryClient();
+  const available = TRANSITIONS[playbook.lifecycle_state] ?? [];
+  const [newState, setNewState] = useState(available[0] ?? "");
+  const [comment, setComment] = useState("");
+
+  const mut = useMutation({
+    mutationFn: () =>
+      api.post(`/playbooks/${playbook.id}/transition`, {
+        new_state: newState,
+        comment: comment.trim() || undefined,
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["playbook", playbook.id] });
+      toast.success(`Playbook transitioned to "${newState}"`);
+      onClose();
+    },
+    onError: (err: any) => {
+      toast.error(err.message || "Transition failed");
+    },
+  });
+
+  if (available.length === 0) {
+    return (
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>No transitions available</DialogTitle>
+        </DialogHeader>
+        <p className="text-sm text-muted-foreground">
+          Playbooks in "{playbook.lifecycle_state}" state cannot be transitioned further.
+        </p>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>
+            Close
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    );
+  }
+
+  return (
+    <DialogContent>
+      <DialogHeader>
+        <DialogTitle>Transition playbook</DialogTitle>
+      </DialogHeader>
+      <div className="space-y-4">
+        <div>
+          <Label>New state</Label>
+          <Select value={newState} onValueChange={(v) => setNewState(v ?? "")}>
+            <SelectTrigger className="mt-1">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {available.map((s) => (
+                <SelectItem key={s} value={s}>
+                  {s}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <div>
+          <Label htmlFor="comment">Comment (optional)</Label>
+          <Textarea
+            id="comment"
+            className="mt-1"
+            placeholder="Reason for this transition…"
+            value={comment}
+            onChange={(e) => setComment(e.target.value)}
+          />
+        </div>
+      </div>
+      <DialogFooter>
+        <Button variant="outline" onClick={onClose}>
+          Cancel
+        </Button>
+        <Button disabled={!newState || mut.isPending} onClick={() => mut.mutate()}>
+          {mut.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+          Confirm
+        </Button>
+      </DialogFooter>
+      {mut.error && (
+        <p className="text-sm text-destructive">{String((mut.error as Error).message)}</p>
+      )}
+    </DialogContent>
+  );
+}
+
+function DiffDialog({
+  playbookId,
+  versionId,
+  onClose,
+}: {
+  playbookId: string;
+  versionId: string;
+  onClose: () => void;
+}) {
+  const { data, isLoading } = useQuery<PlaybookVersionDiff>({
+    queryKey: ["playbook-diff", playbookId, versionId],
+    queryFn: () => api.get(`/playbooks/${playbookId}/versions/${versionId}/diff`),
+  });
+
+  return (
+    <DialogContent className="max-w-2xl">
+      <DialogHeader>
+        <DialogTitle>Version diff</DialogTitle>
+      </DialogHeader>
+      {isLoading ? (
+        <div className="flex items-center justify-center py-8">
+          <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+        </div>
+      ) : data ? (
+        <div className="space-y-3 text-sm">
+          <p className="text-xs text-muted-foreground">
+            {data.base_semantic_version
+              ? `v${data.base_semantic_version} → v${data.target_semantic_version}`
+              : `Initial version v${data.target_semantic_version}`}
+          </p>
+          {data.changed_fields.length > 0 && (
+            <div className="flex flex-wrap gap-1">
+              {data.changed_fields.map((f) => (
+                <span key={f} className="rounded bg-muted px-2 py-0.5 text-xs">{f}</span>
+              ))}
+            </div>
+          )}
+          <pre className="max-h-80 overflow-auto rounded-md bg-muted p-3 text-xs whitespace-pre-wrap font-mono">
+            {data.unified_diff || "No textual diff available."}
+          </pre>
+        </div>
+      ) : null}
+      <DialogFooter>
+        <Button variant="outline" onClick={onClose}>Close</Button>
+      </DialogFooter>
+    </DialogContent>
+  );
+}
 
 export default function PlaybookDetailPage() {
   const params = useParams<{ id: string }>();
   const playbookId = params.id;
+  const roles = useAuthStore((s) => s.roles);
+  const [transitionOpen, setTransitionOpen] = useState(false);
+  const [diffVersion, setDiffVersion] = useState<string | null>(null);
+  const qc = useQueryClient();
 
   const { data: playbook, isLoading, error } = useQuery({
     queryKey: ["playbook", playbookId],
@@ -31,6 +220,17 @@ export default function PlaybookDetailPage() {
     queryKey: ["playbook-versions", playbookId],
     queryFn: () => api.get<PlaybookVersion[]>(`/playbooks/${playbookId}/versions`),
     enabled: !!playbookId,
+  });
+
+  const rollbackMut = useMutation({
+    mutationFn: (versionId: string) =>
+      api.post(`/playbooks/${playbookId}/rollback`, { target_version_id: versionId }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["playbook-versions", playbookId] });
+      qc.invalidateQueries({ queryKey: ["playbook", playbookId] });
+      toast.success("Playbook rolled back successfully");
+    },
+    onError: (err: any) => toast.error(err.message || "Rollback failed"),
   });
 
   if (!playbookId) return null;
@@ -62,6 +262,7 @@ export default function PlaybookDetailPage() {
   }
 
   const latest = versions[0];
+  const hasTransitions = (TRANSITIONS[playbook.lifecycle_state] ?? []).length > 0;
 
   return (
     <div className="space-y-6">
@@ -69,11 +270,34 @@ export default function PlaybookDetailPage() {
         title={playbook.title}
         description={`Stable key ${playbook.stable_key} · ${playbook.automation_mode}`}
         actions={
-          <Link href="/playbooks" className={cn(buttonVariants({ variant: "outline" }))}>
-            All playbooks
-          </Link>
+          <div className="flex gap-2">
+            {canTransition(roles) && hasTransitions && (
+              <Button variant="outline" onClick={() => setTransitionOpen(true)}>
+                Transition state
+              </Button>
+            )}
+            <Link href="/playbooks" className={cn(buttonVariants({ variant: "outline" }))}>
+              All playbooks
+            </Link>
+          </div>
         }
       />
+
+      <Dialog open={transitionOpen} onOpenChange={setTransitionOpen}>
+        {transitionOpen && playbook && (
+          <TransitionDialog playbook={playbook} onClose={() => setTransitionOpen(false)} />
+        )}
+      </Dialog>
+
+      <Dialog open={!!diffVersion} onOpenChange={(o) => { if (!o) setDiffVersion(null); }}>
+        {diffVersion && playbookId && (
+          <DiffDialog
+            playbookId={playbookId}
+            versionId={diffVersion}
+            onClose={() => setDiffVersion(null)}
+          />
+        )}
+      </Dialog>
 
       <div className="flex flex-wrap gap-2">
         <StatusBadge status={playbook.lifecycle_state} />
@@ -111,14 +335,42 @@ export default function PlaybookDetailPage() {
           <p className="text-sm text-muted-foreground">No published versions yet.</p>
         ) : (
           <div className="space-y-4">
-            {versions.map((v) => (
+            {versions.map((v, idx) => (
               <Card key={v.id}>
                 <CardHeader className="pb-2">
                   <CardTitle className="text-base flex items-center justify-between gap-2">
-                    <span>v{v.semantic_version}</span>
-                    <span className="text-xs font-normal text-muted-foreground">
-                      {new Date(v.created_at).toLocaleString()}
-                    </span>
+                    <div className="flex items-center gap-2">
+                      <span>v{v.semantic_version}</span>
+                      {idx === 0 && (
+                        <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] text-primary font-medium">latest</span>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-1">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-7 px-2 text-xs"
+                        onClick={() => setDiffVersion(v.id)}
+                      >
+                        <GitCompare className="mr-1 h-3 w-3" />
+                        Diff
+                      </Button>
+                      {idx > 0 && canTransition(roles) && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-7 px-2 text-xs"
+                          disabled={rollbackMut.isPending}
+                          onClick={() => rollbackMut.mutate(v.id)}
+                        >
+                          <RotateCcw className="mr-1 h-3 w-3" />
+                          Rollback
+                        </Button>
+                      )}
+                      <span className="text-xs font-normal text-muted-foreground">
+                        {new Date(v.created_at).toLocaleString()}
+                      </span>
+                    </div>
                   </CardTitle>
                 </CardHeader>
                 <CardContent className="space-y-3 text-sm">

@@ -6,8 +6,9 @@ from sqlalchemy.orm import selectinload
 import structlog
 
 from contextedge.deps import AuthUser, DbSession
-from contextedge.models.pattern import Pattern
+from contextedge.models.pattern import Pattern, PatternEvidenceLink
 from contextedge.schemas.playbook import PatternResponse
+from contextedge.schemas.review import PatternEvidenceLinkCreate, PatternEvidenceLinkResponse
 from pydantic import BaseModel
 
 router = APIRouter()
@@ -53,6 +54,79 @@ async def get_pattern_graph(pattern_id: UUID, db: DbSession, user: AuthUser):
     if not result.scalar_one_or_none():
         raise HTTPException(status_code=404, detail="Pattern not found")
     return await get_pattern_subgraph(db, user.tenant_id, pattern_id)
+
+
+@router.get("/{pattern_id}/evidence-links", response_model=list[PatternEvidenceLinkResponse])
+async def list_pattern_evidence_links(pattern_id: UUID, db: DbSession, user: AuthUser):
+    pattern = (
+        await db.execute(
+            select(Pattern).where(Pattern.id == pattern_id, Pattern.tenant_id == user.tenant_id)
+        )
+    ).scalar_one_or_none()
+    if not pattern:
+        raise HTTPException(status_code=404, detail="Pattern not found")
+    result = await db.execute(
+        select(PatternEvidenceLink)
+        .where(PatternEvidenceLink.pattern_id == pattern_id)
+        .order_by(PatternEvidenceLink.created_at.desc())
+    )
+    return result.scalars().all()
+
+
+@router.post("/{pattern_id}/evidence-links", response_model=PatternEvidenceLinkResponse, status_code=201)
+async def create_pattern_evidence_link(
+    pattern_id: UUID,
+    body: PatternEvidenceLinkCreate,
+    db: DbSession,
+    user: AuthUser,
+):
+    user.require_role("knowledge_manager")
+    pattern = (
+        await db.execute(
+            select(Pattern).where(Pattern.id == pattern_id, Pattern.tenant_id == user.tenant_id)
+        )
+    ).scalar_one_or_none()
+    if not pattern:
+        raise HTTPException(status_code=404, detail="Pattern not found")
+    if body.evidence_id is None and body.episode_id is None:
+        raise HTTPException(status_code=400, detail="episode_id or evidence_id is required")
+
+    link = PatternEvidenceLink(
+        pattern_id=pattern_id,
+        episode_id=body.episode_id,
+        evidence_id=body.evidence_id,
+        link_type=body.link_type,
+        weight=body.weight,
+    )
+    db.add(link)
+    await db.flush()
+    await db.refresh(link)
+    return link
+
+
+@router.delete("/{pattern_id}/evidence-links/{link_id}", status_code=204)
+async def delete_pattern_evidence_link(
+    pattern_id: UUID,
+    link_id: UUID,
+    db: DbSession,
+    user: AuthUser,
+):
+    user.require_role("knowledge_manager")
+    link = (
+        await db.execute(
+            select(PatternEvidenceLink)
+            .join(Pattern, Pattern.id == PatternEvidenceLink.pattern_id)
+            .where(
+                PatternEvidenceLink.id == link_id,
+                PatternEvidenceLink.pattern_id == pattern_id,
+                Pattern.tenant_id == user.tenant_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if not link:
+        raise HTTPException(status_code=404, detail="Pattern evidence link not found")
+    await db.delete(link)
+    return None
 
 
 class PatternDiscoverRequest(BaseModel):

@@ -15,6 +15,8 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
+import { usePagination } from "@/lib/hooks/use-pagination";
+import { PaginationControls } from "@/components/common/pagination-controls";
 
 function EvidenceActions({ evidenceId, title }: { evidenceId: string; title: string }) {
   const queryClient = useQueryClient();
@@ -92,14 +94,15 @@ const columns: ColumnDef<EvidenceItem>[] = [
 export default function EvidencePage() {
   const [search, setSearch] = useState("");
   const [appliedQuery, setAppliedQuery] = useState("");
+  const pg = usePagination(50);
 
   const { data = [], isLoading } = useQuery<EvidenceItem[]>({
-    queryKey: ["evidence", appliedQuery],
-    queryFn: () =>
-      api.get(
-        "/evidence",
-        appliedQuery.trim() ? { query: appliedQuery.trim() } : undefined,
-      ),
+    queryKey: ["evidence", appliedQuery, pg.page],
+    queryFn: () => {
+      const params: Record<string, string> = { ...pg.params };
+      if (appliedQuery.trim()) params.query = appliedQuery.trim();
+      return api.get("/evidence", params);
+    },
   });
 
   return (
@@ -116,7 +119,14 @@ export default function EvidencePage() {
           className="font-mono text-sm"
         />
         <div className="flex shrink-0 gap-2">
-          <Button type="button" variant="secondary" onClick={() => setAppliedQuery(search.trim())}>
+          <Button
+            type="button"
+            variant="secondary"
+            onClick={() => {
+              pg.reset();
+              setAppliedQuery(search.trim());
+            }}
+          >
             Search
           </Button>
           <Button
@@ -125,6 +135,7 @@ export default function EvidencePage() {
             onClick={() => {
               setSearch("");
               setAppliedQuery("");
+              pg.reset();
             }}
           >
             Clear
@@ -134,7 +145,16 @@ export default function EvidencePage() {
       {isLoading ? (
         <DataTableSkeleton columns={5} />
       ) : (
-        <DataTable columns={columns} data={data} />
+        <>
+          <DataTable columns={columns} data={data} />
+          <PaginationControls
+            page={pg.page}
+            pageSize={pg.pageSize}
+            count={data.length}
+            onPrev={pg.prevPage}
+            onNext={pg.nextPage}
+          />
+        </>
       )}
     </div>
   );

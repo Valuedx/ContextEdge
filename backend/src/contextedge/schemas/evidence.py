@@ -98,6 +98,18 @@ class EpisodeStepResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class EpisodeStepUpdate(BaseModel):
+    step_order: int | None = Field(None, ge=0)
+    step_type: str | None = None
+    text: str | None = None
+    observation: str | None = None
+    result_state: str | None = None
+    failed_flag: bool | None = None
+    successful_flag: bool | None = None
+    extraction_confidence: float | None = Field(None, ge=0.0, le=1.0)
+    evidence_refs: list | None = None
+
+
 class EpisodeUpdate(BaseModel):
     title: str | None = None
     status: str | None = None
@@ -120,3 +132,22 @@ class EvidenceSearchParams(BaseModel):
 
 class ReconstructRequest(BaseModel):
     evidence_ids: list[UUID] | None = None
+
+
+class AttachmentArtifactResponse(BaseModel):
+    id: UUID
+    evidence_id: UUID
+    filename: str
+    mime_type: str | None
+    size_bytes: int | None
+    object_storage_key: str
+    extracted_text: str | None
+    extraction_status: str
+    parser_type: str | None
+    parser_confidence: float | None
+    extraction_error: str | None
+    parser_metadata: dict | None
+    extracted_at: datetime | None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}

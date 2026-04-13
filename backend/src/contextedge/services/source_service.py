@@ -103,3 +103,44 @@ async def create_sync_run(
     db.add(run)
     await db.flush()
     return run
+
+
+async def rotate_source_credentials(
+    db: AsyncSession,
+    source: Source,
+    *,
+    credentials: dict,
+    auth_type: str | None = None,
+) -> SourceCredential:
+    valid, message = await validate_source_credentials(
+        source.source_type,
+        source.config,
+        credentials,
+    )
+    if not valid:
+        raise ValueError(message)
+
+    existing = await db.execute(
+        select(SourceCredential).where(
+            SourceCredential.source_id == source.id,
+            SourceCredential.status == "active",
+        )
+    )
+    now = datetime.now(timezone.utc)
+    for row in existing.scalars().all():
+        row.status = "rotated"
+        row.rotated_at = now
+
+    encrypted = await encrypt_credentials(credentials)
+    credential = SourceCredential(
+        source_id=source.id,
+        auth_type=auth_type or source.auth_type,
+        encrypted_credentials=encrypted,
+        status="active",
+        rotated_at=now,
+    )
+    db.add(credential)
+    source.auth_status = "connected"
+    await db.flush()
+    await db.refresh(credential)
+    return credential
