@@ -36,9 +36,13 @@ People, devices, and software versions appear under different names across diffe
 
 1. Calls `resolve_entities_from_text`.
 2. Upserts `EvidenceIdentityLink` rows (one per unique identity) with `match_type` and `confidence`.
-3. Writes the resolved list into `evidence.canonical_entity_refs` as a JSONB column so queries can inspect identity links without a join.
+3. Merges the resolved list into `evidence.canonical_entity_refs["identities"]` as a JSONB column so queries can inspect identity links without a join. The merge preserves other keys (e.g., `decisions`) that may have been written by the decision extraction step.
 4. Calls `graph/builder.link_node_to_identities` to add `GraphEdge` rows with `edge_type="mentions_identity"` so the hybrid ranker can boost playbooks sharing identity context.
 5. Appends an `identity.resolved` operational event for observability.
+
+### Relationship with decision extraction
+
+Decision extraction (`decision_service.link_evidence_decisions`) also resolves actors and targets against canonical identities using `resolve_extracted_entities`. Both systems share the same `CanonicalIdentity` and `IdentityAlias` tables. The normalization pipeline runs identity linking first, then decision linking — both write to `canonical_entity_refs` non-destructively so each preserves the other's keys. See [09-graph-and-correlation.md](./09-graph-and-correlation.md) for details on decision graph edges.
 
 `resolve_identity_ids_for_terms` and `find_related_evidence_ids_by_identity_ids` are query-side helpers: the first maps search-term strings to canonical IDs; the second returns all evidence that shares any of those IDs—enabling related-evidence discovery from a search query.
 
@@ -149,7 +153,7 @@ After hydration, the full 18-message Teams conversation is available for episode
 
 - **Create-on-first-sight for new identities** — *Why:* avoids blocking ingestion on reviewer approval; creates the canonical record immediately so subsequent references can match it. *Tradeoff:* the canonical table may accumulate near-duplicates (e.g., "VPN Gateway" and "vpn gateway") until a deduplication or merge pass is run. Reviewer tooling should surface low-confidence aliases for cleanup.
 
-- **JSONB snapshot on evidence row** — *Why:* `canonical_entity_refs` avoids a join on the hot evidence retrieval path and lets the ranker inspect identity context without a separate query. *Tradeoff:* the snapshot can drift from the `evidence_identity_links` table if aliases are later merged or corrected; re-linking is an operational step.
+- **JSONB snapshot on evidence row** — *Why:* `canonical_entity_refs` avoids a join on the hot evidence retrieval path and lets the ranker inspect identity context without a separate query. The JSONB is structured with separate keys (`identities`, `decisions`) so multiple extraction passes can write non-destructively. *Tradeoff:* the snapshot can drift from the `evidence_identity_links` table if aliases are later merged or corrected; re-linking is an operational step.
 
 - **Lazy thread hydration via worker** — *Why:* connectors cannot always enumerate thread depth efficiently at discovery time, and not every thread is operationally relevant. Pulling threads only when needed reduces API quota and storage costs. *Tradeoff:* evidence items may remain in `raw`/`shallow` state until a hydration task fires; retrieval over partially hydrated threads returns less context.
 
@@ -163,6 +167,8 @@ After hydration, the full 18-message Teams conversation is available for episode
 | Resolution core | `backend/src/contextedge/services/identity_service.py` | `resolve_extracted_entities`, `resolve_entities_from_text` | Normalize / API |
 | Evidence–identity linking | `backend/src/contextedge/services/identity_service.py` | `link_evidence_identities` | Normalization worker |
 | Query helpers | `backend/src/contextedge/services/identity_service.py` | `resolve_identity_ids_for_terms`, `find_related_evidence_ids_by_identity_ids`, `get_identity_ids_for_evidence` | Search / correlation |
+| Decision extraction (AI) | `backend/src/contextedge/ai/extractors/decision_extractor.py` | `extract_decisions` | Normalization worker |
+| Decision linking | `backend/src/contextedge/services/decision_service.py` | `link_evidence_decisions` | Normalization worker |
 | Graph wiring | `backend/src/contextedge/graph/builder.py` | `link_node_to_identities` | After linking |
 | Canonical identity model | `backend/src/contextedge/models/episode.py` | `CanonicalIdentity`, `IdentityAlias`, `EvidenceIdentityLink` | ORM |
 | Thread model | `backend/src/contextedge/models/evidence.py` | `Thread` | ORM |

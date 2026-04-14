@@ -49,7 +49,15 @@ The current frontend notification experience is the header dropdown in `AppHeade
 
 ## Graph Explorer is read-only
 
-The Graph Explorer page (`/graph-explorer`) provides interactive visualization and traversal of the context graph — statistics, subgraph rendering via React Flow, and BFS neighbor browsing — but does not yet support creating, editing, or deleting graph edges from the UI. All graph mutations happen through backend services: builder functions called from pattern discovery, playbook generation, contradiction scans, identity linking, and episode graph construction.
+The Graph Explorer page (`/graph-explorer`) provides interactive visualization and traversal of the context graph — statistics, subgraph rendering via React Flow, and BFS neighbor browsing — but does not yet support creating, editing, or deleting graph edges from the UI. All graph mutations happen through backend services: builder functions called from pattern discovery, playbook generation, contradiction scans, identity linking, decision extraction, and episode graph construction.
+
+## Decision extraction depends on LLM quality
+
+AI-extracted decisions (Tier 1) rely on `decision_extractor.py` prompting an LLM to identify operational actions from evidence text. Decision types are open-ended labels, not a fixed enum, which means analytics and filtering may require normalization or fuzzy matching across label variations. The extractor truncates input to 4,000 characters; decisions mentioned later in long evidence items may be missed. Governed decision edges (Tier 2) from execution service are high-fidelity and not subject to this limitation.
+
+## Decision and identity linking order in normalization
+
+The normalization worker runs `link_evidence_identities` before `link_evidence_decisions`. Both write to `evidence.canonical_entity_refs` non-destructively (using separate keys: `identities` and `decisions`). If either step fails, the other's data is preserved. However, if identity linking is re-run after decisions have been written, the merge logic in `link_evidence_identities` preserves existing keys — but a full re-normalization should be monitored to ensure both keys remain intact.
 
 ## Historical note: sync Celery tasks
 

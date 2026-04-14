@@ -140,7 +140,9 @@ async def link_evidence_identities(
 ) -> list[dict]:
     resolved = await resolve_entities_from_text(db, tenant_id, content, source_id=source_id)
     if not resolved:
-        evidence.canonical_entity_refs = {"identities": []}
+        existing_refs = evidence.canonical_entity_refs or {}
+        existing_refs["identities"] = []
+        evidence.canonical_entity_refs = existing_refs
         await db.flush()
         return []
 
@@ -186,7 +188,9 @@ async def link_evidence_identities(
             }
         )
 
-    evidence.canonical_entity_refs = {"identities": merged_refs}
+    existing_refs = evidence.canonical_entity_refs or {}
+    existing_refs["identities"] = merged_refs
+    evidence.canonical_entity_refs = existing_refs
     await db.flush()
 
     await link_node_to_identities(

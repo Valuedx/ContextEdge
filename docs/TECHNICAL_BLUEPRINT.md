@@ -164,6 +164,7 @@ flowchart TD
 ### Normalization behavior
 
 - `normalize_evidence` reads `RawEvidenceObject`, derives title/body/hash, and inserts or dedupes into `EvidenceItem`.
+- After insertion or dedup repair, the worker runs **identity linking** (`link_evidence_identities`) and **decision extraction** (`link_evidence_decisions`) inline. Decision extraction uses an LLM to identify operational actions from evidence text, resolves actors and targets against canonical identities, and creates `records_decision` / `records_action_on` graph edges.
 - Dedupe is hash-based at the application layer and is not yet backed by a database uniqueness constraint.
 - Embeddings are ensured inline on normalization so semantic search sees newly normalized evidence without a second broker hop.
 
@@ -202,8 +203,8 @@ Implementation lives in `services/playbook_service.py`.
 | Connectors | `connectors/` | Source-specific adapters behind a shared contract |
 | Services | `services/` | Application-layer orchestration and domain logic |
 | Search | `search/` | FTS, vector search, risk gating, hybrid ranking |
-| Graph and patterning | `graph/`, `api/v1/graph.py`, parts of `services/`, `workers/pattern_tasks.py` | Graph HTTP API, BFS traversal, aggregate stats, relationship and pattern signals |
-| AI integration | `ai/` | Embeddings, classification, generation helpers |
+| Graph, patterning, decisions | `graph/`, `api/v1/graph.py`, `services/decision_service.py`, `ai/extractors/decision_extractor.py`, parts of `services/`, `workers/pattern_tasks.py` | Graph HTTP API, BFS traversal, aggregate stats, relationship, pattern, and decision signals |
+| AI integration | `ai/` | Embeddings, classification, generation helpers, decision extraction |
 | Worker wrappers | `workers/` | Celery tasks and async session bridge |
 
 ---
@@ -215,7 +216,7 @@ Implementation lives in `services/playbook_service.py`.
 - **Data fetching:** TanStack Query
 - **API client:** `frontend/src/lib/api.ts`
 - **Representative route groups:** `overview`, `sources`, `evidence`, `episodes`, `patterns`, `playbooks`, `runtime`, `evaluations`, `drift`, `policies`, `audit`, `sync`, `graph-explorer`
-- **Graph visualization:** The Graph Explorer page (`/graph-explorer`) provides interactive subgraph visualization via React Flow with dagre layout, BFS neighbor traversal, and aggregate statistics. Shared node/edge styling lives in `components/graph/graph-constants.ts` and is reused by both the pattern-scoped graph and the generic Graph Explorer.
+- **Graph visualization:** The Graph Explorer page (`/graph-explorer`) provides interactive subgraph visualization via React Flow with dagre layout, BFS neighbor traversal, and aggregate statistics. Shared node/edge styling lives in `components/graph/graph-constants.ts` and is reused by both the pattern-scoped graph and the generic Graph Explorer. Decision-related node types (`session`, `execution_run`, `approval_request`, `user`) and edge types (`executed_playbook`, `approved_by`, `denied_by`, `execution_outcome`, `records_decision`, `records_action_on`) are included in the graph constants for visualization.
 
 The frontend is a thin client over the FastAPI API. Most business rules remain on the server.
 
@@ -255,8 +256,8 @@ Primary entity groups:
    `RawEvidenceObject`, `EvidenceItem`, `Thread`, `AttachmentArtifact`
 4. **Identity and reconstruction**
    `CanonicalIdentity`, `IdentityAlias`, `CorrelationEdge`, `Episode`, `EpisodeStep`
-5. **Patterns and graph**
-   `Pattern`, `NegativeKnowledgeItem`, `Contradiction`, `GraphEdge` (includes `domain_id` for domain-scoped graph queries)
+5. **Patterns, graph, and decisions**
+   `Pattern`, `NegativeKnowledgeItem`, `Contradiction`, `GraphEdge` (includes `domain_id` for domain-scoped graph queries). Decision edges use `GraphEdge` with edge types `executed_playbook`, `approved_by`, `denied_by`, `execution_outcome` (governed, Tier 2) and `records_decision`, `records_action_on` (AI-extracted, Tier 1). Node types include `session`, `execution_run`, `approval_request`, and `user`.
 6. **Playbooks**
    `Playbook`, `PlaybookVersion`, `PlaybookEvidenceLink`, `PlaybookApproval`
 7. **Evaluation and runtime feedback**
@@ -297,4 +298,4 @@ Update this blueprint when any of the following change:
 
 Update [API.md](API.md) when changing routes, auth headers, or response semantics. Update [SETUP_GUIDE.md](SETUP_GUIDE.md) when onboarding steps change. Update [RUNBOOK.md](RUNBOOK.md) when operational commands, migrations, or deployment requirements change.
 
-**Last reviewed:** 2026-04-14. Codebase includes Alembic revisions through `0015_graph_edges_domain_id`.
+**Last reviewed:** 2026-04-14. Codebase includes Alembic revisions through `0015_graph_edges_domain_id`. Decision graph edges (Tier 1 AI-extracted + Tier 2 governed execution) are implemented.

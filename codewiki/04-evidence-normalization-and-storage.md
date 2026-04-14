@@ -20,7 +20,7 @@ The outcome: analysts can trust that search results are complete, duplicate-free
 
 3. **Normalize** — `_normalize` inside `workers/extraction_tasks.py` reads the raw row, derives `title` / `body` via `evidence_title_from_payload` and `evidence_body_from_payload`, and computes **normalization hash** `evidence_content_hash_from_payload` (hash of normalized body text). If an `EvidenceItem` with the same `tenant_id` + `content_hash` exists, the path is **deduped**: it may repair embeddings, link identities, and register attachment artifacts against the existing row.
 
-4. **New evidence row** — On no match, it inserts `EvidenceItem` with `relevance_state="unclassified"`, links identities when content allows, embeds via `embed_evidence`, runs attachment registration, may enqueue/classify relevance, and triggers `correlate_evidence` for cross-source linking.
+4. **New evidence row** — On no match, it inserts `EvidenceItem` with `relevance_state="unclassified"`, links identities when content allows, **extracts and links decisions** from the text, embeds via `embed_evidence`, runs attachment registration, may enqueue/classify relevance, and triggers `correlate_evidence` for cross-source linking.
 
 5. **Object store** — `object_store.py` provides `ensure_bucket`, `upload_raw`, `download_raw`, and artifact upload helpers using boto3 against the configured S3-compatible endpoint (MinIO in dev).
 
@@ -72,7 +72,7 @@ The worker extracts a clean title and body, computes a normalization hash (based
 }
 ```
 
-Note: `canonical_entity_refs` is empty at this point. Identity resolution (see [12-identity-resolution-and-thread-hydration.md](./12-identity-resolution-and-thread-hydration.md)) populates it shortly after.
+Note: `canonical_entity_refs` is empty at this point. Identity resolution populates the `identities` key (see [12-identity-resolution-and-thread-hydration.md](./12-identity-resolution-and-thread-hydration.md)) and decision extraction populates the `decisions` key (see [09-graph-and-correlation.md](./09-graph-and-correlation.md)) shortly after. Both write to `canonical_entity_refs` non-destructively, preserving each other's keys.
 
 ## Design decisions
 
@@ -92,6 +92,8 @@ Note: `canonical_entity_refs` is empty at this point. Identity resolution (see [
 | Title/body/hash helpers | `backend/src/contextedge/services/evidence_normalization.py` | `evidence_title_from_payload`, `evidence_body_from_payload`, `evidence_content_hash_from_payload` | Normalize |
 | Blob I/O | `backend/src/contextedge/services/object_store.py` | `upload_raw`, `download_raw`, `ensure_bucket` | Persist / normalize |
 | Normalize worker | `backend/src/contextedge/workers/extraction_tasks.py` | `_normalize`, `normalize_evidence` | Celery **extraction** queue |
+| Decision extraction | `backend/src/contextedge/ai/extractors/decision_extractor.py` | `extract_decisions` | Normalization worker |
+| Decision linking | `backend/src/contextedge/services/decision_service.py` | `link_evidence_decisions` | Normalization worker |
 | Payload load | `backend/src/contextedge/services/artifact_extraction_service.py` | `load_raw_payload`, `register_attachment_artifacts` | Normalize |
 | Embeddings on item | `backend/src/contextedge/ai/embeddings.py` | `embed_evidence` | Normalize / repair |
 | ORM | `backend/src/contextedge/models/evidence.py` | `RawEvidenceObject`, `EvidenceItem` | Persistence |

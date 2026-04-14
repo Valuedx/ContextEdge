@@ -8,6 +8,10 @@ export const NODE_TYPE_OPTIONS = [
   "entity",
   "error",
   "root_cause",
+  "session",
+  "execution_run",
+  "approval_request",
+  "user",
 ] as const;
 
 export const nodeColors: Record<string, { bg: string; border: string; text: string; dot: string }> = {
@@ -19,7 +23,11 @@ export const nodeColors: Record<string, { bg: string; border: string; text: stri
   trigger:    { bg: "bg-amber-900",   border: "border-amber-500",   text: "text-amber-100",   dot: "bg-amber-500" },
   entity:     { bg: "bg-emerald-900", border: "border-emerald-500", text: "text-emerald-100", dot: "bg-emerald-500" },
   error:      { bg: "bg-rose-900",    border: "border-rose-500",    text: "text-rose-100",    dot: "bg-rose-500" },
-  root_cause: { bg: "bg-orange-900",  border: "border-orange-500",  text: "text-orange-100",  dot: "bg-orange-500" },
+  root_cause:        { bg: "bg-orange-900",  border: "border-orange-500",  text: "text-orange-100",  dot: "bg-orange-500" },
+  session:           { bg: "bg-cyan-900",    border: "border-cyan-500",    text: "text-cyan-100",    dot: "bg-cyan-500" },
+  execution_run:     { bg: "bg-lime-900",    border: "border-lime-500",    text: "text-lime-100",    dot: "bg-lime-500" },
+  approval_request:  { bg: "bg-yellow-900",  border: "border-yellow-500",  text: "text-yellow-100",  dot: "bg-yellow-500" },
+  user:              { bg: "bg-fuchsia-900", border: "border-fuchsia-500", text: "text-fuchsia-100", dot: "bg-fuchsia-500" },
 };
 
 export const edgeColors: Record<string, { stroke: string; dasharray?: string }> = {
@@ -33,6 +41,12 @@ export const edgeColors: Record<string, { stroke: string; dasharray?: string }> 
   mentions_identity:   { stroke: "#2dd4bf", dasharray: "3 3" },
   references_identity: { stroke: "#2dd4bf" },
   contradicts:         { stroke: "#f43f5e", dasharray: "8 4" },
+  executed_playbook:   { stroke: "#06b6d4" },
+  approved_by:         { stroke: "#22c55e" },
+  denied_by:           { stroke: "#ef4444", dasharray: "6 3" },
+  execution_outcome:   { stroke: "#84cc16" },
+  records_decision:    { stroke: "#a855f7", dasharray: "4 4" },
+  records_action_on:   { stroke: "#d946ef", dasharray: "4 4" },
 };
 
 export function getNodeClassName(nodeType: string): string {

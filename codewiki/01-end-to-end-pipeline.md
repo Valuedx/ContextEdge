@@ -30,7 +30,7 @@ The path below is the backbone of the product; names in parentheses are the main
 
 6. **AI-assisted extraction** — Language models and embeddings help classify relevance, extract structure, and power semantic retrieval. **In code:** `ai/provider.py`, `ai/embeddings.py`, `ai/extractors/`, `ai/classifiers/`.
 
-7. **Episodes, patterns, graph** — Higher-level objects summarize incidents (**episodes**), surface recurrence (**patterns**), and link entities via a **graph** and correlation services. **In code:** `services/episode_service.py`, `services/pattern_service.py`, `graph/builder.py`, `services/correlation_service.py`, `services/contradiction_service.py`.
+7. **Episodes, patterns, graph, decisions** — Higher-level objects summarize incidents (**episodes**), surface recurrence (**patterns**), and link entities via a **graph** and correlation services. **Decision extraction** identifies operational actions from evidence text and links actors/targets to canonical identities as graph edges. **Governed execution** steps (approvals, denials, outcomes) also produce graph edges for full decision traceability. **In code:** `services/episode_service.py`, `services/pattern_service.py`, `graph/builder.py`, `services/correlation_service.py`, `services/contradiction_service.py`, `services/decision_service.py`, `ai/extractors/decision_extractor.py`.
 
 8. **Playbooks and governance** — **Playbooks** move through a lifecycle; only **published** versions are what runtime retrieval prefers to serve. **In code:** `services/playbook_service.py`, `models/playbook.py`, `api/v1/playbooks.py`.
 
@@ -60,11 +60,14 @@ flowchart LR
   subgraph enrich[Enrichment and memory]
     SRCH[Search FTS plus vectors]
     AI[Extractors and embeddings]
+    DEC[Decision extraction]
     EP[Episodes and patterns]
     GR[Graph and correlation]
     NORM --> SRCH
     NORM --> AI
+    NORM --> DEC
     AI --> EP
+    DEC --> GR
     EP --> GR
   end
 
@@ -128,7 +131,12 @@ One Jira ticket travels the full pipeline. Each box below shows the data shape a
   "title": "VPN connection drops after Windows update KB5032190",
   "body_summary": "Multiple users report VPN disconnects following patch Tuesday. AUTH_CERT_EXPIRED on vpn-gw-east-01.",
   "relevance_state": "operational",
-  "canonical_entity_refs": ["id:john-smith", "id:kb5032190", "id:vpn-gw-east-01"]
+  "canonical_entity_refs": {
+    "identities": ["id:john-smith", "id:kb5032190", "id:vpn-gw-east-01"],
+    "decisions": [
+      { "decision_type": "remediation", "actor": "id:john-smith", "target": "id:vpn-gw-east-01", "action": "renewed gateway certificate" }
+    ]
+  }
 }
 ```
 
@@ -209,7 +217,7 @@ One Jira ticket travels the full pipeline. Each box below shows the data shape a
 
 ## Acme VPN incident (this layer)
 
-When **Acme Corp**'s **Corporate VPN** outage spawns duplicate Jira tickets, Teams threads, and a follow-up email, **connectors and sync** land multiple **raw** payloads that **normalize** into evidence rows analysts can find with "VPN gateway." **Extraction** proposes an **episode** spanning the noise; **patterns** may later reflect "auth certificate expiry" style repeats. A reviewed **playbook** version captures the approved fix; **runtime** ranks that playbook when an integration asks about VPN failures, and **sessions** can record what was decided—so the same story threads every stage above without changing the example.
+When **Acme Corp**'s **Corporate VPN** outage spawns duplicate Jira tickets, Teams threads, and a follow-up email, **connectors and sync** land multiple **raw** payloads that **normalize** into evidence rows analysts can find with "VPN gateway." **Decision extraction** identifies that jsmith restarted the gateway and links the action to both the actor and the target system in the graph. **Extraction** proposes an **episode** spanning the noise; **patterns** may later reflect "auth certificate expiry" style repeats. A reviewed **playbook** version captures the approved fix; **runtime** ranks that playbook when an integration asks about VPN failures, and **sessions** record what was decided. When the playbook executes, **governed decision edges** capture the approval chain and outcome — so the same story threads every stage above without changing the example.
 
 ## Further reading
 

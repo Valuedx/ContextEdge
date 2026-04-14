@@ -25,6 +25,22 @@ Incidents rarely live in one ticket. The platform connects related evidence acro
 - `persist_pattern_enrichment_edges` converts pattern enrichment metadata (triggers, entities, errors, root causes) into persisted `GraphEdge` rows using deterministic UUIDs (`_enrichment_node_id`). This replaces the earlier approach of generating virtual nodes on read, enabling BFS traversal and generic subgraph queries to reach enrichment data without special-case code.
 - `hybrid_ranker` uses graph edge **counts** around playbooks as a ranking signal; identity links use types like `references_identity`.
 
+### Decision graph edges
+
+The context graph also captures **operational decisions** — both governed actions taken through ContextEdge execution and decisions observed in ingested evidence.
+
+**Tier 2 — governed decisions** (high fidelity, structured):
+
+- `execution_service.start_execution` creates `session --(executed_playbook)--> playbook` when a session initiates execution, recording `execution_run_id` and `automation_mode` in metadata.
+- `execution_service.decide_approval` creates `approval_request --(approved_by / denied_by)--> user` when a manager approves or denies a step, with `comment` and `safety_class` in metadata.
+- `execution_service.complete_execution` creates `execution_run --(execution_outcome)--> playbook` with `outcome` and `outcome_summary` in metadata.
+
+**Tier 1 — observed decisions** (moderate fidelity, AI-extracted):
+
+- `decision_service.link_evidence_decisions` uses `ai/extractors/decision_extractor.py` to identify actions from evidence text (e.g., "engineer restarted the server", "manager approved access"). Actors and targets are resolved against canonical identities.
+- Creates `evidence --(records_decision)--> identity(actor)` and `evidence --(records_action_on)--> identity(target)` edges, with `decision_type`, `action`, and `context` in metadata.
+- Decision types are open-ended — common labels include `approval`, `remediation`, `restart`, `escalation`, `rollback`, `configuration_change`, but the extractor generates whatever label best fits the action.
+
 ### Contradictions
 
 - `contradiction_service` compares playbook step text to KB-typed evidence (`kb_article`, `sop`, `documentation`), uses token overlap heuristics (`should_compare_contradiction`), then may call `llm_complete_json` for a structured judgment, persists `Contradiction` rows, adds graph edges, emits operational events, and can notify via `notification_service`.
@@ -110,6 +126,46 @@ All endpoints are tenant-scoped via the authenticated user. When `domain_id` is 
 
 Contradictions prompt the knowledge manager to either update the KB article or revise the playbook, preventing teams from following outdated guidance.
 
+**Output — decision graph edges from governed execution**
+
+```json
+[
+  {
+    "source_node": { "type": "session", "id": "sess-abc123" },
+    "target_node": { "type": "playbook", "id": "pb-r1s2t3" },
+    "edge_type": "executed_playbook",
+    "metadata": { "execution_run_id": "exec-def456", "automation_mode": "supervised" }
+  },
+  {
+    "source_node": { "type": "approval_request", "id": "apr-789" },
+    "target_node": { "type": "user", "id": "admin@acme.com" },
+    "edge_type": "approved_by",
+    "metadata": { "comment": "Certificate rotation is safe", "safety_class": "medium_side_effect" }
+  }
+]
+```
+
+**Output — decision edges extracted from evidence text**
+
+The Teams thread mentions "jsmith restarted vpn-gw-east-01 at 14:30." The decision extractor links this action to the graph:
+
+```json
+[
+  {
+    "source_node": { "type": "evidence", "id": "ev-d4e5f6" },
+    "target_node": { "type": "identity", "id": "id:jsmith" },
+    "edge_type": "records_decision",
+    "metadata": { "decision_type": "restart", "action": "restarted vpn-gw-east-01" }
+  },
+  {
+    "source_node": { "type": "evidence", "id": "ev-d4e5f6" },
+    "target_node": { "type": "identity", "id": "id:vpn-gw-east-01" },
+    "edge_type": "records_action_on",
+    "metadata": { "decision_type": "restart", "action": "restarted vpn-gw-east-01" }
+  }
+]
+```
+
 ## Design decisions
 
 - **Adjacency in Postgres vs dedicated graph DB** — *Why:* simpler ops, transactional consistency with evidence and playbooks. *Tradeoff:* deep graph algorithms are harder than in Neo4j-style stores.
@@ -122,6 +178,10 @@ Contradictions prompt the knowledge manager to either update the KB article or r
 
 - **`domain_id` on graph edges** — *Why:* enables domain-scoped views of the context graph (e.g. only VPN-related edges) while keeping tenant-wide edges accessible. *Tradeoff:* all builder call sites must propagate `domain_id`; queries use `OR domain_id IS NULL` to include unscoped edges.
 
+- **Two-tier decision capture** — *Why:* governed execution edges (Tier 2) are high-fidelity and attributable; AI-extracted decision edges (Tier 1) capture actions from unstructured evidence that would otherwise be invisible. *Tradeoff:* Tier 1 decisions depend on LLM quality and may miss nuance or generate false positives; both tiers share the same `GraphEdge` store and BFS traversal.
+
+- **Open-ended decision types** — *Why:* operational decisions are too varied for a fixed enum — the LLM extractor generates the most accurate label for each action. *Tradeoff:* analytics and filtering require normalization or fuzzy matching across labels.
+
 ## Code map
 
 | Concern | Module path | Key symbols | When it runs |
@@ -133,12 +193,15 @@ Contradictions prompt the knowledge manager to either update the KB article or r
 | Contradictions | `backend/src/contextedge/services/contradiction_service.py` | `should_compare_contradiction`, scan helpers | Evaluation task |
 | Correlation worker | `backend/src/contextedge/workers/correlation_tasks.py` | `correlate_evidence` | extraction queue |
 | Hybrid use of graph | `backend/src/contextedge/search/hybrid_ranker.py` | `_graph_score_for_playbook`, `_identity_score_for_playbook`, `_negative_penalty_for_playbook` | Runtime ranking |
+| Decision extraction (AI) | `backend/src/contextedge/ai/extractors/decision_extractor.py` | `extract_decisions`, `DECISION_PROMPT` | Normalization worker |
+| Decision linking | `backend/src/contextedge/services/decision_service.py` | `link_evidence_decisions` | Normalization worker |
+| Governed decision edges | `backend/src/contextedge/services/execution_service.py` | `start_execution`, `decide_approval`, `complete_execution` | Execution API |
 | Models | `backend/src/contextedge/models/pattern.py` | `GraphEdge` (incl. `domain_id`), `Contradiction` | ORM |
 | Episode correlation model | `backend/src/contextedge/models/episode.py` | `CorrelationEdge` | ORM |
 
 ## Acme VPN incident (this layer)
 
-`correlate_evidence` links the ServiceNow incident to the Jira clone and the engineer's email; `GraphEdge` ties the approved **VPN playbook** to **identity** nodes for gateway hosts; a scheduled contradiction scan flags an outdated KB article that still says "disable MFA for VPN"—prompting Acme to update KB or playbook text.
+`correlate_evidence` links the ServiceNow incident to the Jira clone and the engineer's email; `GraphEdge` ties the approved **VPN playbook** to **identity** nodes for gateway hosts; a scheduled contradiction scan flags an outdated KB article that still says "disable MFA for VPN"—prompting Acme to update KB or playbook text. Decision extraction picks up that jsmith restarted the gateway and links the action to both the actor and the target system in the graph, while governed execution edges record the approval chain when the VPN certificate rotation playbook runs.
 
 ## Further reading
 

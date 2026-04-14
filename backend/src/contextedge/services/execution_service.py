@@ -16,6 +16,7 @@ from contextedge.models.execution import (
     ExecutionStepRun,
     ToolInvocation,
 )
+from contextedge.graph.builder import ensure_edge
 from contextedge.models.playbook import Playbook, PlaybookVersion
 from contextedge.services.event_log_service import append_operational_event
 from contextedge.services.session_service import append_trace_event
@@ -196,6 +197,14 @@ async def start_execution(
                 "step_count": len(steps),
                 "approval_request_count": approval_count,
                 "status": run.status,
+            },
+        )
+        await ensure_edge(
+            db, tenant_id, "session", session_id,
+            "playbook", playbook.id, "executed_playbook",
+            metadata={
+                "execution_run_id": str(run.id),
+                "automation_mode": playbook.automation_mode,
             },
         )
 
@@ -443,6 +452,18 @@ async def decide_approval(
             "comment": comment,
         },
     )
+
+    edge_type = "approved_by" if decision == "approved" else "denied_by"
+    await ensure_edge(
+        db, tenant_id, "approval_request", req.id,
+        "user", decided_by, edge_type,
+        metadata={
+            "comment": comment,
+            "safety_class": req.safety_class,
+            "execution_run_id": str(req.execution_run_id),
+        },
+    )
+
     return req
 
 
@@ -485,6 +506,15 @@ async def complete_execution(
             inputs={"execution_run_id": str(run.id)},
             outputs={"outcome": outcome, "outcome_summary": outcome_summary},
         )
+
+    await ensure_edge(
+        db, tenant_id, "execution_run", run.id,
+        "playbook", run.playbook_id, "execution_outcome",
+        metadata={
+            "outcome": outcome,
+            "outcome_summary": outcome_summary,
+        },
+    )
 
     return run
 

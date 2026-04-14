@@ -18,6 +18,7 @@ from contextedge.services.evidence_normalization import (
     evidence_content_hash_from_payload,
     evidence_title_from_payload,
 )
+from contextedge.services.decision_service import link_evidence_decisions
 from contextedge.services.identity_service import link_evidence_identities
 from contextedge.workers.asyncio_runner import run_async
 from contextedge.workers.celery_app import celery_app
@@ -87,6 +88,25 @@ async def _normalize(db: AsyncSession, raw_object_id: str, tenant_id: uuid.UUID)
                     evidence_id=str(existing.id),
                     error=str(exc),
                 )
+        decision_count = None
+        if not ((existing.canonical_entity_refs or {}).get("decisions")) and identity_content.strip():
+            try:
+                decision_refs = await link_evidence_decisions(
+                    db,
+                    tenant_id=tenant_id,
+                    evidence=existing,
+                    content=identity_content,
+                    source_id=raw.source_id,
+                )
+                decision_count = len(decision_refs)
+            except Exception as exc:
+                logger.warning(
+                    "decision_extraction_failed",
+                    tenant_id=str(tenant_id),
+                    raw_object_id=str(raw.id),
+                    evidence_id=str(existing.id),
+                    error=str(exc),
+                )
         attachments = await register_attachment_artifacts(
             db,
             tenant_id=tenant_id,
@@ -99,6 +119,7 @@ async def _normalize(db: AsyncSession, raw_object_id: str, tenant_id: uuid.UUID)
             "embedded": existing.embedding is not None,
             "embedding_repaired": embedded,
             "identity_count": identity_count,
+            "decision_count": decision_count,
             "attachment_ids": [str(artifact.id) for artifact in attachments],
         }
 
@@ -135,6 +156,25 @@ async def _normalize(db: AsyncSession, raw_object_id: str, tenant_id: uuid.UUID)
                 evidence_id=str(ev.id),
                 error=str(exc),
             )
+    decision_count = 0
+    if identity_content.strip():
+        try:
+            decision_refs = await link_evidence_decisions(
+                db,
+                tenant_id=tenant_id,
+                evidence=ev,
+                content=identity_content,
+                source_id=raw.source_id,
+            )
+            decision_count = len(decision_refs)
+        except Exception as exc:
+            logger.warning(
+                "decision_extraction_failed",
+                tenant_id=str(tenant_id),
+                raw_object_id=str(raw.id),
+                evidence_id=str(ev.id),
+                error=str(exc),
+            )
     attachments = await register_attachment_artifacts(
         db,
         tenant_id=tenant_id,
@@ -147,6 +187,7 @@ async def _normalize(db: AsyncSession, raw_object_id: str, tenant_id: uuid.UUID)
         "deduped": False,
         "embedded": embedded,
         "identity_count": identity_count,
+        "decision_count": decision_count,
         "attachment_ids": [str(artifact.id) for artifact in attachments],
     }
 
