@@ -695,3 +695,140 @@ class TestDeadCodeRemoval:
 
         sig = inspect.signature(rank_playbooks)
         assert "symptoms" not in sig.parameters
+
+
+# ---------------------------------------------------------------------------
+# Episode reconstruction: LLM failure isolation
+# ---------------------------------------------------------------------------
+
+
+class TestEpisodeReconstructionFailureIsolation:
+    @pytest.mark.asyncio
+    async def test_llm_failure_returns_empty_list(self):
+        """LLM failures in episode reconstruction should be caught, logged,
+        and return an empty list instead of raising."""
+        from contextedge.services.episode_service import create_episodes_from_evidence
+
+        mock_db = AsyncMock()
+        mock_db.execute = AsyncMock(return_value=Mock(all=Mock(return_value=[])))
+
+        with patch(
+            "contextedge.services.episode_service.reconstruct_episode",
+            side_effect=ValueError("LLM returned invalid JSON for task 'extraction'"),
+        ):
+            result = await create_episodes_from_evidence(
+                mock_db,
+                tenant_id=uuid4(),
+                domain_id=None,
+                evidence_items=[{"title": "Test", "body": "body", "source_type": "test", "evidence_id": str(uuid4())}],
+                evidence_ids=[uuid4()],
+            )
+
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_generic_exception_returns_empty_list(self):
+        """Any exception from the LLM provider should be caught gracefully."""
+        from contextedge.services.episode_service import create_episodes_from_evidence
+
+        mock_db = AsyncMock()
+
+        with patch(
+            "contextedge.services.episode_service.reconstruct_episode",
+            side_effect=RuntimeError("Connection timeout"),
+        ):
+            result = await create_episodes_from_evidence(
+                mock_db,
+                tenant_id=uuid4(),
+                domain_id=None,
+                evidence_items=[{"title": "Test", "body": "body"}],
+                evidence_ids=[uuid4()],
+            )
+
+        assert result == []
+
+
+# ---------------------------------------------------------------------------
+# Correlation auto-triggers episode reconstruction
+# ---------------------------------------------------------------------------
+
+
+class TestCorrelationEpisodeTrigger:
+    def test_correlation_with_new_edges_enqueues_episode_task(self):
+        """When correlation creates new edges, it should enqueue
+        reconstruct_episode_task."""
+        from contextedge.workers.correlation_tasks import correlate_evidence
+
+        correlation_result = {
+            "status": "ok",
+            "canonical_case_id": str(uuid4()),
+            "correlations_created": 2,
+            "candidate_count": 1,
+            "case_links_created": 1,
+            "case_links_updated": 0,
+        }
+
+        evidence_id = str(uuid4())
+        tenant_id = str(uuid4())
+
+        with (
+            patch(
+                "contextedge.workers.correlation_tasks.run_async",
+                return_value=correlation_result,
+            ),
+            patch(
+                "contextedge.workers.extraction_tasks.reconstruct_episode_task",
+            ) as mock_reconstruct,
+        ):
+            mock_reconstruct.delay = Mock()
+            correlate_evidence(evidence_id, tenant_id)
+            mock_reconstruct.delay.assert_called_once_with(evidence_id, tenant_id)
+
+    def test_correlation_without_new_edges_skips_episode_task(self):
+        """When correlation creates no new edges, episode reconstruction
+        should not be enqueued."""
+        from contextedge.workers.correlation_tasks import correlate_evidence
+
+        correlation_result = {
+            "status": "ok",
+            "canonical_case_id": str(uuid4()),
+            "correlations_created": 0,
+            "candidate_count": 1,
+            "case_links_created": 0,
+            "case_links_updated": 1,
+        }
+
+        evidence_id = str(uuid4())
+        tenant_id = str(uuid4())
+
+        with (
+            patch(
+                "contextedge.workers.correlation_tasks.run_async",
+                return_value=correlation_result,
+            ),
+            patch(
+                "contextedge.workers.extraction_tasks.reconstruct_episode_task",
+            ) as mock_reconstruct,
+        ):
+            mock_reconstruct.delay = Mock()
+            correlate_evidence(evidence_id, tenant_id)
+            mock_reconstruct.delay.assert_not_called()
+
+    def test_correlation_skipped_does_not_trigger_episode(self):
+        """Skipped correlation (no candidates) should not trigger episodes."""
+        from contextedge.workers.correlation_tasks import correlate_evidence
+
+        correlation_result = {"status": "skipped", "reason": "no_candidates"}
+
+        with (
+            patch(
+                "contextedge.workers.correlation_tasks.run_async",
+                return_value=correlation_result,
+            ),
+            patch(
+                "contextedge.workers.extraction_tasks.reconstruct_episode_task",
+            ) as mock_reconstruct,
+        ):
+            mock_reconstruct.delay = Mock()
+            correlate_evidence(str(uuid4()), str(uuid4()))
+            mock_reconstruct.delay.assert_not_called()

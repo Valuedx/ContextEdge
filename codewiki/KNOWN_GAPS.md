@@ -102,9 +102,9 @@ Teams `hydrate_thread` now fetches the root message first via `/messages/{messag
 
 `apply_retention_policy` exists in `retention_service.py` but is not called from a scheduled job. Tenant retention defaults have no effect until a cron trigger or operator script is wired.
 
-## Correlation does not auto-trigger episode reconstruction
+## Resolved: Correlation now auto-triggers episode reconstruction
 
-`correlate_evidence_item` creates correlation edges and case links but does not automatically trigger `reconstruct_episode_task`. Episode reconstruction is currently manual via the episodes API or via explicitly enqueued tasks.
+`correlate_evidence` (Celery task) now enqueues `reconstruct_episode_task` when new correlation edges are created. Episode reconstruction LLM failures are caught and logged in `create_episodes_from_evidence` so they do not crash the task.
 
 ## `workspace_id` and `domain_id` not set during normalization
 

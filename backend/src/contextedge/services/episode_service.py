@@ -2,12 +2,15 @@
 
 import uuid
 
+import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from contextedge.ai.extractors.episode_extractor import reconstruct_episode
 from contextedge.models.episode import Episode, EpisodeStep
 from contextedge.models.evidence import EvidenceItem
+
+logger = structlog.get_logger()
 
 
 def _merge_identity_refs(values: list[dict | None]) -> dict | None:
@@ -38,7 +41,17 @@ async def create_episodes_from_evidence(
     evidence_ids: list[uuid.UUID],
 ) -> list[Episode]:
     """Run LLM extraction and create one or more episodes with steps."""
-    extracted_episodes = await reconstruct_episode(evidence_items)
+    try:
+        extracted_episodes = await reconstruct_episode(evidence_items)
+    except Exception as exc:
+        logger.warning(
+            "episode_reconstruction_llm_failed",
+            tenant_id=str(tenant_id),
+            evidence_count=len(evidence_items),
+            error=str(exc),
+        )
+        return []
+
     evidence_result = await db.execute(
         select(EvidenceItem.canonical_entity_refs).where(EvidenceItem.id.in_(evidence_ids))
     )
