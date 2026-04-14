@@ -6,9 +6,11 @@ You will understand how ContextEdge **canonicalizes entities** (people, devices,
 
 ## Business picture
 
-A VPN incident ticket might mention "John Smith," "jsmith," and "J. Smith (IT)" as the same engineer, or reference "Win11 KB5032190" and "November patch" for the same update. Without canonical identities, search and correlation treat each as different data points. **Identity resolution** normalises these into a single `CanonicalIdentity` row per entity so retrieval, graph scoring, and episode clustering all see the same entity.
+People, devices, and software versions appear under different names across different tools. A VPN incident ticket might reference "John Smith," "jsmith," and "J. Smith (IT)" for the same engineer, or mention "KB5032190" and "November patch" for the same update. Without a single source of truth for each entity, search results fragment, correlations miss connections, and episode reconstruction treats related data as unrelated.
 
-Separately, many connectors (Slack, Teams, Gmail) deliver per-message or per-event streams. A single message mentioning a VPN problem might be part of a 40-message thread. **Thread hydration** fetches that full thread on demand so evidence rows carry the case context, not just an isolated message fragment.
+**Identity resolution** ensures every variant points to one canonical record — so when you search for "John Smith," you also find tickets filed under "jsmith" and messages from "J. Smith (IT)." This keeps search, correlation, and playbook matching accurate across all the tools your team uses.
+
+**Thread hydration** solves a related gap: many chat and email connectors deliver messages one at a time, stripped of their surrounding conversation. A single Slack or Teams message about a VPN outage may be part of a 40-message diagnostic discussion. Thread hydration fetches that full conversation on demand, so the system sees the complete context — not just an isolated snippet.
 
 ## Technical walkthrough
 
@@ -53,6 +55,95 @@ Thread hydration fills in conversation context lazily: the connector fetches det
 5. Task retries up to 3 times with a 60-second delay on failure.
 
 The `Thread` model (`models/evidence.py`) tracks `external_thread_id`, `source_id`, `tenant_id`, `hydration_status`, and message/participant counts. Evidence items link to threads, so after hydration the full conversation context is available for normalization and extraction.
+
+## Example: Acme VPN data at this stage
+
+**Input — raw mentions extracted from evidence text**
+
+```json
+{
+  "evidence_id": "ev-a1b2c3",
+  "extracted_entities": [
+    { "text": "jsmith@acme.com", "type": "person" },
+    { "text": "KB5032190", "type": "patch" },
+    { "text": "vpn-gw-east-01", "type": "device" },
+    { "text": "November patch", "type": "version" }
+  ]
+}
+```
+
+**Output — resolved canonical identities**
+
+```json
+[
+  {
+    "canonical_identity_id": "id:john-smith",
+    "name": "John Smith",
+    "entity_type": "person",
+    "aliases": [
+      { "alias": "jsmith@acme.com", "confidence": 0.95, "created_by": "system" },
+      { "alias": "jsmith", "confidence": 0.90, "created_by": "system" },
+      { "alias": "J. Smith (IT)", "confidence": 0.80, "created_by": "system" }
+    ],
+    "matched_via": "alias"
+  },
+  {
+    "canonical_identity_id": "id:kb5032190",
+    "name": "Windows Update KB5032190",
+    "entity_type": "patch",
+    "aliases": [
+      { "alias": "KB5032190", "confidence": 0.95, "created_by": "system" },
+      { "alias": "November patch", "confidence": 0.80, "created_by": "system" }
+    ],
+    "matched_via": "alias"
+  },
+  {
+    "canonical_identity_id": "id:vpn-gw-east-01",
+    "name": "VPN Gateway East 01",
+    "entity_type": "device",
+    "aliases": [
+      { "alias": "vpn-gw-east-01", "confidence": 0.95, "created_by": "system" }
+    ],
+    "matched_via": "new_identity_created"
+  }
+]
+```
+
+**Output — evidence item updated with identity links**
+
+```json
+{
+  "evidence_id": "ev-a1b2c3",
+  "canonical_entity_refs": ["id:john-smith", "id:kb5032190", "id:vpn-gw-east-01"],
+  "identity_links": [
+    { "identity_id": "id:john-smith", "match_type": "alias", "confidence": 0.95 },
+    { "identity_id": "id:kb5032190", "match_type": "alias", "confidence": 0.95 },
+    { "identity_id": "id:vpn-gw-east-01", "match_type": "new", "confidence": 0.95 }
+  ]
+}
+```
+
+**Thread hydration example**
+
+```json
+{
+  "task": "hydrate_thread",
+  "thread_id": "thread-teams-vpn-001",
+  "source_type": "teams",
+  "before": {
+    "hydration_status": "pending",
+    "message_count": null,
+    "participant_count": null
+  },
+  "after": {
+    "hydration_status": "complete",
+    "message_count": 18,
+    "participant_count": 5
+  }
+}
+```
+
+After hydration, the full 18-message Teams conversation is available for episode reconstruction, rather than just the single alert message that triggered ingestion.
 
 ## Design decisions
 

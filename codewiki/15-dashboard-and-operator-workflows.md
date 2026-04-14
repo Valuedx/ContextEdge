@@ -2,21 +2,21 @@
 
 ## Summary
 
-This page explains the product the way a business user experiences it: as a dashboard with workflows for onboarding sources, investigating evidence, curating knowledge, resolving incidents, and governing live automation. It also maps those screens back to the backend APIs that actually enforce the rules.
+This page explains the product the way a business user experiences it: as a dashboard with workflows for onboarding sources, investigating evidence, curating knowledge, resolving incidents, and governing live automation. It also maps those screens back to the backend APIs that enforce the rules.
 
 ## Business picture
 
-For most users, ContextEdge is not "the ingestion pipeline" or "the Celery topology." It is a control tower. The left navigation organizes work into a business sequence:
+For most users, ContextEdge is a **control tower** — not a database or a pipeline diagram. The dashboard organizes work into a business sequence: **monitor** your data sources, **investigate** what happened, **curate** knowledge, **resolve** live incidents, and **govern** the system over time.
 
 | Workflow | Main pages | What the user is trying to accomplish |
 | --- | --- | --- |
 | Monitor | Overview, Sources, Sync Operations | See whether evidence is flowing and whether review queues are growing |
-| Investigate | Evidence, Episodes, Identities, Correlations, Contradictions | Understand what happened and what evidence supports it |
-| Curate | Patterns, Playbooks, Negative Knowledge | Turn investigation results into reusable and governed memory |
+| Investigate | Evidence, Episodes, Identities, Correlations, Contradictions, Graph Explorer | Understand what happened and what evidence supports it |
+| Curate | Patterns, Playbooks, Negative Knowledge | Turn investigation results into reusable, governed memory |
 | Resolve | Runtime, Sessions, Execution | Match live incidents to playbooks, capture decisions, and process approvals |
 | Govern | Drift, Evaluations, Policies, Audit Log, Settings | Keep memory current, controlled, and compliant |
 
-The dashboard is therefore a business workflow shell over an API-first backend. The UI helps users move from raw signals to governed action, but most permission, search, ranking, and retention rules still live on the server.
+The dashboard is a business workflow layer over an API-first backend. The UI helps users move from raw signals to governed action, while permission, search, ranking, and retention rules are enforced on the server.
 
 ## Technical walkthrough
 
@@ -30,11 +30,62 @@ The dashboard is therefore a business workflow shell over an API-first backend. 
 
 5. **Knowledge curation is split into successive pages** - Episodes capture incident narratives, Patterns highlight recurrence, Playbooks store governed procedures, Negative Knowledge captures ineffective or prohibited steps, and Identities / Correlations / Contradictions refine the system's memory graph. The dashboard keeps these as separate pages because they are different business decisions, even when they share the same underlying evidence. In code: `frontend/src/app/(dashboard)/episodes/page.tsx`, `frontend/src/app/(dashboard)/patterns/page.tsx`, `frontend/src/app/(dashboard)/playbooks/page.tsx`, `frontend/src/app/(dashboard)/negative-knowledge/page.tsx`, `frontend/src/app/(dashboard)/identities/page.tsx`, `frontend/src/app/(dashboard)/correlations/page.tsx`, `frontend/src/app/(dashboard)/contradictions/page.tsx`.
 
+5b. **Graph Explorer provides interactive visualization** - The Graph Explorer (`/graph-explorer`) is a three-tab page for exploring the context graph. The **Statistics** tab fetches `GET /graph/stats` and displays total edges, node-type distributions, and edge-type breakdowns. The **Subgraph** tab lets users enter any entity type/ID and depth, renders the result using React Flow with dagre auto-layout, and supports click-to-explore (clicking a node re-centers the subgraph on it). The **Neighbors** tab performs BFS traversal via `GET /graph/neighbors` and displays tabular results grouped by depth with optional edge-type filtering and follow-node navigation. All three tabs support optional `domain_id` scoping. Shared node/edge styling lives in `graph-constants.ts`, which is also used by the pattern-scoped graph view. In code: `frontend/src/app/(dashboard)/graph-explorer/page.tsx`, `frontend/src/components/graph/graph-subgraph.tsx`, `frontend/src/components/graph/graph-neighbors.tsx`, `frontend/src/components/graph/graph-stats.tsx`, `frontend/src/components/graph/graph-constants.ts`, `backend/src/contextedge/api/v1/graph.py`.
+
 6. **Runtime, sessions, and execution support live incident work** - `RuntimePage` is a sandbox over the production runtime APIs. It lets a user submit symptoms and entities, inspect ranked playbooks, fetch explain payloads, and submit retrieval feedback. `SessionsPage` manages resolution sessions and trace review. `ExecutionPage` handles pending approval requests for higher-risk execution steps. In code: `frontend/src/app/(dashboard)/runtime/page.tsx`, `frontend/src/app/(dashboard)/sessions/page.tsx`, `frontend/src/app/(dashboard)/execution/page.tsx`, `backend/src/contextedge/api/v1/runtime.py`, `backend/src/contextedge/api/v1/sessions.py`, `backend/src/contextedge/api/v1/execution.py`.
 
 7. **Governance pages stay close to day-to-day work** - Drift and Evaluations show whether stored memory still performs well. Policies and Audit Log show who changed rules or resources. Settings holds tenant, workspace, domain, and user context. This keeps governance inside the same product flow rather than hiding it in a separate admin tool. In code: `frontend/src/app/(dashboard)/drift/page.tsx`, `frontend/src/app/(dashboard)/evaluations/page.tsx`, `frontend/src/app/(dashboard)/policies/page.tsx`, `frontend/src/app/(dashboard)/audit/page.tsx`, `frontend/src/app/(dashboard)/settings/page.tsx`.
 
 8. **The frontend is intentionally thin** - The shared `api` client adds the bearer token and request ids, then all page components call the backend directly. This means the UI is easy to reason about, but it also means backend capability can exist before there is a polished screen for it. In code: `frontend/src/lib/api.ts`, `frontend/src/lib/stores/auth-store.ts`.
+
+## Example: Acme VPN data at this stage
+
+A day-in-the-life walkthrough of how different Acme users interact with the dashboard during and after the VPN outage.
+
+**Morning — Admin checks source health (Overview page)**
+
+| Source | Status | Last sync | Review queue |
+| --- | --- | --- | --- |
+| Jira IT-OPS | Healthy | 5 min ago | 3 new episodes pending |
+| Teams #vpn-support | Healthy | 2 min ago | — |
+| Email ops-escalation | Credential expiring | 3 days ago | 1 sync failure |
+
+The admin sees the email source needs credential rotation and clicks through to the Source Detail page to update it.
+
+**Mid-morning — Responder investigates (Evidence + Sessions pages)**
+
+The responder searches "VPN authentication failure" in the Evidence explorer:
+
+| Evidence | Source | Relevance | Time |
+| --- | --- | --- | --- |
+| VPN connection drops after Windows update KB5032190 | Jira | Operational | Mar 15, 9:23 AM |
+| Engineers discuss AUTH_CERT_EXPIRED errors | Teams | Operational | Mar 15, 9:45 AM |
+
+They open a Resolution Session, which captures the runtime match result (VPN Certificate Rotation playbook, 92% confidence) and their decision to proceed.
+
+**Afternoon — Knowledge manager curates (Episodes + Playbooks pages)**
+
+The knowledge manager reviews the draft episode "Corporate VPN auth failure after KB5032190," confirms the AI-reconstructed steps are accurate, and approves it. The system links it to the existing "Certificate expiry after Windows updates" pattern. A playbook candidate enters the review queue.
+
+**Next day — Reviewer approves (Playbook Review page)**
+
+The reviewer sees the candidate playbook with:
+- Trigger conditions, branching logic, and evidence links
+- Diff showing this is a new playbook (no prior version)
+- Risk tier: medium, automation mode: human-confirmed
+
+After review, they approve and publish version 1.0.0. The playbook is now visible to runtime retrieval.
+
+**Weekly — Governance check (Drift + Evaluations pages)**
+
+The drift page shows:
+
+| Playbook | Issues | Severity |
+| --- | --- | --- |
+| Legacy VPN Reconnect Steps | Past expiry, not validated in 180 days | High |
+| VPN Certificate Rotation | 3 negative feedback events | Medium |
+
+The knowledge manager retires the legacy playbook and narrows the trigger conditions on the certificate rotation playbook based on the feedback.
 
 ## Design decisions
 
@@ -67,6 +118,11 @@ The dashboard is therefore a business workflow shell over an API-first backend. 
 | Negative knowledge | `frontend/src/app/(dashboard)/negative-knowledge/page.tsx` | `NegativeKnowledgePage`, `NKDialog` | Curating failed steps |
 | Policies | `frontend/src/app/(dashboard)/policies/page.tsx` | `PoliciesPage`, `PolicySection` | Governance admin |
 | Settings | `frontend/src/app/(dashboard)/settings/page.tsx` | `SettingsPage`, `NewWorkspaceDialog`, `NewDomainDialog` | Tenant admin |
+| Graph Explorer page | `frontend/src/app/(dashboard)/graph-explorer/page.tsx` | `GraphExplorerPage` | Graph investigation |
+| Graph subgraph visualization | `frontend/src/components/graph/graph-subgraph.tsx` | `GraphSubgraph` | Subgraph tab |
+| Graph neighbors browser | `frontend/src/components/graph/graph-neighbors.tsx` | `GraphNeighbors` | Neighbors tab |
+| Graph statistics | `frontend/src/components/graph/graph-stats.tsx` | `GraphStats` | Statistics tab |
+| Shared graph constants | `frontend/src/components/graph/graph-constants.ts` | `nodeColors`, `edgeColors`, `NODE_TYPE_OPTIONS`, `getNodeClassName` | All graph views |
 
 ## Acme VPN incident (this layer)
 
@@ -77,5 +133,6 @@ In the Acme VPN outage, the dashboard is the business user's path through the pr
 - [00-business-capability-map.md](./00-business-capability-map.md) - business-first orientation
 - [03-ingestion-connectors-and-sync.md](./03-ingestion-connectors-and-sync.md) - source and sync internals
 - [05-search-hybrid-and-access.md](./05-search-hybrid-and-access.md) - evidence retrieval behavior behind the UI
+- [09-graph-and-correlation.md](./09-graph-and-correlation.md) - context graph internals and the `/graph` API
 - [10-governance-sessions-execution-audit.md](./10-governance-sessions-execution-audit.md) - sessions, execution, and audit internals
 - [14-control-plane-tenants-roles-policies.md](./14-control-plane-tenants-roles-policies.md) - settings, users, roles, and policies

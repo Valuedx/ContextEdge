@@ -118,6 +118,8 @@ Revisions live in `backend/alembic/versions/`.
 | `0011_execution_governance` | Governed execution runs, step runs, tool invocations, and approval requests |
 | `0012_evidence_identity_links` | Active evidence-to-identity links for normalization, retrieval, and correlation |
 | `0013_attachment_processing` | Attachment parser metadata, extraction status, and extracted-at timestamps |
+| `0014_notifications_and_playbook_approval_policy` | Notification tables and playbook approval policy |
+| `0015_graph_edges_domain_id` | `domain_id` column and composite index on `graph_edges` |
 
 Apply all pending migrations:
 

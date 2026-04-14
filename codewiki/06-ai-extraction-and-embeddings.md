@@ -6,7 +6,7 @@ You will understand how ContextEdge calls **language models** through **LiteLLM*
 
 ## Business picture
 
-Machines read tickets faster than humans, but their output must be **reviewable**. The platform uses models to **summarize**, **classify**, **cluster semantically**, and **propose structure** (steps, root cause, outcomes). Cheap or fast models can triage; stronger models can reconstruct narratives. Everything still sits under tenant isolation and human lifecycle states (draft episodes, playbook review)—AI suggests; governance approves.
+AI reads your tickets and messages faster than any human—but everything it proposes goes through human review before it becomes trusted knowledge. The platform uses AI to **summarize** incoming evidence, **sort it by relevance**, **group similar items together**, and **reconstruct the story** of what happened (symptoms, steps tried, root cause, outcome). Lighter models handle quick triage; more capable models reconstruct full incident narratives. Every AI output starts as a draft: reviewers see exactly what the AI suggested, can correct it, and only then promote it into the organization's knowledge base. Tenant isolation and governance controls stay in place at every step—AI suggests, humans approve.
 
 ## Technical walkthrough
 
@@ -20,11 +20,65 @@ Machines read tickets faster than humans, but their output must be **reviewable*
 
 5. **Episode reconstruction** — `ai/extractors/episode_extractor.py` `reconstruct_episode` sends ordered evidence text through a large structured prompt; output is a list of episodes with steps and confidence. `episode_service.create_episodes_from_evidence` persists `Episode` and `EpisodeStep` rows.
 
-6. **Other extractors** — `ai/extractors/pattern_extractor.py` and `identity_extractor.py` (pattern and identity flows) follow the same “prompt + JSON” style where used by services.
+6. **Other extractors** — `ai/extractors/pattern_extractor.py` and `identity_extractor.py` (pattern and identity flows) follow the same "prompt + JSON" style where used by services.
 
 7. **Contradiction scanning** — `contradiction_service.py` uses `llm_complete_json` to compare playbook steps to KB-style evidence and may add graph edges via `add_contradicts_edge`.
 
 8. **Configuration** — Model names and keys come from `config.py` / environment (documented in setup and runbook); changing models is an ops concern, not a code change.
+
+## Example: Acme VPN data at this stage
+
+**Input — evidence text sent to the relevance classifier**
+
+```json
+{
+  "evidence_id": "ev-a1b2c3",
+  "title": "VPN connection drops after Windows update KB5032190",
+  "body": "Users reporting VPN disconnects since patch Tuesday. Gateway: vpn-gw-east-01. Error: AUTH_CERT_EXPIRED."
+}
+```
+
+**Output — relevance classification**
+
+```json
+{
+  "classification": "operational",
+  "confidence": 0.94,
+  "reasoning": "Describes a specific infrastructure issue with affected systems, error codes, and user impact."
+}
+```
+
+**Input — evidence batch sent to the episode reconstructor**
+
+Multiple evidence items from the same incident are assembled in time order and sent to a language model:
+
+```json
+{
+  "evidence_items": [
+    { "evidence_id": "ev-a1b2c3", "source": "jira", "text": "VPN connection drops after Windows update KB5032190..." },
+    { "evidence_id": "ev-d4e5f6", "source": "teams", "text": "Thread: engineers discuss AUTH_CERT_EXPIRED on vpn-gw-east-01..." },
+    { "evidence_id": "ev-g7h8i9", "source": "email", "text": "Root cause: gateway certificate invalidated by new patch chain..." }
+  ]
+}
+```
+
+**Output — proposed episode (draft, pending human review)**
+
+```json
+{
+  "title": "Corporate VPN authentication failure after KB5032190",
+  "confidence": 0.87,
+  "steps": [
+    { "order": 1, "type": "complaint", "text": "Users report VPN drops post-patch Tuesday", "evidence_ref": "ev-a1b2c3" },
+    { "order": 2, "type": "diagnostic", "text": "Checked gateway logs — AUTH_CERT_EXPIRED errors", "evidence_ref": "ev-d4e5f6" },
+    { "order": 3, "type": "failed_attempt", "text": "Restarted VPN service — no improvement", "evidence_ref": "ev-d4e5f6" },
+    { "order": 4, "type": "remediation", "text": "Renewed gateway certificate via internal CA", "evidence_ref": "ev-g7h8i9" },
+    { "order": 5, "type": "outcome", "text": "VPN restored for all affected users", "evidence_ref": "ev-g7h8i9" }
+  ]
+}
+```
+
+Every proposed step links back to the evidence that supports it, so reviewers can verify the AI's interpretation before promoting the episode.
 
 ## Design decisions
 
@@ -50,7 +104,7 @@ Machines read tickets faster than humans, but their output must be **reviewable*
 
 ## Acme VPN incident (this layer)
 
-The classifier marks VPN tickets as **operational**; embedding groups them near past “certificate expiry” evidence; `reconstruct_episode` proposes one episode titled **Corporate VPN authentication failure** with ordered steps from Jira + Teams + mail, leaving `reviewer_state` pending human approval.
+The classifier marks VPN tickets as **operational**; embedding groups them near past "certificate expiry" evidence; `reconstruct_episode` proposes one episode titled **Corporate VPN authentication failure** with ordered steps from Jira + Teams + mail, leaving `reviewer_state` pending human approval.
 
 ## Further reading
 

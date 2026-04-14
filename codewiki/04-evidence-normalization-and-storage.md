@@ -6,7 +6,11 @@ You will learn how **raw** connector payloads become **evidence items** queryabl
 
 ## Business picture
 
-Raw dumps from tools are too noisy and too large to expose directly to analysts. The platform copies them into a durable **raw** record, then produces a **clean row**: title, body, type, hashes, and links back to the source. Large payloads are offloaded to blob storage so the database stays fast. Duplicate emails or ticket updates should collapse to one logical evidence row when the **meaningful text** matches, so search results stay trustworthy.
+Raw data flowing in from connected tools — ticketing systems, chat platforms, email — arrives in inconsistent formats, with duplicates and oversized payloads. If exposed directly, analysts would waste time sifting through noise instead of resolving incidents.
+
+This stage solves that problem. It transforms every raw payload into a **clean, searchable evidence record** with a consistent title, body, source link, and content fingerprint. Duplicates are automatically collapsed: if three Jira tickets describe the same VPN outage in the same words, analysts see **one** trustworthy result, not three. Large payloads are moved to cheaper blob storage so the main database stays fast and backups stay small.
+
+The outcome: analysts can trust that search results are complete, duplicate-free, and up to date — regardless of which tool the data originally came from.
 
 ## Technical walkthrough
 
@@ -22,9 +26,57 @@ Raw dumps from tools are too noisy and too large to expose directly to analysts.
 
 6. **Access policy** — Evidence rows may carry `access_policy_id`; search and GET routes filter using `resolve_excluded_access_policy_ids` (see [05-search-hybrid-and-access.md](./05-search-hybrid-and-access.md)).
 
+## Example: Acme VPN data at this stage
+
+**Input — raw evidence object from the Jira connector**
+
+```json
+{
+  "raw_id": "raw-7f3a1b",
+  "tenant_id": "acme-corp",
+  "source_id": "src-jira-01",
+  "external_id": "JIRA-4521",
+  "content_hash": "sha256:9f3a2b4c...",
+  "raw_payload": {
+    "key": "JIRA-4521",
+    "fields": {
+      "summary": "VPN connection drops after Windows update KB5032190",
+      "description": "Users reporting VPN disconnects since patch Tuesday. Gateway: vpn-gw-east-01. Error: AUTH_CERT_EXPIRED. Reported by jsmith@acme.com.",
+      "priority": { "name": "High" },
+      "created": "2026-03-15T09:23:00.000+0000"
+    }
+  }
+}
+```
+
+**Processing — normalize, deduplicate, embed**
+
+The worker extracts a clean title and body, computes a normalization hash (based on the meaningful text, not the raw JSON wrapper), and checks whether an evidence item with the same hash already exists. If JIRA-4522 contains effectively the same text, it is deduplicated against this record. An embedding vector is generated for semantic search.
+
+**Output — normalized evidence item**
+
+```json
+{
+  "evidence_id": "ev-a1b2c3",
+  "tenant_id": "acme-corp",
+  "domain_id": "vpn-connectivity",
+  "source_id": "src-jira-01",
+  "external_id": "JIRA-4521",
+  "title": "VPN connection drops after Windows update KB5032190",
+  "body_text": "Users reporting VPN disconnects since patch Tuesday. Gateway: vpn-gw-east-01. Error: AUTH_CERT_EXPIRED. Reported by jsmith@acme.com.",
+  "body_summary": "Multiple users report VPN disconnects following patch Tuesday. AUTH_CERT_EXPIRED on vpn-gw-east-01.",
+  "content_hash": "sha256:b7d4e1...",
+  "relevance_state": "unclassified",
+  "embedding": [0.023, -0.041, 0.018, "... 3072 dimensions ..."],
+  "canonical_entity_refs": []
+}
+```
+
+Note: `canonical_entity_refs` is empty at this point. Identity resolution (see [12-identity-resolution-and-thread-hydration.md](./12-identity-resolution-and-thread-hydration.md)) populates it shortly after.
+
 ## Design decisions
 
-- **Two hashes (raw canonical vs normalized body)** — *Why:* raw dedupe prevents storing identical upstream snapshots twice; normalized dedupe aligns with “same operational meaning” for analysts. *Tradeoff:* two concepts to document; edge cases if titles differ but bodies match.
+- **Two hashes (raw canonical vs normalized body)** — *Why:* raw dedupe prevents storing identical upstream snapshots twice; normalized dedupe aligns with "same operational meaning" for analysts. *Tradeoff:* two concepts to document; edge cases if titles differ but bodies match.
 
 - **Offload large JSON to object storage** — *Why:* keeps Postgres row size predictable; backups and replication cheaper. *Tradeoff:* normalize path depends on object store availability; `load_raw_payload` errors surface as worker failures.
 

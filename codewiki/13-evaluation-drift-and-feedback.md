@@ -6,7 +6,13 @@ You will understand how ContextEdge measures retrieval quality via **offline eva
 
 ## Business picture
 
-Playbooks that were accurate six months ago may no longer match the way incidents present today—software versions change, workarounds expire, and field teams learn better steps. ContextEdge tracks this in two complementary loops. **Offline evaluation** replays historical cases against the current retrieval pipeline to catch regressions before they reach production. **Drift detection** continuously monitors approved playbooks for signs of staleness (past expiry, lack of validation, or a spike in negative runtime feedback). When runtime callers report that a match was wrong or a step was ineffective, that **retrieval feedback** feeds directly into drift scoring—closing the gap between offline benchmarks and live performance.
+Playbooks that were accurate six months ago may not match how incidents present today. Software versions change, workarounds expire, and field teams discover better steps. Without continuous quality checks, outdated guidance quietly degrades every recommendation the system makes.
+
+ContextEdge measures retrieval quality, detects when playbooks go stale, and feeds real-world outcome signals back into the system — so your operational knowledge stays current without manual monitoring. Three capabilities work together:
+
+- **Offline evaluation** replays historical cases against the current retrieval pipeline to catch accuracy regressions before they reach production. If a recent change causes the wrong playbook to rank first, the evaluation run surfaces it.
+- **Drift detection** continuously monitors approved playbooks for signs of staleness — an expiry date that has passed, a long gap since the last review, or a pattern of negative feedback from field teams. Stale playbooks are flagged for review or automatically removed from results.
+- **Retrieval feedback** closes the loop: when a team member reports that a recommended playbook was wrong or a step no longer works, that signal feeds directly into drift scoring. Operators do not need to manually flag each affected playbook — the system connects the dots on the next scheduled scan.
 
 ## Technical walkthrough
 
@@ -23,7 +29,7 @@ Playbooks that were accurate six months ago may no longer match the way incident
   4. Writes `top1_accuracy`, per-case hit/miss detail, and `completed` into `run.results`.
   5. On any exception, sets `status="failed"` and stores the error in `results`.
 
-- The `run_evaluation` Celery task in `workers/evaluation_tasks.py` wraps this in an async runner with up to 2 retries and a 120-second delay, so evaluation jobs survive transient DB or provider hiccups.
+- The `run_evaluation` Celery task in `workers/evaluation_tasks.py` wraps this in an async runner with up to 2 retries and a 120-second delay, so evaluation jobs survive transient database or provider hiccups.
 
 ### Drift detection
 
@@ -59,6 +65,85 @@ Both tasks are wired into Celery Beat via `celery_app.beat_schedule`; see [08-wo
 - `drift_service.list_drift_alerts` queries this table's `feedback_type` and recency when scoring negative feedback signals.
 
 This means a pattern of bad runtime outcomes surfaces in the next scheduled drift pass—operators do not need to manually flag each affected playbook.
+
+## Example: Acme VPN data at this stage
+
+**Input — evaluation dataset curated by Acme's reviewer**
+
+```json
+{
+  "dataset_id": "eval-ds-001",
+  "tenant_id": "acme-corp",
+  "name": "VPN domain gold set — Q1 2026",
+  "cases": [
+    {
+      "symptoms": ["VPN authentication failure", "AUTH_CERT_EXPIRED"],
+      "entities": ["vpn-gw-east-01"],
+      "context": "Post-patch Tuesday",
+      "expected_playbook_stable_key": "vpn-cert-rotation"
+    },
+    {
+      "symptoms": ["VPN slow connection", "high latency"],
+      "entities": ["vpn-gw-west-02"],
+      "context": "No recent patches",
+      "expected_playbook_stable_key": "vpn-capacity-check"
+    },
+    {
+      "symptoms": ["Cannot connect to VPN", "DNS resolution failure"],
+      "entities": ["vpn-gw-east-01"],
+      "context": "DNS misconfiguration reported",
+      "expected_playbook_stable_key": "vpn-dns-troubleshoot"
+    }
+  ]
+}
+```
+
+**Output — evaluation run results**
+
+```json
+{
+  "evaluation_run_id": "eval-run-001",
+  "dataset_id": "eval-ds-001",
+  "status": "completed",
+  "results": {
+    "top1_accuracy": 0.78,
+    "cases": [
+      { "case_index": 0, "expected": "vpn-cert-rotation", "top_result": "vpn-cert-rotation", "hit": true },
+      { "case_index": 1, "expected": "vpn-capacity-check", "top_result": "vpn-cert-rotation", "hit": false },
+      { "case_index": 2, "expected": "vpn-dns-troubleshoot", "top_result": "vpn-cert-rotation", "hit": false }
+    ]
+  },
+  "completed_at": "2026-04-01T04:15:00Z"
+}
+```
+
+Cases 1 and 2 are mismatches: the VPN certificate playbook is ranking too broadly. This tells the reviewer to narrow trigger conditions or improve the competing playbooks' evidence links.
+
+**Output — drift alerts from scheduled scan**
+
+```json
+{
+  "alerts": [
+    {
+      "playbook_id": "pb-r1s2t3",
+      "title": "VPN Certificate Rotation After Patch Tuesday",
+      "issues": ["high_negative_feedback_3"],
+      "severity": "medium",
+      "detail": "3 wrong_match feedback events in the past 30 days"
+    },
+    {
+      "playbook_id": "pb-old-vpn",
+      "title": "Legacy VPN Reconnect Steps",
+      "issues": ["past_expiry", "not_validated_in_180_days"],
+      "severity": "high",
+      "detail": "Expired 2026-02-01; last validated 2025-10-15"
+    }
+  ],
+  "expired_transitions": 1
+}
+```
+
+The legacy playbook is automatically transitioned from `approved` to `expired` and removed from runtime results. The certificate rotation playbook stays active but appears in the review queue for the knowledge manager to address the negative feedback.
 
 ## Design decisions
 

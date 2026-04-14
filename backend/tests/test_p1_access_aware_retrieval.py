@@ -102,6 +102,7 @@ async def test_rank_playbooks_passes_excluded_policies_for_non_admin():
     with (
         patch("contextedge.search.hybrid_ranker._latest_published_version_id", AsyncMock(return_value=uuid4())),
         patch("contextedge.search.hybrid_ranker._graph_score_for_playbook", AsyncMock(return_value=0.0)),
+        patch("contextedge.search.hybrid_ranker._negative_penalty_for_playbook", AsyncMock(return_value=0.0)),
         patch("contextedge.search.hybrid_ranker.resolve_identity_ids_for_terms", AsyncMock(return_value=set())),
         patch("contextedge.search.hybrid_ranker.search_playbooks_fts", AsyncMock(return_value=[])),
         patch("contextedge.search.hybrid_ranker.generate_embedding", AsyncMock(return_value=[0.1, 0.2])),
@@ -142,6 +143,7 @@ async def test_rank_playbooks_admin_sees_all_evidence():
     with (
         patch("contextedge.search.hybrid_ranker._latest_published_version_id", AsyncMock(return_value=uuid4())),
         patch("contextedge.search.hybrid_ranker._graph_score_for_playbook", AsyncMock(return_value=0.0)),
+        patch("contextedge.search.hybrid_ranker._negative_penalty_for_playbook", AsyncMock(return_value=0.0)),
         patch("contextedge.search.hybrid_ranker.resolve_identity_ids_for_terms", AsyncMock(return_value=set())),
         patch("contextedge.search.hybrid_ranker.search_playbooks_fts", AsyncMock(return_value=[])),
         patch("contextedge.search.hybrid_ranker.generate_embedding", AsyncMock(return_value=[0.1, 0.2])),

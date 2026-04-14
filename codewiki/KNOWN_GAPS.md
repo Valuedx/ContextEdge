@@ -47,6 +47,10 @@ The current frontend notification experience is the header dropdown in `AppHeade
 
 `apply_retention_policy` in `retention_service.py` is intended to be invoked from a scheduled job or operator script. If nothing calls it, tenant retention defaults have no effect yet.
 
+## Graph Explorer is read-only
+
+The Graph Explorer page (`/graph-explorer`) provides interactive visualization and traversal of the context graph — statistics, subgraph rendering via React Flow, and BFS neighbor browsing — but does not yet support creating, editing, or deleting graph edges from the UI. All graph mutations happen through backend services: builder functions called from pattern discovery, playbook generation, contradiction scans, identity linking, and episode graph construction.
+
 ## Historical note: sync Celery tasks
 
 Sync tasks were previously commented out in `sync_tasks.py`, which broke imports used by `api/v1/sync.py` and `api/v1/sources.py`. They are implemented again; use a worker configuration that consumes `sync` as described above.

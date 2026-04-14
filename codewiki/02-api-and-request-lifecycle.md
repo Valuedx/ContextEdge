@@ -6,7 +6,7 @@ You will see how an HTTP call moves through ContextEdge: which middleware runs f
 
 ## Business picture
 
-Every customer (**tenant**) expects their data isolated and their actions attributable. When someone (or an integration) hits the API, the system must know **who** they are, **which tenant** they belong to, and—when data changes—leave a trail that compliance and operations can follow. Optional headers tie separate calls into one **correlation** story for support and debugging.
+Every customer expects their data kept strictly separate and every action attributable to a real person or integration. When anyone calls the API, the platform immediately identifies **who** they are and **which organization** they belong to. Any change to data automatically leaves an audit trail that compliance officers and operations teams can review later. Optional tracking headers let support staff link related calls into a single story—useful during an incident investigation or a routine compliance check.
 
 ## Technical walkthrough
 
@@ -18,11 +18,52 @@ Every customer (**tenant**) expects their data isolated and their actions attrib
 
 4. **Per-route authentication** — Routers use FastAPI `Depends`: `get_current_user` in `deps.py` is the gate for protected endpoints. It accepts either `Authorization: Bearer` (JWT) or `X-Service-Token`. Service tokens are resolved from `settings.service_tokens_json` via `service_token_context` in `security_tokens.py`. The returned `CurrentUser` carries `tenant_id`, roles, workspace allowlists, and optional `allowed_domain_ids` for service principals.
 
-5. **Explicit audit from handlers** — Many mutations also call `log_audit_event` in `middleware/audit.py`, which writes `AuditLog` through the **async** session and merges request/correlation IDs from `current_request_context()`. This complements the middleware’s generic HTTP audit row.
+5. **Explicit audit from handlers** — Many mutations also call `log_audit_event` in `middleware/audit.py`, which writes `AuditLog` through the **async** session and merges request/correlation IDs from `current_request_context()`. This complements the middleware's generic HTTP audit row.
 
-6. **Router surface** — `api/v1/__init__.py` mounts routers: auth, tenants, workspaces, domains, users, audit logs, sources, sync runs, evidence, threads, episodes, patterns, playbooks, sessions, runtime, evaluations, policies, drift, execution, etc. Each module owns a slice of the product API; behavior lives in `services/` not in fat routers.
+6. **Router surface** — `api/v1/__init__.py` mounts routers: auth, tenants, workspaces, domains, users, audit logs, sources, sync runs, evidence, threads, episodes, patterns, playbooks, sessions, runtime, evaluations, policies, drift, execution, graph, etc. Each module owns a slice of the product API; behavior lives in `services/` not in fat routers.
 
 7. **`middleware/auth.py`** — Today this file holds **SSO/OIDC/SAML stubs** and placeholders for future authlib wiring; it is **not** the primary JWT path. Human and service authentication for the API are implemented in `deps.py` and `request_context.py`.
+
+## Example: Acme VPN data at this stage
+
+When an Acme domain admin calls the API to trigger a sync or update evidence policy, the request lifecycle produces traceability at every step.
+
+**Input — HTTP request from Acme's domain admin**
+
+```
+POST /api/v1/sources/src-jira-01/sync
+Authorization: Bearer eyJhbGciOi...
+X-Correlation-ID: corr-vpn-incident-2026-03
+```
+
+**Middleware extracts and binds context**
+
+```json
+{
+  "request_id": "req-8a4f2c",
+  "correlation_id": "corr-vpn-incident-2026-03",
+  "tenant_id": "acme-corp",
+  "user_id": "usr-admin-01",
+  "email": "admin@acme.com",
+  "roles": ["domain_admin"]
+}
+```
+
+**Output — audit log row (written after response)**
+
+```json
+{
+  "audit_log_id": "aud-3b7e9d",
+  "tenant_id": "acme-corp",
+  "actor_id": "usr-admin-01",
+  "action": "POST /api/v1/sources/src-jira-01/sync",
+  "correlation_id": "corr-vpn-incident-2026-03",
+  "status_code": 202,
+  "timestamp": "2026-03-15T10:05:00Z"
+}
+```
+
+Every subsequent call in this incident can share the same `correlation_id`, letting auditors trace the full chain of admin actions during the VPN outage.
 
 ## Design decisions
 
@@ -32,7 +73,7 @@ Every customer (**tenant**) expects their data isolated and their actions attrib
 
 - **Service tokens in config JSON** — *Why:* simple ops model for integrations without a full service-user table. *Tradeoff:* rotation and scale-out token management are operator responsibilities (see deployment docs).
 
-- **Context variables for request IDs** — *Why:* services and audit code stay testable and avoid threading `Request` through every function. *Tradeoff:* code must run inside the middleware’s context binding (normal for HTTP handlers).
+- **Context variables for request IDs** — *Why:* services and audit code stay testable and avoid threading `Request` through every function. *Tradeoff:* code must run inside the middleware's context binding (normal for HTTP handlers).
 
 ## Code map
 
@@ -49,7 +90,7 @@ Every customer (**tenant**) expects their data isolated and their actions attrib
 
 ## Acme VPN incident (this layer)
 
-When an Acme **domain admin** patches evidence access policy or triggers sync from the dashboard, `TenantContextMiddleware` tags the call with correlation IDs; `get_current_user` ensures the admin’s **tenant** matches the evidence tenant; `RequestAuditMiddleware` and `log_audit_event` together support the question “who changed visibility on VPN-related tickets after the incident?”
+When an Acme **domain admin** patches evidence access policy or triggers sync from the dashboard, `TenantContextMiddleware` tags the call with correlation IDs; `get_current_user` ensures the admin's **tenant** matches the evidence tenant; `RequestAuditMiddleware` and `log_audit_event` together support the question "who changed visibility on VPN-related tickets after the incident?"
 
 ## Further reading
 

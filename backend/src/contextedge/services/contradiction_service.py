@@ -209,6 +209,7 @@ async def scan_contradictions(
                     playbook.id,
                     item.id,
                     metadata={"contradiction_id": str(contradiction.id)},
+                    domain_id=playbook.domain_id,
                 )
                 await append_operational_event(
                     db,

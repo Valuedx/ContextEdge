@@ -8,7 +8,7 @@ from contextedge.models.episode import Episode
 from contextedge.models.pattern import NegativeKnowledgeItem, Pattern, PatternEvidenceLink
 from contextedge.models.playbook import Playbook
 from contextedge.models.tenant import User
-from contextedge.graph.builder import link_node_to_identities
+from contextedge.graph.builder import ensure_edge, link_node_to_identities
 from contextedge.services.identity_service import identity_ids_from_refs
 from contextedge.services.pattern_service import create_pattern_from_episodes
 from contextedge.services.playbook_service import create_playbook_version
@@ -175,6 +175,14 @@ def generate_playbook_candidate(self, pattern_id: str, tenant_id: str):
             playbook.id,
             identity_ids,
             edge_type="references_identity",
+            domain_id=pattern.domain_id,
+        )
+        await ensure_edge(
+            db, tid,
+            "playbook", playbook.id,
+            "pattern", pattern.id,
+            "derived_from",
+            domain_id=pattern.domain_id,
         )
         await db.refresh(playbook)
         return {"status": "ok", "playbook_id": str(playbook.id), "stable_key": stable_key}

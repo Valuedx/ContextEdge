@@ -84,6 +84,7 @@ Prefixes are relative to `/api/v1`.
 | `/evaluations` | evaluations | Datasets and evaluation runs |
 | `/policies` | policies | Tenant policies |
 | `/drift` | drift | Drift alerts |
+| `/graph` | graph | Graph traversal, subgraph visualization, aggregate statistics |
 
 ---
 
@@ -225,6 +226,53 @@ The Celery drift payload includes:
 
 ---
 
+## Graph
+
+Base path: `/api/v1/graph`.
+
+Implementation: `contextedge.api.v1.graph`.
+
+These endpoints expose the context graph for interactive exploration and visualization. All are tenant-scoped via the authenticated user.
+
+### Endpoints
+
+| Method | Path | Description |
+| --- | --- | --- |
+| `GET` | `/neighbors` | BFS traversal returning neighboring nodes up to `max_depth` hops |
+| `GET` | `/subgraph/{entity_type}/{entity_id}` | Returns nodes and edges around any entity for visualization |
+| `GET` | `/stats` | Aggregate edge-type and node-type counts for the tenant |
+
+### `GET /graph/neighbors`
+
+| Parameter | Type | Required | Description |
+| --- | --- | --- | --- |
+| `node_type` | string | yes | Type of origin node (e.g. `pattern`, `playbook`, `episode`) |
+| `node_id` | UUID | yes | ID of origin node |
+| `edge_type` | string | no | Filter to a specific edge type |
+| `max_depth` | int (1–3) | no | BFS traversal depth, default 1 |
+| `domain_id` | UUID | no | Scope to a domain (includes domain-less edges) |
+
+Returns an array of objects: `{node_type, node_id, edge_type, weight, direction, depth}`.
+
+### `GET /graph/subgraph/{entity_type}/{entity_id}`
+
+| Parameter | Type | Required | Description |
+| --- | --- | --- | --- |
+| `max_depth` | int (1–3) | no | BFS traversal depth, default 1 |
+| `domain_id` | UUID | no | Scope to a domain |
+
+Returns `{nodes: [{type, id, title}], edges: [{source, target, type, weight}]}`. Node `source`/`target` strings use the composite format `type:id` suitable for React Flow rendering.
+
+### `GET /graph/stats`
+
+| Parameter | Type | Required | Description |
+| --- | --- | --- | --- |
+| `domain_id` | UUID | no | Scope to a domain |
+
+Returns `{total_edges, edge_type_counts, node_type_counts}`. Node counts are deduplicated across source and target roles using a `UNION ALL` with distinct counts.
+
+---
+
 ## Observability
 
 HTTP endpoints:
@@ -243,6 +291,7 @@ HTTP endpoints:
 | Auth dependency | `contextedge.deps` |
 | Runtime router | `contextedge.api.v1.runtime` |
 | Policies router | `contextedge.api.v1.policies` |
+| Graph router | `contextedge.api.v1.graph` |
 | Schemas | `contextedge.schemas.*` |
 
 When you add or rename routers, update this file and the document map in [TECHNICAL_BLUEPRINT.md](TECHNICAL_BLUEPRINT.md).

@@ -6,9 +6,17 @@ After reading this page, a business or product stakeholder should know what Cont
 
 ## Business picture
 
-ContextEdge is an operational memory system. It collects evidence from systems where work already happens, turns that evidence into reusable organizational memory, and serves approved guidance back to people and integrations with governance, traceability, and retention controls.
+Every organization already generates the knowledge it needs to solve recurring problems—it just lives scattered across tickets, chat threads, emails, and wikis. ContextEdge turns that scattered activity into a **managed operational memory** that grows more valuable over time.
 
-The product is easiest to understand as a chain of business capabilities:
+The core value chain is:
+
+1. **Capture** — Automatically collect evidence from the systems teams already use, with no manual data entry.
+2. **Organize** — Resolve duplicates, link related people and assets, and build a single source of truth per customer.
+3. **Learn** — Surface what happened, what keeps happening, and what should never be repeated.
+4. **Guide** — Publish reviewed, approved playbooks so the right answer appears the next time a similar problem strikes.
+5. **Trust** — Maintain full traceability, human review gates, and retention controls so every recommendation can be explained and audited.
+
+The result: faster incident resolution, fewer repeat mistakes, and a clear audit trail that satisfies compliance requirements—all without asking teams to change how they work today.
 
 | Reader | Main question | Best next page |
 | --- | --- | --- |
@@ -33,6 +41,29 @@ The product is easiest to understand as a chain of business capabilities:
 6. **Support live resolution and controlled execution** - Responders can search for evidence, open sessions, run runtime match, inspect explain payloads, and process human approval requests before higher-risk automation proceeds. In code: `backend/src/contextedge/services/runtime_service.py`, `backend/src/contextedge/services/session_service.py`, `backend/src/contextedge/services/execution_service.py`, `frontend/src/app/(dashboard)/runtime/page.tsx`, `frontend/src/app/(dashboard)/sessions/page.tsx`, `frontend/src/app/(dashboard)/execution/page.tsx`.
 
 7. **Keep the memory healthy over time** - Evaluations, drift signals, notifications, audit logs, and retention policies show whether the memory is still trustworthy, still current, and still compliant. In code: `backend/src/contextedge/services/evaluation_service.py`, `backend/src/contextedge/services/drift_service.py`, `backend/src/contextedge/services/notification_service.py`, `backend/src/contextedge/services/retention_service.py`.
+
+## Example: Acme VPN data at this stage
+
+This section shows the kind of information that flows through each capability layer for one incident.
+
+**Starting point** — a VPN outage generates activity across three systems:
+
+| System | What happens |
+| --- | --- |
+| Jira | Ticket JIRA-4521: "VPN connection drops after Windows update KB5032190" filed by jsmith@acme.com |
+| Teams | 12-message thread in #vpn-support: engineers discuss AUTH_CERT_EXPIRED errors on vpn-gw-east-01 |
+| Email | Engineer sends root-cause note: "Gateway certificate invalidated by new patch chain" |
+
+**What ContextEdge produces from this activity:**
+
+| Capability | Output |
+| --- | --- |
+| Evidence normalization | 3 raw records collapse into 2 unique evidence items (Jira ticket + Teams thread; email deduplicated with ticket) |
+| Identity resolution | "jsmith," "John Smith," and "J. Smith (IT)" resolve to one canonical person; "KB5032190" and "November patch" resolve to one canonical patch |
+| Episode reconstruction | One structured episode: "Corporate VPN auth failure after KB5032190" with 5 ordered steps from complaint through remediation |
+| Pattern detection | Linked to existing pattern: "Certificate expiry after Windows cumulative updates" (7 prior episodes) |
+| Playbook governance | Candidate playbook "VPN Certificate Rotation After Patch Tuesday" enters review queue |
+| Runtime retrieval | When the next similar outage occurs, the approved playbook ranks first with 92% confidence |
 
 ## Design decisions
 

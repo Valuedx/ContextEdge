@@ -18,25 +18,7 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import dagre from "dagre";
-
-// --- Node Types/Styles ---
-
-const nodeStyles: Record<string, any> = {
-  pattern: "bg-indigo-900 border-indigo-500 text-white font-bold shadow-[0_0_15px_rgba(99,102,241,0.5)]",
-  episode: "bg-purple-900 border-purple-500 text-slate-100",
-  trigger: "bg-amber-900 border-amber-500 text-amber-100",
-  entity: "bg-emerald-900 border-emerald-500 text-emerald-100",
-  error: "bg-rose-900 border-rose-500 text-rose-100",
-  root_cause: "bg-orange-900 border-orange-500 text-orange-100",
-};
-
-const edgeStyles: Record<string, any> = {
-  belongs_to: { stroke: "#818cf8", strokeDasharray: "5 5" },
-  trigger_of: { stroke: "#fbbf24" },
-  involved_in: { stroke: "#34d399" },
-  discovered_in: { stroke: "#fb7185" },
-  causes: { stroke: "#fb923c" },
-};
+import { getNodeClassName, edgeColors, nodeColors } from "@/components/graph/graph-constants";
 
 // --- Dagre Layout ---
 
@@ -91,21 +73,24 @@ export function PatternGraph({ patternId }: { patternId: string }) {
         id: `${n.type}:${n.id}`,
         data: { label: n.title || n.type.toUpperCase() },
         className: `px-4 py-2 border-2 rounded-lg text-sm transition-all hover:scale-105 ${
-          nodeStyles[n.type] || "bg-slate-800 border-slate-600"
-        }`,
+          getNodeClassName(n.type)
+        }${n.type === "pattern" ? " font-bold shadow-[0_0_15px_rgba(99,102,241,0.5)]" : ""}`,
         type: "default",
       }));
 
-      const rawEdges: Edge[] = data.edges.map((e: any, i: number) => ({
-        id: `e-${i}`,
-        source: e.source,
-        target: e.target,
-        label: e.type.replace("_", " "),
-        labelStyle: { fill: "#94a3b8", fontSize: "10px", fontWeight: 500 },
-        style: edgeStyles[e.type] || { stroke: "#475569" },
-        animated: true,
-        markerEnd: { type: MarkerType.ArrowClosed, color: (edgeStyles[e.type] || { stroke: "#475569" }).stroke },
-      }));
+      const rawEdges: Edge[] = data.edges.map((e: any, i: number) => {
+        const ec = edgeColors[e.type] || { stroke: "#475569" };
+        return {
+          id: `e-${i}`,
+          source: e.source,
+          target: e.target,
+          label: e.type.replace(/_/g, " "),
+          labelStyle: { fill: "#94a3b8", fontSize: "10px", fontWeight: 500 },
+          style: { stroke: ec.stroke, strokeDasharray: ec.dasharray },
+          animated: true,
+          markerEnd: { type: MarkerType.ArrowClosed, color: ec.stroke },
+        };
+      });
 
       const { nodes: layoutedNodes, edges: layoutedEdges } = getLayoutedElements(
         rawNodes,
@@ -136,12 +121,12 @@ export function PatternGraph({ patternId }: { patternId: string }) {
         <Panel position="top-left" className="bg-slate-900/90 border border-slate-700 p-3 rounded-lg text-xs space-y-2 backdrop-blur-sm shadow-xl">
            <div className="font-semibold text-slate-400 mb-1 flex items-center gap-1.5"><Network className="h-3 w-3" /> Map Legend</div>
            <div className="grid grid-cols-2 gap-x-4 gap-y-1.5">
-              <div className="flex items-center gap-2"><div className="w-2.5 h-2.5 rounded-sm bg-indigo-500" /> Pattern</div>
-              <div className="flex items-center gap-2"><div className="w-2.5 h-2.5 rounded-sm bg-purple-500" /> Episode</div>
-              <div className="flex items-center gap-2"><div className="w-2.5 h-2.5 rounded-sm bg-amber-500" /> Trigger</div>
-              <div className="flex items-center gap-2"><div className="w-2.5 h-2.5 rounded-sm bg-emerald-500" /> Entity</div>
-              <div className="flex items-center gap-2"><div className="w-2.5 h-2.5 rounded-sm bg-rose-500" /> Error</div>
-              <div className="flex items-center gap-2"><div className="w-2.5 h-2.5 rounded-sm bg-orange-500" /> Cause</div>
+              {Object.entries(nodeColors).map(([type, c]) => (
+                <div key={type} className="flex items-center gap-2">
+                  <div className={`w-2.5 h-2.5 rounded-sm ${c.dot}`} />
+                  {type.replace(/_/g, " ").replace(/\b\w/g, (l) => l.toUpperCase())}
+                </div>
+              ))}
            </div>
         </Panel>
 

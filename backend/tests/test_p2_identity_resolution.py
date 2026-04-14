@@ -201,6 +201,7 @@ async def test_rank_playbooks_identity_signal_boosts_score():
         patch("contextedge.search.hybrid_ranker._latest_published_version_id", AsyncMock(return_value=uuid4())),
         patch("contextedge.search.hybrid_ranker._graph_score_for_playbook", AsyncMock(return_value=0.0)),
         patch("contextedge.search.hybrid_ranker._identity_score_for_playbook", AsyncMock(return_value=1.0)),
+        patch("contextedge.search.hybrid_ranker._negative_penalty_for_playbook", AsyncMock(return_value=0.0)),
         patch("contextedge.search.hybrid_ranker.resolve_identity_ids_for_terms", AsyncMock(return_value={uuid4()})),
     ):
         ranked = await rank_playbooks(

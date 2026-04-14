@@ -6,7 +6,11 @@ You will see how **evidence search** in the admin API uses PostgreSQL **full-tex
 
 ## Business picture
 
-Analysts type natural language: “VPN certificate expired.” The product should return relevant tickets and messages, but **not** evidence the user’s role is not allowed to see. When matching **approved playbooks** for automation or assistants, the same ideas apply: keyword hits matter, but so does **conceptual similarity**, recency, and how connected a playbook is to known entities—without surfacing **high-risk** procedures to callers who should only see safer tiers.
+Analysts type plain questions — "VPN certificate expired" — and expect back the most relevant tickets, messages, and documents. The platform delivers **ranked, access-controlled results**: not just keyword matches, but conceptually related evidence from across every connected tool.
+
+Behind the scenes, search combines keyword matching with meaning-based similarity, so results surface even when the analyst uses different words than the original source. At the same time, **access policies ensure analysts only see evidence they are authorized to view** — restricted items are silently excluded, never leaked as placeholders or counts.
+
+The same ranking engine powers **playbook matching** for automation and assistants. When the system needs to recommend a runbook, it weighs keyword relevance, conceptual similarity, how connected the playbook is to known infrastructure entities, and how recently the playbook was validated — then filters out procedures above the caller's authorized risk tier. The result: the right playbook surfaces for the right situation, with full transparency into why it ranked where it did.
 
 ## Technical walkthrough
 
@@ -29,16 +33,92 @@ Analysts type natural language: “VPN certificate expired.” The product shoul
 - For each playbook it resolves the **latest published** `PlaybookVersion` (skips if none).
 - **Keyword:** `search_playbooks_fts` scores titles/descriptions.
 - **Semantic:** `search_evidence_semantic_for_playbook` searches evidence linked to that **published** version.
-- **Graph:** `_graph_score_for_playbook` counts `GraphEdge` rows involving the playbook.
-- **Identity:** `_identity_score_for_playbook` when entity terms resolve to identity IDs via `identity_service.resolve_identity_ids_for_terms`.
+- **Graph:** `_graph_score_for_playbook` counts `GraphEdge` rows involving the playbook and blends in a **correlation co-occurrence boost** via `CorrelationEdge` — if the playbook's evidence overlaps with semantic search hits, the score increases. Both functions accept an optional `domain_id` so that domain-scoped ranking only considers edges in that domain (plus domain-less edges).
+- **Identity:** `_identity_score_for_playbook` counts identity graph edges matching the query's resolved identity IDs. Also accepts `domain_id` for scoped scoring.
+- **Negative penalty:** `_negative_penalty_for_playbook` computes a downward adjustment based on the number of `contradicts` graph edges and domain-scoped `NegativeKnowledgeItem` rows, capped at 1.0. This penalizes playbooks associated with contradictions or known-bad guidance.
 - Weights default via `RankingWeights` (keyword, semantic, graph, evidence quality, identity, recency, freshness, negative penalty).
 - Admins bypass certain access exclusions: `resolve_excluded_access_policy_ids` returns `None` when roles intersect `ADMIN_ROLES`.
+
+## Example: Acme VPN data at this stage
+
+**Input — analyst searches for VPN evidence**
+
+```
+GET /api/v1/evidence?query=VPN+certificate+expired&domain_id=vpn-connectivity
+Authorization: Bearer <analyst-token>
+```
+
+**Output — ranked evidence results (security-trimmed)**
+
+```json
+{
+  "results": [
+    {
+      "evidence_id": "ev-a1b2c3",
+      "title": "VPN connection drops after Windows update KB5032190",
+      "body_summary": "Multiple users report VPN disconnects following patch Tuesday. AUTH_CERT_EXPIRED on vpn-gw-east-01.",
+      "relevance_state": "operational",
+      "source_type": "jira_sm",
+      "fts_rank": 0.87
+    },
+    {
+      "evidence_id": "ev-d4e5f6",
+      "title": "Teams thread: VPN outage troubleshooting",
+      "body_summary": "Engineers confirmed AUTH_CERT_EXPIRED. Discussed certificate renewal steps.",
+      "relevance_state": "operational",
+      "source_type": "teams",
+      "fts_rank": 0.74
+    }
+  ],
+  "total": 2
+}
+```
+
+Evidence items with restricted access policies that the analyst's role does not cover are excluded from results — they do not appear at all, not even as placeholders.
+
+**Input — runtime match request for playbook ranking**
+
+```json
+{
+  "symptoms": ["VPN authentication failure", "users cannot connect"],
+  "entities": ["vpn-gw-east-01", "KB5034567"],
+  "context": "Post-patch Tuesday, multiple user reports"
+}
+```
+
+**Output — hybrid-ranked playbook matches**
+
+```json
+{
+  "matches": [
+    {
+      "playbook_id": "pb-r1s2t3",
+      "title": "VPN Certificate Rotation After Patch Tuesday",
+      "confidence": 0.92,
+      "breakdown": {
+        "keyword": 0.85,
+        "semantic": 0.94,
+        "graph": 0.88,
+        "identity": 0.80,
+        "recency": 0.95,
+        "freshness": 1.0,
+        "negative_penalty": 0.0
+      },
+      "evidence_trace": ["ev-a1b2c3", "ev-d4e5f6"],
+      "freshness": "current",
+      "risk_tier": "medium"
+    }
+  ]
+}
+```
+
+The `breakdown` field lets reviewers understand why a playbook ranked where it did — for example, high semantic similarity but lower keyword match because the analyst used different terms than the playbook title.
 
 ## Design decisions
 
 - **FTS columns + GIN (see migrations)** — *Why:* fast keyword retrieval at scale. *Tradeoff:* tsvector must be maintained on write/update.
 
-- **pgvector for semantics** — *Why:* “similar meaning” queries FTS misses. *Tradeoff:* embedding dimension (3072 in provider path) and index size; provider outages affect semantic leg.
+- **pgvector for semantics** — *Why:* "similar meaning" queries FTS misses. *Tradeoff:* embedding dimension (3072 in provider path) and index size; provider outages affect semantic leg.
 
 - **Hybrid vs single-signal** — *Why:* operational search is inherently multi-signal. *Tradeoff:* tuning weights is product-specific; explainability uses `breakdown` on `RankedPlaybook`.
 
@@ -53,7 +133,7 @@ Analysts type natural language: “VPN certificate expired.” The product shoul
 | Evidence HTTP | `backend/src/contextedge/api/v1/evidence.py` | `search_evidence`, `get_evidence`, `update_access_policy` | API |
 | Evidence FTS | `backend/src/contextedge/search/pg_fts.py` | `search_evidence_fts`, `search_playbooks_fts` | Query time |
 | Evidence semantic | `backend/src/contextedge/search/vector_search.py` | `search_evidence_semantic`, `search_evidence_semantic_for_playbook` | Query / rank |
-| Hybrid ranker | `backend/src/contextedge/search/hybrid_ranker.py` | `rank_playbooks`, `RankingWeights`, `RankedPlaybook` | Runtime / evaluation |
+| Hybrid ranker | `backend/src/contextedge/search/hybrid_ranker.py` | `rank_playbooks`, `RankingWeights`, `RankedPlaybook`, `_negative_penalty_for_playbook` | Runtime / evaluation |
 | Access policies | `backend/src/contextedge/search/access_control.py` | `resolve_excluded_access_policy_ids` | Retrieval |
 | Risk ordering | `backend/src/contextedge/search/risk_policy.py` | `risk_within_cap`, `playbook_risk_rank` | Runtime filter |
 | Runtime API | `backend/src/contextedge/api/v1/runtime.py` | (calls `rank_playbooks`) | HTTP |
@@ -61,7 +141,7 @@ Analysts type natural language: “VPN certificate expired.” The product shoul
 
 ## Acme VPN incident (this layer)
 
-A **knowledge manager** searches “VPN gateway”; FTS ranks Acme’s normalized tickets; an analyst without clearance for restricted policies sees fewer rows because `access_policy_id` matches excluded tenant policies. Runtime matching for an integration uses the same hybrid function with optional **domain** and **risk** caps so only appropriate VPN playbooks surface.
+A **knowledge manager** searches "VPN gateway"; FTS ranks Acme's normalized tickets; an analyst without clearance for restricted policies sees fewer rows because `access_policy_id` matches excluded tenant policies. Runtime matching for an integration uses the same hybrid function with optional **domain** and **risk** caps so only appropriate VPN playbooks surface.
 
 ## Further reading
 

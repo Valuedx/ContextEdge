@@ -352,7 +352,7 @@ async def generate_playbook(
     from contextedge.ai.generators.playbook_generator import generate_playbook_candidate
     from contextedge.services.playbook_service import create_playbook_version
     from contextedge.services.identity_service import identity_ids_from_refs
-    from contextedge.graph.builder import link_node_to_identities
+    from contextedge.graph.builder import ensure_edge, link_node_to_identities
 
     # 1. Fetch Pattern and Episodes
     q = select(Pattern).where(
@@ -428,6 +428,14 @@ async def generate_playbook(
             playbook.id,
             identity_ids,
             edge_type="references_identity",
+            domain_id=pattern.domain_id,
+        )
+        await ensure_edge(
+            db, user.tenant_id,
+            "playbook", playbook.id,
+            "pattern", pattern.id,
+            "derived_from",
+            domain_id=pattern.domain_id,
         )
 
         await db.commit()

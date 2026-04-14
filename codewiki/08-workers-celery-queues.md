@@ -6,7 +6,7 @@ You will understand which **background tasks** exist, how they map to **Redis qu
 
 ## Business picture
 
-Ingestion, AI, clustering, and health checks would make the API slow if everything ran in the browser request. **Workers** pick up jobs from a queue, process them with retries, and update the database. Some jobs run on a **schedule** (drift, contradiction scans) like a cron for the platform.
+Background processing ensures that heavy work like AI extraction, pattern detection, and health checks happens without slowing down the interface. When a user triggers an import or a new ticket arrives, the platform queues those jobs and returns immediately—users never wait for AI models or data crunching to finish. If something fails (an AI provider is temporarily down, a database hiccup, etc.), the system **retries automatically**. Some jobs also run on a **recurring schedule**—for example, checking whether playbooks have drifted from reality or whether knowledge-base articles contradict approved guidance—so the platform stays healthy around the clock without manual intervention.
 
 ## Technical walkthrough
 
@@ -57,6 +57,62 @@ flowchart TB
   CLU --> GPC[generate_playbook_candidate]
 ```
 
+## Example: Acme VPN data at this stage
+
+When Acme's VPN tickets are ingested, multiple background tasks fire in sequence. Here is the task chain for one evidence item:
+
+**Task 1 — Normalize evidence (extraction queue)**
+
+```json
+{
+  "task": "extraction_tasks.normalize_evidence",
+  "queue": "extraction",
+  "args": { "raw_id": "raw-7f3a1b" },
+  "result": "Created evidence item ev-a1b2c3"
+}
+```
+
+**Task 2 — Classify relevance (extraction queue, chained from normalize)**
+
+```json
+{
+  "task": "extraction_tasks.classify_relevance_task",
+  "queue": "extraction",
+  "args": { "evidence_id": "ev-a1b2c3" },
+  "result": "Classification: operational (confidence: 0.94)"
+}
+```
+
+**Task 3 — Correlate evidence (extraction queue, chained from normalize)**
+
+```json
+{
+  "task": "correlation_tasks.correlate_evidence",
+  "queue": "extraction",
+  "args": { "evidence_id": "ev-a1b2c3" },
+  "result": "Linked to ev-d4e5f6 (Teams thread) with confidence 0.78"
+}
+```
+
+**Scheduled task — Drift detection (evaluation queue, runs every 6 hours)**
+
+```json
+{
+  "task": "evaluation_tasks.detect_drift",
+  "queue": "evaluation",
+  "args": { "tenant_id": "all" },
+  "result": {
+    "tenants_scanned": 12,
+    "alerts": [
+      { "playbook_id": "pb-r1s2t3", "issues": ["high_negative_feedback_3"], "severity": "medium" }
+    ],
+    "expired_transitions": 2
+  }
+}
+```
+
+Each task runs independently and retries on failure, so a temporary AI provider outage during classification does not block evidence normalization or correlation from completing.
+
 ## Design decisions
 
 - **Multiple queues** — *Why:* isolate slow extraction from quick hydration; operators can scale worker pools per queue. *Tradeoff:* more processes to monitor.
@@ -84,7 +140,7 @@ flowchart TB
 
 ## Acme VPN incident (this layer)
 
-After Acme’s raws commit, **extraction** workers normalize and embed VPN evidence; **correlation** links the email RCA to tickets; **pattern** workers may later cluster episodes; **evaluation** beat jobs scan for drift between the new playbook and KB articles overnight.
+After Acme's raws commit, **extraction** workers normalize and embed VPN evidence; **correlation** links the email RCA to tickets; **pattern** workers may later cluster episodes; **evaluation** beat jobs scan for drift between the new playbook and KB articles overnight.
 
 ## Further reading
 

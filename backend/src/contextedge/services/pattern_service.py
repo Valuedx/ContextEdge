@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from contextedge.models.episode import Episode
 from contextedge.models.pattern import Pattern, PatternEvidenceLink
+from contextedge.graph.builder import persist_pattern_enrichment_edges
 from contextedge.services.memory_service import promote_pattern_memory
 
 
@@ -53,6 +54,18 @@ async def create_pattern_from_episodes(
         db.add(link)
 
     await db.flush()
+
+    await persist_pattern_enrichment_edges(
+        db,
+        tenant_id,
+        pattern.id,
+        domain_id,
+        trigger_conditions=trigger_conditions,
+        core_entities=core_entities,
+        observed_errors=observed_errors,
+        root_causes=root_causes,
+    )
+
     await promote_pattern_memory(
         db,
         tenant_id=tenant_id,

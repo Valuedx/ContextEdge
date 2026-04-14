@@ -6,34 +6,29 @@ This page explains the administrative control plane behind ContextEdge: how orga
 
 ## Business picture
 
-Before a business can trust operational memory, it has to answer four simple questions:
+Before your organization can trust operational memory, it needs clear answers to three questions: **Who owns this knowledge? Who can see it? Who can change the rules?** The control plane sets up these boundaries so every action is scoped, every change is attributable, and every rule is explicit.
 
-1. Which organization does this memory belong to?
-2. Which team or domain owns this work?
-3. Which people or service accounts can change or retrieve it?
-4. Which rules govern access, retention, classification, and approvals?
-
-ContextEdge answers those questions with a small but explicit model:
+ContextEdge models this with a small set of familiar concepts:
 
 | Concept | What it means to the business |
 | --- | --- |
-| Tenant | The customer or organization boundary |
+| Tenant | Your organization — the top-level boundary that keeps one company's memory completely separate from another's |
 | Workspace | A broad operating area such as IT Operations or Customer Support |
 | Domain | A narrower subject area such as VPN, Identity, or Endpoint Management |
-| User | A human actor inside the tenant |
-| Role binding | A granted responsibility such as tenant admin, domain admin, or knowledge manager |
-| Policy | A reusable rule document for retention, classification, access, or approval |
+| User | A person (or service account) who acts inside the tenant |
+| Role binding | A granted responsibility — who can administer, curate, or consume knowledge |
+| Policy | A reusable rule for retention, classification, access, or approval that can be attached to any resource |
 
-The current product also exposes a practical role ladder:
+The product ships with a practical role ladder so organizations can delegate authority clearly:
 
-| Role | Typical responsibility in the product today |
+| Role | Typical responsibility |
 | --- | --- |
-| `platform_super_admin` | Create and inspect tenants across organizations |
-| `tenant_admin` | Manage tenant settings, workspaces, domains, users, policies, and some approvals |
-| `domain_admin` | Connect sources, run discovery, retry sync, change some policy assignments, approve execution requests |
-| `knowledge_manager` | Curate patterns, playbooks, evidence access policies, identities, correlations, negative knowledge, and evaluations |
+| Platform super-admin | Create and inspect tenants across organizations |
+| Tenant admin | Manage tenant settings, workspaces, domains, users, policies, and some approvals |
+| Domain admin | Connect sources, run discovery, retry sync, change some policy assignments, approve execution requests |
+| Knowledge manager | Curate patterns, playbooks, evidence access policies, identities, correlations, negative knowledge, and evaluations |
 | Authenticated user | Search, use runtime, and open sessions within the tenant |
-| Service account | Retrieve runtime playbooks with optional domain allowlists |
+| Service account | Retrieve runtime playbooks with optional domain restrictions |
 
 ## Technical walkthrough
 
@@ -50,6 +45,76 @@ The current product also exposes a practical role ladder:
 6. **Resource attachment follows business intent** - Sources can carry retention and classification policy ids. Evidence items can carry access policy ids. Playbooks can carry approval policy ids. The current dashboard surfaces source and evidence assignment flows directly, while playbook approval assignment remains an API-first capability. In code: `backend/src/contextedge/api/v1/sources.py`, `backend/src/contextedge/api/v1/evidence.py`, `backend/src/contextedge/models/playbook.py`, `frontend/src/app/(dashboard)/sources/[id]/page.tsx`, `frontend/src/app/(dashboard)/evidence/[id]/page.tsx`.
 
 7. **Admin mutations are auditable** - Tenant, workspace, domain, user, and source changes call `log_audit_event`, which means the control plane is not just configurable; it is traceable. In code: `backend/src/contextedge/middleware/audit.py`, `backend/src/contextedge/api/v1/tenants.py`, `backend/src/contextedge/api/v1/workspaces.py`, `backend/src/contextedge/api/v1/domains.py`, `backend/src/contextedge/api/v1/users.py`.
+
+## Example: Acme VPN data at this stage
+
+**Setting up the organization**
+
+```json
+{
+  "tenant": {
+    "tenant_id": "acme-corp",
+    "name": "Acme Corporation",
+    "sso_provider": "okta",
+    "retention_defaults": { "short_term_days": 90, "long_term_days": 365 }
+  },
+  "workspaces": [
+    { "workspace_id": "ws-it-ops", "name": "IT Operations" },
+    { "workspace_id": "ws-security", "name": "Security Operations" }
+  ],
+  "domains": [
+    { "domain_id": "vpn-connectivity", "name": "VPN and Connectivity", "workspace_id": "ws-it-ops" },
+    { "domain_id": "endpoint-mgmt", "name": "Endpoint Management", "workspace_id": "ws-it-ops" },
+    { "domain_id": "identity-access", "name": "Identity and Access", "workspace_id": "ws-security" }
+  ]
+}
+```
+
+**Assigning roles**
+
+```json
+{
+  "role_bindings": [
+    { "user": "admin@acme.com", "role": "tenant_admin", "scope": "tenant:acme-corp" },
+    { "user": "vpn-lead@acme.com", "role": "domain_admin", "scope": "domain:vpn-connectivity" },
+    { "user": "knowledge@acme.com", "role": "knowledge_manager", "scope": "tenant:acme-corp" },
+    { "user": "analyst@acme.com", "role": "analyst", "scope": "workspace:ws-it-ops" }
+  ]
+}
+```
+
+**Attaching policies to resources**
+
+```json
+{
+  "policy_assignments": [
+    {
+      "policy_type": "retention",
+      "policy_name": "Standard IT retention — 1 year",
+      "attached_to": "source:src-jira-01"
+    },
+    {
+      "policy_type": "access",
+      "policy_name": "Restricted — security team only",
+      "attached_to": "evidence:ev-sensitive-vpn-config"
+    },
+    {
+      "policy_type": "classification",
+      "policy_name": "Internal — standard sensitivity",
+      "attached_to": "source:src-teams-vpn"
+    }
+  ]
+}
+```
+
+**Result — what each role can do during the VPN incident**
+
+| Person | Role | Can do | Cannot do |
+| --- | --- | --- | --- |
+| admin@acme.com | tenant_admin | Configure sources, manage users, set policies | N/A (full tenant scope) |
+| vpn-lead@acme.com | domain_admin | Trigger sync, approve source objects, retry failed jobs for VPN domain | Modify Security Operations sources |
+| knowledge@acme.com | knowledge_manager | Review episodes, curate playbooks, manage evidence access | Change tenant settings |
+| analyst@acme.com | analyst | Search evidence, use runtime, open sessions within IT Ops | See restricted-access evidence, approve playbooks |
 
 ## Design decisions
 

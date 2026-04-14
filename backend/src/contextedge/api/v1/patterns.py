@@ -46,14 +46,19 @@ async def get_pattern(pattern_id: UUID, db: DbSession, user: AuthUser):
 
 
 @router.get("/{pattern_id}/graph")
-async def get_pattern_graph(pattern_id: UUID, db: DbSession, user: AuthUser):
+async def get_pattern_graph(
+    pattern_id: UUID,
+    db: DbSession,
+    user: AuthUser,
+    domain_id: UUID | None = Query(None, description="Scope edges to a domain (includes domain-less edges)"),
+):
     from contextedge.graph.queries import get_pattern_subgraph
     result = await db.execute(
         select(Pattern).where(Pattern.id == pattern_id, Pattern.tenant_id == user.tenant_id)
     )
     if not result.scalar_one_or_none():
         raise HTTPException(status_code=404, detail="Pattern not found")
-    return await get_pattern_subgraph(db, user.tenant_id, pattern_id)
+    return await get_pattern_subgraph(db, user.tenant_id, pattern_id, domain_id=domain_id)
 
 
 @router.get("/{pattern_id}/evidence-links", response_model=list[PatternEvidenceLinkResponse])
@@ -195,13 +200,15 @@ async def discover_pattern(
         await db.flush()
 
         # 5. Build Graph Edges for visual clustering
+        domain_id = episodes[0].domain_id
         for ep in episodes:
             await build_episode_graph(
-                db, 
-                user.tenant_id, 
-                ep.id, 
-                pattern.id, 
+                db,
+                user.tenant_id,
+                ep.id,
+                pattern.id,
                 identity_ids_from_refs(ep.entity_refs),
+                domain_id=domain_id,
             )
 
         await db.commit()

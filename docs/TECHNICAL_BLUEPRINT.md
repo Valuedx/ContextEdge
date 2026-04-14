@@ -202,7 +202,7 @@ Implementation lives in `services/playbook_service.py`.
 | Connectors | `connectors/` | Source-specific adapters behind a shared contract |
 | Services | `services/` | Application-layer orchestration and domain logic |
 | Search | `search/` | FTS, vector search, risk gating, hybrid ranking |
-| Graph and patterning | `graph/`, parts of `services/`, `workers/pattern_tasks.py` | Relationship and pattern signals |
+| Graph and patterning | `graph/`, `api/v1/graph.py`, parts of `services/`, `workers/pattern_tasks.py` | Graph HTTP API, BFS traversal, aggregate stats, relationship and pattern signals |
 | AI integration | `ai/` | Embeddings, classification, generation helpers |
 | Worker wrappers | `workers/` | Celery tasks and async session bridge |
 
@@ -214,7 +214,8 @@ Implementation lives in `services/playbook_service.py`.
 - **UI stack:** React, Tailwind, shadcn/ui
 - **Data fetching:** TanStack Query
 - **API client:** `frontend/src/lib/api.ts`
-- **Representative route groups:** `overview`, `sources`, `evidence`, `episodes`, `patterns`, `playbooks`, `runtime`, `evaluations`, `drift`, `policies`, `audit`, `sync`
+- **Representative route groups:** `overview`, `sources`, `evidence`, `episodes`, `patterns`, `playbooks`, `runtime`, `evaluations`, `drift`, `policies`, `audit`, `sync`, `graph-explorer`
+- **Graph visualization:** The Graph Explorer page (`/graph-explorer`) provides interactive subgraph visualization via React Flow with dagre layout, BFS neighbor traversal, and aggregate statistics. Shared node/edge styling lives in `components/graph/graph-constants.ts` and is reused by both the pattern-scoped graph and the generic Graph Explorer.
 
 The frontend is a thin client over the FastAPI API. Most business rules remain on the server.
 
@@ -255,7 +256,7 @@ Primary entity groups:
 4. **Identity and reconstruction**
    `CanonicalIdentity`, `IdentityAlias`, `CorrelationEdge`, `Episode`, `EpisodeStep`
 5. **Patterns and graph**
-   `Pattern`, `NegativeKnowledgeItem`, `Contradiction`, `GraphEdge`
+   `Pattern`, `NegativeKnowledgeItem`, `Contradiction`, `GraphEdge` (includes `domain_id` for domain-scoped graph queries)
 6. **Playbooks**
    `Playbook`, `PlaybookVersion`, `PlaybookEvidenceLink`, `PlaybookApproval`
 7. **Evaluation and runtime feedback**
@@ -296,4 +297,4 @@ Update this blueprint when any of the following change:
 
 Update [API.md](API.md) when changing routes, auth headers, or response semantics. Update [SETUP_GUIDE.md](SETUP_GUIDE.md) when onboarding steps change. Update [RUNBOOK.md](RUNBOOK.md) when operational commands, migrations, or deployment requirements change.
 
-**Last reviewed:** 2026-04-05. Codebase includes Alembic revisions through `0005_playbook_version_semantic_unique`.
+**Last reviewed:** 2026-04-14. Codebase includes Alembic revisions through `0015_graph_edges_domain_id`.

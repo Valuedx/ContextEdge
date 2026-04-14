@@ -266,7 +266,7 @@ export interface EvaluationRun {
 }
 
 export interface PatternSubgraph {
-  nodes: { type: string; id: string }[];
+  nodes: { type: string; id: string; title?: string }[];
   edges: { source: string; target: string; type: string; weight: number }[];
 }
 

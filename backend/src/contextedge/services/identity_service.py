@@ -196,6 +196,7 @@ async def link_evidence_identities(
         evidence.id,
         linked_identity_ids,
         edge_type="mentions_identity",
+        domain_id=getattr(evidence, "domain_id", None),
     )
     await append_operational_event(
         db,

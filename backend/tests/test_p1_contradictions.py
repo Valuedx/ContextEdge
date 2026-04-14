@@ -89,6 +89,11 @@ async def test_contradiction_detected():
     assert any(isinstance(obj, OperationalEvent) for obj in added)
     notify_mock.assert_awaited_once()
 
+    graph_edges = [obj for obj in added if isinstance(obj, GraphEdge)]
+    assert len(graph_edges) >= 1
+    for ge in graph_edges:
+        assert ge.domain_id == domain_id
+
 
 @pytest.mark.asyncio
 async def test_no_false_positive_contradiction():

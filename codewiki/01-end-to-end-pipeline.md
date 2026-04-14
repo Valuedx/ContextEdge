@@ -6,9 +6,13 @@ After reading this page, you should see how operational content enters ContextEd
 
 ## Business picture
 
-Organizations store truth in many places: tickets, chat, email, and knowledge bases. ContextEdge’s job is to **pull or receive** that activity, **normalize** it into comparable records, **remember** it per customer (**tenant**), and **derive** structured memory (what happened, what repeats, what we officially say to do next). Humans and integrations then **search** and **match** approved guidance, while the system keeps enough trace to explain **why** something was shown. Later, **retention** and policy shape how long raw and derived data remain available.
+Most organizations already have the answers to their recurring problems—they are just buried across ticket queues, chat threads, emails, and shared drives. ContextEdge connects to those systems and converts scattered activity into a **structured, governed knowledge pipeline** that delivers three measurable outcomes:
 
-None of that requires the reader to know PostgreSQL, Celery, or vector indexes—but those are how the implementation delivers the story.
+1. **Faster resolution** — When a new incident arrives, the system surfaces the most relevant approved playbook in seconds, ranked by confidence, so responders spend less time searching and more time fixing.
+2. **Fewer repeat mistakes** — Patterns, contradictions, and past failures are captured alongside successes, so teams learn from what went wrong, not just what went right.
+3. **Audit-ready traceability** — Every recommendation can be traced back to the evidence it came from, the review it passed, and the policy that governs its retention—satisfying compliance without extra manual work.
+
+The pipeline flows through six stages: **ingest** raw data from connected systems, **normalize** it into comparable evidence records, **enrich** it with search indexes and AI-assisted extraction, **derive** structured memory (episodes, patterns, playbooks), **deliver** governed guidance at runtime, and **maintain** data quality through retention and drift monitoring. Each stage is scoped to a single customer (tenant) so data never crosses organizational boundaries.
 
 ## Technical walkthrough
 
@@ -84,19 +88,109 @@ flowchart LR
 
 Solid arrows are the main data dependency; dashed arrows show where **workers** extend or continue the HTTP-started path.
 
+## Example: Acme VPN data at this stage
+
+One Jira ticket travels the full pipeline. Each box below shows the data shape at that stage.
+
+**1. Connector output (ingestion event)**
+
+```json
+{
+  "external_id": "JIRA-4521",
+  "source_type": "jira_sm",
+  "title": "VPN connection drops after Windows update KB5032190",
+  "body": "Users reporting VPN disconnects since patch Tuesday. Gateway: vpn-gw-east-01. Error: AUTH_CERT_EXPIRED. Reported by jsmith@acme.com.",
+  "created_at": "2026-03-15T09:23:00Z"
+}
+```
+
+**2. Raw evidence (after persist)**
+
+```json
+{
+  "raw_id": "raw-7f3a1b",
+  "tenant_id": "acme-corp",
+  "source_id": "src-jira-01",
+  "external_id": "JIRA-4521",
+  "content_hash": "sha256:9f3a2b...",
+  "raw_payload": "{ ... full Jira JSON ... }"
+}
+```
+
+**3. Normalized evidence item**
+
+```json
+{
+  "evidence_id": "ev-a1b2c3",
+  "tenant_id": "acme-corp",
+  "domain_id": "vpn-connectivity",
+  "source_id": "src-jira-01",
+  "title": "VPN connection drops after Windows update KB5032190",
+  "body_summary": "Multiple users report VPN disconnects following patch Tuesday. AUTH_CERT_EXPIRED on vpn-gw-east-01.",
+  "relevance_state": "operational",
+  "canonical_entity_refs": ["id:john-smith", "id:kb5032190", "id:vpn-gw-east-01"]
+}
+```
+
+**4. Episode (after AI reconstruction)**
+
+```json
+{
+  "episode_id": "ep-x1y2z3",
+  "title": "Corporate VPN authentication failure after KB5032190",
+  "status": "draft",
+  "reviewer_state": "pending_review",
+  "steps": [
+    { "order": 1, "type": "complaint", "text": "Users report VPN drops post-patch Tuesday" },
+    { "order": 2, "type": "diagnostic", "text": "Checked gateway logs — AUTH_CERT_EXPIRED errors" },
+    { "order": 3, "type": "failed_attempt", "text": "Restarted VPN service — no improvement" },
+    { "order": 4, "type": "remediation", "text": "Renewed gateway certificate via internal CA" },
+    { "order": 5, "type": "outcome", "text": "VPN restored for all affected users" }
+  ]
+}
+```
+
+**5. Approved playbook (after review)**
+
+```json
+{
+  "playbook_id": "pb-r1s2t3",
+  "title": "VPN Certificate Rotation After Patch Tuesday",
+  "lifecycle_state": "approved",
+  "risk_tier": "medium",
+  "current_version": "1.0.0",
+  "trigger_conditions": "VPN auth failures after Windows update with AUTH_CERT_EXPIRED"
+}
+```
+
+**6. Runtime match response**
+
+```json
+{
+  "matches": [{
+    "playbook_id": "pb-r1s2t3",
+    "title": "VPN Certificate Rotation After Patch Tuesday",
+    "confidence": 0.92,
+    "breakdown": { "keyword": 0.85, "semantic": 0.94, "graph": 0.88, "recency": 0.95 },
+    "evidence_trace": ["ev-a1b2c3", "ev-d4e5f6"],
+    "freshness": "current"
+  }]
+}
+```
+
 ## Design decisions
 
-- **Modular monolith (FastAPI + one Postgres)** — *Why:* simpler operations and consistent transactions across tenants’ data. *Tradeoff:* horizontal scaling is mostly “scale the app + DB,” not independent microservices per feature.
+- **Modular monolith (FastAPI + one Postgres)** — *Why:* simpler operations and consistent transactions across tenants' data. *Tradeoff:* horizontal scaling is mostly "scale the app + DB," not independent microservices per feature.
 
-- **Post-commit worker pipeline for normalization** — *Why:* HTTP and sync paths stay fast; heavy parsing and embedding do not block the caller. *Tradeoff:* evidence is briefly “raw-only” until workers catch up; monitoring queue depth matters.
+- **Post-commit worker pipeline for normalization** — *Why:* HTTP and sync paths stay fast; heavy parsing and embedding do not block the caller. *Tradeoff:* evidence is briefly "raw-only" until workers catch up; monitoring queue depth matters.
 
-- **Claim-before-queue handoff for raw backlog** — *Why:* survives Redis/broker outages without duplicate normalize tasks or lost tails. *Tradeoff:* more moving parts in `sync_worker_service` than a naive “enqueue immediately.”
+- **Claim-before-queue handoff for raw backlog** — *Why:* survives Redis/broker outages without duplicate normalize tasks or lost tails. *Tradeoff:* more moving parts in `sync_worker_service` than a naive "enqueue immediately."
 
-- **Application-layer hash dedupe for evidence** — *Why:* flexible evolution of what counts as “the same” content. *Tradeoff:* under extreme concurrency, duplicates are still possible until a DB uniqueness story hardens (see root `README.md` known constraints).
+- **Application-layer hash dedupe for evidence** — *Why:* flexible evolution of what counts as "the same" content. *Tradeoff:* under extreme concurrency, duplicates are still possible until a DB uniqueness story hardens (see root `README.md` known constraints).
 
-- **Hybrid retrieval (lexical + semantic + signals)** — *Why:* operational questions are both keyword-precise (“VPN gateway host name”) and conceptually fuzzy (“similar outage last month”). *Tradeoff:* more indexes to maintain (FTS, pgvector) and tuning surface area.
+- **Hybrid retrieval (lexical + semantic + signals)** — *Why:* operational questions are both keyword-precise ("VPN gateway host name") and conceptually fuzzy ("similar outage last month"). *Tradeoff:* more indexes to maintain (FTS, pgvector) and tuning surface area.
 
-- **Playbook publication gate for runtime** — *Why:* customers should not get draft or unreviewed procedures in automated retrieval. *Tradeoff:* operators must complete lifecycle steps before runtime “sees” the latest version.
+- **Playbook publication gate for runtime** — *Why:* customers should not get draft or unreviewed procedures in automated retrieval. *Tradeoff:* operators must complete lifecycle steps before runtime "sees" the latest version.
 
 ## Code map
 
@@ -115,7 +209,7 @@ Solid arrows are the main data dependency; dashed arrows show where **workers** 
 
 ## Acme VPN incident (this layer)
 
-When **Acme Corp**’s **Corporate VPN** outage spawns duplicate Jira tickets, Teams threads, and a follow-up email, **connectors and sync** land multiple **raw** payloads that **normalize** into evidence rows analysts can find with “VPN gateway.” **Extraction** proposes an **episode** spanning the noise; **patterns** may later reflect “auth certificate expiry” style repeats. A reviewed **playbook** version captures the approved fix; **runtime** ranks that playbook when an integration asks about VPN failures, and **sessions** can record what was decided—so the same story threads every stage above without changing the example.
+When **Acme Corp**'s **Corporate VPN** outage spawns duplicate Jira tickets, Teams threads, and a follow-up email, **connectors and sync** land multiple **raw** payloads that **normalize** into evidence rows analysts can find with "VPN gateway." **Extraction** proposes an **episode** spanning the noise; **patterns** may later reflect "auth certificate expiry" style repeats. A reviewed **playbook** version captures the approved fix; **runtime** ranks that playbook when an integration asks about VPN failures, and **sessions** can record what was decided—so the same story threads every stage above without changing the example.
 
 ## Further reading
 

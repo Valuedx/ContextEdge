@@ -6,7 +6,7 @@ You will see how **episodes** reconstruct what happened from evidence, how **pat
 
 ## Business picture
 
-An **episode** is the story of one incident: symptoms, steps tried, outcome. A **pattern** is “this keeps happening” across several episodes—useful for prioritizing engineering or documentation work. A **playbook** is the official “how we handle it” artifact: steps, risk, automation mode, and versions that can be **published** so runtime and execution only use blessed content.
+Individual incidents become reusable organizational knowledge through a governed review process. An **episode** captures the full story of one incident—what users reported, what the team tried, what worked, and what the outcome was. When several episodes look alike, the system surfaces a **pattern**: a signal that the same type of problem keeps happening, which helps teams prioritize fixes and documentation. Once a pattern is well understood, it can be promoted into a **playbook**—an approved, versioned procedure that describes exactly how to handle this class of issue. Playbooks go through a formal review cycle (draft → under review → approved) so that only vetted procedures reach the teams and automation that rely on them. At every stage, humans decide what gets promoted; the system organizes and proposes, but people own the final word.
 
 ## Technical walkthrough
 
@@ -31,6 +31,70 @@ An **episode** is the story of one incident: symptoms, steps tried, outcome. A *
 
 - Episodes ground patterns in real evidence; patterns can feed **playbook candidate** generation (see pattern workers). Playbooks link **evidence** via `PlaybookEvidenceLink` at version scope for semantic retrieval.
 
+## Example: Acme VPN data at this stage
+
+**Stage 1 — Episode (created from AI extraction, pending review)**
+
+```json
+{
+  "episode_id": "ep-x1y2z3",
+  "tenant_id": "acme-corp",
+  "domain_id": "vpn-connectivity",
+  "title": "Corporate VPN authentication failure after KB5032190",
+  "status": "draft",
+  "reviewer_state": "pending_review",
+  "extraction_confidence": 0.87,
+  "root_cause_summary": "Windows update KB5032190 invalidated the gateway certificate chain",
+  "final_outcome": "Certificate renewed via internal CA; VPN restored",
+  "steps": [
+    { "step_order": 1, "step_type": "complaint", "text": "Users report VPN drops post-patch Tuesday", "evidence_refs": ["ev-a1b2c3"] },
+    { "step_order": 2, "step_type": "diagnostic", "text": "Checked gateway logs — AUTH_CERT_EXPIRED", "evidence_refs": ["ev-d4e5f6"] },
+    { "step_order": 3, "step_type": "failed_attempt", "text": "Restarted VPN service — no improvement", "failed_flag": true, "evidence_refs": ["ev-d4e5f6"] },
+    { "step_order": 4, "step_type": "remediation", "text": "Renewed gateway certificate via internal CA", "successful_flag": true, "evidence_refs": ["ev-g7h8i9"] },
+    { "step_order": 5, "step_type": "outcome", "text": "VPN restored for all affected users", "evidence_refs": ["ev-g7h8i9"] }
+  ]
+}
+```
+
+**Stage 2 — Pattern (clusters similar episodes)**
+
+```json
+{
+  "pattern_id": "pat-m1n2o3",
+  "tenant_id": "acme-corp",
+  "domain_id": "vpn-connectivity",
+  "title": "Certificate expiry after Windows cumulative updates",
+  "pattern_type": "recurring_issue",
+  "confidence": 0.82,
+  "episode_count": 7,
+  "triggers": ["Windows cumulative update", "certificate chain validation change"],
+  "common_root_cause": "Cumulative updates occasionally invalidate certificate chains trusted by network appliances",
+  "common_resolution": "Renew affected certificates via internal CA before or immediately after patch rollout"
+}
+```
+
+**Stage 3 — Playbook (governed, versioned, approved)**
+
+```json
+{
+  "playbook_id": "pb-r1s2t3",
+  "title": "VPN Certificate Rotation After Patch Tuesday",
+  "lifecycle_state": "approved",
+  "risk_tier": "medium",
+  "automation_mode": "human_confirmed",
+  "current_version": {
+    "version_id": "ver-001",
+    "semantic_version": "1.0.0",
+    "trigger_conditions": "VPN auth failures with AUTH_CERT_EXPIRED after a Windows cumulative update",
+    "published_at": "2026-03-20T14:00:00Z",
+    "published_by": "reviewer@acme.com",
+    "evidence_refs": ["ev-a1b2c3", "ev-d4e5f6", "ev-g7h8i9"]
+  }
+}
+```
+
+The playbook is only visible to runtime retrieval after it reaches `approved` state and has a published version. Draft and under-review versions are invisible to downstream consumers.
+
 ## Design decisions
 
 - **Draft episodes with pending review** — *Why:* AI reconstruction is advisory; humans correct narrative before trust. *Tradeoff:* more UI/review workload.
@@ -39,7 +103,7 @@ An **episode** is the story of one incident: symptoms, steps tried, outcome. A *
 
 - **Version per semantic version string** — *Why:* customers think in semver; uniqueness per playbook prevents collisions. *Tradeoff:* allocation logic must handle races.
 
-- **Publication timestamp on version** — *Why:* runtime ranks **published** versions only. *Tradeoff:* unpublished drafts invisible to match even if “newer.”
+- **Publication timestamp on version** — *Why:* runtime ranks **published** versions only. *Tradeoff:* unpublished drafts invisible to match even if "newer."
 
 ## Code map
 
@@ -58,7 +122,7 @@ An **episode** is the story of one incident: symptoms, steps tried, outcome. A *
 
 ## Acme VPN incident (this layer)
 
-One **episode** consolidates Acme’s duplicate tickets and chat; a **pattern** links it to prior certificate incidents; a **playbook candidate** becomes `under_review`, then `approved` with a **published** version describing certificate rotation—ready for runtime matching described in [05-search-hybrid-and-access.md](./05-search-hybrid-and-access.md).
+One **episode** consolidates Acme's duplicate tickets and chat; a **pattern** links it to prior certificate incidents; a **playbook candidate** becomes `under_review`, then `approved` with a **published** version describing certificate rotation—ready for runtime matching described in [05-search-hybrid-and-access.md](./05-search-hybrid-and-access.md).
 
 ## Further reading
 

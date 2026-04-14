@@ -6,7 +6,7 @@ You will understand how **retention** ages out or archives evidence by **memory 
 
 ## Business picture
 
-Companies must keep operational history long enough to learn from incidents but not forever—regulators and contracts differ by data type. **Legal hold** freezes items under investigation. The platform classifies evidence into **memory classes** (short vs long term) so retention windows can vary without manual tagging on every row. Separately, **operational events** create an append-only style timeline of “what the system did,” useful when proving retention jobs ran or sessions were opened.
+Organizations need to keep incident data long enough to learn from it, but not forever. Retention policies automatically age out old records according to your rules — short-lived items like chat fragments expire in weeks, while high-value evidence such as linked tickets and root-cause analyses stays longer. When regulations or internal investigations require it, **legal holds** freeze specific items so they are never archived regardless of age. The platform classifies evidence into retention tiers automatically, so teams do not need to tag every record by hand. Meanwhile, an append-only event timeline records what the system did (retention job results, session openings, playbook runs), giving auditors a clear answer to "did the scheduled cleanup actually run last night?"
 
 ## Technical walkthrough
 
@@ -31,6 +31,59 @@ Companies must keep operational history long enough to learn from incidents but 
 - `event_log_service.append_operational_event` persists rows to `operational_events` with `entity_type`, `event_type`, optional `session_id`, correlation/causation UUIDs, actor, JSON `payload`, and timestamps (`models/events.py`).
 - Use this stream to audit retention runs if you append events from the job that calls `apply_retention_policy`.
 
+## Example: Acme VPN data at this stage
+
+**Input — Acme's retention policy configuration**
+
+```json
+{
+  "tenant_id": "acme-corp",
+  "retention_defaults": {
+    "short_term_days": 90,
+    "long_term_days": 365,
+    "reasoning_memory_days": 180
+  }
+}
+```
+
+**Processing — nightly retention job runs**
+
+The system classifies each evidence item into a memory class based on its type, relevance, and pattern linkages:
+
+| Evidence | Memory class | Age (days) | Retention window | Action |
+| --- | --- | --- | --- | --- |
+| ev-a1b2c3 (Jira ticket, linked to pattern) | long_term | 45 | 365 days | Keep |
+| ev-d4e5f6 (Teams thread, linked to episode) | long_term | 45 | 365 days | Keep |
+| ev-old-chat-01 (Teams message, no pattern link) | short_term | 120 | 90 days | Archive |
+| ev-legal-hold-01 (Email, legal hold) | long_term | 400 | 365 days | **Skipped** (legal hold) |
+
+**Output — retention job result**
+
+```json
+{
+  "tenant_id": "acme-corp",
+  "items_scanned": 1247,
+  "items_archived": 83,
+  "items_skipped_legal_hold": 4,
+  "items_retained": 1160,
+  "run_at": "2026-04-01T03:00:00Z"
+}
+```
+
+**Legal hold example**
+
+```json
+{
+  "action": "apply_legal_hold",
+  "evidence_ids": ["ev-legal-hold-01", "ev-legal-hold-02"],
+  "reason": "Pending investigation by Legal — VPN outage liability review",
+  "applied_by": "legal-admin@acme.com",
+  "result": "sensitivity_label set to 'legal_hold' — these items are now exempt from retention archival"
+}
+```
+
+Archived items have their `relevance_state` set to `archived` but remain recoverable for audit and reprocessing. Legal-hold items are never archived regardless of their age.
+
 ## Design decisions
 
 - **Archive via state flag vs hard delete** — *Why:* safer recovery and simpler compliance story; hard delete can be a later phase. *Tradeoff:* storage still occupied until vacuum/compaction policies exist.
@@ -54,7 +107,7 @@ Companies must keep operational history long enough to learn from incidents but 
 
 ## Acme VPN incident (this layer)
 
-After the VPN incident closes, Acme’s default **retention** window archives stale chat fragments but leaves the **legal_hold** email chain untouched while Legal reviews; an `operational_events` row records the nightly retention job counts for auditors.
+After the VPN incident closes, Acme's default **retention** window archives stale chat fragments but leaves the **legal_hold** email chain untouched while Legal reviews; an `operational_events` row records the nightly retention job counts for auditors.
 
 ## Further reading
 

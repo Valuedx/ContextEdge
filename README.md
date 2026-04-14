@@ -98,7 +98,7 @@ make test
 Notes:
 
 - `make dev` starts the full Docker development stack.
-- Current Alembic head is `0009_case_links`. Run `make migrate` after pulling to apply any new revisions.
+- Current Alembic head is `0015_graph_edges_domain_id`. Run `make migrate` after pulling to apply any new revisions.
 - Frontend `npm test` is currently a placeholder script; there is no real frontend unit-test suite yet.
 - The backend enforces a non-default `JWT_SECRET_KEY` when `APP_ENV` is not `development`. Set a real secret before deploying to staging or production.
 
@@ -119,10 +119,10 @@ docs/
   MIGRATIONS.md
 
 backend/
-  alembic/versions/        # 0001..0009 migration chain
+  alembic/versions/        # 0001..0015 migration chain
   src/contextedge/
     api/v1/                 # FastAPI routers (auth, evidence, episodes, patterns,
-                            #   playbooks, runtime, sessions, evaluations, drift, ...)
+                            #   playbooks, runtime, sessions, evaluations, drift, graph, ...)
     models/                 # SQLAlchemy ORM (evidence, episode, pattern, playbook,
                             #   session, policy, evaluation, audit, tenant)
     schemas/                # Pydantic request/response models

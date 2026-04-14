@@ -4,18 +4,37 @@ This folder holds technical blueprint explainers and business-readable walkthrou
 
 ## How to use this wiki
 
-1. Business readers should start with [00-business-capability-map.md](./00-business-capability-map.md), then [15-dashboard-and-operator-workflows.md](./15-dashboard-and-operator-workflows.md), then [01-end-to-end-pipeline.md](./01-end-to-end-pipeline.md).
-2. Engineers who want the system shape first should start with [01-end-to-end-pipeline.md](./01-end-to-end-pipeline.md) and follow the numbered deep dives.
-3. Maintainers should read [EDITORIAL-GUIDE.md](./EDITORIAL-GUIDE.md) before editing pages so vocabulary, voice, and the shared Acme VPN scenario stay consistent.
-4. Check [KNOWN_GAPS.md](./KNOWN_GAPS.md) when the UI, worker wiring, or policy model behaves differently from the idealized flow in the articles.
-5. Use [PLAN.md](./PLAN.md) for scope, cross-links, and maintenance expectations.
+### Business and product readers
+
+Start here to understand what ContextEdge does, who uses it, and how operational knowledge flows through the product:
+
+1. [00-business-capability-map.md](./00-business-capability-map.md) — What the product does end to end, which personas own which parts, and the business value at each stage.
+2. [15-dashboard-and-operator-workflows.md](./15-dashboard-and-operator-workflows.md) — What users actually see in the product: a day-in-the-life walkthrough of the dashboard.
+3. [01-end-to-end-pipeline.md](./01-end-to-end-pipeline.md) — How one incident travels from raw ticket to approved playbook to runtime recommendation.
+4. [14-control-plane-tenants-roles-policies.md](./14-control-plane-tenants-roles-policies.md) — How organizations, roles, and policies are structured.
+
+Each article includes an **"Example: Acme VPN data at this stage"** section with concrete data showing what goes in and what comes out at that layer — so you can trace a single VPN outage through the entire system without reading code.
+
+### Engineering readers
+
+Start with the system architecture, then follow the numbered deep dives:
+
+1. [01-end-to-end-pipeline.md](./01-end-to-end-pipeline.md) — Full pipeline from connector to audit trail.
+2. [02-api-and-request-lifecycle.md](./02-api-and-request-lifecycle.md) through [13-evaluation-drift-and-feedback.md](./13-evaluation-drift-and-feedback.md) — Vertical slices covering API, ingestion, search, AI, episodes, workers, graph, governance, retention, identity, and evaluation.
+3. [08-workers-celery-queues.md](./08-workers-celery-queues.md) — Background task topology (useful for operations and debugging).
+
+### Maintainers
+
+- Read [EDITORIAL-GUIDE.md](./EDITORIAL-GUIDE.md) before editing pages so vocabulary, voice, the shared Acme VPN scenario, and the example input/output format stay consistent.
+- Check [KNOWN_GAPS.md](./KNOWN_GAPS.md) when the UI, worker wiring, or policy model behaves differently from the idealized flow in the articles.
+- Use [PLAN.md](./PLAN.md) for scope, cross-links, and maintenance expectations.
 
 ## Article index
 
 | Doc | Description |
 | --- | --- |
 | [00-business-capability-map.md](./00-business-capability-map.md) | Business-first map of personas, outcomes, and product capabilities |
-| [EDITORIAL-GUIDE.md](./EDITORIAL-GUIDE.md) | Voice, template, vocabulary, and the Acme VPN scenario |
+| [EDITORIAL-GUIDE.md](./EDITORIAL-GUIDE.md) | Voice, template, vocabulary, example format, and the Acme VPN scenario |
 | [KNOWN_GAPS.md](./KNOWN_GAPS.md) | Implementation caveats, UI gaps, and operational footnotes |
 | [PLAN.md](./PLAN.md) | Scope table, cross-links, maintenance, and article ordering |
 | [01-end-to-end-pipeline.md](./01-end-to-end-pipeline.md) | Full journey from sync to evidence to search to playbooks to audit |
@@ -33,6 +52,23 @@ This folder holds technical blueprint explainers and business-readable walkthrou
 | [13-evaluation-drift-and-feedback.md](./13-evaluation-drift-and-feedback.md) | Offline evaluation, drift alerts, and the feedback loop |
 | [14-control-plane-tenants-roles-policies.md](./14-control-plane-tenants-roles-policies.md) | Tenant hierarchy, roles, policies, and admin control plane behavior |
 | [15-dashboard-and-operator-workflows.md](./15-dashboard-and-operator-workflows.md) | Dashboard navigation and how business workflows map to APIs |
+
+## Following one incident end to end
+
+Every article uses the same **Acme Corp VPN outage** scenario. To trace a single incident through the entire system, read the "Example: Acme VPN data at this stage" sections in this order:
+
+| Stage | Article | What you will see |
+| --- | --- | --- |
+| 1. Connect sources | [03](./03-ingestion-connectors-and-sync.md) | Jira connector fetches two VPN tickets; sync run records checkpoint |
+| 2. Normalize evidence | [04](./04-evidence-normalization-and-storage.md) | Raw Jira JSON becomes a clean, searchable evidence item |
+| 3. Resolve identities | [12](./12-identity-resolution-and-thread-hydration.md) | "jsmith," "John Smith," and "J. Smith (IT)" resolve to one person |
+| 4. Classify and extract | [06](./06-ai-extraction-and-embeddings.md) | AI marks evidence as operational; proposes an episode with steps |
+| 5. Build episodes | [07](./07-episodes-patterns-playbooks.md) | Draft episode links to pattern; playbook candidate enters review |
+| 6. Connect relationships | [09](./09-graph-and-correlation.md) | Correlation edges link Jira ticket to Teams thread; graph scores playbooks; Graph Explorer visualizes the context network |
+| 7. Search and rank | [05](./05-search-hybrid-and-access.md) | Analyst searches "VPN certificate expired"; hybrid ranking returns results |
+| 8. Resolve and execute | [10](./10-governance-sessions-execution-audit.md) | Responder opens session; playbook execution enforces safety caps |
+| 9. Monitor quality | [13](./13-evaluation-drift-and-feedback.md) | Evaluation run scores accuracy; drift scan flags negative feedback |
+| 10. Manage retention | [11](./11-retention-and-operational-events.md) | Nightly job archives stale chat but preserves legal-hold items |
 
 ## Relationship to `docs/`
 
