@@ -174,7 +174,7 @@ async def trigger_manual_reconstruction(
         since = datetime.now(UTC) - timedelta(hours=24)
         q = select(EvidenceItem.id).where(
             EvidenceItem.tenant_id == user.tenant_id,
-            EvidenceItem.relevance_state.in_(["relevant", "operational"]),
+            EvidenceItem.relevance_state.in_(["operational", "possibly_relevant"]),
             EvidenceItem.ingested_at >= since
         )
         result = await db.execute(q)

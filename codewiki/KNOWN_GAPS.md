@@ -8,7 +8,7 @@ Built-in types `teams`, `gmail`, `servicenow`, and `jira_sm` are registered in `
 
 ## Sync requires a worker on the `sync` queue
 
-`discover_source`, `run_backfill`, and `run_incremental_sync` in `workers/sync_tasks.py` route to the `sync` Celery queue. Local development includes `sync` in `DEFAULT_QUEUES` in `backend/dev.py`. Custom workers that omit `sync` will leave retry and backfill tasks stuck.
+`run_backfill` and `run_incremental_sync` in `workers/sync_tasks.py` route to the `sync` Celery queue. Local development includes `sync` in `DEFAULT_QUEUES` in `backend/dev.py`. Custom workers that omit `sync` will leave retry and backfill tasks stuck.
 
 Fix direction: include `sync` in consumed queues and verify worker routing against [`docs/RUNBOOK.md`](../docs/RUNBOOK.md).
 
@@ -74,3 +74,50 @@ Gmail's `backfill` fetches the mailbox `historyId` when the last page completes 
 ## Historical note: sync Celery tasks
 
 Sync tasks were previously commented out in `sync_tasks.py`, which broke imports used by `api/v1/sync.py` and `api/v1/sources.py`. They are implemented again; use a worker configuration that consumes `sync` as described above.
+
+## Resolved: backfill-to-incremental checkpoint bridging
+
+All four connectors (Gmail, Teams, ServiceNow, Jira SM) now seed a checkpoint on the final backfill page so incremental sync can start without manual intervention. Previously, the last page returned `new_checkpoint=None`, breaking the incremental flow.
+
+## Resolved: sync retry dispatch by run_type
+
+`POST /sync/{run_id}/retry` now checks `run.run_type` and dispatches to `run_backfill.delay(...)` for backfill runs or `run_incremental_sync.delay(...)` for incremental runs. Previously, all retries were dispatched as incremental sync regardless of the original run type.
+
+## Resolved: title/body extraction for all connectors
+
+`evidence_title_from_payload` and `evidence_body_from_payload` now cover field names from all connectors (`summary`, `short_description`, `description`, `text`, `snippet`) in addition to the previously handled `title`/`subject`/`body`/`body_text`.
+
+## Resolved: Teams hydrate_thread includes root message
+
+Teams `hydrate_thread` now fetches the root message first via `/messages/{message_id}` before fetching replies, so the parent message body and author are included in the hydrated thread.
+
+## Resolved: dead code removed
+
+- `generate_embeddings` Celery task removed (embeddings are now inline during normalization)
+- `discover_source` Celery task removed (discovery runs directly via API and `discover_source_objects`)
+- `validate_service_account_token` stub removed from `middleware/auth.py`
+- Unused `symptoms` parameter removed from `rank_playbooks`
+
+## Retention service not scheduled (intentional gap)
+
+`apply_retention_policy` exists in `retention_service.py` but is not called from a scheduled job. Tenant retention defaults have no effect until a cron trigger or operator script is wired.
+
+## Correlation does not auto-trigger episode reconstruction
+
+`correlate_evidence_item` creates correlation edges and case links but does not automatically trigger `reconstruct_episode_task`. Episode reconstruction is currently manual via the episodes API or via explicitly enqueued tasks.
+
+## `workspace_id` and `domain_id` not set during normalization
+
+New `EvidenceItem` rows do not have `workspace_id` or `domain_id` set during normalization. These are intended to be populated by domain-assignment logic after the evidence item exists.
+
+## `body_summary` only via artifact path
+
+Evidence `body_summary` is only populated when attachment artifact extraction runs (via `process_attachment_artifact`). Direct normalization does not generate a summary.
+
+## Semantic search not exposed in evidence API
+
+The evidence list API supports FTS-based search but does not expose the semantic (vector) search path. Semantic search is used internally by the hybrid ranker for playbook ranking.
+
+## `evidence_quality` placeholder in ranker
+
+The hybrid ranker uses a hard-coded `quality_score = 0.5` for all playbooks. A proper evidence-quality signal has not been implemented.

@@ -1,5 +1,6 @@
 import json
 import uuid
+from datetime import datetime
 
 import structlog
 from sqlalchemy import select
@@ -59,6 +60,13 @@ async def _normalize(db: AsyncSession, raw_object_id: str, tenant_id: uuid.UUID)
         if part and part.strip()
     )
 
+    source_ts = None
+    if payload.get("_source_timestamp"):
+        try:
+            source_ts = datetime.fromisoformat(payload["_source_timestamp"])
+        except (ValueError, TypeError):
+            pass
+
     existing = (
         await db.execute(
             select(EvidenceItem).where(
@@ -68,11 +76,17 @@ async def _normalize(db: AsyncSession, raw_object_id: str, tenant_id: uuid.UUID)
         )
     ).scalar_one_or_none()
     if existing:
+        if existing.created_at_source is None and source_ts:
+            existing.created_at_source = source_ts
         if existing.thread_id is None:
             await ensure_thread_for_evidence(
                 db, tenant_id=tenant_id, evidence=existing, payload=payload,
             )
-        embedded = await _ensure_embedding(db, existing)
+        try:
+            embedded = await _ensure_embedding(db, existing)
+        except Exception as embed_exc:
+            logger.warning("embedding_failed", evidence_id=str(existing.id), error=str(embed_exc))
+            embedded = False
         identity_count = None
         if not ((existing.canonical_entity_refs or {}).get("identities")) and identity_content.strip():
             try:
@@ -138,6 +152,7 @@ async def _normalize(db: AsyncSession, raw_object_id: str, tenant_id: uuid.UUID)
         body_text=body,
         content_hash=h,
         relevance_state="unclassified",
+        created_at_source=source_ts,
     )
     db.add(ev)
     await db.flush()
@@ -189,7 +204,11 @@ async def _normalize(db: AsyncSession, raw_object_id: str, tenant_id: uuid.UUID)
         evidence=ev,
         payload=payload,
     )
-    embedded = await _ensure_embedding(db, ev)
+    try:
+        embedded = await _ensure_embedding(db, ev)
+    except Exception as embed_exc:
+        logger.warning("embedding_failed", evidence_id=str(ev.id), error=str(embed_exc))
+        embedded = False
     return {
         "evidence_id": str(ev.id),
         "deduped": False,
@@ -217,18 +236,6 @@ async def _classify(db: AsyncSession, evidence_id: str, tenant_id: uuid.UUID) ->
     ev.relevance_score = float(out.get("confidence", 0.0))
     await db.flush()
     return {"evidence_id": evidence_id, "classification": ev.relevance_state}
-
-
-async def _embed(db: AsyncSession, evidence_id: str, tenant_id: uuid.UUID) -> dict:
-    eid = uuid.UUID(evidence_id)
-    ev = await db.get(EvidenceItem, eid)
-    if not ev or ev.tenant_id != tenant_id:
-        return {"error": "evidence_not_found"}
-
-    vec = await embed_evidence(ev.title, ev.body_text)
-    ev.embedding = vec
-    await db.flush()
-    return {"evidence_id": evidence_id, "dimensions": len(vec)}
 
 
 async def _reconstruct(db: AsyncSession, cluster_id: str, tenant_id: uuid.UUID) -> dict:
@@ -310,19 +317,6 @@ def classify_relevance_task(self, evidence_id: str, tenant_id: str):
 
     async def work(db):
         return await _classify(db, evidence_id, tid)
-
-    try:
-        return run_async(work)
-    except Exception as exc:
-        raise self.retry(exc=exc) from exc
-
-
-@celery_app.task(bind=True, max_retries=3, default_retry_delay=30)
-def generate_embeddings(self, evidence_id: str, tenant_id: str):
-    tid = uuid.UUID(tenant_id)
-
-    async def work(db):
-        return await _embed(db, evidence_id, tid)
 
     try:
         return run_async(work)

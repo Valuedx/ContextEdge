@@ -77,7 +77,6 @@ async def _execute_evaluation_core(
             db,
             tenant_id=tenant_id,
             query_text=query,
-            symptoms=symptoms,
             entities=entities,
             top_k=5,
         )

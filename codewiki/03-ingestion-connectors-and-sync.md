@@ -20,7 +20,7 @@ You connect each of your existing tools—Jira, ServiceNow, Teams, Gmail, or sim
 
 5. **Handoff recovery** — `_claim_pending_raw_ids_for_handoff` and related helpers in `sync_worker_service.py` merge newly created raw IDs with any **pending** IDs stored on `SourceObject.metadata_extra` under keys such as `pending_normalize_raw_ids`, under row lock, so recovery uses the same content hash logic as normalization and does not loop on deduplicated raws.
 
-6. **Sync run API** — `api/v1/sync.py` lists and fetches `SyncRun` rows tenant-scoped. **Retry** (`POST .../retry`) requires `domain_admin`, checks run status, and enqueues `run_incremental_sync` in `workers/sync_tasks.py`, which runs `run_incremental_job` inside `run_async`.
+6. **Sync run API** — `api/v1/sync.py` lists and fetches `SyncRun` rows tenant-scoped. **Retry** (`POST .../retry`) requires `domain_admin`, checks run status, and dispatches the correct task based on `run.run_type`: `run_backfill.delay(...)` for backfill runs or `run_incremental_sync.delay(...)` for incremental runs.
 
 7. **Sources API** — `api/v1/sources.py` (with `source_service`) manages source CRUD, credentials, and **backfill** via `run_backfill.delay(...)` per selected source object.
 
@@ -34,6 +34,14 @@ You connect each of your existing tools—Jira, ServiceNow, Teams, Gmail, or sim
    | Jira SM | `issueKey` | `PROJ-123` |
 
    The normalization worker uses `_thread_id` from the raw payload to create `Thread` rows (via `ensure_thread_for_evidence` in `evidence_normalization.py`), and the hydration worker passes `Thread.external_thread_id` directly to `connector.hydrate_thread()`.
+
+9. **Backfill-to-incremental checkpoint bridging** — All four connectors now seed a checkpoint on the **last page** of backfill so that subsequent incremental sync can start immediately:
+   - **Gmail**: stores `history_id` from the user's profile
+   - **Teams**: fetches a fresh delta link via `/messages/delta` and stores `delta_link`
+   - **ServiceNow**: records the latest `sys_updated_on` timestamp as `last_updated`
+   - **Jira SM**: records the latest issue `updated` timestamp as `last_updated`
+
+   Without this bridging, incremental sync would fail with no checkpoint after a completed backfill.
 
 Residual caveats (sync queue in prod, dedupe): see [KNOWN_GAPS.md](./KNOWN_GAPS.md).
 
@@ -107,7 +115,7 @@ After commit, `normalize_evidence` tasks are queued for each new raw record, han
 | Thread linking | `backend/src/contextedge/services/evidence_normalization.py` | `ensure_thread_for_evidence` | Normalization worker |
 | Sync orchestration | `backend/src/contextedge/services/sync_worker_service.py` | `run_discovery_job`, `run_backfill_job`, `run_incremental_job`, `_claim_pending_raw_ids_for_handoff` | Celery tasks / tests |
 | Enqueue normalize | `backend/src/contextedge/services/sync_ingestion_queue.py` | `queue_normalize_raw_objects`, `NormalizeEnqueueError` | After transaction commit |
-| Celery sync tasks | `backend/src/contextedge/workers/sync_tasks.py` | `discover_source`, `run_backfill`, `run_incremental_sync` | **sync** queue |
+| Celery sync tasks | `backend/src/contextedge/workers/sync_tasks.py` | `run_backfill`, `run_incremental_sync` | **sync** queue |
 | Sync API | `backend/src/contextedge/api/v1/sync.py` | `list_all_sync_runs`, `retry_sync_run` | HTTP |
 | Source helpers | `backend/src/contextedge/services/source_service.py` | `discover_source_objects`, `create_sync_run`, `decrypt_credentials` | Discovery/sync flows |
 

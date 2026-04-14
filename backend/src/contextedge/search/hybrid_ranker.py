@@ -182,7 +182,6 @@ async def rank_playbooks(
     db: AsyncSession,
     tenant_id: uuid.UUID,
     query_text: str,
-    symptoms: list[str] | None = None,
     entities: list[str] | None = None,
     top_k: int = 5,
     weights: RankingWeights | None = None,

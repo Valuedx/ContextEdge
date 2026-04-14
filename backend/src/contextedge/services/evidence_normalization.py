@@ -12,13 +12,19 @@ from contextedge.models.evidence import EvidenceItem, Thread
 
 
 def evidence_title_from_payload(payload: dict | None) -> str:
-    body = payload or {}
-    return body.get("title") or body.get("subject") or "Untitled"
+    p = payload or {}
+    return (
+        p.get("title") or p.get("subject") or p.get("summary")
+        or p.get("short_description") or "Untitled"
+    )
 
 
 def evidence_body_from_payload(payload: dict | None) -> str:
-    body = payload or {}
-    return body.get("body") or body.get("body_text") or str(body)[:8000]
+    p = payload or {}
+    return (
+        p.get("body") or p.get("body_text") or p.get("description")
+        or p.get("text") or p.get("snippet") or str(p)[:8000]
+    )
 
 
 def evidence_content_hash_from_payload(payload: dict | None) -> str:

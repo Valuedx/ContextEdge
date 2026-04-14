@@ -100,7 +100,7 @@ Every proposed step links back to the evidence that supports it, so reviewers ca
 | Episodes | `backend/src/contextedge/ai/extractors/episode_extractor.py` | `reconstruct_episode` | Episode creation |
 | Episode persist | `backend/src/contextedge/services/episode_service.py` | `create_episodes_from_evidence` | API / tasks |
 | Contradictions | `backend/src/contextedge/services/contradiction_service.py` | (LLM-assisted compare) | Evaluation tasks |
-| Celery hooks | `backend/src/contextedge/workers/extraction_tasks.py` | `classify_relevance_task`, `reconstruct_episode_task`, `generate_embeddings` | Queues |
+| Celery hooks | `backend/src/contextedge/workers/extraction_tasks.py` | `classify_relevance_task`, `reconstruct_episode_task` | Queues |
 
 ## Acme VPN incident (this layer)
 

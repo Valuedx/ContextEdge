@@ -24,7 +24,6 @@ async def match_playbooks(
         db,
         tenant_id=tenant_id,
         query_text=query_text,
-        symptoms=symptoms,
         entities=entities,
         top_k=top_k,
     )

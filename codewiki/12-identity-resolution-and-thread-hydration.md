@@ -65,10 +65,11 @@ Thread hydration fills in conversation context lazily: the connector fetches det
 1. Loads the `Source` and its active `SourceCredential` from the DB.
 2. Calls `decrypt_credentials` and builds the connector via `get_connector(source_type, config, creds)`.
 3. Calls `connector.hydrate_thread(thread_id)` — each connector implements this to fetch complete thread messages and participant metadata. The `thread_id` argument is `Thread.external_thread_id`, which uses the compound format set during normalization.
-4. Finds the matching `Thread` row and updates `hydration_status="complete"`, `message_count`, and `participant_count`.
-5. Task retries up to 3 times with a 60-second delay on failure.
+4. Finds the matching `Thread` row and updates `hydration_status="complete"`, `message_count`, `participant_count`, `first_message_at`, and `last_message_at` from message timestamps. If the thread has no title, the first message's subject or body prefix is used.
+5. Persists each hydrated message as a `RawEvidenceObject` via `persist_ingestion_events`, then enqueues `normalize_evidence` for each new raw ID — so hydrated content becomes searchable evidence.
+6. Task retries up to 3 times with a 60-second delay on failure.
 
-The `Thread` model (`models/evidence.py`) tracks `external_thread_id`, `source_id`, `tenant_id`, `hydration_status`, and message/participant counts. Evidence items link to threads via `EvidenceItem.thread_id`, so after hydration the full conversation context is available for correlation and extraction.
+The `Thread` model (`models/evidence.py`) tracks `external_thread_id`, `source_id`, `tenant_id`, `hydration_status`, message/participant counts, and `first_message_at`/`last_message_at` timestamps. Evidence items link to threads via `EvidenceItem.thread_id`, so after hydration the full conversation context is available for correlation and extraction.
 
 ## Example: Acme VPN data at this stage
 

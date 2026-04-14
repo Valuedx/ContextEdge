@@ -146,9 +146,20 @@ class TeamsConnector(BaseConnector):
         if next_link and "$skiptoken=" in next_link:
             skip_token = next_link.split("$skiptoken=")[-1].split("&")[0]
 
+        if skip_token:
+            new_checkpoint = Checkpoint(data={"skip_token": skip_token})
+        elif not next_link:
+            delta_data = await self._graph_get(
+                f"/teams/{team_id}/channels/{channel_id}/messages/delta",
+            )
+            delta_link = delta_data.get("@odata.deltaLink", "")
+            new_checkpoint = Checkpoint(data={"delta_link": delta_link})
+        else:
+            new_checkpoint = Checkpoint(data={"skip_token": None})
+
         return BackfillResult(
             events=events,
-            new_checkpoint=Checkpoint(data={"skip_token": skip_token}) if skip_token else None,
+            new_checkpoint=new_checkpoint,
             items_processed=len(events),
             has_more=next_link is not None,
         )
@@ -198,17 +209,29 @@ class TeamsConnector(BaseConnector):
     async def hydrate_thread(self, thread_ref: str) -> HydratedThread:
         parts = thread_ref.split(":")
         team_id, channel_id, message_id = parts[0], parts[1], parts[2]
-        data = await self._graph_get(
+
+        root = await self._graph_get(
+            f"/teams/{team_id}/channels/{channel_id}/messages/{message_id}",
+        )
+        messages = [{
+            "id": root["id"],
+            "body": root.get("body", {}).get("content", ""),
+            "subject": root.get("subject"),
+            "from": root.get("from", {}).get("user", {}).get("displayName"),
+            "timestamp": root.get("createdDateTime"),
+        }]
+
+        replies_data = await self._graph_get(
             f"/teams/{team_id}/channels/{channel_id}/messages/{message_id}/replies",
         )
-        messages = []
-        for reply in data.get("value", []):
+        for reply in replies_data.get("value", []):
             messages.append({
                 "id": reply["id"],
                 "body": reply.get("body", {}).get("content", ""),
                 "from": reply.get("from", {}).get("user", {}).get("displayName"),
                 "timestamp": reply.get("createdDateTime"),
             })
+
         participants = {m.get("from") for m in messages if m.get("from")}
         return HydratedThread(
             thread_id=thread_ref,

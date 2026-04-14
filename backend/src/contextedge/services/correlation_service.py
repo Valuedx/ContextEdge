@@ -10,6 +10,7 @@ from contextedge.models.episode import CorrelationEdge
 from contextedge.models.evidence import EvidenceItem, RawEvidenceObject, Thread
 from contextedge.models.session import CaseLink
 from contextedge.models.source import Source
+from contextedge.services.artifact_extraction_service import load_raw_payload
 from contextedge.services.event_log_service import append_operational_event
 from contextedge.services.identity_service import (
     find_related_evidence_ids_by_identity_ids,
@@ -62,6 +63,7 @@ def extract_case_link_candidates(
     *,
     source_type: str,
     raw_object: RawEvidenceObject | None,
+    raw_payload: dict | None = None,
     thread_external_id: str | None = None,
 ) -> list[tuple[str, str]]:
     candidates: list[tuple[str, str]] = []
@@ -78,7 +80,7 @@ def extract_case_link_candidates(
 
     if raw_object is not None:
         add(source_type, raw_object.external_id)
-        payload = raw_object.raw_payload if isinstance(raw_object.raw_payload, dict) else {}
+        payload = raw_payload if isinstance(raw_payload, dict) else {}
         add(f"{source_type}:thread", payload.get("_thread_id"))
 
     add(f"{source_type}:thread", thread_external_id)
@@ -99,8 +101,14 @@ async def correlate_evidence_item(
         return {"status": "skipped", "reason": "source_not_found"}
 
     raw_object = None
+    raw_payload: dict | None = None
     if evidence.raw_object_ref is not None:
         raw_object = await db.get(RawEvidenceObject, evidence.raw_object_ref)
+        if raw_object is not None:
+            try:
+                raw_payload = await load_raw_payload(raw_object)
+            except (ValueError, Exception):
+                raw_payload = raw_object.raw_payload if isinstance(raw_object.raw_payload, dict) else {}
 
     thread_external_id = None
     if evidence.thread_id is not None:
@@ -111,6 +119,7 @@ async def correlate_evidence_item(
     candidates = extract_case_link_candidates(
         source_type=source.source_type or "unknown",
         raw_object=raw_object,
+        raw_payload=raw_payload,
         thread_external_id=thread_external_id,
     )
     existing_links: list[CaseLink] = []

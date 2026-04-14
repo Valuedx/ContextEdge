@@ -57,10 +57,3 @@ def configure_saml_for_tenant(tenant_config: dict[str, Any]) -> dict:
     }
 
 
-async def validate_service_account_token(token: str) -> dict | None:
-    """Validate a service account API token for runtime access.
-
-    Service accounts have scope-limited access to specific domains and APIs.
-    Token format and storage TBD - placeholder for MVP.
-    """
-    return None

@@ -130,7 +130,6 @@ async def runtime_match(
         db,
         tenant_id=user.tenant_id,
         query_text=query_text,
-        symptoms=body.symptoms,
         entities=body.entities,
         top_k=body.top_k,
         domain_id=body.domain_id,

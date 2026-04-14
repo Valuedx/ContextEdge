@@ -54,6 +54,9 @@ async def retry_sync_run(run_id: UUID, db: DbSession, user: AuthUser):
     if run.source_object_id is None:
         raise HTTPException(status_code=400, detail="Run has no source object to retry")
 
-    from contextedge.workers.sync_tasks import run_incremental_sync
-    run_incremental_sync.delay(str(run.source_id), str(run.source_object_id), str(user.tenant_id))
-    return {"status": "retry_queued"}
+    from contextedge.workers.sync_tasks import run_backfill, run_incremental_sync
+    if run.run_type == "backfill":
+        run_backfill.delay(str(run.source_id), str(run.source_object_id), str(user.tenant_id))
+    else:
+        run_incremental_sync.delay(str(run.source_id), str(run.source_object_id), str(user.tenant_id))
+    return {"status": "retry_queued", "dispatched_as": run.run_type or "incremental"}

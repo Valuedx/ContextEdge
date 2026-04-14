@@ -23,8 +23,8 @@ Background processing ensures that heavy work like AI extraction, pattern detect
 3. **Async bridge** — `workers/asyncio_runner.run_async` runs an async callable with a DB session (unit-of-work style) so tasks stay thin wrappers around `services/`.
 
 4. **Representative tasks**
-   - **sync:** `discover_source`, `run_backfill`, `run_incremental_sync` (`sync_tasks.py`) — discovery, historical backfill, incremental pull per source object.
-   - **extraction:** `normalize_evidence` (including inline identity linking and decision extraction), `classify_relevance_task`, `generate_embeddings`, `reconstruct_episode_task` (`extraction_tasks.py`).
+   - **sync:** `run_backfill`, `run_incremental_sync` (`sync_tasks.py`) — historical backfill and incremental pull per source object.
+   - **extraction:** `normalize_evidence` (including inline identity linking, decision extraction, and embedding), `classify_relevance_task`, `reconstruct_episode_task` (`extraction_tasks.py`).
    - **hydration:** `hydrate_thread` (`hydration_tasks.py`) for fuller thread payloads.
    - **correlation:** `correlate_evidence` (`correlation_tasks.py`).
    - **artifacts:** `extract_attachment_artifact` (`artifact_tasks.py`).
@@ -45,7 +45,6 @@ flowchart TB
   API --> QSYNC[Queue sync]
   QSYNC --> INC[run_incremental_sync]
   QSYNC --> BF[run_backfill]
-  QSYNC --> DISC[discover_source]
   QEX --> NORM[normalize_evidence]
   NORM -->|inline| DEC[link_evidence_decisions]
   NORM -->|may chain| CORR[correlate_evidence]
@@ -130,7 +129,7 @@ Each task runs independently and retries on failure, so a temporary AI provider 
 | --- | --- | --- | --- |
 | Celery config | `backend/src/contextedge/workers/celery_app.py` | `celery_app`, `task_routes`, `beat_schedule` | — |
 | Async runner | `backend/src/contextedge/workers/asyncio_runner.py` | `run_async` | All async tasks |
-| Normalize / classify / episode | `backend/src/contextedge/workers/extraction_tasks.py` | `normalize_evidence` (calls `link_evidence_identities` + `link_evidence_decisions` inline), `classify_relevance_task`, `generate_embeddings`, `reconstruct_episode_task` | extraction |
+| Normalize / classify / episode | `backend/src/contextedge/workers/extraction_tasks.py` | `normalize_evidence` (calls `link_evidence_identities` + `link_evidence_decisions` + embedding inline), `classify_relevance_task`, `reconstruct_episode_task` | extraction |
 | Decision extraction | `backend/src/contextedge/ai/extractors/decision_extractor.py` | `extract_decisions` | Called within normalize |
 | Decision linking | `backend/src/contextedge/services/decision_service.py` | `link_evidence_decisions` | Called within normalize |
 | Thread hydration | `backend/src/contextedge/workers/hydration_tasks.py` | `hydrate_thread` | hydration |
@@ -138,7 +137,7 @@ Each task runs independently and retries on failure, so a temporary AI provider 
 | Attachments | `backend/src/contextedge/workers/artifact_tasks.py` | `extract_attachment_artifact` | extraction |
 | Patterns | `backend/src/contextedge/workers/pattern_tasks.py` | `cluster_episodes`, `generate_playbook_candidate` | pattern |
 | Eval / drift / contradictions | `backend/src/contextedge/workers/evaluation_tasks.py` | `run_evaluation`, `detect_drift`, `scan_contradictions_task` | evaluation |
-| Sync | `backend/src/contextedge/workers/sync_tasks.py` | `discover_source`, `run_backfill`, `run_incremental_sync` | sync |
+| Sync | `backend/src/contextedge/workers/sync_tasks.py` | `run_backfill`, `run_incremental_sync` | sync |
 | Enqueue helper | `backend/src/contextedge/services/sync_ingestion_queue.py` | `queue_normalize_raw_objects` | extraction |
 
 ## Acme VPN incident (this layer)

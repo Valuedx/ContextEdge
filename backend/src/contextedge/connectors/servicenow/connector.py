@@ -121,9 +121,22 @@ class ServiceNowConnector(BaseConnector):
 
         has_more = len(records) == 100
         new_offset = offset + len(records)
+
+        if has_more:
+            new_checkpoint = Checkpoint(data={"offset": new_offset})
+        else:
+            latest_ts = ""
+            for record in records:
+                ts = record.get("sys_updated_on", "")
+                if ts > latest_ts:
+                    latest_ts = ts
+            if not latest_ts:
+                latest_ts = end_str
+            new_checkpoint = Checkpoint(data={"last_updated": latest_ts})
+
         return BackfillResult(
             events=events,
-            new_checkpoint=Checkpoint(data={"offset": new_offset}) if has_more else None,
+            new_checkpoint=new_checkpoint,
             items_processed=len(events),
             has_more=has_more,
         )

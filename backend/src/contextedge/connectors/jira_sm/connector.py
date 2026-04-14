@@ -129,12 +129,23 @@ class JiraSmConnector(BaseConnector):
             )
 
         total = data.get("total", 0)
-        new_start_at = start_at + len(data.get("issues", []))
+        issues = data.get("issues", [])
+        new_start_at = start_at + len(issues)
         has_more = new_start_at < total
+
+        if has_more:
+            new_checkpoint = Checkpoint(data={"start_at": new_start_at})
+        else:
+            latest_ts = window.end.isoformat()
+            for issue in issues:
+                updated = issue.get("fields", {}).get("updated", "")
+                if updated > latest_ts:
+                    latest_ts = updated
+            new_checkpoint = Checkpoint(data={"last_updated": latest_ts})
 
         return BackfillResult(
             events=events,
-            new_checkpoint=Checkpoint(data={"start_at": new_start_at}) if has_more else None,
+            new_checkpoint=new_checkpoint,
             items_processed=len(events),
             has_more=has_more,
         )
