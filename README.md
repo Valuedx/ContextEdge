@@ -30,7 +30,8 @@ OpenAPI for a running local API:
 - **Object storage:** MinIO (S3-compatible) for raw evidence offload and attachments
 - **AI integration:** LiteLLM with provider-specific keys (OpenAI, Anthropic, Google/Vertex AI)
 - **Auth:** Bearer JWT for users and optional `X-Service-Token` for service integrations
-- **Graph:** PostgreSQL adjacency table (`graph_edges`) for pattern/entity/contradiction relationships
+- **Graph:** PostgreSQL adjacency table (`graph_edges`) for pattern, entity, contradiction, and decision relationships
+- **Decision capture:** Two-tier decision graph — governed execution edges (approvals, denials, outcomes) from the execution engine, plus AI-extracted decision edges from ingested evidence text
 - **Decision traces:** Resolution sessions with append-only trace events for runtime audit
 
 ## Quick Start
@@ -127,10 +128,11 @@ backend/
                             #   session, policy, evaluation, audit, tenant)
     schemas/                # Pydantic request/response models
     services/               # Business logic (playbook lifecycle, retention, correlation,
-                            #   contradiction detection, session/trace, object store, ...)
+                            #   contradiction detection, decision linking, session/trace,
+                            #   object store, ...)
     connectors/             # Source-specific ingestion adapters
     workers/                # Celery tasks (extraction, correlation, pattern, evaluation)
-    ai/                     # LLM provider, extractors, classifiers, generators
+    ai/                     # LLM provider, extractors (identity, decision), classifiers, generators
     graph/                  # Context graph builder and query helpers
     search/                 # Hybrid ranker, FTS, vector search, access control
     middleware/             # Request audit, tenant context

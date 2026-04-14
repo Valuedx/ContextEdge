@@ -45,8 +45,8 @@ Start with the system architecture, then follow the numbered deep dives:
 | [06-ai-extraction-and-embeddings.md](./06-ai-extraction-and-embeddings.md) | Embeddings, classifiers, extractors, and model orchestration |
 | [07-episodes-patterns-playbooks.md](./07-episodes-patterns-playbooks.md) | Episodes, patterns, playbook lifecycle, and knowledge promotion |
 | [08-workers-celery-queues.md](./08-workers-celery-queues.md) | Celery queues, task routing, retries, and beat |
-| [09-graph-and-correlation.md](./09-graph-and-correlation.md) | Correlation edges, graph structure, and contradictions |
-| [10-governance-sessions-execution-audit.md](./10-governance-sessions-execution-audit.md) | Sessions, execution safety, operational events, and audit |
+| [09-graph-and-correlation.md](./09-graph-and-correlation.md) | Correlation edges, graph structure, contradictions, and decision graph edges |
+| [10-governance-sessions-execution-audit.md](./10-governance-sessions-execution-audit.md) | Sessions, execution safety, governed decision edges, operational events, and audit |
 | [11-retention-and-operational-events.md](./11-retention-and-operational-events.md) | Retention, legal hold, memory class, and event history |
 | [12-identity-resolution-and-thread-hydration.md](./12-identity-resolution-and-thread-hydration.md) | Canonical identities, alias matching, and thread hydration |
 | [13-evaluation-drift-and-feedback.md](./13-evaluation-drift-and-feedback.md) | Offline evaluation, drift alerts, and the feedback loop |
@@ -62,11 +62,12 @@ Every article uses the same **Acme Corp VPN outage** scenario. To trace a single
 | 1. Connect sources | [03](./03-ingestion-connectors-and-sync.md) | Jira connector fetches two VPN tickets; sync run records checkpoint |
 | 2. Normalize evidence | [04](./04-evidence-normalization-and-storage.md) | Raw Jira JSON becomes a clean, searchable evidence item |
 | 3. Resolve identities | [12](./12-identity-resolution-and-thread-hydration.md) | "jsmith," "John Smith," and "J. Smith (IT)" resolve to one person |
+| 3b. Extract decisions | [09](./09-graph-and-correlation.md) | "Engineer restarted vpn-gw-east-01" becomes a decision graph edge linking actor to target |
 | 4. Classify and extract | [06](./06-ai-extraction-and-embeddings.md) | AI marks evidence as operational; proposes an episode with steps |
 | 5. Build episodes | [07](./07-episodes-patterns-playbooks.md) | Draft episode links to pattern; playbook candidate enters review |
 | 6. Connect relationships | [09](./09-graph-and-correlation.md) | Correlation edges link Jira ticket to Teams thread; graph scores playbooks; Graph Explorer visualizes the context network |
 | 7. Search and rank | [05](./05-search-hybrid-and-access.md) | Analyst searches "VPN certificate expired"; hybrid ranking returns results |
-| 8. Resolve and execute | [10](./10-governance-sessions-execution-audit.md) | Responder opens session; playbook execution enforces safety caps |
+| 8. Resolve and execute | [10](./10-governance-sessions-execution-audit.md) | Responder opens session; playbook execution enforces safety caps; governed decision edges record approvals and outcomes |
 | 9. Monitor quality | [13](./13-evaluation-drift-and-feedback.md) | Evaluation run scores accuracy; drift scan flags negative feedback |
 | 10. Manage retention | [11](./11-retention-and-operational-events.md) | Nightly job archives stale chat but preserves legal-hold items |
 
