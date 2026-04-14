@@ -47,6 +47,10 @@ The current frontend notification experience is the header dropdown in `AppHeade
 
 `apply_retention_policy` in `retention_service.py` is intended to be invoked from a scheduled job or operator script. If nothing calls it, tenant retention defaults have no effect yet.
 
+## Object storage blobs are not lifecycle-managed in-app
+
+Raw payloads above the offload threshold are stored in S3-compatible object storage (MinIO) and referenced by `RawEvidenceObject.object_storage_key`. The application currently uploads and reads these blobs but does not delete them (no TTL, lifecycle policy enforcement, or garbage collection job in code). In practice, blob retention relies on external bucket lifecycle rules or manual cleanup.
+
 ## Graph Explorer is read-only
 
 The Graph Explorer page (`/graph-explorer`) provides interactive visualization and traversal of the context graph — statistics, subgraph rendering via React Flow, and BFS neighbor browsing — but does not yet support creating, editing, or deleting graph edges from the UI. All graph mutations happen through backend services: builder functions called from pattern discovery, playbook generation, contradiction scans, identity linking, decision extraction, and episode graph construction.
@@ -58,6 +62,14 @@ AI-extracted decisions (Tier 1) rely on `decision_extractor.py` prompting an LLM
 ## Decision and identity linking order in normalization
 
 The normalization worker runs `link_evidence_identities` before `link_evidence_decisions`. Both write to `evidence.canonical_entity_refs` non-destructively (using separate keys: `identities` and `decisions`). If either step fails, the other's data is preserved. However, if identity linking is re-run after decisions have been written, the merge logic in `link_evidence_identities` preserves existing keys — but a full re-normalization should be monitored to ensure both keys remain intact.
+
+## Thread hydration requires normalization to run first
+
+`Thread` rows are created during normalization via `ensure_thread_for_evidence`. If normalization has not yet processed a raw evidence object, the corresponding `Thread` row will not exist and the hydration API will return 404. This is by design (threads are created lazily), but operators should be aware that hydration depends on normalization completing first.
+
+## Gmail backfill checkpoint seeds history_id for incremental
+
+Gmail's `backfill` fetches the mailbox `historyId` when the last page completes and stores it in the checkpoint. This bridges backfill to incremental sync. If a backfill is interrupted before the final page, only a `page_token` checkpoint exists and incremental sync will fail until backfill finishes.
 
 ## Historical note: sync Celery tasks
 

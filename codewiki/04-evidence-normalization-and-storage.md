@@ -20,11 +20,13 @@ The outcome: analysts can trust that search results are complete, duplicate-free
 
 3. **Normalize** — `_normalize` inside `workers/extraction_tasks.py` reads the raw row, derives `title` / `body` via `evidence_title_from_payload` and `evidence_body_from_payload`, and computes **normalization hash** `evidence_content_hash_from_payload` (hash of normalized body text). If an `EvidenceItem` with the same `tenant_id` + `content_hash` exists, the path is **deduped**: it may repair embeddings, link identities, and register attachment artifacts against the existing row.
 
-4. **New evidence row** — On no match, it inserts `EvidenceItem` with `relevance_state="unclassified"`, links identities when content allows, **extracts and links decisions** from the text, embeds via `embed_evidence`, runs attachment registration, may enqueue/classify relevance, and triggers `correlate_evidence` for cross-source linking.
+4. **Thread linking** — After the evidence row exists (new or deduped), `ensure_thread_for_evidence` in `evidence_normalization.py` checks the raw payload for `_thread_id`. If present, it finds or creates a `Thread` row (get-or-create by `tenant_id` + `source_id` + `external_thread_id`) and sets `EvidenceItem.thread_id`. The thread starts with `hydration_status="pending"` and can later be hydrated on demand via the threads API.
 
-5. **Object store** — `object_store.py` provides `ensure_bucket`, `upload_raw`, `download_raw`, and artifact upload helpers using boto3 against the configured S3-compatible endpoint (MinIO in dev).
+5. **New evidence row** — On no match, it inserts `EvidenceItem` with `relevance_state="unclassified"`, links the thread (step 4), links identities when content allows, **extracts and links decisions** from the text, embeds via `embed_evidence`, runs attachment registration, may enqueue/classify relevance, and triggers `correlate_evidence` for cross-source linking.
 
-6. **Access policy** — Evidence rows may carry `access_policy_id`; search and GET routes filter using `resolve_excluded_access_policy_ids` (see [05-search-hybrid-and-access.md](./05-search-hybrid-and-access.md)).
+6. **Object store** — `object_store.py` provides `ensure_bucket`, `upload_raw`, `download_raw`, and artifact upload helpers using boto3 against the configured S3-compatible endpoint (MinIO in dev).
+
+7. **Access policy** — Evidence rows may carry `access_policy_id`; search and GET routes filter using `resolve_excluded_access_policy_ids` (see [05-search-hybrid-and-access.md](./05-search-hybrid-and-access.md)).
 
 ## Example: Acme VPN data at this stage
 
@@ -90,6 +92,7 @@ Note: `canonical_entity_refs` is empty at this point. Identity resolution popula
 | --- | --- | --- | --- |
 | Raw insert + offload | `backend/src/contextedge/services/ingestion_persistence.py` | `persist_ingestion_events`, `OFFLOAD_THRESHOLD_BYTES` | After connector batch |
 | Title/body/hash helpers | `backend/src/contextedge/services/evidence_normalization.py` | `evidence_title_from_payload`, `evidence_body_from_payload`, `evidence_content_hash_from_payload` | Normalize |
+| Thread linking | `backend/src/contextedge/services/evidence_normalization.py` | `ensure_thread_for_evidence` | Normalize |
 | Blob I/O | `backend/src/contextedge/services/object_store.py` | `upload_raw`, `download_raw`, `ensure_bucket` | Persist / normalize |
 | Normalize worker | `backend/src/contextedge/workers/extraction_tasks.py` | `_normalize`, `normalize_evidence` | Celery **extraction** queue |
 | Decision extraction | `backend/src/contextedge/ai/extractors/decision_extractor.py` | `extract_decisions` | Normalization worker |

@@ -135,7 +135,7 @@ class TeamsConnector(BaseConnector):
                         "from_email": msg.get("from", {}).get("user", {}).get("email"),
                         "importance": msg.get("importance"),
                     },
-                    thread_id=msg["id"],
+                    thread_id=f"{team_id}:{channel_id}:{msg['id']}",
                     timestamp=datetime.fromisoformat(msg["createdDateTime"].replace("Z", "+00:00")),
                     metadata={"team_id": team_id, "channel_id": channel_id},
                 )
@@ -182,7 +182,7 @@ class TeamsConnector(BaseConnector):
                         "subject": msg.get("subject"),
                         "from": msg.get("from", {}).get("user", {}).get("displayName"),
                     },
-                    thread_id=msg["id"],
+                    thread_id=f"{team_id}:{channel_id}:{msg['id']}",
                     timestamp=datetime.fromisoformat(msg["createdDateTime"].replace("Z", "+00:00")) if msg.get("createdDateTime") else None,
                     metadata={"team_id": team_id, "channel_id": channel_id},
                 )

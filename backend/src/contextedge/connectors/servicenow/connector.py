@@ -106,13 +106,14 @@ class ServiceNowConnector(BaseConnector):
         records = data.get("result", [])
 
         for record in records:
+            sys_id = record.get("sys_id", "")
             events.append(
                 IngestionEvent(
-                    external_id=record.get("sys_id", ""),
+                    external_id=sys_id,
                     source_type="servicenow",
                     object_type=table_name,
                     content=record,
-                    thread_id=record.get("number"),
+                    thread_id=f"{table_name}:{sys_id}",
                     timestamp=_parse_snow_datetime(record.get("sys_updated_on")),
                     metadata={"table": table_name},
                 )
@@ -153,13 +154,14 @@ class ServiceNowConnector(BaseConnector):
             ts = record.get("sys_updated_on", "")
             if ts > latest_ts:
                 latest_ts = ts
+            sys_id = record.get("sys_id", "")
             events.append(
                 IngestionEvent(
-                    external_id=record.get("sys_id", ""),
+                    external_id=sys_id,
                     source_type="servicenow",
                     object_type=table_name,
                     content=record,
-                    thread_id=record.get("number"),
+                    thread_id=f"{table_name}:{sys_id}",
                     timestamp=_parse_snow_datetime(ts),
                     metadata={"table": table_name},
                 )

@@ -10,7 +10,7 @@ You connect each of your existing tools—Jira, ServiceNow, Teams, Gmail, or sim
 
 ## Technical walkthrough
 
-1. **Connector contract** — `BaseConnector` in `connectors/base.py` defines the adapter surface: `validate_credentials`, `discover_objects`, `backfill`, `fetch_changes`, and optional thread hydration types (`IngestionEvent`, `Checkpoint`, `BackfillResult`, `ChangeResult`). Concrete implementations live under `connectors/<vendor>/connector.py`.
+1. **Connector contract** — `BaseConnector` in `connectors/base.py` defines the adapter surface: `validate_credentials`, `discover_objects`, `backfill`, `fetch_changes`, and `hydrate_thread`, plus shared types (`IngestionEvent`, `Checkpoint`, `BackfillResult`, `ChangeResult`, `HydratedThread`). Concrete implementations live under `connectors/<vendor>/connector.py`. Each connector must emit `IngestionEvent.thread_id` values in the compound format that its own `hydrate_thread(thread_ref)` can parse — this ensures the normalization pipeline creates `Thread` rows with an `external_thread_id` that hydration can later resolve.
 
 2. **Registry** — `get_connector(source_type, source_config, credentials)` in `connectors/registry.py` maps a string `source_type` to a class. `_register_connectors()` lazily imports and registers `teams`, `gmail`, `servicenow`, and `jira_sm`. New connector types need a module plus an entry in `CONNECTOR_CLASSES`.
 
@@ -23,6 +23,17 @@ You connect each of your existing tools—Jira, ServiceNow, Teams, Gmail, or sim
 6. **Sync run API** — `api/v1/sync.py` lists and fetches `SyncRun` rows tenant-scoped. **Retry** (`POST .../retry`) requires `domain_admin`, checks run status, and enqueues `run_incremental_sync` in `workers/sync_tasks.py`, which runs `run_incremental_job` inside `run_async`.
 
 7. **Sources API** — `api/v1/sources.py` (with `source_service`) manages source CRUD, credentials, and **backfill** via `run_backfill.delay(...)` per selected source object.
+
+8. **Thread ref format contract** — Each connector's `thread_id` must be a compound string that its own `hydrate_thread` can parse. The formats are:
+
+   | Connector | `thread_id` format | Example |
+   | --- | --- | --- |
+   | Gmail | `email:gmailThreadId` | `shared@acme.com:18abcdef123` |
+   | Teams | `teamId:channelId:messageId` | `team-001:chan-002:msg-003` |
+   | ServiceNow | `tableName:sys_id` | `incident:abc123def456` |
+   | Jira SM | `issueKey` | `PROJ-123` |
+
+   The normalization worker uses `_thread_id` from the raw payload to create `Thread` rows (via `ensure_thread_for_evidence` in `evidence_normalization.py`), and the hydration worker passes `Thread.external_thread_id` directly to `connector.hydrate_thread()`.
 
 Residual caveats (sync queue in prod, dedupe): see [KNOWN_GAPS.md](./KNOWN_GAPS.md).
 
@@ -91,8 +102,9 @@ After commit, `normalize_evidence` tasks are queued for each new raw record, han
 
 | Concern | Module path | Key symbols | When it runs |
 | --- | --- | --- | --- |
-| Connector interface | `backend/src/contextedge/connectors/base.py` | `BaseConnector`, `IngestionEvent` | Connector implementations |
+| Connector interface | `backend/src/contextedge/connectors/base.py` | `BaseConnector`, `IngestionEvent`, `HydratedThread` | Connector implementations |
 | Registry | `backend/src/contextedge/connectors/registry.py` | `get_connector`, `supported_source_types` | Sync worker loads connector |
+| Thread linking | `backend/src/contextedge/services/evidence_normalization.py` | `ensure_thread_for_evidence` | Normalization worker |
 | Sync orchestration | `backend/src/contextedge/services/sync_worker_service.py` | `run_discovery_job`, `run_backfill_job`, `run_incremental_job`, `_claim_pending_raw_ids_for_handoff` | Celery tasks / tests |
 | Enqueue normalize | `backend/src/contextedge/services/sync_ingestion_queue.py` | `queue_normalize_raw_objects`, `NormalizeEnqueueError` | After transaction commit |
 | Celery sync tasks | `backend/src/contextedge/workers/sync_tasks.py` | `discover_source`, `run_backfill`, `run_incremental_sync` | **sync** queue |

@@ -14,6 +14,7 @@ from contextedge.services.artifact_extraction_service import (
     register_attachment_artifacts,
 )
 from contextedge.services.evidence_normalization import (
+    ensure_thread_for_evidence,
     evidence_body_from_payload,
     evidence_content_hash_from_payload,
     evidence_title_from_payload,
@@ -67,6 +68,10 @@ async def _normalize(db: AsyncSession, raw_object_id: str, tenant_id: uuid.UUID)
         )
     ).scalar_one_or_none()
     if existing:
+        if existing.thread_id is None:
+            await ensure_thread_for_evidence(
+                db, tenant_id=tenant_id, evidence=existing, payload=payload,
+            )
         embedded = await _ensure_embedding(db, existing)
         identity_count = None
         if not ((existing.canonical_entity_refs or {}).get("identities")) and identity_content.strip():
@@ -136,6 +141,9 @@ async def _normalize(db: AsyncSession, raw_object_id: str, tenant_id: uuid.UUID)
     )
     db.add(ev)
     await db.flush()
+    await ensure_thread_for_evidence(
+        db, tenant_id=tenant_id, evidence=ev, payload=payload,
+    )
     identity_count = 0
     if identity_content.strip():
         try:

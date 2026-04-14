@@ -46,6 +46,16 @@ Decision extraction (`decision_service.link_evidence_decisions`) also resolves a
 
 `resolve_identity_ids_for_terms` and `find_related_evidence_ids_by_identity_ids` are query-side helpers: the first maps search-term strings to canonical IDs; the second returns all evidence that shares any of those IDs—enabling related-evidence discovery from a search query.
 
+### Thread creation during normalization
+
+`Thread` rows are created automatically during normalization by `ensure_thread_for_evidence` in `evidence_normalization.py`. When the raw payload carries a `_thread_id` (set by connectors via `IngestionEvent.thread_id`), the function:
+
+1. Looks up an existing `Thread` by `(tenant_id, source_id, external_thread_id)`.
+2. If none exists, creates a new `Thread` with `hydration_status="pending"` and `title` derived from the evidence payload.
+3. Sets `EvidenceItem.thread_id` to link the evidence to the thread.
+
+This runs in both the **new evidence** and **deduped evidence** paths. The `external_thread_id` uses a connector-specific compound format (e.g. `email:threadId` for Gmail, `teamId:channelId:msgId` for Teams) so that the hydration worker can pass it directly to `connector.hydrate_thread()`. See [03-ingestion-connectors-and-sync.md](./03-ingestion-connectors-and-sync.md) for the full thread ref format table.
+
 ### Thread hydration
 
 Thread hydration fills in conversation context lazily: the connector fetches detailed thread content only when policy and relevance warrant it, rather than pulling every message from every channel at sync time.
@@ -54,11 +64,11 @@ Thread hydration fills in conversation context lazily: the connector fetches det
 
 1. Loads the `Source` and its active `SourceCredential` from the DB.
 2. Calls `decrypt_credentials` and builds the connector via `get_connector(source_type, config, creds)`.
-3. Calls `connector.hydrate_thread(thread_id)` — each connector implements this to fetch complete thread messages and participant metadata.
+3. Calls `connector.hydrate_thread(thread_id)` — each connector implements this to fetch complete thread messages and participant metadata. The `thread_id` argument is `Thread.external_thread_id`, which uses the compound format set during normalization.
 4. Finds the matching `Thread` row and updates `hydration_status="complete"`, `message_count`, and `participant_count`.
 5. Task retries up to 3 times with a 60-second delay on failure.
 
-The `Thread` model (`models/evidence.py`) tracks `external_thread_id`, `source_id`, `tenant_id`, `hydration_status`, and message/participant counts. Evidence items link to threads, so after hydration the full conversation context is available for normalization and extraction.
+The `Thread` model (`models/evidence.py`) tracks `external_thread_id`, `source_id`, `tenant_id`, `hydration_status`, and message/participant counts. Evidence items link to threads via `EvidenceItem.thread_id`, so after hydration the full conversation context is available for correlation and extraction.
 
 ## Example: Acme VPN data at this stage
 
@@ -171,6 +181,7 @@ After hydration, the full 18-message Teams conversation is available for episode
 | Decision linking | `backend/src/contextedge/services/decision_service.py` | `link_evidence_decisions` | Normalization worker |
 | Graph wiring | `backend/src/contextedge/graph/builder.py` | `link_node_to_identities` | After linking |
 | Canonical identity model | `backend/src/contextedge/models/episode.py` | `CanonicalIdentity`, `IdentityAlias`, `EvidenceIdentityLink` | ORM |
+| Thread creation | `backend/src/contextedge/services/evidence_normalization.py` | `ensure_thread_for_evidence` | Normalization worker |
 | Thread model | `backend/src/contextedge/models/evidence.py` | `Thread` | ORM |
 | Hydration worker | `backend/src/contextedge/workers/hydration_tasks.py` | `hydrate_thread` | Celery **hydration** queue |
 

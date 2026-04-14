@@ -146,7 +146,7 @@ class GmailConnector(BaseConnector):
                         "message_count": len(messages),
                         "snippet": thread_data.get("snippet", ""),
                     },
-                    thread_id=thread_summary["id"],
+                    thread_id=f"{user_email}:{thread_summary['id']}",
                     timestamp=datetime.fromtimestamp(
                         int(messages[0].get("internalDate", "0")) / 1000,
                         tz=timezone.utc,
@@ -156,11 +156,16 @@ class GmailConnector(BaseConnector):
             )
 
         page_token = data.get("nextPageToken")
-        history_id = data.get("resultSizeEstimate")
+
+        if page_token:
+            new_checkpoint = Checkpoint(data={"page_token": page_token})
+        else:
+            profile = await self._gmail_get(f"/users/{user_email}/profile", user_email)
+            new_checkpoint = Checkpoint(data={"history_id": profile["historyId"]})
 
         return BackfillResult(
             events=events,
-            new_checkpoint=Checkpoint(data={"page_token": page_token}) if page_token else None,
+            new_checkpoint=new_checkpoint,
             items_processed=len(events),
             has_more=page_token is not None,
         )
@@ -202,7 +207,7 @@ class GmailConnector(BaseConnector):
                     source_type="gmail",
                     object_type="email_thread",
                     content={"thread_id": tid, "needs_hydration": True},
-                    thread_id=tid,
+                    thread_id=f"{user_email}:{tid}",
                     metadata={"mailbox": user_email},
                 )
             )
