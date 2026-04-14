@@ -76,7 +76,7 @@ class TestTeamsCheckpointBridging:
         assert result.has_more is False
 
     @pytest.mark.asyncio
-    async def test_nextlink_without_skiptoken_yields_safe_checkpoint(self):
+    async def test_nextlink_without_skiptoken_stores_full_url(self):
         from contextedge.connectors.teams.connector import TeamsConnector
 
         connector = TeamsConnector(
@@ -88,6 +88,7 @@ class TestTeamsCheckpointBridging:
             },
         )
 
+        full_next_url = "https://graph.microsoft.com/v1.0/teams/t1/channels/c1/messages?$top=50"
         response = {
             "value": [
                 {
@@ -96,7 +97,7 @@ class TestTeamsCheckpointBridging:
                     "createdDateTime": "2024-01-01T00:00:00Z",
                 }
             ],
-            "@odata.nextLink": "https://graph.microsoft.com/v1.0/teams/t1/channels/c1/messages?$top=50",
+            "@odata.nextLink": full_next_url,
         }
 
         async def mock_graph_get(path, params=None):
@@ -115,7 +116,58 @@ class TestTeamsCheckpointBridging:
 
         assert result.has_more is True
         assert result.new_checkpoint is not None
-        assert result.new_checkpoint.data.get("skip_token") is None
+        assert result.new_checkpoint.data.get("next_link") == full_next_url
+
+    @pytest.mark.asyncio
+    async def test_nextlink_checkpoint_advances_on_resume(self):
+        """Verify that a second backfill call with a next_link checkpoint
+        uses the stored URL instead of rebuilding params (no infinite loop)."""
+        from contextedge.connectors.teams.connector import TeamsConnector
+
+        connector = TeamsConnector(
+            source_config={},
+            credentials={
+                "tenant_id": "t",
+                "client_id": "c",
+                "client_secret": "s",
+            },
+        )
+
+        requested_paths: list[str] = []
+
+        page2_url = "https://graph.microsoft.com/v1.0/teams/t1/channels/c1/messages?$top=50&page=2"
+        page2_response = {
+            "value": [
+                {
+                    "id": "msg2",
+                    "body": {"content": "page 2", "contentType": "text"},
+                    "createdDateTime": "2024-01-02T00:00:00Z",
+                }
+            ],
+        }
+        delta_response = {"@odata.deltaLink": "https://graph.microsoft.com/v1.0/delta?token=final"}
+
+        async def mock_graph_get(path, params=None):
+            requested_paths.append(path)
+            if "delta" in path:
+                return delta_response
+            return page2_response
+
+        connector._graph_get = mock_graph_get
+
+        result = await connector.backfill(
+            "team1:chan1",
+            "teams_channel",
+            DateRange(
+                start=datetime(2024, 1, 1, tzinfo=timezone.utc),
+                end=datetime(2024, 12, 31, tzinfo=timezone.utc),
+            ),
+            checkpoint=Checkpoint(data={"next_link": page2_url}),
+        )
+
+        assert requested_paths[0] == page2_url.replace("https://graph.microsoft.com/v1.0", "")
+        assert result.has_more is False
+        assert "delta_link" in result.new_checkpoint.data
 
 
 class TestServiceNowCheckpointBridging:
@@ -211,6 +263,40 @@ class TestJiraCheckpointBridging:
         assert result.has_more is False
         assert result.new_checkpoint is not None
         assert "last_updated" in result.new_checkpoint.data
+        assert result.new_checkpoint.data["last_updated"] == "2024-06-15T10:00:00.000+0000"
+
+    @pytest.mark.asyncio
+    async def test_last_page_no_issues_uses_window_end(self):
+        from contextedge.connectors.jira_sm.connector import JiraSmConnector
+
+        connector = JiraSmConnector(
+            source_config={},
+            credentials={
+                "base_url": "https://test.atlassian.net",
+                "email": "a@b.com",
+                "api_token": "tok",
+            },
+        )
+
+        response = {"issues": [], "total": 0}
+
+        async def mock_jira_get(path, params=None):
+            return response
+
+        connector._jira_get = mock_jira_get
+        window_end = datetime(2024, 12, 31, tzinfo=timezone.utc)
+
+        result = await connector.backfill(
+            "PROJ",
+            "jira_project",
+            DateRange(
+                start=datetime(2024, 1, 1, tzinfo=timezone.utc),
+                end=window_end,
+            ),
+        )
+
+        assert result.new_checkpoint is not None
+        assert result.new_checkpoint.data["last_updated"] == window_end.isoformat()
 
 
 # ---------------------------------------------------------------------------
@@ -453,6 +539,129 @@ class TestTeamsHydrateThread:
         assert result.messages[0]["subject"] == "Thread subject"
         assert result.messages[1]["id"] == "reply-1"
         assert result.participant_count == 2
+
+
+# ---------------------------------------------------------------------------
+# Phase 6: Dead code removal verification
+# ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# Hydration fixes: epoch-ms timestamps, subject propagation
+# ---------------------------------------------------------------------------
+
+
+class TestHydrationTimestampParsing:
+    def test_iso_format(self):
+        from contextedge.workers.hydration_tasks import _parse_msg_timestamp
+
+        result = _parse_msg_timestamp("2024-06-15T10:00:00Z")
+        assert result is not None
+        assert result.year == 2024
+        assert result.month == 6
+        assert result.day == 15
+
+    def test_epoch_ms_gmail_format(self):
+        """Gmail internalDate is epoch milliseconds as a string."""
+        from contextedge.workers.hydration_tasks import _parse_msg_timestamp
+
+        result = _parse_msg_timestamp("1718438400000")
+        assert result is not None
+        assert result.year == 2024
+
+    def test_none_input(self):
+        from contextedge.workers.hydration_tasks import _parse_msg_timestamp
+
+        assert _parse_msg_timestamp(None) is None
+
+    def test_empty_string(self):
+        from contextedge.workers.hydration_tasks import _parse_msg_timestamp
+
+        assert _parse_msg_timestamp("") is None
+
+    def test_garbage_input(self):
+        from contextedge.workers.hydration_tasks import _parse_msg_timestamp
+
+        assert _parse_msg_timestamp("not-a-date") is None
+
+
+class TestHydratedMessageSubjectPropagation:
+    @pytest.mark.asyncio
+    async def test_subject_copied_to_ingestion_event_content(self):
+        """Hydrated messages with subject should have it in IngestionEvent.content
+        so normalization can extract a meaningful title."""
+        from contextedge.workers.hydration_tasks import _parse_msg_timestamp
+        from contextedge.connectors.base import IngestionEvent
+
+        msg = {
+            "id": "msg1",
+            "body": "Hello world",
+            "from": "Alice",
+            "subject": "VPN Outage Alert",
+            "timestamp": "2024-06-15T10:00:00Z",
+        }
+
+        msg_content: dict = {
+            "body": msg.get("body", ""),
+            "from": msg.get("from", ""),
+            "type": msg.get("type", "message"),
+        }
+        if msg.get("subject"):
+            msg_content["subject"] = msg["subject"]
+
+        ev = IngestionEvent(
+            external_id="thread:msg:msg1",
+            source_type="teams",
+            object_type="hydrated_message",
+            content=msg_content,
+            thread_id="thread1",
+            timestamp=_parse_msg_timestamp(msg["timestamp"]),
+        )
+
+        assert ev.content["subject"] == "VPN Outage Alert"
+        assert evidence_title_from_payload(ev.content) == "VPN Outage Alert"
+
+    def test_message_without_subject_gets_body_fallback(self):
+        """Messages without subject should fall back to body for title extraction."""
+        content = {"body": "Some body text", "from": "Bob", "type": "message"}
+        assert evidence_title_from_payload(content) == "Untitled"
+        assert evidence_body_from_payload(content) == "Some body text"
+
+
+class TestTeamsDeltaPagination:
+    @pytest.mark.asyncio
+    async def test_fetch_initial_delta_link_follows_pages(self):
+        from contextedge.connectors.teams.connector import TeamsConnector
+
+        connector = TeamsConnector(
+            source_config={},
+            credentials={
+                "tenant_id": "t",
+                "client_id": "c",
+                "client_secret": "s",
+            },
+        )
+
+        call_count = 0
+
+        async def mock_graph_get(path, params=None):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return {
+                    "value": [{"id": "m1"}],
+                    "@odata.nextLink": "https://graph.microsoft.com/v1.0/delta?page=2",
+                }
+            return {
+                "value": [],
+                "@odata.deltaLink": "https://graph.microsoft.com/v1.0/delta?token=final",
+            }
+
+        connector._graph_get = mock_graph_get
+
+        result = await connector._fetch_initial_delta_link("team1", "chan1")
+        assert result == "https://graph.microsoft.com/v1.0/delta?token=final"
+        assert call_count == 2
 
 
 # ---------------------------------------------------------------------------

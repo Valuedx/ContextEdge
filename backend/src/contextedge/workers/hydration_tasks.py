@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 
 import structlog
 from sqlalchemy import select
@@ -23,6 +23,12 @@ def _parse_msg_timestamp(raw: str | None) -> datetime | None:
     try:
         return datetime.fromisoformat(raw.replace("Z", "+00:00"))
     except (ValueError, TypeError):
+        pass
+    # Gmail returns internalDate as epoch milliseconds (string)
+    try:
+        epoch_ms = int(raw)
+        return datetime.fromtimestamp(epoch_ms / 1000.0, tz=timezone.utc)
+    except (ValueError, TypeError, OverflowError, OSError):
         return None
 
 
@@ -68,16 +74,26 @@ async def _hydrate(db: AsyncSession, thread_id: str, source_id: str, tenant_id: 
             if last_ts is None or msg_ts > last_ts:
                 last_ts = msg_ts
 
+        msg_content: dict = {
+            "body": msg.get("body", ""),
+            "from": msg.get("from", ""),
+            "type": msg.get("type", "message"),
+        }
+        if msg.get("subject"):
+            msg_content["subject"] = msg["subject"]
+        if msg.get("title"):
+            msg_content["title"] = msg["title"]
+        if msg.get("short_description"):
+            msg_content["short_description"] = msg["short_description"]
+        if msg.get("summary"):
+            msg_content["summary"] = msg["summary"]
+
         ingestion_events.append(
             IngestionEvent(
                 external_id=f"{thread_id}:msg:{msg.get('id', '')}",
                 source_type=src.source_type,
                 object_type="hydrated_message",
-                content={
-                    "body": msg.get("body", ""),
-                    "from": msg.get("from", ""),
-                    "type": msg.get("type", "message"),
-                },
+                content=msg_content,
                 thread_id=thread_id,
                 timestamp=msg_ts,
                 metadata={"hydrated_from_thread": thread_id},

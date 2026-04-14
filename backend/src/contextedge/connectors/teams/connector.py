@@ -108,18 +108,22 @@ class TeamsConnector(BaseConnector):
         team_id, channel_id = object_id.split(":")
         events: list[IngestionEvent] = []
 
-        params: dict[str, str] = {
-            "$orderby": "lastModifiedDateTime desc",
-            "$top": "50",
-            "$filter": f"lastModifiedDateTime ge {window.start.isoformat()}",
-        }
-        if checkpoint and checkpoint.data.get("skip_token"):
-            params["$skiptoken"] = checkpoint.data["skip_token"]
+        resume_url = checkpoint.data.get("next_link") if checkpoint else None
+        if resume_url:
+            data = await self._graph_get(resume_url.replace(GRAPH_BASE, ""))
+        else:
+            params: dict[str, str] = {
+                "$orderby": "lastModifiedDateTime desc",
+                "$top": "50",
+                "$filter": f"lastModifiedDateTime ge {window.start.isoformat()}",
+            }
+            if checkpoint and checkpoint.data.get("skip_token"):
+                params["$skiptoken"] = checkpoint.data["skip_token"]
 
-        data = await self._graph_get(
-            f"/teams/{team_id}/channels/{channel_id}/messages",
-            params=params,
-        )
+            data = await self._graph_get(
+                f"/teams/{team_id}/channels/{channel_id}/messages",
+                params=params,
+            )
 
         for msg in data.get("value", []):
             events.append(
@@ -149,13 +153,10 @@ class TeamsConnector(BaseConnector):
         if skip_token:
             new_checkpoint = Checkpoint(data={"skip_token": skip_token})
         elif not next_link:
-            delta_data = await self._graph_get(
-                f"/teams/{team_id}/channels/{channel_id}/messages/delta",
-            )
-            delta_link = delta_data.get("@odata.deltaLink", "")
+            delta_link = await self._fetch_initial_delta_link(team_id, channel_id)
             new_checkpoint = Checkpoint(data={"delta_link": delta_link})
         else:
-            new_checkpoint = Checkpoint(data={"skip_token": None})
+            new_checkpoint = Checkpoint(data={"next_link": next_link})
 
         return BackfillResult(
             events=events,
@@ -163,6 +164,21 @@ class TeamsConnector(BaseConnector):
             items_processed=len(events),
             has_more=next_link is not None,
         )
+
+    async def _fetch_initial_delta_link(self, team_id: str, channel_id: str) -> str:
+        """Follow delta pagination until we obtain a stable deltaLink."""
+        data = await self._graph_get(
+            f"/teams/{team_id}/channels/{channel_id}/messages/delta",
+        )
+        max_pages = 20
+        for _ in range(max_pages):
+            if "@odata.deltaLink" in data:
+                return data["@odata.deltaLink"]
+            nxt = data.get("@odata.nextLink")
+            if not nxt:
+                break
+            data = await self._graph_get(nxt.replace(GRAPH_BASE, ""))
+        return data.get("@odata.deltaLink", "")
 
     async def fetch_changes(
         self,
