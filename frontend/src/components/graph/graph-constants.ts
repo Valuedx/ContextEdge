@@ -12,6 +12,10 @@ export const NODE_TYPE_OPTIONS = [
   "execution_run",
   "approval_request",
   "user",
+  "decision",
+  "decision_option",
+  "decision_outcome",
+  "tenant_policy",
 ] as const;
 
 export const nodeColors: Record<string, { bg: string; border: string; text: string; dot: string }> = {
@@ -28,6 +32,10 @@ export const nodeColors: Record<string, { bg: string; border: string; text: stri
   execution_run:     { bg: "bg-lime-900",    border: "border-lime-500",    text: "text-lime-100",    dot: "bg-lime-500" },
   approval_request:  { bg: "bg-yellow-900",  border: "border-yellow-500",  text: "text-yellow-100",  dot: "bg-yellow-500" },
   user:              { bg: "bg-fuchsia-900", border: "border-fuchsia-500", text: "text-fuchsia-100", dot: "bg-fuchsia-500" },
+  decision:          { bg: "bg-amber-900",   border: "border-amber-400",   text: "text-amber-100",   dot: "bg-amber-400" },
+  decision_option:   { bg: "bg-yellow-900",  border: "border-yellow-400",  text: "text-yellow-100",  dot: "bg-yellow-400" },
+  decision_outcome:  { bg: "bg-orange-900",  border: "border-orange-400",  text: "text-orange-100",  dot: "bg-orange-400" },
+  tenant_policy:     { bg: "bg-violet-900",  border: "border-violet-500",  text: "text-violet-100",  dot: "bg-violet-500" },
 };
 
 export const edgeColors: Record<string, { stroke: string; dasharray?: string }> = {
@@ -47,6 +55,13 @@ export const edgeColors: Record<string, { stroke: string; dasharray?: string }> 
   execution_outcome:   { stroke: "#84cc16" },
   records_decision:    { stroke: "#a855f7", dasharray: "4 4" },
   records_action_on:   { stroke: "#d946ef", dasharray: "4 4" },
+  based_on:            { stroke: "#f59e0b" },
+  considered:          { stroke: "#fbbf24", dasharray: "4 4" },
+  chose:               { stroke: "#f59e0b" },
+  applied_policy:      { stroke: "#8b5cf6", dasharray: "5 5" },
+  required_approval:   { stroke: "#eab308", dasharray: "6 3" },
+  resulted_in:         { stroke: "#f97316" },
+  followed_by:         { stroke: "#d97706", dasharray: "8 4" },
 };
 
 export function getNodeClassName(nodeType: string): string {

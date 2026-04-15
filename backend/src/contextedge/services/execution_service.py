@@ -5,9 +5,10 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import select
+from sqlalchemy import select, cast
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
+from sqlalchemy.dialects.postgresql import JSONB as JSONB_TYPE
 
 from contextedge.models.execution import (
     SAFETY_CLASSES,
@@ -18,6 +19,7 @@ from contextedge.models.execution import (
 )
 from contextedge.graph.builder import ensure_edge
 from contextedge.models.playbook import Playbook, PlaybookVersion
+from contextedge.services.decision_trace_service import create_decision, record_outcome
 from contextedge.services.event_log_service import append_operational_event
 from contextedge.services.session_service import append_trace_event
 
@@ -207,6 +209,27 @@ async def start_execution(
                 "automation_mode": playbook.automation_mode,
             },
         )
+
+    await create_decision(
+        db,
+        tenant_id=tenant_id,
+        decision_type="execute_playbook",
+        agent_step="remediation",
+        actor_type="human",
+        actor_id=actor_id,
+        session_id=session_id,
+        rationale_summary=f"Initiated execution of playbook {playbook.title or playbook.id}",
+        compact_trace=f"Executing playbook {playbook.title or playbook.id} v{version.semantic_version}",
+        confidence=None,
+        context_snapshot={
+            "playbook_id": str(playbook.id),
+            "playbook_version_id": str(version.id),
+            "execution_run_id": str(run.id),
+            "automation_mode": playbook.automation_mode,
+            "max_safety_class": effective_safety_class,
+        },
+        status="pending",
+    )
 
     return run
 
@@ -464,6 +487,27 @@ async def decide_approval(
         },
     )
 
+    session_id = run.session_id if run else None
+    await create_decision(
+        db,
+        tenant_id=tenant_id,
+        decision_type=decision,
+        agent_step="remediation",
+        actor_type="human",
+        actor_id=decided_by,
+        session_id=session_id,
+        rationale_summary=comment or f"Approval {decision}",
+        compact_trace=f"Step {decision}: {req.requested_action}",
+        approval_required=True,
+        context_snapshot={
+            "approval_request_id": str(req.id),
+            "execution_run_id": str(req.execution_run_id),
+            "safety_class": req.safety_class,
+            "requested_action": req.requested_action,
+        },
+        status="completed",
+    )
+
     return req
 
 
@@ -515,6 +559,36 @@ async def complete_execution(
             "outcome_summary": outcome_summary,
         },
     )
+
+    # Prefer the execute_playbook Decision created for this specific run.
+    # This avoids attaching outcomes to the wrong decision when multiple playbooks
+    # are executed within a single session.
+    from contextedge.models.decision import Decision
+    exec_decision_res = await db.execute(
+        select(Decision)
+        .where(
+            Decision.tenant_id == tenant_id,
+            Decision.decision_type == "execute_playbook",
+            Decision.context_snapshot.op("@>")(
+                cast({"execution_run_id": str(run.id)}, JSONB_TYPE)
+            ),
+        )
+        .order_by(Decision.created_at.desc())
+        .limit(1)
+    )
+    exec_decision = exec_decision_res.scalar_one_or_none()
+    if exec_decision is not None:
+        await record_outcome(
+            db,
+            tenant_id=tenant_id,
+            decision_id=exec_decision.id,
+            action_executed=f"execution_run:{run.id}",
+            execution_result=outcome,
+            result_details={
+                "outcome_summary": outcome_summary,
+                "playbook_id": str(run.playbook_id),
+            },
+        )
 
     return run
 

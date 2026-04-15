@@ -61,14 +61,18 @@ async def get_resolution_session(
     *,
     tenant_id: uuid.UUID,
     session_id: uuid.UUID,
+    include_decisions: bool = False,
 ) -> ResolutionSession | None:
+    load_options = [selectinload(ResolutionSession.trace_events)]
+    if include_decisions:
+        load_options.append(selectinload(ResolutionSession.decisions))
     result = await db.execute(
         select(ResolutionSession)
         .where(
             ResolutionSession.id == session_id,
             ResolutionSession.tenant_id == tenant_id,
         )
-        .options(selectinload(ResolutionSession.trace_events))
+        .options(*load_options)
     )
     return result.scalar_one_or_none()
 

@@ -13,16 +13,17 @@ When teams resolve outages, the platform records **what was known** (symptoms, r
 ### Resolution sessions
 
 - `session_service.create_resolution_session` inserts `ResolutionSession` with symptoms, entities, external case ids, optional domain, and `append_operational_event` records `session.created` with memory class metadata.
-- `append_trace_event` appends `DecisionTraceEvent` rows (inputs, outputs, reasoning, confidence) for AI or runtime steps tied to the session.
-- `get_resolution_session` loads trace events via `selectinload`.
+- `append_trace_event` appends `DecisionTraceEvent` rows (inputs, outputs, reasoning, confidence) for AI or runtime steps tied to the session. These compact traces remain for backward compatibility and lightweight audit trails.
+- `get_resolution_session` loads trace events via `selectinload`, and optionally eager-loads first-class `Decision` objects via `include_decisions=True`.
+- Sessions also expose a `decisions` relationship to first-class `Decision` rows, providing the richer, graph-connected reasoning records alongside the flat trace events.
 - HTTP: `api/v1/sessions.py`.
 
 ### Execution
 
 - `execution_service.start_execution` loads the playbook, enforces `lifecycle_state == "approved"`, resolves a **published** `PlaybookVersion` (explicit id or latest published), computes caller **max safety class** from roles + playbook `automation_mode` vs `requested_max_safety_class`, and creates `ExecutionRun` plus related structures; integrates with `append_trace_event` and `append_operational_event` for traceability. It also creates a `session --(executed_playbook)--> playbook` graph edge when a session is present.
-- `decide_approval` creates `approval_request --(approved_by / denied_by)--> user` graph edges when managers approve or deny steps, recording the comment and safety class.
-- `complete_execution` creates an `execution_run --(execution_outcome)--> playbook` graph edge with the outcome and summary.
-- These **governed decision edges** form the high-fidelity tier of the decision graph — every approval, denial, and execution outcome is directly attributable to a person and fully auditable.
+- `decide_approval` creates `approval_request --(approved_by / denied_by)--> user` graph edges when managers approve or deny steps, recording the comment and safety class. It also creates a first-class `Decision` with `decision_type="approve"` or `"deny"`.
+- `complete_execution` creates an `execution_run --(execution_outcome)--> playbook` graph edge with the outcome and summary, and records a `DecisionOutcome` on the execution's first-class `Decision`.
+- These **governed decision edges** form the high-fidelity tier of the decision graph — every approval, denial, and execution outcome is directly attributable to a person and fully auditable. Since the introduction of first-class decision traces, these execution stages also produce `Decision`, `DecisionOption`, and `DecisionOutcome` records that are connected into the context graph with edges like `based_on`, `chose`, `resulted_in`, and `followed_by` (see [16-decision-traces.md](./16-decision-traces.md)).
 - `ExecutionPolicyError` surfaces policy violations to API as errors.
 - Models in `models/execution.py` include `ExecutionRun`, `ExecutionStepRun`, `ToolInvocation`, `ApprovalRequest`, and ordered `SAFETY_CLASSES`.
 - HTTP: `api/v1/execution.py`.
@@ -149,6 +150,9 @@ These edges make it possible to traverse the graph from a playbook to see who ap
 | --- | --- | --- | --- |
 | Sessions | `backend/src/contextedge/services/session_service.py` | `create_resolution_session`, `append_trace_event`, `get_resolution_session` | API / runtime |
 | Session model | `backend/src/contextedge/models/session.py` | `ResolutionSession`, `DecisionTraceEvent`, `CaseLink` | ORM |
+| Decision models | `backend/src/contextedge/models/decision.py` | `Decision`, `DecisionOption`, `DecisionOutcome` | ORM |
+| Decision service | `backend/src/contextedge/services/decision_trace_service.py` | `create_decision`, `record_outcome`, `get_decision_chain` | Decisions API / execution |
+| Decisions API | `backend/src/contextedge/api/v1/decisions.py` | (handlers) | HTTP |
 | Sessions API | `backend/src/contextedge/api/v1/sessions.py` | (handlers) | HTTP |
 | Execution | `backend/src/contextedge/services/execution_service.py` | `start_execution`, `ExecutionPolicyError`, `_caller_max_safety_class` | API |
 | Execution models | `backend/src/contextedge/models/execution.py` | `ExecutionRun`, `SAFETY_CLASSES`, `ToolInvocation` | ORM |
@@ -167,4 +171,5 @@ An Acme responder opens a **resolution session** with symptoms `["VPN auth failu
 
 - [02-api-and-request-lifecycle.md](./02-api-and-request-lifecycle.md) — middleware audit and auth  
 - [07-episodes-patterns-playbooks.md](./07-episodes-patterns-playbooks.md) — approval and publication  
+- [16-decision-traces.md](./16-decision-traces.md) — first-class decision trace architecture and analytics  
 - [`docs/API.md`](../docs/API.md) — sessions and execution routes  

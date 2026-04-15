@@ -14,6 +14,7 @@ from contextedge.models.playbook import (
     Playbook, PlaybookVersion, PlaybookEvidenceLink, PlaybookApproval,
 )
 from contextedge.models.session import ResolutionSession, DecisionTraceEvent, CaseLink
+from contextedge.models.decision import Decision, DecisionOption, DecisionOutcome
 from contextedge.models.execution import (
     ExecutionRun, ExecutionStepRun, ToolInvocation, ApprovalRequest,
 )
@@ -31,6 +32,7 @@ __all__ = [
     "Pattern", "PatternEvidenceLink", "NegativeKnowledgeItem", "Contradiction", "GraphEdge",
     "Playbook", "PlaybookVersion", "PlaybookEvidenceLink", "PlaybookApproval",
     "ResolutionSession", "DecisionTraceEvent", "CaseLink",
+    "Decision", "DecisionOption", "DecisionOutcome",
     "ExecutionRun", "ExecutionStepRun", "ToolInvocation", "ApprovalRequest",
     "EvaluationDataset", "EvaluationRun", "RetrievalFeedback",
     "POLICY_TYPES", "TenantPolicy",

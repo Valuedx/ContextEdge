@@ -23,6 +23,7 @@ import {
   Fingerprint,
   Share2,
   PlayCircle,
+  Scale,
   Waypoints,
 } from "lucide-react";
 
@@ -38,6 +39,7 @@ const navItems = [
   { label: "Evaluations", href: "/evaluations", icon: FlaskConical },
   { label: "Runtime", href: "/runtime", icon: Radio },
   { label: "Execution", href: "/execution", icon: PlayCircle },
+  { label: "Decisions", href: "/decisions", icon: Scale },
   { label: "Contradictions", href: "/contradictions", icon: AlertTriangle },
   { label: "Neg. Knowledge", href: "/negative-knowledge", icon: BrainCircuit },
   { label: "Identities", href: "/identities", icon: Fingerprint },

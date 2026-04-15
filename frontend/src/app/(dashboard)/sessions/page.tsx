@@ -1,8 +1,9 @@
 "use client";
 
+import Link from "next/link";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ColumnDef } from "@tanstack/react-table";
-import { Plus, Loader2, CheckCircle } from "lucide-react";
+import { Plus, Loader2, CheckCircle, ExternalLink } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 
@@ -12,6 +13,7 @@ import { DataTableSkeleton } from "@/components/common/data-table-skeleton";
 import { StatusBadge } from "@/components/common/status-badge";
 import { PaginationControls } from "@/components/common/pagination-controls";
 import { usePagination } from "@/lib/hooks/use-pagination";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
@@ -23,10 +25,12 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { Separator } from "@/components/ui/separator";
 import { api } from "@/lib/api";
 import { useAuthStore } from "@/lib/stores/auth-store";
+import type { Decision } from "@/lib/types";
 
 interface DecisionTraceEvent {
   id: string;
@@ -257,36 +261,120 @@ function SessionDetail({
           )}
         </div>
 
-        {session.trace_events.length > 0 && (
-          <>
-            <Separator />
-            <div>
-              <p className="text-xs text-muted-foreground mb-2">Decision trace ({session.trace_events.length})</p>
-              <div className="space-y-2">
-                {session.trace_events.map((ev) => (
-                  <div key={ev.id} className="rounded-md border p-3 space-y-1">
-                    <div className="flex items-center justify-between">
-                      <span className="font-mono text-xs font-medium">{ev.event_type}</span>
-                      <span className="text-xs text-muted-foreground">
-                        {new Date(ev.created_at).toLocaleString()}
-                      </span>
-                    </div>
-                    {ev.confidence != null && (
-                      <p className="text-xs text-muted-foreground">
-                        Confidence: {(ev.confidence * 100).toFixed(0)}%
-                      </p>
-                    )}
-                    {ev.reasoning && (
-                      <p className="text-xs whitespace-pre-wrap">{ev.reasoning}</p>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </div>
-          </>
-        )}
+        <Separator />
+        <SessionDecisionsAndTraces session={session} />
       </CardContent>
     </Card>
+  );
+}
+
+function SessionDecisionsAndTraces({ session }: { session: ResolutionSession }) {
+  const [tab, setTab] = useState("traces");
+
+  const { data: decisions = [], isLoading } = useQuery<Decision[]>({
+    queryKey: ["session-decisions", session.id],
+    queryFn: () =>
+      api.get("/decisions", { session_id: session.id, limit: "50" }),
+    enabled: tab === "decisions",
+  });
+
+  return (
+    <Tabs value={tab} onValueChange={setTab}>
+      <TabsList>
+        <TabsTrigger value="traces">
+          Trace events ({session.trace_events.length})
+        </TabsTrigger>
+        <TabsTrigger value="decisions">Decisions</TabsTrigger>
+      </TabsList>
+
+      <TabsContent value="traces" className="mt-3">
+        {session.trace_events.length === 0 ? (
+          <p className="text-xs text-muted-foreground">No trace events yet.</p>
+        ) : (
+          <div className="space-y-2">
+            {session.trace_events.map((ev) => (
+              <div key={ev.id} className="rounded-md border p-3 space-y-1">
+                <div className="flex items-center justify-between">
+                  <span className="font-mono text-xs font-medium">
+                    {ev.event_type}
+                  </span>
+                  <span className="text-xs text-muted-foreground">
+                    {new Date(ev.created_at).toLocaleString()}
+                  </span>
+                </div>
+                {ev.confidence != null && (
+                  <p className="text-xs text-muted-foreground">
+                    Confidence: {(ev.confidence * 100).toFixed(0)}%
+                  </p>
+                )}
+                {ev.reasoning && (
+                  <p className="text-xs whitespace-pre-wrap">{ev.reasoning}</p>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </TabsContent>
+
+      <TabsContent value="decisions" className="mt-3">
+        {isLoading ? (
+          <p className="text-xs text-muted-foreground">Loading decisions…</p>
+        ) : decisions.length === 0 ? (
+          <p className="text-xs text-muted-foreground">
+            No first-class decisions linked to this session.
+          </p>
+        ) : (
+          <div className="space-y-2">
+            {decisions.map((d) => (
+              <div
+                key={d.id}
+                className="rounded-md border p-3 space-y-1 hover:border-amber-500/30 transition-colors"
+              >
+                <div className="flex items-center gap-2 flex-wrap">
+                  <Badge variant="outline" className="text-[10px]">
+                    {d.decision_type}
+                  </Badge>
+                  <Badge variant="secondary" className="text-[10px]">
+                    {d.agent_step}
+                  </Badge>
+                  <StatusBadge status={d.status} />
+                  {d.confidence != null && (
+                    <span className="text-[10px] font-mono text-muted-foreground">
+                      {Math.round(d.confidence * 100)}%
+                    </span>
+                  )}
+                  <span className="ml-auto text-[10px] text-muted-foreground">
+                    {new Date(d.created_at).toLocaleString()}
+                  </span>
+                </div>
+                {d.compact_trace && (
+                  <p className="text-xs">{d.compact_trace}</p>
+                )}
+                {d.options.length > 0 && (
+                  <p className="text-[10px] text-muted-foreground">
+                    {d.options.length} option{d.options.length !== 1 ? "s" : ""}
+                    {d.options.find((o) => o.selected) &&
+                      ` · selected: ${d.options.find((o) => o.selected)!.action}`}
+                  </p>
+                )}
+                {d.outcomes.length > 0 && (
+                  <StatusBadge
+                    status={d.outcomes[d.outcomes.length - 1].execution_result}
+                  />
+                )}
+                <Link
+                  href={`/decisions?id=${d.id}`}
+                  className="text-[10px] text-primary hover:underline inline-flex items-center gap-1 mt-1"
+                >
+                  View full decision
+                  <ExternalLink className="h-2.5 w-2.5" />
+                </Link>
+              </div>
+            ))}
+          </div>
+        )}
+      </TabsContent>
+    </Tabs>
   );
 }
 

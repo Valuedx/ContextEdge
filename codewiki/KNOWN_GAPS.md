@@ -57,7 +57,11 @@ The Graph Explorer page (`/graph-explorer`) provides interactive visualization a
 
 ## Decision extraction depends on LLM quality
 
-AI-extracted decisions (Tier 1) rely on `decision_extractor.py` prompting an LLM to identify operational actions from evidence text. Decision types are open-ended labels, not a fixed enum, which means analytics and filtering may require normalization or fuzzy matching across label variations. The extractor truncates input to 4,000 characters; decisions mentioned later in long evidence items may be missed. Governed decision edges (Tier 2) from execution service are high-fidelity and not subject to this limitation.
+AI-extracted decisions (Tier 1) rely on `decision_extractor.py` prompting an LLM to identify operational actions from evidence text. Decision types are open-ended labels, not a fixed enum, which means analytics and filtering may require normalization or fuzzy matching across label variations. The extractor truncates input to 4,000 characters; decisions mentioned later in long evidence items may be missed. Governed decision edges (Tier 2) from execution service are high-fidelity and not subject to this limitation. First-class decision traces (Tier 3) provide the richest representation — see [16-decision-traces.md](./16-decision-traces.md).
+
+## Resolved: Decision traces are now first-class graph citizens
+
+Previously, decision traces were flat `DecisionTraceEvent` rows with no graph connectivity or structured option/outcome tracking. This has been addressed: `Decision`, `DecisionOption`, and `DecisionOutcome` models are fully integrated into the context graph with typed edges (`based_on`, `considered`, `chose`, `applied_policy`, `required_approval`, `resulted_in`, `followed_by`). The execution service creates first-class decisions at every key lifecycle point (playbook start, approval/denial, completion). A dedicated `/decisions` API and frontend page provide full CRUD, chain navigation, similarity search, and effectiveness analytics. The flat `DecisionTraceEvent` is retained for backward compatibility as a compact audit trail.
 
 ## Decision and identity linking order in normalization
 

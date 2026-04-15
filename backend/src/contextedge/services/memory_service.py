@@ -9,6 +9,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from contextedge.models.decision import Decision
 from contextedge.models.episode import CanonicalIdentity, Episode, EvidenceIdentityLink
 from contextedge.models.evidence import EvidenceItem
 from contextedge.models.execution import ExecutionRun, ExecutionStepRun
@@ -142,6 +143,19 @@ async def build_runtime_memory_context(
             .limit(3)
         )
         execution_runs = list(execution_result.scalars().all())
+    recent_decisions: list[Decision] = []
+    if session_id is not None:
+        decision_result = await db.execute(
+            select(Decision)
+            .where(
+                Decision.tenant_id == tenant_id,
+                Decision.session_id == session_id,
+            )
+            .order_by(Decision.created_at.desc())
+            .limit(5)
+        )
+        recent_decisions = list(decision_result.scalars().all())
+
     pending_approval_count = sum(
         1
         for run in execution_runs
@@ -240,6 +254,19 @@ async def build_runtime_memory_context(
         "approved_playbook_count": int(approved_playbook_count),
         "active_pattern_count": int(active_pattern_count),
     }
+    recent_decision_summaries = [
+        {
+            "id": str(d.id),
+            "decision_type": d.decision_type,
+            "agent_step": d.agent_step,
+            "actor_type": d.actor_type,
+            "status": d.status,
+            "confidence": d.confidence,
+            "compact_trace": d.compact_trace,
+            "rationale_summary": (d.rationale_summary or "")[:200],
+        }
+        for d in recent_decisions
+    ]
     reasoning = {
         "trace_event_count": len(recent_trace_events),
         "recent_trace_events": recent_trace_events,
@@ -247,6 +274,8 @@ async def build_runtime_memory_context(
         "pending_approval_count": pending_approval_count,
         "recent_tools": recent_tools,
         "reasoning_fragments": reasoning_fragments,
+        "decision_count": len(recent_decisions),
+        "recent_decisions": recent_decision_summaries,
     }
     return RuntimeMemoryContext(
         query_text=query_text,

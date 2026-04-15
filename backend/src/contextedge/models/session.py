@@ -40,6 +40,12 @@ class ResolutionSession(Base, TenantScopedMixin):
         back_populates="session",
         order_by="DecisionTraceEvent.created_at",
     )
+    decisions: Mapped[list] = relationship(
+        "contextedge.models.decision.Decision",
+        foreign_keys="contextedge.models.decision.Decision.session_id",
+        order_by="contextedge.models.decision.Decision.created_at",
+        lazy="noload",
+    )
 
 
 class DecisionTraceEvent(Base):

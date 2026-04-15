@@ -201,6 +201,40 @@ async def get_entity_subgraph(
     }
 
 
+async def get_decision_subgraph(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    decision_id: uuid.UUID,
+    max_depth: int = 2,
+    domain_id: uuid.UUID | None = None,
+) -> dict:
+    """Get the subgraph around a decision including evidence, options, outcomes, and policies."""
+    return await get_entity_subgraph(
+        db, tenant_id, "decision", decision_id, max_depth=max_depth, domain_id=domain_id,
+    )
+
+
+async def get_decision_effectiveness(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    decision_type: str,
+    context_filters: dict | None = None,
+) -> dict:
+    """Aggregate outcome success/failure counts for a decision type.
+
+    Delegates to the service-layer implementation to keep query logic
+    co-located with the ORM models it depends on.
+    """
+    from contextedge.services.decision_trace_service import (
+        get_decision_effectiveness as _svc_effectiveness,
+    )
+
+    return await _svc_effectiveness(
+        db, tenant_id=tenant_id, decision_type=decision_type,
+        context_filters=context_filters,
+    )
+
+
 async def get_graph_stats(
     db: AsyncSession,
     tenant_id: uuid.UUID,

@@ -507,10 +507,12 @@ async def test_start_execution_creates_executed_playbook_edge():
     playbook = SimpleNamespace(
         id=playbook_id, tenant_id=tenant_id,
         lifecycle_state="approved", automation_mode="human_confirmed",
+        title="Test Playbook",
     )
     version = SimpleNamespace(
         id=version_id, playbook_id=playbook_id,
         published_at="2026-01-01T00:00:00Z", steps=[],
+        semantic_version="1.0.0",
     )
 
     ensure_edge_calls = []
@@ -528,6 +530,7 @@ async def test_start_execution_creates_executed_playbook_edge():
         patch("contextedge.services.execution_service.ensure_edge", side_effect=capture_ensure_edge),
         patch("contextedge.services.execution_service.append_operational_event", new_callable=AsyncMock),
         patch("contextedge.services.execution_service.append_trace_event", new_callable=AsyncMock),
+        patch("contextedge.services.execution_service.create_decision", new_callable=AsyncMock),
     ):
         run = await start_execution(
             db, tenant_id=tenant_id, actor_id=actor_id,
@@ -555,10 +558,12 @@ async def test_start_execution_no_edge_without_session():
     playbook = SimpleNamespace(
         id=playbook_id, tenant_id=tenant_id,
         lifecycle_state="approved", automation_mode="human_confirmed",
+        title="Test Playbook",
     )
     version = SimpleNamespace(
         id=version_id, playbook_id=playbook_id,
         published_at="2026-01-01T00:00:00Z", steps=[],
+        semantic_version="1.0.0",
     )
 
     ensure_edge_calls = []
@@ -573,6 +578,7 @@ async def test_start_execution_no_edge_without_session():
         patch("contextedge.services.execution_service.ensure_edge", side_effect=capture_ensure_edge),
         patch("contextedge.services.execution_service.append_operational_event", new_callable=AsyncMock),
         patch("contextedge.services.execution_service.append_trace_event", new_callable=AsyncMock),
+        patch("contextedge.services.execution_service.create_decision", new_callable=AsyncMock),
     ):
         await start_execution(
             db, tenant_id=tenant_id, actor_id=uuid4(),
@@ -597,10 +603,12 @@ async def test_decide_approval_creates_approved_by_edge():
         id=approval_id, tenant_id=tenant_id,
         status="pending", execution_run_id=run_id,
         step_run_id=None, safety_class="low_side_effect",
+        requested_action="execute_step:0",
         decided_by=None, decided_at=None, decision_comment=None,
     )
     run = SimpleNamespace(
         id=run_id, tenant_id=tenant_id, status="awaiting_approval",
+        session_id=None,
     )
 
     ensure_edge_calls = []
@@ -616,6 +624,7 @@ async def test_decide_approval_creates_approved_by_edge():
     with (
         patch("contextedge.services.execution_service.ensure_edge", side_effect=capture_ensure_edge),
         patch("contextedge.services.execution_service.append_operational_event", new_callable=AsyncMock),
+        patch("contextedge.services.execution_service.create_decision", new_callable=AsyncMock),
     ):
         result = await decide_approval(
             db, tenant_id=tenant_id, approval_request_id=approval_id,
@@ -642,11 +651,13 @@ async def test_decide_approval_creates_denied_by_edge():
         id=approval_id, tenant_id=tenant_id,
         status="pending", execution_run_id=run_id,
         step_run_id=None, safety_class="destructive",
+        requested_action="execute_step:0",
         decided_by=None, decided_at=None, decision_comment=None,
     )
     run = SimpleNamespace(
         id=run_id, tenant_id=tenant_id, status="awaiting_approval",
         completed_at=None, outcome=None, outcome_summary=None,
+        session_id=None,
     )
 
     ensure_edge_calls = []
@@ -662,6 +673,7 @@ async def test_decide_approval_creates_denied_by_edge():
     with (
         patch("contextedge.services.execution_service.ensure_edge", side_effect=capture_ensure_edge),
         patch("contextedge.services.execution_service.append_operational_event", new_callable=AsyncMock),
+        patch("contextedge.services.execution_service.create_decision", new_callable=AsyncMock),
     ):
         await decide_approval(
             db, tenant_id=tenant_id, approval_request_id=approval_id,
@@ -696,11 +708,19 @@ async def test_complete_execution_creates_outcome_edge():
 
     db, _ = _make_db()
     db.get = AsyncMock(return_value=run)
+    # complete_execution now performs an extra db.execute() to find the
+    # execute_playbook Decision associated with this execution_run_id.
+    db.execute = AsyncMock(return_value=_ScalarOneOrNoneResult(None))
+
+    from contextedge.models.decision import Decision
+    mock_list_result = _ScalarsProxy([])
 
     with (
         patch("contextedge.services.execution_service.ensure_edge", side_effect=capture_ensure_edge),
         patch("contextedge.services.execution_service.append_operational_event", new_callable=AsyncMock),
         patch("contextedge.services.execution_service.append_trace_event", new_callable=AsyncMock),
+        patch("contextedge.services.execution_service.record_outcome", new_callable=AsyncMock),
+        patch("contextedge.services.decision_trace_service.list_decisions", new_callable=AsyncMock, return_value=[]),
     ):
         await complete_execution(
             db, tenant_id=tenant_id, execution_run_id=run_id,

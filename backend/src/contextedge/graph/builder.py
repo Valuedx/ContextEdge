@@ -188,6 +188,150 @@ async def add_contradicts_edge(
     )
 
 
+async def link_decision_evidence(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    decision_id: uuid.UUID,
+    evidence_id: uuid.UUID,
+    domain_id: uuid.UUID | None = None,
+    *,
+    weight: float = 1.0,
+    metadata: dict | None = None,
+) -> GraphEdge:
+    return await ensure_edge(
+        db, tenant_id, "decision", decision_id,
+        "evidence", evidence_id, "based_on",
+        weight=weight, metadata=metadata, domain_id=domain_id,
+    )
+
+
+async def link_decision_episode(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    decision_id: uuid.UUID,
+    episode_id: uuid.UUID,
+    domain_id: uuid.UUID | None = None,
+    *,
+    weight: float = 1.0,
+    metadata: dict | None = None,
+) -> GraphEdge:
+    return await ensure_edge(
+        db, tenant_id, "decision", decision_id,
+        "episode", episode_id, "based_on",
+        weight=weight, metadata=metadata, domain_id=domain_id,
+    )
+
+
+async def link_decision_pattern(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    decision_id: uuid.UUID,
+    pattern_id: uuid.UUID,
+    domain_id: uuid.UUID | None = None,
+    *,
+    weight: float = 1.0,
+    metadata: dict | None = None,
+) -> GraphEdge:
+    return await ensure_edge(
+        db, tenant_id, "decision", decision_id,
+        "pattern", pattern_id, "based_on",
+        weight=weight, metadata=metadata, domain_id=domain_id,
+    )
+
+
+async def link_decision_option(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    decision_id: uuid.UUID,
+    option_id: uuid.UUID,
+    selected: bool,
+    domain_id: uuid.UUID | None = None,
+    *,
+    metadata: dict | None = None,
+) -> list[GraphEdge]:
+    """Create CONSIDERED edge for all options, plus CHOSE for selected."""
+    edges = [
+        await ensure_edge(
+            db, tenant_id, "decision", decision_id,
+            "decision_option", option_id, "considered",
+            metadata=metadata, domain_id=domain_id,
+        )
+    ]
+    if selected:
+        edges.append(
+            await ensure_edge(
+                db, tenant_id, "decision", decision_id,
+                "decision_option", option_id, "chose",
+                metadata=metadata, domain_id=domain_id,
+            )
+        )
+    return edges
+
+
+async def link_decision_policy(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    decision_id: uuid.UUID,
+    policy_id: uuid.UUID,
+    domain_id: uuid.UUID | None = None,
+    *,
+    metadata: dict | None = None,
+) -> GraphEdge:
+    return await ensure_edge(
+        db, tenant_id, "decision", decision_id,
+        "tenant_policy", policy_id, "applied_policy",
+        metadata=metadata, domain_id=domain_id,
+    )
+
+
+async def link_decision_approval(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    decision_id: uuid.UUID,
+    approval_id: uuid.UUID,
+    domain_id: uuid.UUID | None = None,
+    *,
+    metadata: dict | None = None,
+) -> GraphEdge:
+    return await ensure_edge(
+        db, tenant_id, "decision", decision_id,
+        "approval_request", approval_id, "required_approval",
+        metadata=metadata, domain_id=domain_id,
+    )
+
+
+async def link_decision_outcome(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    decision_id: uuid.UUID,
+    outcome_id: uuid.UUID,
+    domain_id: uuid.UUID | None = None,
+    *,
+    metadata: dict | None = None,
+) -> GraphEdge:
+    return await ensure_edge(
+        db, tenant_id, "decision", decision_id,
+        "decision_outcome", outcome_id, "resulted_in",
+        metadata=metadata, domain_id=domain_id,
+    )
+
+
+async def link_decision_chain(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    parent_id: uuid.UUID,
+    child_id: uuid.UUID,
+    domain_id: uuid.UUID | None = None,
+    *,
+    metadata: dict | None = None,
+) -> GraphEdge:
+    return await ensure_edge(
+        db, tenant_id, "decision", parent_id,
+        "decision", child_id, "followed_by",
+        metadata=metadata, domain_id=domain_id,
+    )
+
+
 def _enrichment_node_id(pattern_id: uuid.UUID, node_type: str, value: str) -> uuid.UUID:
     """Deterministic UUID for virtual enrichment nodes so edges are idempotent."""
     return uuid.uuid5(ENRICHMENT_NAMESPACE, f"{pattern_id}:{node_type}:{value}")

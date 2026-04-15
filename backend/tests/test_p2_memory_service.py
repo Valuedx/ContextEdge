@@ -95,6 +95,7 @@ async def test_build_runtime_memory_context_summarizes_memory_classes():
             side_effect=[
                 _ScalarOneOrNoneResult(session),
                 _ScalarsResult([run]),
+                _ScalarsResult([]),
                 _ScalarsResult([identity]),
                 _ScalarsResult([evidence]),
                 _ScalarValueResult(4),

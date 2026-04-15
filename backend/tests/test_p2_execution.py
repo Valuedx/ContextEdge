@@ -150,12 +150,14 @@ async def test_start_execution_creates_pending_approval_for_gated_step():
         tenant_id=tenant_id,
         lifecycle_state="approved",
         automation_mode="full_auto",
+        title="Reimage Host Playbook",
     )
     version = SimpleNamespace(
         id=version_id,
         playbook_id=playbook_id,
         published_at=datetime.now(timezone.utc),
         steps=[{"title": "Reimage host", "safety_class": "destructive"}],
+        semantic_version="1.0.0",
     )
 
     added: list[object] = []
@@ -183,6 +185,7 @@ async def test_start_execution_creates_pending_approval_for_gated_step():
     with (
         patch("contextedge.services.execution_service.append_operational_event", AsyncMock()),
         patch("contextedge.services.execution_service.append_trace_event", AsyncMock()),
+        patch("contextedge.services.execution_service.create_decision", AsyncMock()),
     ):
         run = await start_execution(
             db,

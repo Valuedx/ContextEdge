@@ -41,6 +41,13 @@ The context graph also captures **operational decisions** — both governed acti
 - Creates `evidence --(records_decision)--> identity(actor)` and `evidence --(records_action_on)--> identity(target)` edges, with `decision_type`, `action`, and `context` in metadata.
 - Decision types are open-ended — common labels include `approval`, `remediation`, `restart`, `escalation`, `rollback`, `configuration_change`, but the extractor generates whatever label best fits the action.
 
+**Tier 3 — first-class decision traces** (highest fidelity, structured + graph-connected):
+
+- `decision_trace_service.create_decision` creates a `Decision` node with typed edges to its evidence, options, policies, and parent decisions. This replaces the need to reconstruct reasoning from flat `DecisionTraceEvent` logs.
+- New graph edge types: `based_on` (decision → evidence/episode/pattern), `considered` (decision → option), `chose` (decision → selected option), `applied_policy` (decision → tenant policy), `required_approval` (decision → approval request), `resulted_in` (decision → outcome), `followed_by` (decision → next decision in chain).
+- `execution_service` now creates first-class `Decision` records in addition to the Tier 2 governed edges — every playbook execution, approval, and completion produces a graph-connected decision.
+- See [16-decision-traces.md](./16-decision-traces.md) for full details on the data model, API, and analytics.
+
 ### Contradictions
 
 - `contradiction_service` compares playbook step text to KB-typed evidence (`kb_article`, `sop`, `documentation`), uses token overlap heuristics (`should_compare_contradiction`), then may call `llm_complete_json` for a structured judgment, persists `Contradiction` rows, adds graph edges, emits operational events, and can notify via `notification_service`.
@@ -187,8 +194,8 @@ The Teams thread mentions "jsmith restarted vpn-gw-east-01 at 14:30." The decisi
 | Concern | Module path | Key symbols | When it runs |
 | --- | --- | --- | --- |
 | Evidence correlation | `backend/src/contextedge/services/correlation_service.py` | `create_correlation`, `get_correlated_evidence`, `extract_case_link_candidates` | APIs / workers |
-| Graph mutations | `backend/src/contextedge/graph/builder.py` | `add_edge`, `ensure_edge`, `link_node_to_identities`, `add_contradicts_edge`, `persist_pattern_enrichment_edges`, `_enrichment_node_id` | Promotion / contradictions / pattern discovery |
-| Graph reads | `backend/src/contextedge/graph/queries.py` | `get_neighbors`, `get_pattern_subgraph`, `get_entity_subgraph`, `get_graph_stats` | Services / API |
+| Graph mutations | `backend/src/contextedge/graph/builder.py` | `add_edge`, `ensure_edge`, `link_node_to_identities`, `add_contradicts_edge`, `persist_pattern_enrichment_edges`, `link_decision_*` helpers | Promotion / contradictions / pattern discovery / decision traces |
+| Graph reads | `backend/src/contextedge/graph/queries.py` | `get_neighbors`, `get_pattern_subgraph`, `get_entity_subgraph`, `get_graph_stats`, `get_decision_subgraph`, `get_decision_effectiveness` | Services / API |
 | Graph HTTP API | `backend/src/contextedge/api/v1/graph.py` | `graph_neighbors`, `graph_subgraph`, `graph_stats` | HTTP |
 | Contradictions | `backend/src/contextedge/services/contradiction_service.py` | `should_compare_contradiction`, scan helpers | Evaluation task |
 | Correlation worker | `backend/src/contextedge/workers/correlation_tasks.py` | `correlate_evidence` | extraction queue |
@@ -196,6 +203,8 @@ The Teams thread mentions "jsmith restarted vpn-gw-east-01 at 14:30." The decisi
 | Decision extraction (AI) | `backend/src/contextedge/ai/extractors/decision_extractor.py` | `extract_decisions`, `DECISION_PROMPT` | Normalization worker |
 | Decision linking | `backend/src/contextedge/services/decision_service.py` | `link_evidence_decisions` | Normalization worker |
 | Governed decision edges | `backend/src/contextedge/services/execution_service.py` | `start_execution`, `decide_approval`, `complete_execution` | Execution API |
+| First-class decisions | `backend/src/contextedge/services/decision_trace_service.py` | `create_decision`, `record_outcome`, `get_decision_chain`, `find_similar_decisions` | Decisions API / execution integration |
+| Decision models | `backend/src/contextedge/models/decision.py` | `Decision`, `DecisionOption`, `DecisionOutcome` | ORM |
 | Models | `backend/src/contextedge/models/pattern.py` | `GraphEdge` (incl. `domain_id`), `Contradiction` | ORM |
 | Episode correlation model | `backend/src/contextedge/models/episode.py` | `CorrelationEdge` | ORM |
 
@@ -210,4 +219,5 @@ The Teams thread mentions "jsmith restarted vpn-gw-east-01 at 14:30." The decisi
 - [08-workers-celery-queues.md](./08-workers-celery-queues.md) — `scan_contradictions_task`  
 - [12-identity-resolution-and-thread-hydration.md](./12-identity-resolution-and-thread-hydration.md) — `link_node_to_identities` and identity graph edges  
 - [15-dashboard-and-operator-workflows.md](./15-dashboard-and-operator-workflows.md) — Graph Explorer UI for interactive graph visualization  
+- [16-decision-traces.md](./16-decision-traces.md) — first-class decision trace architecture, data model, and analytics  
 - [`docs/API.md`](../docs/API.md) — `/graph` endpoint catalog  

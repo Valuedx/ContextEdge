@@ -510,3 +510,61 @@ export interface PendingApproval {
   decision_comment: string | null;
   created_at: string;
 }
+
+export interface DecisionOption {
+  id: string;
+  decision_id: string;
+  tenant_id: string;
+  action: string;
+  suitability: number | null;
+  risk_level: string | null;
+  preconditions: string[];
+  rejection_reason: string | null;
+  selected: boolean;
+  created_at: string;
+}
+
+export interface DecisionOutcome {
+  id: string;
+  decision_id: string;
+  tenant_id: string;
+  action_executed: string;
+  execution_result: string;
+  result_details: Record<string, unknown>;
+  follow_up_needed: boolean;
+  follow_up_decision_id: string | null;
+  feedback_received: string | null;
+  feedback_by: string | null;
+  created_at: string;
+}
+
+export interface Decision {
+  id: string;
+  tenant_id: string;
+  domain_id: string | null;
+  session_id: string | null;
+  parent_decision_id: string | null;
+  decision_type: string;
+  agent_step: string;
+  actor_type: string;
+  actor_id: string | null;
+  context_snapshot: Record<string, unknown>;
+  evidence_summary: Array<{ ref_type: string; ref_id: string; description: string }>;
+  rationale_summary: string;
+  confidence: number | null;
+  uncertainty_notes: string | null;
+  compact_trace: string | null;
+  explanation: string | null;
+  approval_required: boolean;
+  policy_refs: string[];
+  human_override: boolean;
+  status: string;
+  created_at: string;
+  updated_at: string;
+  options: DecisionOption[];
+  outcomes: DecisionOutcome[];
+}
+
+export interface DecisionChainResponse {
+  decisions: Decision[];
+}
