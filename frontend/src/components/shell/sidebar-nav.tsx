@@ -46,7 +46,7 @@ const navItems: NavItem[] = [
   { label: "Patterns", href: "/patterns", icon: Network },
   { label: "Playbooks", href: "/playbooks", icon: BookOpen },
   { label: "Sessions", href: "/sessions", icon: Layers },
-  { label: "Evaluations", href: "/evaluations", icon: FlaskConical, requiredRoles: ["knowledge_manager"] },
+  { label: "Evaluations", href: "/evaluations", icon: FlaskConical },
   { label: "Runtime", href: "/runtime", icon: Radio },
   { label: "Execution", href: "/execution", icon: PlayCircle },
   { label: "Decisions", href: "/decisions", icon: Scale },
@@ -58,7 +58,7 @@ const navItems: NavItem[] = [
   { label: "Drift", href: "/drift", icon: Activity },
   { label: "Policies", href: "/policies", icon: Shield, requiredRoles: ["tenant_admin"] },
   { label: "Audit Log", href: "/audit", icon: ClipboardList, requiredRoles: ["tenant_admin", "domain_admin"] },
-  { label: "Settings", href: "/settings", icon: Settings, requiredRoles: ["tenant_admin"] },
+  { label: "Settings", href: "/settings", icon: Settings },
 ];
 
 export function SidebarNav() {

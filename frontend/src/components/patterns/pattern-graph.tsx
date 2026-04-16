@@ -167,8 +167,8 @@ function FlowCanvas({
 
 export function PatternGraph({ patternId }: { patternId: string }) {
   const router = useRouter();
-  const [nodes, setNodes, onNodesChange] = useNodesState([]);
-  const [edges, setEdges, onEdgesChange] = useEdgesState([]);
+  const [nodes, setNodes, onNodesChange] = useNodesState<Node>([]);
+  const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
 
   const { data, isLoading, error } = useQuery({
     queryKey: ["pattern-graph", patternId],
@@ -185,6 +185,7 @@ export function PatternGraph({ patternId }: { patternId: string }) {
         getNodeClassName(n.type)
       }${n.type === "pattern" ? " font-bold shadow-[0_0_15px_rgba(99,102,241,0.5)]" : ""}`,
       type: "default",
+      position: { x: 0, y: 0 },
     }));
 
     const rawEdges: Edge[] = (data.edges as any[]).map((e, i) => {

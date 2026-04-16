@@ -144,7 +144,7 @@ export default function DecisionsPage() {
       <div className="flex flex-wrap gap-3 items-end">
         <div className="space-y-1">
           <Label className="text-xs">Decision type</Label>
-          <Select value={typeFilter} onValueChange={setTypeFilter}>
+          <Select value={typeFilter} onValueChange={(v) => setTypeFilter(v ?? "")}>
             <SelectTrigger className="w-[180px]">
               <SelectValue placeholder="All types" />
             </SelectTrigger>
@@ -160,7 +160,7 @@ export default function DecisionsPage() {
         </div>
         <div className="space-y-1">
           <Label className="text-xs">Agent step</Label>
-          <Select value={stepFilter} onValueChange={setStepFilter}>
+          <Select value={stepFilter} onValueChange={(v) => setStepFilter(v ?? "")}>
             <SelectTrigger className="w-[150px]">
               <SelectValue placeholder="All steps" />
             </SelectTrigger>

@@ -167,8 +167,8 @@ export function GraphSubgraph() {
     depth: number;
   } | null>(null);
 
-  const [nodes, setNodes, onNodesChange] = useNodesState([]);
-  const [edges, setEdges, onEdgesChange] = useEdgesState([]);
+  const [nodes, setNodes, onNodesChange] = useNodesState<Node>([]);
+  const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
 
   const { data, isLoading, error, isFetching } = useQuery<SubgraphResponse>({
     queryKey: ["graph-subgraph", queryParams?.type, queryParams?.id, queryParams?.depth],
@@ -191,6 +191,7 @@ export function GraphSubgraph() {
       data: { label: n.title || n.type.replace(/_/g, " ").toUpperCase() },
       className: `px-4 py-2 border-2 rounded-lg text-sm transition-all cursor-pointer hover:scale-105 ${getNodeClassName(n.type)}`,
       type: "default",
+      position: { x: 0, y: 0 },
     }));
 
     const rawEdges: Edge[] = data.edges.map((e, i) => {

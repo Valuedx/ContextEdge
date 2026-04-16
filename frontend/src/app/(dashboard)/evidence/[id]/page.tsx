@@ -27,7 +27,7 @@ import { Separator } from "@/components/ui/separator";
 import { api } from "@/lib/api";
 import type { AttachmentArtifact, EvidenceItemDetail, PoliciesOverview, ThreadSummary } from "@/lib/types";
 import { useAuthStore } from "@/lib/stores/auth-store";
-import { hasRole, canListPoliciesForEvidence, canEditEvidenceAccessPolicy } from "@/lib/roles";
+import { canListPoliciesForEvidence, canEditEvidenceAccessPolicy } from "@/lib/roles";
 import { Loader2, Paperclip, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 

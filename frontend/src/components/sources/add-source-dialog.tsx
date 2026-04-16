@@ -114,7 +114,7 @@ export function AddSourceDialog({ open, onOpenChange }: AddSourceDialogProps) {
 
   const onSubmit = async (values: SourceFormValues) => {
     try {
-      const source = await mutation.mutateAsync(values);
+      const source = await mutation.mutateAsync(values) as { id: string };
       
       if (values.source_type === "local_file" && selectedFiles.length > 0) {
         toast.info(`Ingesting ${selectedFiles.length} files...`);
@@ -159,7 +159,7 @@ export function AddSourceDialog({ open, onOpenChange }: AddSourceDialogProps) {
             <Label htmlFor="source_type">Source Type</Label>
             <Select
               defaultValue="local_file"
-              onValueChange={(value) => setValue("source_type", value)}
+              onValueChange={(value) => setValue("source_type", value ?? "")}
             >
               <SelectTrigger id="source_type" className="w-full">
                 <SelectValue placeholder="Select a source type" />
