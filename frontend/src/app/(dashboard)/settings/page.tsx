@@ -32,10 +32,7 @@ import {
 import { api } from "@/lib/api";
 import type { Domain, Tenant, User, Workspace } from "@/lib/types";
 import { useAuthStore } from "@/lib/stores/auth-store";
-
-function isTenantAdmin(roles: string[]) {
-  return roles.includes("tenant_admin") || roles.includes("platform_super_admin");
-}
+import { isTenantAdmin } from "@/lib/roles";
 
 // ── Workspace creation dialog ──────────────────────────────────────────────
 

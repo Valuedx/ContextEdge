@@ -22,13 +22,7 @@ import { Input } from "@/components/ui/input";
 import { api } from "@/lib/api";
 import type { EpisodeDetail, EpisodeStep } from "@/lib/types";
 import { useAuthStore } from "@/lib/stores/auth-store";
-
-function canApproveEpisode(roles: string[]) {
-  return (
-    roles.includes("knowledge_manager") ||
-    roles.includes("platform_super_admin")
-  );
-}
+import { canApproveEpisode } from "@/lib/roles";
 
 function StepCard({
   step,

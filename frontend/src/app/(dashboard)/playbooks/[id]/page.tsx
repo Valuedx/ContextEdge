@@ -37,6 +37,7 @@ import { Label } from "@/components/ui/label";
 import { api } from "@/lib/api";
 import type { Playbook, PlaybookVersion, PlaybookVersionDiff } from "@/lib/types";
 import { useAuthStore } from "@/lib/stores/auth-store";
+import { canTransitionPlaybook } from "@/lib/roles";
 import { GitCompare, RotateCcw } from "lucide-react";
 
 // Allowed forward transitions per lifecycle state (mirrors backend VALID_TRANSITIONS)
@@ -50,14 +51,6 @@ const TRANSITIONS: Record<string, string[]> = {
   retired: [],
 };
 
-function canTransition(roles: string[]) {
-  return (
-    roles.includes("playbook_reviewer") ||
-    roles.includes("knowledge_manager") ||
-    roles.includes("tenant_admin") ||
-    roles.includes("platform_super_admin")
-  );
-}
 
 function TransitionDialog({
   playbook,
@@ -271,7 +264,7 @@ export default function PlaybookDetailPage() {
         description={`Stable key ${playbook.stable_key} · ${playbook.automation_mode}`}
         actions={
           <div className="flex gap-2">
-            {canTransition(roles) && hasTransitions && (
+            {canTransitionPlaybook(roles) && hasTransitions && (
               <Button variant="outline" onClick={() => setTransitionOpen(true)}>
                 Transition state
               </Button>
@@ -355,7 +348,7 @@ export default function PlaybookDetailPage() {
                         <GitCompare className="mr-1 h-3 w-3" />
                         Diff
                       </Button>
-                      {idx > 0 && canTransition(roles) && (
+                      {idx > 0 && canTransitionPlaybook(roles) && (
                         <Button
                           variant="ghost"
                           size="sm"

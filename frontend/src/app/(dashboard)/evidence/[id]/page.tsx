@@ -27,26 +27,12 @@ import { Separator } from "@/components/ui/separator";
 import { api } from "@/lib/api";
 import type { AttachmentArtifact, EvidenceItemDetail, PoliciesOverview, ThreadSummary } from "@/lib/types";
 import { useAuthStore } from "@/lib/stores/auth-store";
+import { hasRole, canListPoliciesForEvidence, canEditEvidenceAccessPolicy } from "@/lib/roles";
 import { Loader2, Paperclip, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 
 const POLICY_NONE = "__none__";
 
-function hasRole(roles: string[], role: string) {
-  return roles.includes(role) || roles.includes("platform_super_admin");
-}
-
-function canListPoliciesForEvidence(roles: string[]) {
-  return (
-    hasRole(roles, "tenant_admin") ||
-    hasRole(roles, "domain_admin") ||
-    hasRole(roles, "knowledge_manager")
-  );
-}
-
-function canEditEvidenceAccessPolicy(roles: string[]) {
-  return hasRole(roles, "domain_admin") || hasRole(roles, "knowledge_manager");
-}
 
 export default function EvidenceDetailPage() {
   const params = useParams<{ id: string }>();

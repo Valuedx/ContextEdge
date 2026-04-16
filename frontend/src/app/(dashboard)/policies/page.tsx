@@ -21,10 +21,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { api } from "@/lib/api";
 import type { PoliciesOverview, PolicyType, TenantPolicyRecord } from "@/lib/types";
 import { useAuthStore } from "@/lib/stores/auth-store";
-
-function isTenantAdmin(roles: string[]) {
-  return roles.includes("tenant_admin") || roles.includes("platform_super_admin");
-}
+import { isTenantAdmin } from "@/lib/roles";
 
 const SECTIONS: {
   key: keyof PoliciesOverview;

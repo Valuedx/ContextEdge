@@ -33,6 +33,7 @@ import { Separator } from "@/components/ui/separator";
 import { api } from "@/lib/api";
 import type { PoliciesOverview, Source, SyncRun } from "@/lib/types";
 import { useAuthStore } from "@/lib/stores/auth-store";
+import { hasRole, canListPoliciesForSource } from "@/lib/roles";
 
 const syncColumns: ColumnDef<SyncRun>[] = [
   { accessorKey: "run_type", header: "Type" },
@@ -63,15 +64,7 @@ const syncColumns: ColumnDef<SyncRun>[] = [
   },
 ];
 
-function hasRole(roles: string[], role: string) {
-  return roles.includes(role) || roles.includes("platform_super_admin");
-}
-
 const POLICY_NONE = "__none__";
-
-function canListPoliciesForSource(roles: string[]) {
-  return hasRole(roles, "tenant_admin") || hasRole(roles, "domain_admin");
-}
 
 export default function SourceDetailPage() {
   const params = useParams<{ id: string }>();

@@ -12,17 +12,14 @@ import { cn } from "@/lib/utils";
 import { api } from "@/lib/api";
 import type { SourceObject } from "@/lib/types";
 import { useAuthStore } from "@/lib/stores/auth-store";
-
-function hasRole(roles: string[], role: string) {
-  return roles.includes(role) || roles.includes("platform_super_admin");
-}
+import { isTenantAdmin } from "@/lib/roles";
 
 export default function DiscoveryPage() {
   const params = useParams<{ id: string }>();
   const sourceId = params.id;
   const qc = useQueryClient();
   const roles = useAuthStore((s) => s.roles);
-  const canApprove = hasRole(roles, "tenant_admin");
+  const canApprove = isTenantAdmin(roles);
 
   const { data: objects = [], isLoading } = useQuery({
     queryKey: ["source-objects", sourceId],

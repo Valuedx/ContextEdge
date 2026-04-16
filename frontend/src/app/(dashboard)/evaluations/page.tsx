@@ -32,6 +32,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { api } from "@/lib/api";
 import type { EvaluationDataset, EvaluationRun } from "@/lib/types";
 import { useAuthStore } from "@/lib/stores/auth-store";
+import { canManageEval } from "@/lib/roles";
 import { CheckCircle, XCircle } from "lucide-react";
 import { Separator } from "@/components/ui/separator";
 
@@ -121,9 +122,6 @@ function EvalRunResults({ run, onClose }: { run: EvaluationRun; onClose: () => v
   );
 }
 
-function canManageEval(roles: string[]) {
-  return roles.includes("knowledge_manager") || roles.includes("platform_super_admin");
-}
 
 const runColumns: ColumnDef<EvaluationRun>[] = [
   {
