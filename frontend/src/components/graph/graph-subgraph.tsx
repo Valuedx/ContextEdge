@@ -11,8 +11,10 @@ import { Badge } from "@/components/ui/badge";
 import { Loader2, Network, Search, Info } from "lucide-react";
 import {
   ReactFlow,
+  ReactFlowProvider,
   useNodesState,
   useEdgesState,
+  useReactFlow,
   Background,
   Controls,
   Panel,
@@ -43,6 +45,7 @@ interface SubgraphResponse {
   edges: SubgraphEdge[];
 }
 
+// Fresh dagre instance per call — avoids stale graph accumulation
 function layoutGraph(nodes: Node[], edges: Edge[], direction = "LR") {
   const g = new dagre.graphlib.Graph();
   g.setDefaultEdgeLabel(() => ({}));
@@ -67,6 +70,92 @@ function layoutGraph(nodes: Node[], edges: Edge[], direction = "LR") {
     edges,
   };
 }
+
+// ── Inner canvas — must live inside ReactFlowProvider ────────────────────────
+
+function FlowCanvas({
+  nodes,
+  edges,
+  onNodesChange,
+  onEdgesChange,
+  onNodeClick,
+  nodeCount,
+  edgeCount,
+}: {
+  nodes: Node[];
+  edges: Edge[];
+  onNodesChange: ReturnType<typeof useNodesState>[2];
+  onEdgesChange: ReturnType<typeof useEdgesState>[2];
+  onNodeClick: (event: React.MouseEvent, node: Node) => void;
+  nodeCount: number;
+  edgeCount: number;
+}) {
+  const { fitView } = useReactFlow();
+
+  useEffect(() => {
+    if (nodes.length > 0) {
+      requestAnimationFrame(() =>
+        fitView({ padding: 0.15, duration: 350, maxZoom: 1.2 })
+      );
+    }
+  }, [nodes, fitView]);
+
+  return (
+    <ReactFlow
+      nodes={nodes}
+      edges={edges}
+      onNodesChange={onNodesChange}
+      onEdgesChange={onEdgesChange}
+      onNodeClick={onNodeClick}
+      fitView
+      colorMode="dark"
+    >
+      <Background color="#1e293b" gap={20} />
+      <Controls
+        showInteractive={false}
+        className="bg-slate-900 border-slate-700 fill-slate-200"
+      />
+
+      <Panel
+        position="top-left"
+        className="bg-slate-900/90 border border-slate-700 p-3 rounded-lg text-xs space-y-2 backdrop-blur-sm shadow-xl"
+      >
+        <div className="font-semibold text-slate-400 mb-1 flex items-center gap-1.5">
+          <Network className="h-3 w-3" /> Legend
+        </div>
+        <div className="grid grid-cols-2 gap-x-4 gap-y-1.5">
+          {Object.entries(nodeColors).map(([type, c]) => (
+            <div key={type} className="flex items-center gap-2">
+              <div className={`w-2.5 h-2.5 rounded-sm ${c.dot}`} />
+              <span className="text-slate-300">{type.replace(/_/g, " ")}</span>
+            </div>
+          ))}
+        </div>
+      </Panel>
+
+      <Panel
+        position="top-right"
+        className="bg-slate-900/90 border border-slate-700 p-2.5 rounded-lg text-xs backdrop-blur-sm shadow-xl"
+      >
+        <div className="flex items-center gap-1.5 text-slate-400">
+          <Info className="h-3 w-3" /> Click a node to re-center exploration
+        </div>
+      </Panel>
+
+      <Panel
+        position="bottom-left"
+        className="bg-slate-900/90 border border-slate-700 p-2.5 rounded-lg text-xs backdrop-blur-sm shadow-xl"
+      >
+        <div className="flex items-center gap-3 text-slate-400">
+          <Badge variant="secondary">{nodeCount} nodes</Badge>
+          <Badge variant="secondary">{edgeCount} edges</Badge>
+        </div>
+      </Panel>
+    </ReactFlow>
+  );
+}
+
+// ── Public component ─────────────────────────────────────────────────────────
 
 export function GraphSubgraph() {
   const [entityType, setEntityType] = useState("pattern");
@@ -100,7 +189,7 @@ export function GraphSubgraph() {
     const rawNodes: Node[] = data.nodes.map((n) => ({
       id: `${n.type}:${n.id}`,
       data: { label: n.title || n.type.replace(/_/g, " ").toUpperCase() },
-      className: `px-4 py-2 border-2 rounded-lg text-sm transition-all hover:scale-105 ${getNodeClassName(n.type)}`,
+      className: `px-4 py-2 border-2 rounded-lg text-sm transition-all cursor-pointer hover:scale-105 ${getNodeClassName(n.type)}`,
       type: "default",
     }));
 
@@ -218,45 +307,17 @@ export function GraphSubgraph() {
               </div>
             </div>
           ) : (
-            <ReactFlow
-              nodes={nodes}
-              edges={edges}
-              onNodesChange={onNodesChange}
-              onEdgesChange={onEdgesChange}
-              onNodeClick={handleNodeClick}
-              fitView
-              colorMode="dark"
-            >
-              <Background color="#1e293b" gap={20} />
-              <Controls showInteractive={false} className="bg-slate-900 border-slate-700 fill-slate-200" />
-
-              <Panel position="top-left" className="bg-slate-900/90 border border-slate-700 p-3 rounded-lg text-xs space-y-2 backdrop-blur-sm shadow-xl">
-                <div className="font-semibold text-slate-400 mb-1 flex items-center gap-1.5">
-                  <Network className="h-3 w-3" /> Legend
-                </div>
-                <div className="grid grid-cols-2 gap-x-4 gap-y-1.5">
-                  {Object.entries(nodeColors).map(([type, c]) => (
-                    <div key={type} className="flex items-center gap-2">
-                      <div className={`w-2.5 h-2.5 rounded-sm ${c.dot}`} />
-                      {type.replace(/_/g, " ")}
-                    </div>
-                  ))}
-                </div>
-              </Panel>
-
-              <Panel position="top-right" className="bg-slate-900/90 border border-slate-700 p-2.5 rounded-lg text-xs backdrop-blur-sm shadow-xl">
-                <div className="flex items-center gap-1.5 text-slate-400">
-                  <Info className="h-3 w-3" /> Click a node to re-center exploration
-                </div>
-              </Panel>
-
-              <Panel position="bottom-left" className="bg-slate-900/90 border border-slate-700 p-2.5 rounded-lg text-xs backdrop-blur-sm shadow-xl">
-                <div className="flex items-center gap-3 text-slate-400">
-                  <Badge variant="secondary">{data.nodes.length} nodes</Badge>
-                  <Badge variant="secondary">{data.edges.length} edges</Badge>
-                </div>
-              </Panel>
-            </ReactFlow>
+            <ReactFlowProvider>
+              <FlowCanvas
+                nodes={nodes}
+                edges={edges}
+                onNodesChange={onNodesChange}
+                onEdgesChange={onEdgesChange}
+                onNodeClick={handleNodeClick}
+                nodeCount={data.nodes.length}
+                edgeCount={data.edges.length}
+              />
+            </ReactFlowProvider>
           )}
         </div>
       )}
