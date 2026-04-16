@@ -21,7 +21,7 @@ export function DecisionChain({
     <div className="relative ml-3">
       <div className="absolute left-0 top-0 bottom-0 w-0.5 bg-border" />
       <div className="space-y-4">
-        {decisions.map((d, idx) => (
+        {decisions.map((d) => (
           <div key={d.id} className="relative pl-6">
             <div className="absolute left-[-4px] top-2 h-2.5 w-2.5 rounded-full border-2 border-background bg-amber-400" />
             <button

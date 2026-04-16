@@ -75,7 +75,7 @@ function TransitionDialog({
       toast.success(`Playbook transitioned to "${newState}"`);
       onClose();
     },
-    onError: (err: any) => {
+    onError: (err: Error) => {
       toast.error(err.message || "Transition failed");
     },
   });
@@ -87,7 +87,7 @@ function TransitionDialog({
           <DialogTitle>No transitions available</DialogTitle>
         </DialogHeader>
         <p className="text-sm text-muted-foreground">
-          Playbooks in "{playbook.lifecycle_state}" state cannot be transitioned further.
+          Playbooks in &quot;{playbook.lifecycle_state}&quot; state cannot be transitioned further.
         </p>
         <DialogFooter>
           <Button variant="outline" onClick={onClose}>
@@ -223,7 +223,7 @@ export default function PlaybookDetailPage() {
       qc.invalidateQueries({ queryKey: ["playbook", playbookId] });
       toast.success("Playbook rolled back successfully");
     },
-    onError: (err: any) => toast.error(err.message || "Rollback failed"),
+    onError: (err: Error) => toast.error(err.message || "Rollback failed"),
   });
 
   if (!playbookId) return null;

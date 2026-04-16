@@ -1,6 +1,6 @@
 "use client";
 
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { ColumnDef } from "@tanstack/react-table";
 import { BookOpen, Loader2, Network, List } from "lucide-react";
 import { useRouter } from "next/navigation";
@@ -18,7 +18,7 @@ import { PatternGraph } from "@/components/patterns/pattern-graph";
 import { usePagination } from "@/lib/hooks/use-pagination";
 import { PaginationControls } from "@/components/common/pagination-controls";
 
-function PatternActions({ patternId, title }: { patternId: string; title: string }) {
+function PatternActions({ patternId }: { patternId: string; title: string }) {
   const router = useRouter();
   const generateMutation = useMutation({
     mutationFn: () => api.post("/playbooks/generate", { pattern_id: patternId }),
@@ -26,7 +26,7 @@ function PatternActions({ patternId, title }: { patternId: string; title: string
       toast.success("Playbook candidate generated!");
       router.push("/playbooks");
     },
-    onError: (err: any) => {
+    onError: (err: Error) => {
       toast.error(err.message || "Failed to generate playbook");
     },
   });

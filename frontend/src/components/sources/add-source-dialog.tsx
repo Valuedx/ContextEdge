@@ -71,7 +71,7 @@ export function AddSourceDialog({ open, onOpenChange }: AddSourceDialogProps) {
       }
 
       setIsReading(true);
-      // @ts-ignore - showDirectoryPicker is modern API
+      // @ts-expect-error - showDirectoryPicker is modern API not yet in lib.dom.d.ts
       const dirHandle = await window.showDirectoryPicker();
       const files: { filename: string; content: string }[] = [];
 
@@ -90,8 +90,8 @@ export function AddSourceDialog({ open, onOpenChange }: AddSourceDialogProps) {
           setValue("display_name", dirHandle.name);
       }
       toast.success(`Identified ${files.length} valid log/text files in "${dirHandle.name}"`);
-    } catch (err: any) {
-      if (err.name !== "AbortError") {
+    } catch (err) {
+      if ((err as Error).name !== "AbortError") {
         console.error(err);
         toast.error("Failed to read directory");
       }
@@ -128,7 +128,7 @@ export function AddSourceDialog({ open, onOpenChange }: AddSourceDialogProps) {
         });
         toast.success("Local ingestion started successfully");
       }
-    } catch (err) {
+    } catch {
       // Error handled by mutation or manually
     }
   };

@@ -28,7 +28,7 @@ function EpisodeActions({ episodeId, title }: { episodeId: string; title: string
       queryClient.invalidateQueries({ queryKey: ["episodes"] });
       toast.success(`Episode "${title}" deleted`);
     },
-    onError: (err: any) => {
+    onError: (err: Error) => {
       toast.error(err.message || "Failed to delete episode");
     },
   });
@@ -39,7 +39,7 @@ function EpisodeActions({ episodeId, title }: { episodeId: string; title: string
       toast.success("Knowledge pattern discovered!");
       router.push("/patterns");
     },
-    onError: (err: any) => {
+    onError: (err: Error) => {
       toast.error(err.message || "Pattern analysis failed");
     },
   });
@@ -143,8 +143,8 @@ export default function EpisodesPage() {
       toast.success(
         `Reconstruction queued for ${res.evidence_count} evidence item(s). Celery task ${tid} — refresh episodes after the worker finishes.`,
       );
-    } catch (err: any) {
-      toast.error(err.message || "Failed to trigger reconstruction");
+    } catch (err) {
+      toast.error((err as Error).message || "Failed to trigger reconstruction");
     } finally {
       setIsReconstructing(false);
     }

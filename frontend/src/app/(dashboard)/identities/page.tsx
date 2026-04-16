@@ -49,7 +49,7 @@ function EditDialog({
       toast.success("Identity updated");
       onClose();
     },
-    onError: (err: any) => toast.error(err.message || "Update failed"),
+    onError: (err: Error) => toast.error(err.message || "Update failed"),
   });
 
   return (
@@ -140,7 +140,7 @@ function MergeDialog({
       toast.success("Identities merged");
       onClose();
     },
-    onError: (err: any) => toast.error(err.message || "Merge failed"),
+    onError: (err: Error) => toast.error(err.message || "Merge failed"),
   });
 
   const candidates = allIdentities.filter((i) => i.id !== primary.id);

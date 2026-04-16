@@ -118,7 +118,7 @@ function NewSessionDialog({ onClose }: { onClose: () => void }) {
       toast.success("Session created");
       onClose();
     },
-    onError: (err: any) => {
+    onError: (err: Error) => {
       toast.error(err.message || "Failed to create session");
     },
   });
@@ -199,7 +199,7 @@ function SessionDetail({
       toast.success("Session closed");
       onClose();
     },
-    onError: (err: any) => toast.error(err.message || "Failed to close session"),
+    onError: (err: Error) => toast.error(err.message || "Failed to close session"),
   });
 
   return (

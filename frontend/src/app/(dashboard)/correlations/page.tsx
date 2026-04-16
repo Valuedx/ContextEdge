@@ -49,7 +49,7 @@ function CreateDialog({ onClose }: { onClose: () => void }) {
       toast.success("Correlation created");
       onClose();
     },
-    onError: (err: any) => toast.error(err.message || "Create failed"),
+    onError: (err: Error) => toast.error(err.message || "Create failed"),
   });
 
   const valid = sourceId.trim() && targetId.trim();
@@ -152,7 +152,7 @@ function ReviewDialog({
       toast.success("Decision recorded");
       onClose();
     },
-    onError: (err: any) => toast.error(err.message || "Decision failed"),
+    onError: (err: Error) => toast.error(err.message || "Decision failed"),
   });
 
   return (
@@ -240,7 +240,7 @@ export default function CorrelationsPage() {
       qc.invalidateQueries({ queryKey: ["correlations"] });
       toast.success("Correlation deleted");
     },
-    onError: (err: any) => toast.error(err.message || "Delete failed"),
+    onError: (err: Error) => toast.error(err.message || "Delete failed"),
   });
 
   const columns: ColumnDef<CorrelationEdge>[] = [

@@ -42,7 +42,7 @@ function DecideDialog({
       toast.success(`Request ${decision}`);
       onClose();
     },
-    onError: (err: any) => toast.error(err.message || "Decision failed"),
+    onError: (err: Error) => toast.error(err.message || "Decision failed"),
   });
 
   return (

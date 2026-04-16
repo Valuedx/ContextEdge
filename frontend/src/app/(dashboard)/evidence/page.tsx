@@ -18,7 +18,7 @@ import { toast } from "sonner";
 import { usePagination } from "@/lib/hooks/use-pagination";
 import { PaginationControls } from "@/components/common/pagination-controls";
 
-function EvidenceActions({ evidenceId, title }: { evidenceId: string; title: string }) {
+function EvidenceActions({ evidenceId }: { evidenceId: string; title: string }) {
   const queryClient = useQueryClient();
   const mutation = useMutation({
     mutationFn: () => api.delete(`/evidence/${evidenceId}`),
@@ -26,7 +26,7 @@ function EvidenceActions({ evidenceId, title }: { evidenceId: string; title: str
       queryClient.invalidateQueries({ queryKey: ["evidence"] });
       toast.success("Evidence record deleted");
     },
-    onError: (err: any) => {
+    onError: (err: Error) => {
       toast.error(err.message || "Failed to delete record");
     },
   });

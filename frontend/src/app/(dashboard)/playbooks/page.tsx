@@ -10,7 +10,7 @@ import { PageHeader } from "@/components/common/page-header";
 import { DataTable } from "@/components/common/data-table";
 import { DataTableSkeleton } from "@/components/common/data-table-skeleton";
 import { StatusBadge } from "@/components/common/status-badge";
-import { Button, buttonVariants } from "@/components/ui/button";
+import { buttonVariants } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { api } from "@/lib/api";
 import type { Playbook } from "@/lib/types";

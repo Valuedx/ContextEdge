@@ -47,7 +47,7 @@ function ResolveDialog({
       toast.success("Contradiction status updated");
       onClose();
     },
-    onError: (err: any) => toast.error(err.message || "Update failed"),
+    onError: (err: Error) => toast.error(err.message || "Update failed"),
   });
 
   return (

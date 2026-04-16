@@ -20,7 +20,7 @@ import {
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { api } from "@/lib/api";
-import type { Pattern, PatternEvidenceLink, PatternSubgraph } from "@/lib/types";
+import type { Pattern, PatternEvidenceLink } from "@/lib/types";
 
 import { PatternGraph } from "@/components/patterns/pattern-graph";
 import { AlertCircle, Zap, Shield, Bug, Lightbulb, StepForward, Activity, Link2, Plus, Trash2 } from "lucide-react";
@@ -47,7 +47,7 @@ function AddLinkDialog({ patternId, onClose }: { patternId: string; onClose: () 
       toast.success("Evidence link added");
       onClose();
     },
-    onError: (err: any) => toast.error(err.message || "Add failed"),
+    onError: (err: Error) => toast.error(err.message || "Add failed"),
   });
 
   return (
@@ -120,7 +120,7 @@ export default function PatternDetailPage() {
   const delLink = useMutation({
     mutationFn: (linkId: string) => api.delete(`/patterns/${patternId}/evidence-links/${linkId}`),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["pattern-evidence-links", patternId] }),
-    onError: (err: any) => toast.error(err.message || "Delete failed"),
+    onError: (err: Error) => toast.error(err.message || "Delete failed"),
   });
 
   if (!patternId) return null;

@@ -68,7 +68,7 @@ export default function EvidenceDetailPage() {
       qc.invalidateQueries({ queryKey: ["thread", item?.thread_id] });
       toast.success("Thread hydration queued");
     },
-    onError: (err: any) => toast.error(err.message || "Hydration failed"),
+    onError: (err: Error) => toast.error(err.message || "Hydration failed"),
   });
 
   const { data: policiesData } = useQuery({

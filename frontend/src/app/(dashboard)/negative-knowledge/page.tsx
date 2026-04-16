@@ -61,7 +61,7 @@ function NKDialog({
       toast.success(isEdit ? "Item updated" : "Item created");
       onClose();
     },
-    onError: (err: any) => toast.error(err.message || "Save failed"),
+    onError: (err: Error) => toast.error(err.message || "Save failed"),
   });
 
   return (
@@ -136,7 +136,7 @@ function DeleteDialog({
       toast.success("Item deleted");
       onClose();
     },
-    onError: (err: any) => toast.error(err.message || "Delete failed"),
+    onError: (err: Error) => toast.error(err.message || "Delete failed"),
   });
 
   return (

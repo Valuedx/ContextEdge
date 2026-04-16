@@ -52,7 +52,7 @@ function NewWorkspaceDialog({ onClose }: { onClose: () => void }) {
       toast.success(`Workspace "${name.trim()}" created`);
       onClose();
     },
-    onError: (err: any) => toast.error(err.message || "Failed to create workspace"),
+    onError: (err: Error) => toast.error(err.message || "Failed to create workspace"),
   });
 
   return (
@@ -121,7 +121,7 @@ function NewDomainDialog({
       toast.success(`Domain "${name.trim()}" created`);
       onClose();
     },
-    onError: (err: any) => toast.error(err.message || "Failed to create domain"),
+    onError: (err: Error) => toast.error(err.message || "Failed to create domain"),
   });
 
   return (

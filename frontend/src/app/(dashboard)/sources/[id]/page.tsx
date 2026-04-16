@@ -112,7 +112,7 @@ export default function SourceDetailPage() {
       qc.invalidateQueries({ queryKey: ["source", id] });
       toast.success("Credential rotation initiated");
     },
-    onError: (err: any) => toast.error(err.message || "Rotation failed"),
+    onError: (err: Error) => toast.error(err.message || "Rotation failed"),
   });
 
   const srvRetention = source?.retention_policy_id ?? null;

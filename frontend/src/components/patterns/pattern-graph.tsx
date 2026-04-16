@@ -178,7 +178,7 @@ export function PatternGraph({ patternId }: { patternId: string }) {
   useEffect(() => {
     if (!data?.nodes) return;
 
-    const rawNodes: Node[] = (data.nodes as any[]).map((n) => ({
+    const rawNodes: Node[] = (data.nodes as { type: string; id: string; title?: string | null }[]).map((n) => ({
       id: `${n.type}:${n.id}`,
       data: { label: n.title || n.type.toUpperCase() },
       className: `px-4 py-2 border-2 rounded-lg text-sm transition-all cursor-pointer hover:scale-105 ${
@@ -188,7 +188,7 @@ export function PatternGraph({ patternId }: { patternId: string }) {
       position: { x: 0, y: 0 },
     }));
 
-    const rawEdges: Edge[] = (data.edges as any[]).map((e, i) => {
+    const rawEdges: Edge[] = (data.edges as { source: string; target: string; type: string }[]).map((e, i) => {
       const ec = edgeColors[e.type] || { stroke: "#475569" };
       return {
         id: `e-${i}`,

@@ -27,7 +27,7 @@ function SourceActions({ sourceId, name }: { sourceId: string; name: string }) {
       queryClient.invalidateQueries({ queryKey: ["sources"] });
       toast.success(`Source "${name}" deleted`);
     },
-    onError: (err: any) => {
+    onError: (err: Error) => {
       toast.error(err.message || "Failed to delete source");
     },
   });

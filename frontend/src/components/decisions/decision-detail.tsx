@@ -29,7 +29,6 @@ function RiskBadge({ level }: { level: string | null }) {
 }
 
 export function DecisionDetail({ decision }: { decision: Decision }) {
-  const selectedOption = decision.options.find((o) => o.selected);
   const latestOutcome = decision.outcomes[decision.outcomes.length - 1];
 
   return (
