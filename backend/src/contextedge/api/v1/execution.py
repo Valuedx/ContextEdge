@@ -7,6 +7,7 @@ from contextedge.deps import AuthUser, DbSession
 from contextedge.models.execution import ApprovalRequest
 from contextedge.schemas.execution import (
     ApprovalDecision,
+    ApprovalModificationRequest,
     ApprovalRequestResponse,
     ExecutionRunResponse,
     StartExecutionRequest,
@@ -18,6 +19,7 @@ from contextedge.services.execution_service import (
     decide_approval,
     get_execution_run,
     list_execution_runs,
+    modify_approval,
     record_step_completion,
     record_tool_invocation,
     request_approval,
@@ -142,6 +144,37 @@ async def decide_on_approval(
             approval_request_id=approval_id,
             decided_by=user.user_id,
             decision=body.decision,
+            comment=body.comment,
+        )
+    except ExecutionPolicyError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    if req is None:
+        raise HTTPException(status_code=404, detail="Approval request not found")
+    await db.commit()
+    return req
+
+
+@router.post(
+    "/runs/{run_id}/approvals/{approval_id}/modify",
+    response_model=ApprovalRequestResponse,
+)
+async def modify_on_approval(
+    run_id: UUID,
+    approval_id: UUID,
+    body: ApprovalModificationRequest,
+    db: DbSession,
+    user: AuthUser,
+):
+    """Approve a pending approval request with modifications to the step's inputs."""
+    user.require_role("domain_admin")
+    try:
+        req = await modify_approval(
+            db,
+            tenant_id=user.tenant_id,
+            approval_request_id=approval_id,
+            decided_by=user.user_id,
+            modification_diff=body.modification_diff,
+            modification_reason_code=body.modification_reason_code,
             comment=body.comment,
         )
     except ExecutionPolicyError as exc:

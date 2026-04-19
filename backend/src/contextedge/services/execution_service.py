@@ -262,7 +262,11 @@ async def list_execution_runs(
     playbook_id: uuid.UUID | None = None,
     status: str | None = None,
     limit: int = 50,
+    include_details: bool = False,
 ) -> list[ExecutionRun]:
+    """List execution runs; set include_details=True to eager-load step_runs
+    and approval_requests (needed when callers serialize the full run into a
+    response model outside the request-scoped DB session)."""
     stmt = select(ExecutionRun).where(ExecutionRun.tenant_id == tenant_id)
     if session_id is not None:
         stmt = stmt.where(ExecutionRun.session_id == session_id)
@@ -271,6 +275,11 @@ async def list_execution_runs(
     if status is not None:
         stmt = stmt.where(ExecutionRun.status == status)
     stmt = stmt.order_by(ExecutionRun.created_at.desc()).limit(limit)
+    if include_details:
+        stmt = stmt.options(
+            selectinload(ExecutionRun.step_runs).selectinload(ExecutionStepRun.tool_invocations),
+            selectinload(ExecutionRun.approval_requests),
+        )
     result = await db.execute(stmt)
     return list(result.scalars().all())
 
@@ -505,6 +514,135 @@ async def decide_approval(
             "safety_class": req.safety_class,
             "requested_action": req.requested_action,
         },
+        status="completed",
+    )
+
+    return req
+
+
+async def modify_approval(
+    db: AsyncSession,
+    *,
+    tenant_id: uuid.UUID,
+    approval_request_id: uuid.UUID,
+    decided_by: uuid.UUID,
+    modification_diff: dict,
+    modification_reason_code: str,
+    comment: str | None = None,
+) -> ApprovalRequest | None:
+    """Approve an approval request with modifications to the step's inputs.
+
+    Mirrors `decide_approval` but records the structured diff and reason code
+    instead of a plain approve/deny. Treats "modified" as an approved-with-changes
+    outcome — the run and step transition to running, and the diff is applied
+    to the step's `inputs` JSONB when present.
+
+    Creates a first-class `Decision(decision_type="modify")` with two options:
+    the original action (selected=False, rejection_code=<reason>) and the
+    modified action (selected=True), so the `considered`/`chose` graph
+    invariant holds.
+    """
+    from contextedge.models.decision import REJECTION_REASON_CODES
+
+    if modification_reason_code not in REJECTION_REASON_CODES:
+        raise ExecutionPolicyError(
+            f"modification_reason_code must be one of {REJECTION_REASON_CODES}",
+        )
+    if not isinstance(modification_diff, dict) or not modification_diff:
+        raise ExecutionPolicyError("modification_diff must be a non-empty object")
+
+    req = await db.get(ApprovalRequest, approval_request_id)
+    if req is None or req.tenant_id != tenant_id:
+        return None
+    if req.status != "pending":
+        raise ExecutionPolicyError(f"Approval request is already '{req.status}'")
+
+    now = datetime.now(UTC)
+    req.status = "modified"
+    req.decided_by = decided_by
+    req.decided_at = now
+    req.decision_comment = comment
+    req.modification_diff = modification_diff
+    req.modification_reason_code = modification_reason_code
+
+    run = await db.get(ExecutionRun, req.execution_run_id)
+    if run is not None and run.tenant_id == tenant_id and run.status == "awaiting_approval":
+        run.status = "running"
+
+    step_run: ExecutionStepRun | None = None
+    if req.step_run_id is not None:
+        step_run = await db.get(ExecutionStepRun, req.step_run_id)
+        if step_run is not None and step_run.tenant_id == tenant_id:
+            if step_run.status == "awaiting_approval":
+                step_run.status = "running"
+            new_inputs = modification_diff.get("inputs")
+            if isinstance(new_inputs, dict):
+                step_run.inputs = {**(step_run.inputs or {}), **new_inputs}
+
+    await db.flush()
+
+    await append_operational_event(
+        db,
+        tenant_id=tenant_id,
+        actor_id=decided_by,
+        entity_type="approval_request",
+        entity_id=req.id,
+        event_type="approval.modified",
+        payload={
+            "execution_run_id": str(req.execution_run_id),
+            "step_run_id": str(req.step_run_id) if req.step_run_id else None,
+            "modification_reason_code": modification_reason_code,
+            "modification_diff_keys": sorted(modification_diff.keys()),
+            "comment": comment,
+        },
+    )
+
+    await ensure_edge(
+        db, tenant_id, "approval_request", req.id,
+        "user", decided_by, "modified_by",
+        metadata={
+            "comment": comment,
+            "safety_class": req.safety_class,
+            "execution_run_id": str(req.execution_run_id),
+            "modification_reason_code": modification_reason_code,
+        },
+    )
+
+    session_id = run.session_id if run else None
+    modified_action = (
+        modification_diff.get("summary")
+        or f"modified: {req.requested_action}"
+    )
+    await create_decision(
+        db,
+        tenant_id=tenant_id,
+        decision_type="modify",
+        agent_step="remediation",
+        actor_type="human",
+        actor_id=decided_by,
+        session_id=session_id,
+        rationale_summary=comment or f"Approval modified ({modification_reason_code})",
+        compact_trace=f"Step modified: {req.requested_action}",
+        approval_required=True,
+        context_snapshot={
+            "approval_request_id": str(req.id),
+            "execution_run_id": str(req.execution_run_id),
+            "safety_class": req.safety_class,
+            "requested_action": req.requested_action,
+            "modification_reason_code": modification_reason_code,
+        },
+        options=[
+            {
+                "action": req.requested_action,
+                "selected": False,
+                "rejection_code": modification_reason_code,
+                "rejection_reason": comment,
+            },
+            {
+                "action": modified_action,
+                "selected": True,
+            },
+        ],
         status="completed",
     )
 

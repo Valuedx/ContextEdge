@@ -299,8 +299,13 @@ def normalize_evidence(self, raw_object_id: str, tenant_id: str):
                 for artifact_id in attachment_ids:
                     extract_attachment_artifact.delay(artifact_id, tenant_id)
             else:
+                from contextedge.workers.evidence_baseline_tasks import (
+                    compute_evidence_baseline_task,
+                )
+
                 classify_relevance_task.delay(res["evidence_id"], tenant_id)
                 correlate_evidence.delay(res["evidence_id"], tenant_id)
+                compute_evidence_baseline_task.delay(res["evidence_id"], tenant_id)
         return res
     except Exception as exc:
         raise self.retry(exc=exc) from exc

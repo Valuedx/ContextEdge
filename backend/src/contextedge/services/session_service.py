@@ -3,6 +3,7 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime
 
+import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -10,6 +11,28 @@ from sqlalchemy.orm import selectinload
 from contextedge.models.session import DecisionTraceEvent, ResolutionSession
 from contextedge.services.event_log_service import append_operational_event
 from contextedge.services.memory_service import REASONING_MEMORY, SHORT_TERM_MEMORY
+
+logger = structlog.get_logger()
+
+
+def _enqueue_review_context_prefetch(tenant_id: uuid.UUID, session_id: uuid.UUID) -> None:
+    """Fire-and-forget enqueue of the review-queue prefetch task.
+
+    Imported lazily because Celery pulls in redis + broker config and we want
+    session creation to stay unit-testable without those. A failure to enqueue
+    is logged and swallowed — the read-through cache on the endpoint still
+    works, the first request just pays the live-compute cost.
+    """
+    try:
+        from contextedge.workers.review_queue_tasks import prefetch_review_context
+
+        prefetch_review_context.delay(str(tenant_id), str(session_id))
+    except Exception:
+        logger.warning(
+            "review_queue.prefetch_enqueue_failed",
+            tenant_id=str(tenant_id),
+            session_id=str(session_id),
+        )
 
 
 async def create_resolution_session(
@@ -53,6 +76,7 @@ async def create_resolution_session(
             "notes": notes,
         },
     )
+    _enqueue_review_context_prefetch(tenant_id, session.id)
     return session
 
 
@@ -172,5 +196,7 @@ async def close_resolution_session(
             "closed_at": session.closed_at.isoformat(),
         },
     )
+    from contextedge.services.review_queue_service import invalidate_review_context
+    await invalidate_review_context(tenant_id, session.id)
     await db.refresh(session)
     return session

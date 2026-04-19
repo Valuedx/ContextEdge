@@ -567,3 +567,281 @@ def test_decision_outcome_create_schema():
     )
     assert payload.execution_result == "failure"
     assert payload.follow_up_needed is True
+
+
+# =========================================================================
+# Structured rejection (M1 + A4)
+# =========================================================================
+
+def test_decision_reject_request_schema_accepts_valid_code():
+    from contextedge.schemas.decision import DecisionRejectRequest
+
+    payload = DecisionRejectRequest(code="wrong_diagnosis", comment="evidence contradicts")
+    assert payload.code == "wrong_diagnosis"
+
+
+def test_decision_reject_request_schema_rejects_invalid_code():
+    from contextedge.schemas.decision import DecisionRejectRequest
+    import pytest as _pytest
+
+    with _pytest.raises(ValueError):
+        DecisionRejectRequest(code="not_a_real_code")
+
+
+def test_decision_option_create_schema_rejects_invalid_rejection_code():
+    from contextedge.schemas.decision import DecisionOptionCreate
+    import pytest as _pytest
+
+    with _pytest.raises(ValueError):
+        DecisionOptionCreate(action="restart", rejection_code="bogus_code")
+
+
+def test_decision_option_create_schema_accepts_known_rejection_code():
+    from contextedge.schemas.decision import DecisionOptionCreate
+
+    opt = DecisionOptionCreate(action="restart", rejection_code="policy_violation")
+    assert opt.rejection_code == "policy_violation"
+
+
+@pytest.mark.asyncio
+@patch("contextedge.services.decision_trace_service.append_operational_event", new_callable=AsyncMock)
+@patch("contextedge.services.decision_trace_service.link_decision_outcome", new_callable=AsyncMock)
+@patch("contextedge.services.decision_trace_service.get_decision")
+async def test_reject_decision_marks_selected_option_and_creates_outcome(
+    mock_get, mock_link_out, mock_op_event,
+):
+    """reject_decision stamps the selected option with rejection_code and
+    creates a DecisionOutcome carrying feedback_code."""
+    from contextedge.services.decision_trace_service import reject_decision
+
+    tenant_id = uuid4()
+    decision_id = uuid4()
+    chosen = DecisionOption(
+        id=uuid4(),
+        decision_id=decision_id,
+        tenant_id=tenant_id,
+        action="restart_workflow",
+        selected=True,
+    )
+    other = DecisionOption(
+        id=uuid4(),
+        decision_id=decision_id,
+        tenant_id=tenant_id,
+        action="verify_dependency",
+        selected=False,
+    )
+    decision = Decision(
+        id=decision_id,
+        tenant_id=tenant_id,
+        decision_type="execute_playbook",
+        agent_step="remediation",
+        rationale_summary="AI recommended restart",
+        status="pending",
+        human_override=False,
+    )
+    decision.options = [chosen, other]
+    mock_get.return_value = decision
+
+    db, added = _make_db()
+    db.flush = AsyncMock()
+    db.refresh = AsyncMock()
+
+    outcome = await reject_decision(
+        db,
+        tenant_id=tenant_id,
+        decision_id=decision_id,
+        code="wrong_diagnosis",
+        comment="evidence contradicts restart hypothesis",
+    )
+
+    assert isinstance(outcome, DecisionOutcome)
+    assert outcome.execution_result == "rejected"
+    assert outcome.feedback_code == "wrong_diagnosis"
+    assert outcome.action_executed == "rejected_by_reviewer"
+
+    assert chosen.selected is False
+    assert chosen.rejection_code == "wrong_diagnosis"
+    assert chosen.rejection_reason == "evidence contradicts restart hypothesis"
+    assert other.selected is False
+    assert other.rejection_code is None
+
+    assert decision.status == "superseded"
+    assert decision.human_override is True
+
+    mock_link_out.assert_awaited_once()
+    mock_op_event.assert_awaited_once()
+    payload = mock_op_event.call_args.kwargs.get("payload", {})
+    assert payload["code"] == "wrong_diagnosis"
+
+
+@pytest.mark.asyncio
+async def test_reject_decision_raises_on_invalid_code():
+    from contextedge.services.decision_trace_service import reject_decision
+
+    db, _ = _make_db()
+    with pytest.raises(ValueError):
+        await reject_decision(
+            db,
+            tenant_id=uuid4(),
+            decision_id=uuid4(),
+            code="not_a_real_code",
+        )
+
+
+@pytest.mark.asyncio
+@patch("contextedge.services.decision_trace_service.get_decision", return_value=None)
+async def test_reject_decision_returns_none_for_missing_decision(mock_get):
+    from contextedge.services.decision_trace_service import reject_decision
+
+    db, _ = _make_db()
+    result = await reject_decision(
+        db,
+        tenant_id=uuid4(),
+        decision_id=uuid4(),
+        code="wrong_diagnosis",
+    )
+    assert result is None
+
+
+# =========================================================================
+# A2 — find_similar_decisions_aggregate
+# =========================================================================
+
+
+@pytest.mark.asyncio
+@patch("contextedge.services.decision_trace_service.get_decision_effectiveness", new_callable=AsyncMock)
+@patch("contextedge.services.decision_trace_service.count_similar_decisions", new_callable=AsyncMock)
+@patch("contextedge.services.decision_trace_service.find_similar_decisions", new_callable=AsyncMock)
+async def test_find_similar_decisions_aggregate_composes_all_three(
+    mock_find, mock_count, mock_eff,
+):
+    """Composes decisions list + total_count + outcomes + success_rate from
+    three service calls with the same filter."""
+    from contextedge.services.decision_trace_service import (
+        find_similar_decisions_aggregate,
+    )
+
+    tenant_id = uuid4()
+    top_decisions = [
+        Decision(
+            id=uuid4(), tenant_id=tenant_id,
+            decision_type="execute_playbook", agent_step="remediation",
+            rationale_summary="Test",
+        )
+    ]
+    mock_find.return_value = top_decisions
+    mock_count.return_value = 143
+    mock_eff.return_value = {
+        "decision_type": "execute_playbook",
+        "context_filters": {"workflow": "vpn"},
+        "total": 87,
+        "outcomes": {"success": 70, "failure": 10, "rejected": 7},
+    }
+
+    db, _ = _make_db()
+    ctx = {"workflow": "vpn"}
+    result = await find_similar_decisions_aggregate(
+        db,
+        tenant_id=tenant_id,
+        decision_type="execute_playbook",
+        context_snapshot=ctx,
+        limit=5,
+    )
+
+    assert result["decision_type"] == "execute_playbook"
+    assert result["total_count"] == 143
+    assert result["context_filters"] == {"workflow": "vpn"}
+    assert result["outcomes"] == {"success": 70, "failure": 10, "rejected": 7}
+    # success_rate = 70 / (70+10+7) == 70/87
+    assert result["success_rate"] == pytest.approx(70 / 87)
+    assert result["decisions"] == top_decisions
+
+    # All three backends saw the same context filter + type.
+    for mock in (mock_find, mock_count, mock_eff):
+        call_kwargs = mock.call_args.kwargs
+        assert call_kwargs.get("decision_type") == "execute_playbook"
+    assert mock_find.call_args.kwargs["context_snapshot"] == ctx
+    assert mock_count.call_args.kwargs["context_snapshot"] == ctx
+    assert mock_eff.call_args.kwargs["context_filters"] == ctx
+    assert mock_find.call_args.kwargs["limit"] == 5
+
+
+@pytest.mark.asyncio
+@patch("contextedge.services.decision_trace_service.get_decision_effectiveness", new_callable=AsyncMock)
+@patch("contextedge.services.decision_trace_service.count_similar_decisions", new_callable=AsyncMock, return_value=0)
+@patch("contextedge.services.decision_trace_service.find_similar_decisions", new_callable=AsyncMock, return_value=[])
+async def test_find_similar_decisions_aggregate_none_success_rate_when_empty(
+    mock_find, mock_count, mock_eff,
+):
+    """No outcomes recorded → success_rate is None, not a crash."""
+    from contextedge.services.decision_trace_service import (
+        find_similar_decisions_aggregate,
+    )
+
+    mock_eff.return_value = {
+        "decision_type": "escalate_to_human",
+        "context_filters": {},
+        "total": 0,
+        "outcomes": {},
+    }
+
+    db, _ = _make_db()
+    result = await find_similar_decisions_aggregate(
+        db, tenant_id=uuid4(), decision_type="escalate_to_human",
+    )
+
+    assert result["total_count"] == 0
+    assert result["outcomes"] == {}
+    assert result["success_rate"] is None
+    assert result["decisions"] == []
+    assert result["context_filters"] == {}
+
+
+@pytest.mark.asyncio
+@patch("contextedge.services.decision_trace_service.get_decision_effectiveness", new_callable=AsyncMock)
+@patch("contextedge.services.decision_trace_service.count_similar_decisions", new_callable=AsyncMock, return_value=5)
+@patch("contextedge.services.decision_trace_service.find_similar_decisions", new_callable=AsyncMock, return_value=[])
+async def test_find_similar_decisions_aggregate_ignores_unknown_outcomes_in_rate(
+    mock_find, mock_count, mock_eff,
+):
+    """Rogue outcome labels don't skew the denominator — success_rate uses
+    only the canonical success/failure/partial/timeout/rejected set."""
+    from contextedge.services.decision_trace_service import (
+        find_similar_decisions_aggregate,
+    )
+
+    mock_eff.return_value = {
+        "decision_type": "restart_workflow",
+        "context_filters": {},
+        "total": 5,
+        "outcomes": {"success": 3, "failure": 1, "mystery_result": 999},
+    }
+
+    db, _ = _make_db()
+    result = await find_similar_decisions_aggregate(
+        db, tenant_id=uuid4(), decision_type="restart_workflow",
+    )
+
+    # success_rate = 3 / (3+1) == 0.75 — mystery_result excluded
+    assert result["success_rate"] == pytest.approx(0.75)
+    # But outcomes dict preserves the raw data for the UI.
+    assert result["outcomes"]["mystery_result"] == 999
+
+
+def test_similar_decisions_aggregate_response_schema_round_trip():
+    """Round-trip a service-shaped dict through SimilarDecisionsAggregateResponse."""
+    from contextedge.schemas.decision import SimilarDecisionsAggregateResponse
+
+    payload = {
+        "decision_type": "execute_playbook",
+        "context_filters": {"workflow": "vpn"},
+        "total_count": 143,
+        "outcomes": {"success": 120, "failure": 15, "rejected": 8},
+        "success_rate": 0.839,
+        "decisions": [],
+    }
+    resp = SimilarDecisionsAggregateResponse.model_validate(payload)
+    assert resp.total_count == 143
+    assert resp.success_rate == pytest.approx(0.839)
+    assert resp.outcomes["success"] == 120
+    assert resp.decisions == []

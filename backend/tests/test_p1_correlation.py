@@ -46,18 +46,24 @@ def test_extract_case_link_candidates_includes_external_and_thread():
 
 
 def test_normalize_chains_correlation_task():
+    from contextedge.workers import evidence_baseline_tasks
+
     evidence_id = str(uuid4())
 
     with (
         patch.object(extraction_tasks, "run_async", return_value={"evidence_id": evidence_id}),
         patch.object(extraction_tasks.classify_relevance_task, "delay") as classify_mock,
         patch.object(extraction_tasks.correlate_evidence, "delay") as correlate_mock,
+        patch.object(
+            evidence_baseline_tasks.compute_evidence_baseline_task, "delay",
+        ) as baseline_mock,
     ):
         result = extraction_tasks.normalize_evidence.run(str(uuid4()), str(uuid4()))
 
     assert result == {"evidence_id": evidence_id}
     classify_mock.assert_called_once()
     correlate_mock.assert_called_once_with(evidence_id, ANY)
+    baseline_mock.assert_called_once_with(evidence_id, ANY)
 
 
 @pytest.mark.asyncio

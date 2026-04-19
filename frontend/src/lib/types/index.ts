@@ -520,6 +520,7 @@ export interface DecisionOption {
   risk_level: string | null;
   preconditions: string[];
   rejection_reason: string | null;
+  rejection_code: string | null;
   selected: boolean;
   created_at: string;
 }
@@ -534,6 +535,7 @@ export interface DecisionOutcome {
   follow_up_needed: boolean;
   follow_up_decision_id: string | null;
   feedback_received: string | null;
+  feedback_code: string | null;
   feedback_by: string | null;
   created_at: string;
 }
@@ -567,4 +569,175 @@ export interface Decision {
 
 export interface DecisionChainResponse {
   decisions: Decision[];
+}
+
+// --- Structured rejection / modification reason codes (M1) ---
+
+export const REJECTION_REASON_CODES = [
+  "wrong_diagnosis",
+  "plan_incomplete",
+  "needs_human_judgment",
+  "user_context_missing",
+  "policy_violation",
+  "other",
+] as const;
+
+export type RejectionReasonCode = (typeof REJECTION_REASON_CODES)[number];
+
+export const REJECTION_REASON_LABELS: Record<RejectionReasonCode, string> = {
+  wrong_diagnosis: "Wrong diagnosis",
+  plan_incomplete: "Plan incomplete",
+  needs_human_judgment: "Needs human judgment",
+  user_context_missing: "User context missing",
+  policy_violation: "Policy violation",
+  other: "Other (comment required)",
+};
+
+// --- Review queue bundle (A5 + C1) ---
+
+export interface ConfidenceBadge {
+  score: number | null;
+  level: "red" | "amber" | "green" | null;
+}
+
+export interface SimilarDecisionAggregate {
+  decision_type: string;
+  context_filters: Record<string, string>;
+  total_count: number;
+  outcomes: Record<string, number>;
+  success_rate: number | null;
+}
+
+export interface ResolutionSessionResponse {
+  id: string;
+  tenant_id: string;
+  domain_id: string | null;
+  initiated_by: string | null;
+  status: string;
+  symptoms: string[];
+  entities: string[];
+  external_case_ids: string[];
+  notes: string | null;
+  closed_at: string | null;
+  created_at: string;
+  updated_at: string;
+  trace_events: Array<{
+    id: string;
+    session_id: string;
+    event_type: string;
+    inputs: Record<string, unknown>;
+    outputs: Record<string, unknown>;
+    reasoning: string | null;
+    confidence: number | null;
+    created_at: string;
+  }>;
+}
+
+export interface ExecutionRunBrief {
+  id: string;
+  tenant_id: string;
+  session_id: string | null;
+  playbook_id: string;
+  status: string;
+  automation_mode: string;
+  max_safety_class: string;
+  outcome: string | null;
+  outcome_summary: string | null;
+  created_at: string;
+  step_runs: Array<{
+    id: string;
+    step_index: number;
+    step_title: string | null;
+    safety_class: string;
+    requires_approval: boolean;
+    status: string;
+    inputs: Record<string, unknown>;
+    outputs: Record<string, unknown>;
+    started_at: string | null;
+    completed_at: string | null;
+  }>;
+  approval_requests: Array<{
+    id: string;
+    execution_run_id: string;
+    step_run_id: string | null;
+    requested_by: string;
+    requested_action: string;
+    safety_class: string;
+    status: string;
+    decided_by: string | null;
+    decided_at: string | null;
+    decision_comment: string | null;
+    modification_diff: Record<string, unknown> | null;
+    modification_reason_code: string | null;
+    created_at: string;
+  }>;
+}
+
+export interface OperationalEventBrief {
+  id: string;
+  event_type: string;
+  entity_type: string;
+  entity_id: string | null;
+  occurred_at: string;
+  payload: Record<string, unknown>;
+}
+
+export interface ReviewQueueContext {
+  session: ResolutionSessionResponse;
+  top_decision: Decision | null;
+  top_decision_badge: ConfidenceBadge | null;
+  similar: SimilarDecisionAggregate | null;
+  decisions: Decision[];
+  execution_runs: ExecutionRunBrief[];
+  recent_events: OperationalEventBrief[];
+}
+
+// --- Semantic similar-decisions aggregate (A2 + C3) ---
+
+export interface SimilarDecisionsAggregateResponse {
+  decision_type: string;
+  context_filters: Record<string, string>;
+  total_count: number;
+  outcomes: Record<string, number>;
+  success_rate: number | null;
+  decisions: Decision[];
+}
+
+// --- Decision provenance (A6) ---
+
+export interface ProvenanceEvidenceItem {
+  evidence_id: string;
+  title: string | null;
+  body_summary: string | null;
+  evidence_type: string;
+  source_id: string;
+  source_type: string;
+  source_display_name: string;
+  external_id: string | null;
+  deep_link: string | null;
+  delta_signal: string | null;
+  ingested_at: string;
+}
+
+export interface ProvenanceEpisodeItem {
+  episode_id: string;
+  title: string;
+  status: string;
+  final_outcome: string | null;
+  extraction_confidence: number;
+}
+
+export interface ProvenancePatternItem {
+  pattern_id: string;
+  title: string;
+  pattern_type: string;
+  confidence: number;
+  episode_count: number;
+}
+
+export interface DecisionProvenanceResponse {
+  decision_id: string;
+  evidence: ProvenanceEvidenceItem[];
+  episodes: ProvenanceEpisodeItem[];
+  patterns: ProvenancePatternItem[];
 }

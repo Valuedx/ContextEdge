@@ -59,6 +59,74 @@ The Graph Explorer page (`/graph-explorer`) provides interactive visualization a
 
 AI-extracted decisions (Tier 1) rely on `decision_extractor.py` prompting an LLM to identify operational actions from evidence text. Decision types are open-ended labels, not a fixed enum, which means analytics and filtering may require normalization or fuzzy matching across label variations. The extractor truncates input to 4,000 characters; decisions mentioned later in long evidence items may be missed. Governed decision edges (Tier 2) from execution service are high-fidelity and not subject to this limitation. First-class decision traces (Tier 3) provide the richest representation — see [16-decision-traces.md](./16-decision-traces.md).
 
+## Resolved: Human-in-the-loop rejection now uses structured reason codes
+
+Previously, `DecisionOption.rejection_reason` was free-text only, which meant rejection signal was unaggregatable and `get_decision_effectiveness` couldn't break out failure modes. Migration `0017_rejection_modification_codes` adds:
+
+- `decision_options.rejection_code` (one of `REJECTION_REASON_CODES`: `wrong_diagnosis`, `plan_incomplete`, `needs_human_judgment`, `user_context_missing`, `policy_violation`, `other`)
+- `decision_outcomes.feedback_code` (same enum) and extends `OUTCOME_RESULTS` with `"rejected"` so analytics can separate reviewer-rejected from executed-and-failed decisions.
+- `approval_requests.modification_diff` JSONB + `modification_reason_code` for the Modify branch of the Approve / Modify / Reject flow.
+
+A new `POST /decisions/{id}/reject` endpoint (`services.decision_trace_service.reject_decision`) writes the structured code, creates a `DecisionOutcome(execution_result="rejected")` with a `resulted_in` graph edge, flips `decision.status="superseded"` + `human_override=true`, and emits a `decision.rejected` operational event. The free-text `rejection_reason` / `feedback_received` fields remain for the `other` + write-in case. See [16-decision-traces.md](./16-decision-traces.md) for the structured-code walkthrough.
+
+## Resolved: Reviewer console bundle endpoint
+
+`GET /api/v1/review-queue/{session_id}/context` (`services.review_queue_service.build_review_context`) composes session + top-pending decision + similar-decision aggregate + scoped decisions / execution runs / operational events into a single response (`ReviewQueueContext`) so the reviewer UI renders in one round trip instead of fanning out. `top_decision_badge.level` is derived server-side (`green >= 0.8`, `amber 0.5–0.8`, `red < 0.5`) so thresholds can't drift between consumers. Paired with `GET /decisions` confidence filter/sort (`min_confidence`, `max_confidence`, `sort=confidence_desc|confidence_asc|created_desc`) this unlocks queue-based prioritization.
+
+## Resolved: Review-queue bundle prefetched to Redis on session creation
+
+The bundle endpoint is read-through cached (`review_queue:{tenant_id}:{session_id}`, TTL 300s) and pre-warmed by the `prefetch_review_context` Celery task enqueued from `create_resolution_session`. This closes the sub-2s first-render budget for the reviewer console — the click-to-render round trip hits Redis, not Postgres. Cache is shape-safe (default limits only, custom limits bypass), tenant-scoped, corrupt-entry tolerant, and can be bypassed per-request with `?no_cache=true`. Enqueue failures are logged and swallowed so a degraded Celery broker never blocks session creation.
+
+## Partial: Reviewer console — Phase 5
+
+`/review` route renders zones 2 (ticket header), 3 (raw user message), 5 (ranked hypotheses with ruled-out reasons + similar-decisions aggregate), and 7 (**Approve / Modify / Reject** — all three verbs live). Queue pane consumes `/decisions?status=pending&sort=confidence_desc` with confidence-badge color levels (`green ≥ 0.8`, `amber 0.5–0.8`, `red < 0.5`) matching the server-side thresholds.
+
+**Modify flow** opens a dialog pre-filled with the pending approval's current step inputs as editable JSON. Reviewer provides a required summary (becomes `modification_diff.summary`, which the backend uses as the modified step's action label on the new `Decision` option), optional free-text comment, and a reason code from the same 6-code enum as reject. Submission POSTs `{modification_diff: {inputs, summary}, modification_reason_code, comment}` to `/execution/runs/{run_id}/approvals/{approval_id}/modify`. TanStack Query invalidation refetches the bundle; the backend's `invalidate_review_context` (wired into `decide_approval`/`modify_approval` transitively via `create_decision`) drops the Redis cache too.
+
+**Known limitation of the Modify UI:** uses a raw JSON textarea for the `inputs` editor. This preserves the backend's schema-less flexibility (any step shape can be modified) but is a rough reviewer UX. Typed per-step forms — keyed on `PlaybookStep.tool_ref` or `step_title` — are a clean follow-up. For reviewers working on well-known step shapes (cert renewal, password reset), these forms would be materially faster.
+
+**Still deferred:**
+- **Zone 4 evidence cards** — bundle does not carry evidence; needs a `/decisions/{id}/provenance` fetch per top-decision rendered with `delta_signal` color and `baseline_ref.comparison_label`.
+- **Zone 6 plan steps** — needs joining `PlaybookVersion.steps` (the M2 schema) + `verification_policy` so reviewers see reversibility, time estimate, per-step safety class, and the auto-close-on-recheck commitment. Requires a playbook-version fetch (or a dedicated "step detail" endpoint).
+- **Bulk approve** — described in the design doc (filter to confidence > 0.85, select-all, one-click approve with condensed preview modal). Backend supports it today via the existing Approve endpoint; UI affordance is not built.
+- **Keyboard shortcuts** — `A`/`M`/`R` for verbs, `J`/`K` for queue navigation.
+- **Typed Modify forms** — see limitation above.
+- **Frontend tests** — no test runner is configured for the frontend package (`npm test` stubs out). Add one alongside the next slice.
+
+## Resolved: Semantic similar-decision retrieval
+
+`Decision.embedding` (Vector(3072)) is populated inline during `create_decision` from `decision_type + compact_trace + rationale_summary`. `find_similar_decisions` and `find_similar_decisions_aggregate` accept `query_decision_id` (uses that decision's stored embedding) or `query_text` (embedded on the fly) and order results by `embedding <=> query` cosine distance. JSONB containment on `workflow` / `environment` / `impacted_dependency` remains as a structural pre-filter in both paths so structural scoping still works with semantic ordering. When no query embedding resolves (neither param passed, or provider failure), retrieval falls back to the pre-C3 `created_at DESC` ordering — no caller breakage. Embedding write failures at `create_decision` are swallowed; the decision lands with `embedding = NULL` and participates in structural retrieval until re-embedded.
+
+**Not yet done:** no HNSW / IVFFlat index on `decisions.embedding` — matches the existing `evidence_items.embedding` pattern (also unindexed) since the full-table scan is fine at current scale. Add an index when decision row counts warrant it. Similarly, no back-fill task exists to embed pre-C3 decisions; they'll stay embedding-null until re-written or a dedicated `reembed_decisions` task is built.
+
+## Resolved: Cache invalidation on downstream mutations
+
+`services.review_queue_service.invalidate_review_context(tenant_id, session_id)` is called from every mutation that changes a session's review state: `create_decision`, `record_outcome`, `reject_decision` (decision service), and `close_resolution_session` (session service). `decide_approval` and `modify_approval` in the execution service embed `create_decision`, so they invalidate transitively through that call — no duplicate wire-in.
+
+The helper opens a short-lived `aioredis` client via `settings.redis_url`, deletes the key, and swallows transport errors (a degraded Redis never bubbles into mutation code paths). `session_id=None` is a no-op so call sites can invoke unconditionally.
+
+**Known caveat:** invalidation fires post-flush but pre-commit, so a narrow race window exists where a concurrent bundle read could re-populate the cache with the pre-commit snapshot. The 300s TTL backstops the race. A `SQLAlchemy after_commit` hook is the cleanest fix if real-time correctness ever matters more than the current simplicity.
+
+## Resolved: Evidence baseline / delta signal for Zone 4 cards
+
+`EvidenceItem.baseline_ref` (JSONB) and `EvidenceItem.delta_signal` (`neutral` / `amber` / `red`) added in migration `0019_evidence_baseline`. Post-normalize, `compute_evidence_baseline_task` (`workers/evidence_baseline_tasks.py`, `extraction` queue) fans out alongside `classify_relevance_task` and `correlate_evidence`, matches prior evidence on tenant + evidence_type + source_object_id within a 7-day window, and records a relationship-only baseline: "last seen N days ago" or "first observation in 7d window". `delta_signal` defaults to `neutral`; connector-stamped richer signals are preserved.
+
+**By design:** numeric deltas ("74% → 32% disk free") come from connectors that know the metric semantics — the generic worker only does relationship baselines. The JSONB shape is open-ended so connector-side and worker-side baselines coexist on the same column.
+
+**Not yet wired:** no IT-telemetry connectors populate numeric baselines yet — the Intune / CrowdStrike / AD / Entra connectors are part of Phase 4. Until they land, Zone 4 cards render the relationship-only label, not numeric deltas.
+
+## Resolved: Playbook step metadata — reversibility, time estimate, verification flag
+
+`PlaybookStep` (`schemas/playbook.py`) adds per-step `reversible`, `time_estimate_sec`, `verification`, `rollback_hint`, `safety_class`, and `tool_ref`. All fields are optional with defaults so pre-M2 JSONB payloads keep validating, and `extra="allow"` preserves vendor-specific keys. Storage is the existing `PlaybookVersion.steps` JSONB — no column change.
+
+Migration `0018_playbook_step_metadata` adds `playbook_versions.verification_policy JSONB` for the reviewer console's "auto-close on successful recheck" commitment (`VerificationPolicy`: `auto_close_on_success`, `recheck_after_sec`, `recheck_metric`, `recheck_source`). This backs the UI's trust-building promise that the agent closes its own loop rather than fire-and-forget.
+
+**Not yet wired:** the execution engine does not yet honour `verification_policy` — the scheduler + recheck worker that re-evaluates `recheck_metric` after `recheck_after_sec` and auto-closes the session on success is a follow-up. Today the fields are descriptive only; the reviewer UI can render them but the backend does not act on them.
+
+## Resolved: Approve / Modify / Reject flow — Modify endpoint is live
+
+`POST /api/v1/execution/runs/{run_id}/approvals/{approval_id}/modify` (`services.execution_service.modify_approval`) accepts an `ApprovalModificationRequest` with `modification_diff`, `modification_reason_code` (same enum as reject), and optional `comment`. It flips the `ApprovalRequest.status` to `modified`, merges `modification_diff["inputs"]` into the step's inputs JSONB, transitions the run + step back to `running`, emits an `approval.modified` operational event, adds a `modified_by` graph edge, and creates a first-class `Decision(decision_type="modify")` with two options — original (`selected=False`, `rejection_code=<reason>`) and modified (`selected=True`) — keeping the graph's `considered`/`chose` invariant intact. `DECISION_TYPES` now includes `"modify"`.
+
 ## Resolved: Decision traces are now first-class graph citizens
 
 Previously, decision traces were flat `DecisionTraceEvent` rows with no graph connectivity or structured option/outcome tracking. This has been addressed: `Decision`, `DecisionOption`, and `DecisionOutcome` models are fully integrated into the context graph with typed edges (`based_on`, `considered`, `chose`, `applied_policy`, `required_approval`, `resulted_in`, `followed_by`). The execution service creates first-class decisions at every key lifecycle point (playbook start, approval/denial, completion). A dedicated `/decisions` API and frontend page provide full CRUD, chain navigation, similarity search, and effectiveness analytics. The flat `DecisionTraceEvent` is retained for backward compatibility as a compact audit trail.

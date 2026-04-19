@@ -33,6 +33,7 @@ The primary reasoning entity. Key fields:
 | `status` | string | `pending`, `completed`, `superseded`, `reverted` |
 | `parent_decision_id` | FK | Self-referencing for decision chains |
 | `session_id` | FK | Links to `ResolutionSession` |
+| `embedding` | Vector(3072) | pgvector embedding of `decision_type + compact_trace + rationale_summary` for semantic similar-decision retrieval; nullable (provider failures degrade gracefully) |
 
 ### DecisionOption (table: `decision_options`)
 
@@ -44,7 +45,8 @@ Options that were considered during the decision:
 | `suitability` | float | Estimated fitness 0–1 |
 | `risk_level` | string | `low`, `medium`, `high` |
 | `preconditions` | JSONB | Required conditions |
-| `rejection_reason` | text | Why not selected (null if selected) |
+| `rejection_reason` | text | Free-text reason (used for the `other` code + write-in) |
+| `rejection_code` | string | Structured code — one of `REJECTION_REASON_CODES` (see below); feeds analytics |
 | `selected` | boolean | Whether this option was chosen |
 
 ### DecisionOutcome (table: `decision_outcomes`)
@@ -54,11 +56,32 @@ What actually happened after the decision was executed:
 | Field | Type | Purpose |
 |-------|------|---------|
 | `action_executed` | string | What was actually done |
-| `execution_result` | string | `success`, `failure`, `partial`, `timeout` |
+| `execution_result` | string | `success`, `failure`, `partial`, `timeout`, `rejected` (reviewer-rejected decisions use `rejected` so analytics can separate them from executed-and-failed) |
 | `result_details` | JSONB | Structured result payload |
 | `follow_up_needed` | boolean | Whether a follow-up decision is needed |
 | `follow_up_decision_id` | FK | Chains to next decision |
-| `feedback_received` | text | Human feedback on the decision |
+| `feedback_received` | text | Free-text human feedback |
+| `feedback_code` | string | Structured feedback code — same enum as `rejection_code` |
+
+### Structured rejection and modification codes
+
+The human-in-the-loop flow captures **Approve / Modify / Reject** decisions with structured codes rather than free text, so analytics aggregation (e.g. `get_decision_effectiveness`) can group by failure mode. Codes are defined in `contextedge.models.decision.REJECTION_REASON_CODES`:
+
+- `wrong_diagnosis`
+- `plan_incomplete`
+- `needs_human_judgment`
+- `user_context_missing`
+- `policy_violation`
+- `other`
+
+When a reviewer rejects via `POST /decisions/{id}/reject`:
+
+1. The currently selected `DecisionOption` is stamped with `rejection_code` and `rejection_reason = comment`, flipped to `selected = false`.
+2. A `DecisionOutcome(execution_result="rejected", feedback_code=<code>, action_executed="rejected_by_reviewer")` is created with a `resulted_in` graph edge.
+3. `decision.status` flips to `superseded`, `decision.human_override = true`.
+4. An operational event `decision.rejected` is emitted tagged with the code for analytics.
+
+The parallel Modify flow (see `ApprovalRequest.modification_diff` and `modification_reason_code` in `models/execution.py`) follows the same code enum — so a rejected decision and a modified execution step produce comparable learning signals. `POST /api/v1/execution/runs/{run_id}/approvals/{approval_id}/modify` (`services.execution_service.modify_approval`) stamps the approval, merges `modification_diff["inputs"]` into the step's inputs, emits a `modified_by` graph edge, and creates a `Decision(decision_type="modify")` with two options (original `selected=false` with `rejection_code=<reason>`, modified `selected=true`). `DECISION_TYPES` includes `"modify"` alongside `"approve"` and `"deny"`.
 
 ## Graph Edge Types
 
@@ -93,12 +116,30 @@ Sessions can eager-load their associated decisions via the `include_decisions` p
 | Method | Path | Purpose |
 |--------|------|---------|
 | POST | `/decisions` | Create a decision |
-| GET | `/decisions` | List decisions (filter by session, type, step, status) |
+| GET | `/decisions` | List decisions with filters (session, type, step, status), confidence thresholds (`min_confidence`, `max_confidence`), and sort (`created_desc`, `confidence_desc`, `confidence_asc`) |
 | GET | `/decisions/{id}` | Get decision with options and outcomes |
-| POST | `/decisions/{id}/outcome` | Record an outcome |
+| POST | `/decisions/{id}/outcome` | Record an outcome (accepts `feedback_code`) |
+| POST | `/decisions/{id}/reject` | Reject an AI-recommended decision with a structured reason code |
 | GET | `/decisions/{id}/chain` | Get full decision chain |
+| GET | `/decisions/{id}/provenance` | Hydrate `based_on` edges with titles + summaries + source deep-links for Zone 5 drill-in |
 | GET | `/decisions/similar` | Find similar decisions by type + context |
+| GET | `/decisions/similar/aggregate` | Top-N similar decisions + total count + outcome aggregate + success rate in one call |
 | GET | `/decisions/effectiveness` | Aggregate outcome stats for a decision type |
+| GET | `/review-queue/{session_id}/context` | Bundle for reviewer console — session + top decision with confidence badge + similar-decision aggregate + scoped decisions / runs / events, in one round trip |
+
+Confidence filter/sort on `GET /decisions` powers the reviewer queue: `sort=confidence_desc&min_confidence=0.85` surfaces the high-confidence ticket set for bulk-approval, while `sort=confidence_asc` focuses human attention on low-confidence cases.
+
+`GET /decisions/{id}/provenance` hydrates the `based_on` graph edges for Zone 5's drill-in: the evidence items, episodes, and patterns that informed a decision, each with source provenance (source_type, display_name, external_id) and a deep-link back to the origin system (ServiceNow / Jira / Gmail). Deep-link construction is admin-configurable via `source.config.deep_link_template` (with `{external_id}` / `{thread_id}` substitution) with built-in defaults for the known source types. This makes the "why this was recommended" reasoning traceable from the decision all the way to the source ticket without the reviewer context-switching into multiple systems.
+
+`GET /decisions/similar/aggregate` composes top-N similar decisions, the total count, outcome counts, and success rate in one call — server-side three-way join of `find_similar_decisions` + `count_similar_decisions` + `get_decision_effectiveness` via `find_similar_decisions_aggregate`. Zone 5's "based on 143 similar tickets, 87% succeeded" provenance line reads from the single response, no client-side fan-out. The success-rate math ignores unknown outcome labels so a rogue label can't skew the ratio; the raw outcomes dict is preserved for UIs that want to render the full breakdown.
+
+**Semantic similar-decision retrieval.** `Decision.embedding` (Vector(3072)) is populated inline during `create_decision` from `decision_type + compact_trace + rationale_summary`. Both `/similar` and `/similar/aggregate` accept `query_decision_id` (uses that decision's stored embedding as the query vector) or `query_text` (embedded on the fly) and order results by `embedding <=> query` cosine distance via pgvector. JSONB containment on `workflow` / `environment` / `impacted_dependency` still applies as a structural pre-filter, so queries like "most semantically similar VPN decisions in prod" are one request. When no query embedding resolves (neither param, or provider failure), retrieval falls back to `created_at DESC` — the pre-C3 behavior, so rolling this out doesn't break callers. Count + outcome aggregates stay structural (scoped to `decision_type` + context filters), which keeps "N similar tickets" a stable denominator even when the top-K list reshuffles by semantic relevance.
+
+The `/review-queue/{session_id}/context` bundle composes `get_resolution_session`, `list_decisions`, `list_execution_runs`, `list_operational_events`, `count_similar_decisions`, and `get_decision_effectiveness` into a single response shaped by `ReviewQueueContext`. `top_decision_badge.level` is server-derived (`green >= 0.8`, `amber 0.5–0.8`, `red < 0.5`) so every consumer agrees on thresholds. See [`docs/API.md`](../docs/API.md) for the full response shape.
+
+The bundle is **read-through cached** on Redis under `review_queue:{tenant_id}:{session_id}` (TTL 300s). A Celery task `prefetch_review_context` (`workers/review_queue_tasks.py`) is enqueued from `session_service.create_resolution_session`, so the cache is warm before the reviewer ever opens the ticket — the round trip that happens on queue-click hits Redis, not Postgres, which is what makes the sub-2s first-render budget real. The cache key is tenant-scoped so cross-tenant bleed is impossible, and payloads are serialized through `ReviewQueueContext.model_dump_json()` so cached bytes match the wire format with no re-validation on hit. Corrupt cache entries fall back to live compute. Only default limits are cached; custom limits bypass the cache to avoid payload-shape poisoning. Callers can force a live read with `?no_cache=true`.
+
+Every mutation that changes a session's review state invalidates the cache via `invalidate_review_context(tenant_id, session_id)`: `create_decision`, `record_outcome`, `reject_decision`, and `close_resolution_session`. `decide_approval` and `modify_approval` invalidate transitively through their embedded `create_decision` call. The helper manages its own short-lived Redis client and swallows transport errors so a degraded Redis never bubbles into mutation code paths. Invalidation fires post-flush but pre-commit, so a narrow race window exists where a concurrent bundle read could re-populate the cache with the pre-commit snapshot — the 300s TTL backstops this.
 
 ## Analytics (Phase 3)
 
@@ -116,12 +157,21 @@ Sessions can eager-load their associated decisions via the `include_decisions` p
 
 | File | Purpose |
 |------|---------|
-| `backend/src/contextedge/models/decision.py` | ORM models |
-| `backend/src/contextedge/schemas/decision.py` | Pydantic schemas |
-| `backend/src/contextedge/services/decision_trace_service.py` | Core service logic |
-| `backend/src/contextedge/api/v1/decisions.py` | API routes |
+| `backend/src/contextedge/models/decision.py` | ORM models; `REJECTION_REASON_CODES` enum lives here; `Decision.embedding` (Vector(3072)) |
+| `backend/src/contextedge/ai/embeddings.py` | `embed_decision` — combines `decision_type + compact_trace + rationale_summary`, returns zero vector on empty input |
+| `backend/src/contextedge/models/execution.py` | `APPROVAL_STATUSES` (`pending`, `approved`, `denied`, `modified`) and `ApprovalRequest.modification_diff` + `modification_reason_code` |
+| `backend/src/contextedge/schemas/decision.py` | Pydantic schemas incl. `DecisionRejectRequest` with enum validation |
+| `backend/src/contextedge/schemas/review_queue.py` | Bundle response shapes (`ReviewQueueContext`, `ConfidenceBadge`, `SimilarDecisionAggregate`) |
+| `backend/src/contextedge/services/decision_trace_service.py` | Core service logic incl. `reject_decision`, `count_similar_decisions`, confidence filter/sort in `list_decisions` |
+| `backend/src/contextedge/services/review_queue_service.py` | `build_review_context` composition; server-side badge derivation and success-rate math; Redis cache helpers (`build_cache_key`, `read_cache`, `write_cache`, `invalidate_cache`, `REVIEW_CONTEXT_CACHE_TTL_SEC`) |
+| `backend/src/contextedge/services/source_deep_link_service.py` | `build_source_deep_link` — admin-configurable template wins; built-in defaults for `jira_sm`, `servicenow`, `gmail` |
+| `backend/src/contextedge/workers/review_queue_tasks.py` | `prefetch_review_context` Celery task (warms the cache on session creation) |
+| `backend/src/contextedge/api/v1/decisions.py` | API routes incl. `POST /decisions/{id}/reject` |
+| `backend/src/contextedge/api/v1/review_queue.py` | Reviewer console bundle endpoint |
 | `backend/src/contextedge/graph/builder.py` | Graph edge helpers |
 | `backend/src/contextedge/workers/decision_tasks.py` | Analytics workers |
+| `backend/alembic/versions/0017_rejection_modification_codes.py` | Adds `rejection_code` / `feedback_code` / `modification_*` columns |
 | `frontend/src/components/decisions/decision-detail.tsx` | Detail component |
 | `frontend/src/components/decisions/decision-chain.tsx` | Chain timeline |
 | `frontend/src/app/(dashboard)/decisions/page.tsx` | Decisions page |
+| `frontend/src/app/(dashboard)/review/page.tsx` | Reviewer console — queue + session detail with Approve / Reject verbs; consumes `/review-queue/{id}/context` and `/decisions/similar/aggregate` |

@@ -31,8 +31,10 @@ OpenAPI for a running local API:
 - **AI integration:** LiteLLM with provider-specific keys (OpenAI, Anthropic, Google/Vertex AI)
 - **Auth:** Bearer JWT for users and optional `X-Service-Token` for service integrations
 - **Graph:** PostgreSQL adjacency table (`graph_edges`) for pattern, entity, contradiction, and decision relationships
-- **Decision capture:** Two-tier decision graph — governed execution edges (approvals, denials, outcomes) from the execution engine, plus AI-extracted decision edges from ingested evidence text
-- **Decision traces:** Resolution sessions with append-only trace events for runtime audit
+- **Decision capture:** Three-tier decision graph — first-class `Decision` nodes with typed edges (`based_on`, `considered`, `chose`, `applied_policy`, `required_approval`, `resulted_in`, `followed_by`), governed execution edges from the execution engine, and AI-extracted decision edges from ingested evidence text
+- **Human-in-the-loop feedback:** Approve / Modify / Reject flow with structured reason codes (`wrong_diagnosis`, `plan_incomplete`, `needs_human_judgment`, `user_context_missing`, `policy_violation`, `other`) that feed `get_decision_effectiveness` analytics instead of free-text
+- **Evidence baselines:** every `EvidenceItem` carries `baseline_ref` + `delta_signal` (`neutral` / `amber` / `red`) so Zone 4 reviewer cards render current value + comparison ("last seen 3 days ago") with color-coded severity; connectors can populate richer numeric deltas at ingest
+- **Decision traces:** Resolution sessions with append-only trace events for runtime audit, plus a reviewer-console bundle endpoint (`GET /review-queue/{session_id}/context`) that composes session + top decision + similar-decision aggregate in one round trip
 
 ## Quick Start
 

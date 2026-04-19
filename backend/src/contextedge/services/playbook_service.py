@@ -193,6 +193,7 @@ async def create_playbook_version(
                     evidence_refs=version_data.get("evidence_refs"),
                     playbook_confidence=float(version_data.get("playbook_confidence", 0.5)),
                     execution_confidence_guidance=version_data.get("execution_confidence_guidance"),
+                    verification_policy=version_data.get("verification_policy"),
                 )
                 db.add(version)
                 await db.flush()

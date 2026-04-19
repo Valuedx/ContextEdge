@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import uuid
 
+import structlog
 from sqlalchemy import select, func as sa_func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -25,6 +26,8 @@ from contextedge.models.decision import Decision, DecisionOption, DecisionOutcom
 from contextedge.services.event_log_service import append_operational_event
 from contextedge.services.memory_service import REASONING_MEMORY
 from contextedge.services.session_service import append_trace_event
+
+logger = structlog.get_logger()
 
 _DECISION_EAGER = [
     selectinload(Decision.options),
@@ -105,6 +108,7 @@ async def create_decision(
             risk_level=opt.get("risk_level"),
             preconditions=opt.get("preconditions", []),
             rejection_reason=opt.get("rejection_reason"),
+            rejection_code=opt.get("rejection_code"),
             selected=opt.get("selected", False),
         )
         db.add(obj)
@@ -166,6 +170,31 @@ async def create_decision(
         },
     )
 
+    # Best-effort inline embedding — powers semantic similar-decision retrieval.
+    # Failure here must not fail decision creation (LLM provider hiccup, rate
+    # limit, network). `find_similar_decisions` already falls back to JSONB
+    # containment ordering when a decision has no embedding, so a null here
+    # just means this decision participates in structural search until it's
+    # re-embedded by a follow-up job.
+    try:
+        from contextedge.ai.embeddings import embed_decision
+
+        decision.embedding = await embed_decision(
+            decision_type=decision_type,
+            rationale_summary=rationale_summary,
+            compact_trace=compact_trace,
+        )
+        await db.flush()
+    except Exception as exc:
+        logger.warning(
+            "decision.embed_failed",
+            decision_id=str(decision.id),
+            error=str(exc),
+        )
+
+    from contextedge.services.review_queue_service import invalidate_review_context
+    await invalidate_review_context(tenant_id, session_id)
+
     await db.refresh(decision)
     return decision
 
@@ -181,6 +210,7 @@ async def record_outcome(
     follow_up_needed: bool = False,
     follow_up_decision_id: uuid.UUID | None = None,
     feedback_received: str | None = None,
+    feedback_code: str | None = None,
     feedback_by: uuid.UUID | None = None,
 ) -> DecisionOutcome | None:
     decision = await get_decision(db, tenant_id=tenant_id, decision_id=decision_id)
@@ -196,6 +226,7 @@ async def record_outcome(
         follow_up_needed=follow_up_needed,
         follow_up_decision_id=follow_up_decision_id,
         feedback_received=feedback_received,
+        feedback_code=feedback_code,
         feedback_by=feedback_by,
     )
     db.add(outcome)
@@ -229,6 +260,9 @@ async def record_outcome(
         },
     )
 
+    from contextedge.services.review_queue_service import invalidate_review_context
+    await invalidate_review_context(tenant_id, decision.session_id)
+
     await db.refresh(outcome)
     return outcome
 
@@ -247,6 +281,9 @@ async def get_decision(
     return result.scalar_one_or_none()
 
 
+LIST_SORT_CHOICES = ("created_desc", "confidence_desc", "confidence_asc")
+
+
 async def list_decisions(
     db: AsyncSession,
     *,
@@ -255,16 +292,19 @@ async def list_decisions(
     decision_type: str | None = None,
     agent_step: str | None = None,
     status: str | None = None,
+    min_confidence: float | None = None,
+    max_confidence: float | None = None,
+    sort: str = "created_desc",
     limit: int = 50,
     offset: int = 0,
 ) -> list[Decision]:
+    if sort not in LIST_SORT_CHOICES:
+        raise ValueError(f"sort must be one of {LIST_SORT_CHOICES}")
+
     stmt = (
         select(Decision)
         .where(Decision.tenant_id == tenant_id)
         .options(*_DECISION_EAGER)
-        .order_by(Decision.created_at.desc())
-        .limit(limit)
-        .offset(offset)
     )
     if session_id is not None:
         stmt = stmt.where(Decision.session_id == session_id)
@@ -274,6 +314,25 @@ async def list_decisions(
         stmt = stmt.where(Decision.agent_step == agent_step)
     if status is not None:
         stmt = stmt.where(Decision.status == status)
+    if min_confidence is not None:
+        stmt = stmt.where(Decision.confidence >= min_confidence)
+    if max_confidence is not None:
+        stmt = stmt.where(Decision.confidence <= max_confidence)
+
+    if sort == "confidence_desc":
+        stmt = stmt.order_by(
+            Decision.confidence.desc().nullslast(),
+            Decision.created_at.desc(),
+        )
+    elif sort == "confidence_asc":
+        stmt = stmt.order_by(
+            Decision.confidence.asc().nullslast(),
+            Decision.created_at.desc(),
+        )
+    else:
+        stmt = stmt.order_by(Decision.created_at.desc())
+
+    stmt = stmt.limit(limit).offset(offset)
     result = await db.execute(stmt)
     return list(result.scalars().all())
 
@@ -332,28 +391,22 @@ async def get_decision_chain(
     return chain
 
 
-async def find_similar_decisions(
+async def count_similar_decisions(
     db: AsyncSession,
     *,
     tenant_id: uuid.UUID,
     decision_type: str,
     context_snapshot: dict | None = None,
-    limit: int = 10,
-) -> list[Decision]:
-    """Find decisions with matching type and overlapping context keys.
+) -> int:
+    """Count decisions with matching type and overlapping context keys.
 
-    Uses JSONB containment (@>) when context_snapshot keys are provided,
-    falling back to type-only matching otherwise.
+    Uses the same filter logic as `find_similar_decisions` so the UI can
+    render accurate provenance counts ("based on N similar tickets") without
+    retrieving the decision rows.
     """
-    stmt = (
-        select(Decision)
-        .where(
-            Decision.tenant_id == tenant_id,
-            Decision.decision_type == decision_type,
-        )
-        .options(*_DECISION_EAGER)
-        .order_by(Decision.created_at.desc())
-        .limit(limit)
+    stmt = select(sa_func.count()).select_from(Decision).where(
+        Decision.tenant_id == tenant_id,
+        Decision.decision_type == decision_type,
     )
 
     if context_snapshot:
@@ -370,7 +423,389 @@ async def find_similar_decisions(
             )
 
     result = await db.execute(stmt)
+    return int(result.scalar_one() or 0)
+
+
+async def _resolve_query_embedding(
+    db: AsyncSession,
+    *,
+    tenant_id: uuid.UUID,
+    query_decision_id: uuid.UUID | None,
+    query_text: str | None,
+) -> list[float] | None:
+    """Resolve a query embedding from a decision id or free text.
+
+    Priority: explicit decision id (uses that decision's stored embedding)
+    → free text (embeds on the fly) → None (caller falls back to JSONB
+    ordering). Swallows embedding failures so retrieval never 500s on a
+    provider hiccup — the JSONB fallback still returns results.
+    """
+    if query_decision_id is not None:
+        ref_stmt = select(Decision.embedding).where(
+            Decision.id == query_decision_id,
+            Decision.tenant_id == tenant_id,
+        )
+        ref_result = await db.execute(ref_stmt)
+        ref_embedding = ref_result.scalar_one_or_none()
+        if ref_embedding is not None:
+            return list(ref_embedding)
+        return None
+
+    if query_text:
+        try:
+            from contextedge.ai.provider import generate_embedding
+            return await generate_embedding(query_text)
+        except Exception as exc:
+            logger.warning(
+                "decision.query_embed_failed",
+                error=str(exc),
+            )
+            return None
+
+    return None
+
+
+async def find_similar_decisions(
+    db: AsyncSession,
+    *,
+    tenant_id: uuid.UUID,
+    decision_type: str,
+    context_snapshot: dict | None = None,
+    query_decision_id: uuid.UUID | None = None,
+    query_text: str | None = None,
+    limit: int = 10,
+) -> list[Decision]:
+    """Find decisions with matching type, ordered semantically when possible.
+
+    Resolution order:
+    1. A query embedding is resolved from `query_decision_id` (that decision's
+       own embedding) or `query_text` (embedded on the fly). When available,
+       results are ordered by `embedding <=> query` cosine distance and the
+       query is constrained to decisions that have an embedding of their own.
+    2. Otherwise, results are ordered by `created_at DESC` as before (no
+       regression for callers that don't opt in).
+
+    JSONB containment on `context_snapshot` is applied in both paths so
+    `workflow` / `environment` / `impacted_dependency` still act as a
+    structural pre-filter alongside the semantic order.
+    """
+    query_embedding = await _resolve_query_embedding(
+        db,
+        tenant_id=tenant_id,
+        query_decision_id=query_decision_id,
+        query_text=query_text,
+    )
+
+    stmt = (
+        select(Decision)
+        .where(
+            Decision.tenant_id == tenant_id,
+            Decision.decision_type == decision_type,
+        )
+        .options(*_DECISION_EAGER)
+        .limit(limit)
+    )
+
+    if query_embedding is not None:
+        stmt = stmt.where(Decision.embedding.is_not(None))
+        if query_decision_id is not None:
+            stmt = stmt.where(Decision.id != query_decision_id)
+        stmt = stmt.order_by(Decision.embedding.cosine_distance(query_embedding))
+    else:
+        stmt = stmt.order_by(Decision.created_at.desc())
+
+    if context_snapshot:
+        match_keys = {}
+        for key in ("workflow", "environment", "impacted_dependency"):
+            if key in context_snapshot:
+                match_keys[key] = context_snapshot[key]
+        if match_keys:
+            from sqlalchemy import cast
+            from sqlalchemy.dialects.postgresql import JSONB as JSONB_TYPE
+
+            stmt = stmt.where(
+                Decision.context_snapshot.op("@>")(cast(match_keys, JSONB_TYPE))
+            )
+
+    result = await db.execute(stmt)
     return list(result.scalars().all())
+
+
+async def reject_decision(
+    db: AsyncSession,
+    *,
+    tenant_id: uuid.UUID,
+    decision_id: uuid.UUID,
+    code: str,
+    comment: str | None = None,
+    actor_id: uuid.UUID | None = None,
+) -> DecisionOutcome | None:
+    """Reject an AI-recommended decision with a structured reason code.
+
+    Stamps the currently selected option with `rejection_code` + `rejection_reason`
+    and `selected=False`, creates a `DecisionOutcome` with
+    `execution_result="rejected"` carrying the same code as `feedback_code`,
+    flips `decision.status="superseded"` and `human_override=True`, and emits
+    an operational event for analytics.
+    """
+    from contextedge.models.decision import REJECTION_REASON_CODES
+
+    if code not in REJECTION_REASON_CODES:
+        raise ValueError(
+            f"code must be one of {REJECTION_REASON_CODES}",
+        )
+
+    decision = await get_decision(db, tenant_id=tenant_id, decision_id=decision_id)
+    if decision is None:
+        return None
+
+    for opt in decision.options:
+        if opt.selected:
+            opt.selected = False
+            opt.rejection_code = code
+            if comment and not opt.rejection_reason:
+                opt.rejection_reason = comment
+
+    decision.status = "superseded"
+    decision.human_override = True
+    await db.flush()
+
+    outcome = DecisionOutcome(
+        decision_id=decision_id,
+        tenant_id=tenant_id,
+        action_executed="rejected_by_reviewer",
+        execution_result="rejected",
+        result_details={"code": code},
+        follow_up_needed=True,
+        feedback_received=comment,
+        feedback_code=code,
+        feedback_by=actor_id,
+    )
+    db.add(outcome)
+    await db.flush()
+
+    await link_decision_outcome(
+        db, tenant_id, decision_id, outcome.id, decision.domain_id,
+    )
+
+    await append_operational_event(
+        db,
+        tenant_id=tenant_id,
+        entity_type="decision",
+        entity_id=decision_id,
+        session_id=decision.session_id,
+        actor_id=actor_id,
+        event_type="decision.rejected",
+        payload={
+            "memory_class": REASONING_MEMORY,
+            "code": code,
+            "comment": comment,
+            "decision_type": decision.decision_type,
+            "agent_step": decision.agent_step,
+        },
+    )
+
+    from contextedge.services.review_queue_service import invalidate_review_context
+    await invalidate_review_context(tenant_id, decision.session_id)
+
+    await db.refresh(outcome)
+    return outcome
+
+
+async def find_similar_decisions_aggregate(
+    db: AsyncSession,
+    *,
+    tenant_id: uuid.UUID,
+    decision_type: str,
+    context_snapshot: dict | None = None,
+    query_decision_id: uuid.UUID | None = None,
+    query_text: str | None = None,
+    limit: int = 10,
+) -> dict:
+    """Compose top-N similar decisions + total count + outcome aggregate.
+
+    Calls `find_similar_decisions`, `count_similar_decisions`, and
+    `get_decision_effectiveness` with the same filter so the UI can render
+    "based on N similar tickets, X% succeeded, here are the top K" in one
+    round trip. Returns a dict shaped for `SimilarDecisionsAggregateResponse`.
+
+    `query_decision_id` / `query_text` flow into semantic retrieval via
+    `find_similar_decisions`. Count + effectiveness remain scoped by
+    `decision_type` + `context_snapshot` only — they're cardinality /
+    aggregate metrics over the structural slice, not the semantic ordering.
+    """
+    decisions = await find_similar_decisions(
+        db,
+        tenant_id=tenant_id,
+        decision_type=decision_type,
+        context_snapshot=context_snapshot,
+        query_decision_id=query_decision_id,
+        query_text=query_text,
+        limit=limit,
+    )
+    total_count = await count_similar_decisions(
+        db,
+        tenant_id=tenant_id,
+        decision_type=decision_type,
+        context_snapshot=context_snapshot,
+    )
+    effectiveness = await get_decision_effectiveness(
+        db,
+        tenant_id=tenant_id,
+        decision_type=decision_type,
+        context_filters=context_snapshot,
+    )
+    outcomes: dict[str, int] = effectiveness.get("outcomes", {}) or {}
+
+    # success_rate = success / sum(counted_outcomes); unknown labels excluded
+    # so a rogue label can't skew the denominator. Matches the math used by
+    # the review-queue bundle for consistency across consumers.
+    counted_keys = {"success", "failure", "partial", "timeout", "rejected"}
+    counted = {k: v for k, v in outcomes.items() if k in counted_keys}
+    counted_total = sum(counted.values())
+    if counted_total > 0:
+        success_rate = counted.get("success", 0) / counted_total
+    else:
+        success_rate = None
+
+    return {
+        "decision_type": decision_type,
+        "context_filters": context_snapshot or {},
+        "total_count": total_count,
+        "outcomes": outcomes,
+        "success_rate": success_rate,
+        "decisions": decisions,
+    }
+
+
+async def get_decision_provenance(
+    db: AsyncSession,
+    *,
+    tenant_id: uuid.UUID,
+    decision_id: uuid.UUID,
+    evidence_limit: int = 20,
+    episode_limit: int = 10,
+    pattern_limit: int = 10,
+) -> dict | None:
+    """Hydrate a decision's `based_on` references for Zone 5 provenance.
+
+    Looks up all `based_on` graph edges from this decision, groups targets
+    by node type, and returns title + summary + source info + deep-link
+    for each evidence citation (and title + status for episodes + patterns).
+    Returns `None` if the decision does not exist on this tenant.
+    """
+    from contextedge.models.episode import Episode
+    from contextedge.models.evidence import EvidenceItem
+    from contextedge.models.pattern import GraphEdge, Pattern
+    from contextedge.models.source import Source, SourceObject
+    from contextedge.services.source_deep_link_service import build_source_deep_link
+
+    decision = await get_decision(db, tenant_id=tenant_id, decision_id=decision_id)
+    if decision is None:
+        return None
+
+    edges_stmt = select(GraphEdge).where(
+        GraphEdge.tenant_id == tenant_id,
+        GraphEdge.source_node_type == "decision",
+        GraphEdge.source_node_id == decision_id,
+        GraphEdge.edge_type == "based_on",
+    )
+    edges = (await db.execute(edges_stmt)).scalars().all()
+
+    evidence_ids: list[uuid.UUID] = []
+    episode_ids: list[uuid.UUID] = []
+    pattern_ids: list[uuid.UUID] = []
+    for e in edges:
+        if e.target_node_type == "evidence":
+            evidence_ids.append(e.target_node_id)
+        elif e.target_node_type == "episode":
+            episode_ids.append(e.target_node_id)
+        elif e.target_node_type == "pattern":
+            pattern_ids.append(e.target_node_id)
+
+    evidence_items: list[dict] = []
+    if evidence_ids:
+        ev_stmt = (
+            select(EvidenceItem, Source, SourceObject)
+            .join(Source, Source.id == EvidenceItem.source_id)
+            .outerjoin(
+                SourceObject, SourceObject.id == EvidenceItem.source_object_id,
+            )
+            .where(
+                EvidenceItem.id.in_(evidence_ids[:evidence_limit]),
+                EvidenceItem.tenant_id == tenant_id,
+            )
+            .order_by(EvidenceItem.ingested_at.desc())
+        )
+        for ev, src, src_obj in (await db.execute(ev_stmt)).all():
+            external_id = src_obj.external_id if src_obj is not None else None
+            thread_external = None
+            if src_obj is not None and src_obj.metadata_extra:
+                thread_external = src_obj.metadata_extra.get("thread_id")
+            deep_link = build_source_deep_link(
+                src.source_type,
+                src.config,
+                external_id,
+                thread_id=thread_external,
+            )
+            evidence_items.append({
+                "evidence_id": ev.id,
+                "title": ev.title or ev.body_summary,
+                "body_summary": ev.body_summary,
+                "evidence_type": ev.evidence_type,
+                "source_id": src.id,
+                "source_type": src.source_type,
+                "source_display_name": src.display_name,
+                "external_id": external_id,
+                "deep_link": deep_link,
+                "delta_signal": ev.delta_signal,
+                "ingested_at": ev.ingested_at,
+            })
+
+    episode_items: list[dict] = []
+    if episode_ids:
+        ep_stmt = (
+            select(Episode)
+            .where(
+                Episode.id.in_(episode_ids[:episode_limit]),
+                Episode.tenant_id == tenant_id,
+            )
+            .order_by(Episode.created_at.desc())
+        )
+        for ep in (await db.execute(ep_stmt)).scalars().all():
+            episode_items.append({
+                "episode_id": ep.id,
+                "title": ep.title,
+                "status": ep.status,
+                "final_outcome": ep.final_outcome,
+                "extraction_confidence": ep.extraction_confidence,
+            })
+
+    pattern_items: list[dict] = []
+    if pattern_ids:
+        pt_stmt = (
+            select(Pattern)
+            .where(
+                Pattern.id.in_(pattern_ids[:pattern_limit]),
+                Pattern.tenant_id == tenant_id,
+            )
+            .order_by(Pattern.confidence.desc())
+        )
+        for pt in (await db.execute(pt_stmt)).scalars().all():
+            pattern_items.append({
+                "pattern_id": pt.id,
+                "title": pt.title,
+                "pattern_type": pt.pattern_type,
+                "confidence": pt.confidence,
+                "episode_count": pt.episode_count,
+            })
+
+    return {
+        "decision_id": decision_id,
+        "evidence": evidence_items,
+        "episodes": episode_items,
+        "patterns": pattern_items,
+    }
 
 
 async def get_decision_effectiveness(

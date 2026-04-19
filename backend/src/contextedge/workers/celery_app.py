@@ -23,6 +23,7 @@ celery_app.conf.update(
         "contextedge.workers.extraction_tasks.*": {"queue": "extraction"},
         "contextedge.workers.artifact_tasks.*": {"queue": "extraction"},
         "contextedge.workers.correlation_tasks.*": {"queue": "extraction"},
+        "contextedge.workers.evidence_baseline_tasks.*": {"queue": "extraction"},
         "contextedge.workers.pattern_tasks.*": {"queue": "pattern"},
         "contextedge.workers.evaluation_tasks.*": {"queue": "evaluation"},
     },
@@ -50,6 +51,8 @@ celery_app.autodiscover_tasks(
         "contextedge.workers.correlation_tasks",
         "contextedge.workers.pattern_tasks",
         "contextedge.workers.evaluation_tasks",
+        "contextedge.workers.review_queue_tasks",
+        "contextedge.workers.evidence_baseline_tasks",
     ],
     force=True,
 )

@@ -14,6 +14,7 @@ from contextedge.services.execution_service import (
     _caller_max_safety_class,
     _safety_class_rank,
     decide_approval,
+    modify_approval,
     start_execution,
 )
 
@@ -208,3 +209,229 @@ async def test_start_execution_creates_pending_approval_for_gated_step():
     assert approvals[0].execution_run_id == run.id
     assert approvals[0].step_run_id == step_runs[0].id
     assert approvals[0].status == "pending"
+
+
+# =========================================================================
+# A3 — modify_approval (approve-with-changes)
+# =========================================================================
+
+
+@pytest.mark.asyncio
+async def test_modify_approval_rejects_invalid_code():
+    """An unknown modification_reason_code raises ExecutionPolicyError."""
+    tenant_id = uuid4()
+    approval = SimpleNamespace(
+        id=uuid4(), tenant_id=tenant_id, status="pending",
+        execution_run_id=uuid4(), step_run_id=None,
+    )
+    db = SimpleNamespace(get=AsyncMock(return_value=approval))
+
+    with pytest.raises(ExecutionPolicyError, match="modification_reason_code"):
+        await modify_approval(
+            db,
+            tenant_id=tenant_id,
+            approval_request_id=approval.id,
+            decided_by=uuid4(),
+            modification_diff={"inputs": {"x": 1}},
+            modification_reason_code="not_a_real_code",
+        )
+
+
+@pytest.mark.asyncio
+async def test_modify_approval_rejects_empty_diff():
+    """An empty diff raises ExecutionPolicyError."""
+    tenant_id = uuid4()
+    approval = SimpleNamespace(
+        id=uuid4(), tenant_id=tenant_id, status="pending",
+        execution_run_id=uuid4(), step_run_id=None,
+    )
+    db = SimpleNamespace(get=AsyncMock(return_value=approval))
+
+    with pytest.raises(ExecutionPolicyError, match="non-empty"):
+        await modify_approval(
+            db,
+            tenant_id=tenant_id,
+            approval_request_id=approval.id,
+            decided_by=uuid4(),
+            modification_diff={},
+            modification_reason_code="plan_incomplete",
+        )
+
+
+@pytest.mark.asyncio
+async def test_modify_approval_rejects_already_decided():
+    tenant_id = uuid4()
+    approval = SimpleNamespace(
+        id=uuid4(), tenant_id=tenant_id, status="approved",
+        execution_run_id=uuid4(), step_run_id=None,
+    )
+    db = SimpleNamespace(get=AsyncMock(return_value=approval))
+
+    with pytest.raises(ExecutionPolicyError, match="already"):
+        await modify_approval(
+            db,
+            tenant_id=tenant_id,
+            approval_request_id=approval.id,
+            decided_by=uuid4(),
+            modification_diff={"inputs": {"x": 1}},
+            modification_reason_code="plan_incomplete",
+        )
+
+
+@pytest.mark.asyncio
+async def test_modify_approval_returns_none_for_missing():
+    db = SimpleNamespace(get=AsyncMock(return_value=None))
+    result = await modify_approval(
+        db,
+        tenant_id=uuid4(),
+        approval_request_id=uuid4(),
+        decided_by=uuid4(),
+        modification_diff={"inputs": {"x": 1}},
+        modification_reason_code="plan_incomplete",
+    )
+    assert result is None
+
+
+@pytest.mark.asyncio
+@patch("contextedge.services.execution_service.create_decision", new_callable=AsyncMock)
+@patch("contextedge.services.execution_service.ensure_edge", new_callable=AsyncMock)
+@patch("contextedge.services.execution_service.append_operational_event", new_callable=AsyncMock)
+async def test_modify_approval_happy_path(mock_op_event, mock_edge, mock_create_decision):
+    """Modify flips approval to modified, merges inputs into step, emits modified_by
+    edge, and creates a Decision(decision_type='modify') with two options."""
+    tenant_id = uuid4()
+    approval_id = uuid4()
+    run_id = uuid4()
+    step_run_id = uuid4()
+    decider = uuid4()
+    session_id = uuid4()
+
+    approval = ApprovalRequest(
+        id=approval_id,
+        tenant_id=tenant_id,
+        execution_run_id=run_id,
+        step_run_id=step_run_id,
+        requested_by=uuid4(),
+        requested_action="Renew certificate via internal CA",
+        safety_class="medium_side_effect",
+        context={},
+        status="pending",
+    )
+    run = ExecutionRun(
+        id=run_id,
+        tenant_id=tenant_id,
+        playbook_id=uuid4(),
+        playbook_version_id=uuid4(),
+        initiated_by=uuid4(),
+        status="awaiting_approval",
+        automation_mode="supervised",
+        max_safety_class="high_side_effect",
+        session_id=session_id,
+    )
+    step = ExecutionStepRun(
+        id=step_run_id,
+        execution_run_id=run_id,
+        tenant_id=tenant_id,
+        step_index=0,
+        step_title="Renew cert",
+        safety_class="medium_side_effect",
+        requires_approval=True,
+        status="awaiting_approval",
+        inputs={"ttl_days": 90},
+        outputs={},
+    )
+
+    async def _get(model, *args, **kwargs):
+        if model is ApprovalRequest:
+            return approval
+        if model is ExecutionRun:
+            return run
+        if model is ExecutionStepRun:
+            return step
+        return None
+
+    db = SimpleNamespace(get=_get, flush=AsyncMock())
+
+    req = await modify_approval(
+        db,
+        tenant_id=tenant_id,
+        approval_request_id=approval_id,
+        decided_by=decider,
+        modification_diff={"inputs": {"ttl_days": 30, "notify": True}, "summary": "shorter ttl"},
+        modification_reason_code="plan_incomplete",
+        comment="per cert policy",
+    )
+
+    assert req is approval
+    assert approval.status == "modified"
+    assert approval.decided_by == decider
+    assert approval.modification_diff == {
+        "inputs": {"ttl_days": 30, "notify": True},
+        "summary": "shorter ttl",
+    }
+    assert approval.modification_reason_code == "plan_incomplete"
+    assert approval.decision_comment == "per cert policy"
+
+    assert run.status == "running"
+    assert step.status == "running"
+    assert step.inputs == {"ttl_days": 30, "notify": True}
+
+    mock_op_event.assert_awaited_once()
+    event_payload = mock_op_event.call_args.kwargs.get("payload", {})
+    assert event_payload["modification_reason_code"] == "plan_incomplete"
+    assert sorted(event_payload["modification_diff_keys"]) == ["inputs", "summary"]
+
+    mock_edge.assert_awaited_once()
+    edge_args = mock_edge.call_args.args
+    assert edge_args[2] == "approval_request"
+    assert edge_args[4] == "user"
+    assert edge_args[6] == "modified_by"
+
+    mock_create_decision.assert_awaited_once()
+    dec_kwargs = mock_create_decision.call_args.kwargs
+    assert dec_kwargs["decision_type"] == "modify"
+    assert dec_kwargs["actor_type"] == "human"
+    assert dec_kwargs["session_id"] == session_id
+    options = dec_kwargs["options"]
+    assert len(options) == 2
+    original = next(o for o in options if not o["selected"])
+    modified = next(o for o in options if o["selected"])
+    assert original["rejection_code"] == "plan_incomplete"
+    assert original["action"] == "Renew certificate via internal CA"
+    assert modified["action"] == "shorter ttl"
+
+
+# =========================================================================
+# ApprovalModificationRequest schema
+# =========================================================================
+
+
+def test_approval_modification_request_accepts_valid_payload():
+    from contextedge.schemas.execution import ApprovalModificationRequest
+
+    body = ApprovalModificationRequest(
+        modification_diff={"inputs": {"x": 1}},
+        modification_reason_code="plan_incomplete",
+        comment="shorter ttl",
+    )
+    assert body.modification_reason_code == "plan_incomplete"
+
+
+def test_approval_modification_request_rejects_empty_diff():
+    from contextedge.schemas.execution import ApprovalModificationRequest
+
+    with pytest.raises(ValueError, match="non-empty"):
+        ApprovalModificationRequest(
+            modification_diff={},
+            modification_reason_code="plan_incomplete",
+        )
+
+
+def test_approval_modification_request_rejects_invalid_code():
+    from contextedge.schemas.execution import ApprovalModificationRequest
+
+    with pytest.raises(ValueError):
+        ApprovalModificationRequest(
+            modification_diff={"inputs": {}},
+            modification_reason_code="bogus",
+        )

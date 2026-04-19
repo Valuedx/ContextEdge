@@ -8,16 +8,22 @@ from contextedge.schemas.decision import (
     DecisionCreate,
     DecisionOutcomeCreate,
     DecisionOutcomeResponse,
+    DecisionProvenanceResponse,
+    DecisionRejectRequest,
     DecisionResponse,
+    SimilarDecisionsAggregateResponse,
 )
 from contextedge.services.decision_trace_service import (
     create_decision as svc_create_decision,
     find_similar_decisions as svc_find_similar,
+    find_similar_decisions_aggregate as svc_find_similar_aggregate,
     get_decision as svc_get_decision,
     get_decision_chain as svc_get_chain,
     get_decision_effectiveness as svc_get_effectiveness,
+    get_decision_provenance as svc_get_provenance,
     list_decisions as svc_list_decisions,
     record_outcome as svc_record_outcome,
+    reject_decision as svc_reject_decision,
 )
 
 router = APIRouter()
@@ -31,6 +37,14 @@ async def find_similar_decisions(
     workflow: str | None = None,
     environment: str | None = None,
     impacted_dependency: str | None = None,
+    query_decision_id: UUID | None = Query(
+        None,
+        description="When set, results are ordered semantically using this decision's embedding as the query vector; otherwise JSONB containment + created_at ordering applies.",
+    ),
+    query_text: str | None = Query(
+        None,
+        description="Free-text query embedded on the fly and used as the query vector. Ignored when query_decision_id is set.",
+    ),
     limit: int = Query(10, ge=1, le=50),
 ):
     ctx: dict[str, str] = {}
@@ -45,6 +59,50 @@ async def find_similar_decisions(
         tenant_id=user.tenant_id,
         decision_type=decision_type,
         context_snapshot=ctx or None,
+        query_decision_id=query_decision_id,
+        query_text=query_text,
+        limit=limit,
+    )
+
+
+@router.get(
+    "/similar/aggregate",
+    response_model=SimilarDecisionsAggregateResponse,
+)
+async def find_similar_decisions_with_aggregate(
+    db: DbSession,
+    user: AuthUser,
+    decision_type: str = Query(...),
+    workflow: str | None = None,
+    environment: str | None = None,
+    impacted_dependency: str | None = None,
+    query_decision_id: UUID | None = Query(None),
+    query_text: str | None = Query(None),
+    limit: int = Query(10, ge=1, le=50),
+):
+    """Top-N similar decisions + total count + outcome aggregate in one call.
+
+    Powers Zone 5's "based on 143 similar tickets, 87% succeeded" provenance
+    line alongside the top few examples — no client-side fan-out across
+    `/similar`, `/effectiveness`, and a count endpoint. When `query_decision_id`
+    or `query_text` is set, the top-N list is ordered semantically via
+    pgvector cosine distance; count and outcomes remain scoped by
+    `decision_type` + structural context filters.
+    """
+    ctx: dict[str, str] = {}
+    if workflow:
+        ctx["workflow"] = workflow
+    if environment:
+        ctx["environment"] = environment
+    if impacted_dependency:
+        ctx["impacted_dependency"] = impacted_dependency
+    return await svc_find_similar_aggregate(
+        db,
+        tenant_id=user.tenant_id,
+        decision_type=decision_type,
+        context_snapshot=ctx or None,
+        query_decision_id=query_decision_id,
+        query_text=query_text,
         limit=limit,
     )
 
@@ -81,19 +139,31 @@ async def list_decisions(
     decision_type: str | None = None,
     agent_step: str | None = None,
     status_filter: str | None = Query(None, alias="status"),
+    min_confidence: float | None = Query(None, ge=0.0, le=1.0),
+    max_confidence: float | None = Query(None, ge=0.0, le=1.0),
+    sort: str = Query(
+        "created_desc",
+        pattern="^(created_desc|confidence_desc|confidence_asc)$",
+    ),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
 ):
-    return await svc_list_decisions(
-        db,
-        tenant_id=user.tenant_id,
-        session_id=session_id,
-        decision_type=decision_type,
-        agent_step=agent_step,
-        status=status_filter,
-        limit=limit,
-        offset=offset,
-    )
+    try:
+        return await svc_list_decisions(
+            db,
+            tenant_id=user.tenant_id,
+            session_id=session_id,
+            decision_type=decision_type,
+            agent_step=agent_step,
+            status=status_filter,
+            min_confidence=min_confidence,
+            max_confidence=max_confidence,
+            sort=sort,
+            limit=limit,
+            offset=offset,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("", response_model=DecisionResponse, status_code=status.HTTP_201_CREATED)
@@ -176,3 +246,57 @@ async def get_decision_chain(
 ):
     chain = await svc_get_chain(db, tenant_id=user.tenant_id, decision_id=decision_id)
     return DecisionChainResponse(decisions=chain)
+
+
+@router.get(
+    "/{decision_id}/provenance",
+    response_model=DecisionProvenanceResponse,
+)
+async def get_decision_provenance(
+    decision_id: UUID,
+    db: DbSession,
+    user: AuthUser,
+    evidence_limit: int = Query(20, ge=1, le=100),
+    episode_limit: int = Query(10, ge=1, le=50),
+    pattern_limit: int = Query(10, ge=1, le=50),
+):
+    """Hydrate a decision's `based_on` references for Zone 5 drill-in."""
+    bundle = await svc_get_provenance(
+        db,
+        tenant_id=user.tenant_id,
+        decision_id=decision_id,
+        evidence_limit=evidence_limit,
+        episode_limit=episode_limit,
+        pattern_limit=pattern_limit,
+    )
+    if bundle is None:
+        raise HTTPException(status_code=404, detail="Decision not found")
+    return bundle
+
+
+@router.post(
+    "/{decision_id}/reject",
+    response_model=DecisionOutcomeResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def reject_decision(
+    decision_id: UUID,
+    body: DecisionRejectRequest,
+    db: DbSession,
+    user: AuthUser,
+):
+    """Reject an AI-recommended decision with a structured reason code."""
+    try:
+        outcome = await svc_reject_decision(
+            db,
+            tenant_id=user.tenant_id,
+            decision_id=decision_id,
+            code=body.code,
+            comment=body.comment,
+            actor_id=user.user_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if outcome is None:
+        raise HTTPException(status_code=404, detail="Decision not found")
+    return outcome

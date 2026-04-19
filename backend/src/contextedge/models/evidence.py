@@ -49,6 +49,8 @@ class EvidenceItem(Base, TenantScopedMixin):
         nullable=True,
     )
     canonical_entity_refs: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    baseline_ref: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    delta_signal: Mapped[str | None] = mapped_column(String(20), nullable=True)
     content_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     embedding = mapped_column(Vector(3072), nullable=True)
 

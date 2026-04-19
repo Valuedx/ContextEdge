@@ -26,6 +26,8 @@ Individual incidents become reusable organizational knowledge through a governed
 - Semantic versions use `_next_semantic_version` with retry on unique conflicts (`IntegrityError`) to handle concurrency.
 - `promote_playbook_memory` ties approved knowledge into memory/graph promotion when called from transitions.
 - `api/v1/playbooks.py` exposes CRUD and lifecycle operations aligned with service rules.
+- Per-step metadata on `PlaybookVersion.steps` is validated on write through the `PlaybookStep` Pydantic schema (`schemas/playbook.py`) — each step carries `reversible`, `time_estimate_sec`, `verification`, `rollback_hint`, `safety_class`, and `tool_ref`. All fields optional with defaults so pre-M2 payloads keep validating, and `extra="allow"` preserves vendor-specific keys. Storage is unchanged (JSONB list).
+- `PlaybookVersion.verification_policy` (JSONB) declares post-action recheck behavior — `auto_close_on_success`, `recheck_after_sec`, `recheck_metric`, `recheck_source` — so the reviewer console's "auto-close on successful recheck" commitment renders from data, not copy. Fields are descriptive at this revision; the recheck worker that honours them is a follow-up (see [KNOWN_GAPS.md](./KNOWN_GAPS.md)).
 
 ### Relationships
 

@@ -86,6 +86,8 @@ Note: `canonical_entity_refs` is empty at this point. Identity resolution popula
 
 - **Application-layer dedupe** — *Why:* flexible while schemas evolve. *Tradeoff:* rare duplicate rows possible under concurrent writers until DB constraints harden (see root README known constraints).
 
+- **Post-normalize baseline fan-out** — *Why:* Zone 4 of the reviewer console wants a current value plus a baseline comparison ("was 74% a week ago", "first observation in 7d window"); computing this at read time would require a scan of prior evidence on every render. *How:* `compute_evidence_baseline_task` fires alongside `classify_relevance_task` and `correlate_evidence` post-normalize (and again after attachment extraction), matches on tenant + evidence_type + source_object_id in a 7-day window, and writes `baseline_ref` + `delta_signal` into `EvidenceItem`. *Tradeoff:* the generic worker does relationship-only baselines ("last seen N days ago"); numeric baselines ("74% → 32%") are the connector's job to populate at ingest since only the connector knows what a meaningful delta looks like — the JSONB shape is open-ended to allow both sources to coexist. Connector-stamped `delta_signal` values are not overwritten.
+
 ## Code map
 
 | Concern | Module path | Key symbols | When it runs |
@@ -95,6 +97,8 @@ Note: `canonical_entity_refs` is empty at this point. Identity resolution popula
 | Thread linking | `backend/src/contextedge/services/evidence_normalization.py` | `ensure_thread_for_evidence` | Normalize |
 | Blob I/O | `backend/src/contextedge/services/object_store.py` | `upload_raw`, `download_raw`, `ensure_bucket` | Persist / normalize |
 | Normalize worker | `backend/src/contextedge/workers/extraction_tasks.py` | `_normalize`, `normalize_evidence` | Celery **extraction** queue |
+| Baseline service | `backend/src/contextedge/services/evidence_baseline_service.py` | `compute_evidence_baseline`, `DELTA_SIGNALS`, `DEFAULT_WINDOW_DAYS` | Post-normalize |
+| Baseline worker | `backend/src/contextedge/workers/evidence_baseline_tasks.py` | `compute_evidence_baseline_task` (`extraction.compute_evidence_baseline`) | Celery **extraction** queue |
 | Decision extraction | `backend/src/contextedge/ai/extractors/decision_extractor.py` | `extract_decisions` | Normalization worker |
 | Decision linking | `backend/src/contextedge/services/decision_service.py` | `link_evidence_decisions` | Normalization worker |
 | Payload load | `backend/src/contextedge/services/artifact_extraction_service.py` | `load_raw_payload`, `register_attachment_artifacts` | Normalize |

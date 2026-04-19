@@ -1,7 +1,9 @@
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+from contextedge.models.decision import REJECTION_REASON_CODES
 
 
 class StartExecutionRequest(BaseModel):
@@ -17,6 +19,39 @@ class StartExecutionRequest(BaseModel):
 class ApprovalDecision(BaseModel):
     decision: str = Field(..., description="approved or denied")
     comment: str | None = None
+
+
+class ApprovalModificationRequest(BaseModel):
+    """Approve-with-changes on a pending approval request.
+
+    `modification_diff` describes what's changing (e.g. `{"inputs": {...}, "summary": "..."}`).
+    Only the `inputs` key is applied automatically to the step run; other keys
+    are persisted verbatim for audit. `modification_reason_code` uses the same
+    enum as reject so analytics can compare across verbs.
+    """
+
+    modification_diff: dict
+    modification_reason_code: str = Field(
+        ...,
+        description=f"One of {REJECTION_REASON_CODES}",
+    )
+    comment: str | None = None
+
+    @field_validator("modification_diff")
+    @classmethod
+    def _validate_diff(cls, v: dict) -> dict:
+        if not v:
+            raise ValueError("modification_diff must be a non-empty object")
+        return v
+
+    @field_validator("modification_reason_code")
+    @classmethod
+    def _validate_code(cls, v: str) -> str:
+        if v not in REJECTION_REASON_CODES:
+            raise ValueError(
+                f"modification_reason_code must be one of {REJECTION_REASON_CODES}",
+            )
+        return v
 
 
 class ToolInvocationResponse(BaseModel):
@@ -68,6 +103,8 @@ class ApprovalRequestResponse(BaseModel):
     decided_by: UUID | None
     decided_at: datetime | None
     decision_comment: str | None
+    modification_diff: dict | None = None
+    modification_reason_code: str | None = None
     created_at: datetime
 
     model_config = {"from_attributes": True}

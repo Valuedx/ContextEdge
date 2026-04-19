@@ -28,10 +28,14 @@ def extract_attachment_artifact(self, artifact_id: str, tenant_id: str):
     try:
         result = run_async(work)
         if result and result.get("evidence_id") and result.get("follow_up_ready"):
+            from contextedge.workers.evidence_baseline_tasks import (
+                compute_evidence_baseline_task,
+            )
             from contextedge.workers.extraction_tasks import classify_relevance_task
 
             classify_relevance_task.delay(result["evidence_id"], tenant_id)
             correlate_evidence.delay(result["evidence_id"], tenant_id)
+            compute_evidence_baseline_task.delay(result["evidence_id"], tenant_id)
         return result
     except Exception as exc:
         raise self.retry(exc=exc) from exc

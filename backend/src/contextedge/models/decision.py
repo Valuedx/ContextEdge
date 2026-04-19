@@ -1,6 +1,7 @@
 import uuid
 from datetime import datetime
 
+from pgvector.sqlalchemy import Vector
 from sqlalchemy import Boolean, DateTime, Float, ForeignKey, String, Text, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -20,13 +21,23 @@ DECISION_TYPES = (
     "select_playbook",
     "approve",
     "deny",
+    "modify",
 )
 
 AGENT_STEPS = ("diagnostics", "remediation", "evaluation", "triage")
 ACTOR_TYPES = ("ai", "human", "hybrid")
 DECISION_STATUSES = ("pending", "completed", "superseded", "reverted")
 RISK_LEVELS = ("low", "medium", "high")
-OUTCOME_RESULTS = ("success", "failure", "partial", "timeout")
+OUTCOME_RESULTS = ("success", "failure", "partial", "timeout", "rejected")
+
+REJECTION_REASON_CODES = (
+    "wrong_diagnosis",
+    "plan_incomplete",
+    "needs_human_judgment",
+    "user_context_missing",
+    "policy_violation",
+    "other",
+)
 
 
 class Decision(Base, TenantScopedMixin):
@@ -87,6 +98,8 @@ class Decision(Base, TenantScopedMixin):
         String(30), default="pending", nullable=False, index=True,
     )
 
+    embedding = mapped_column(Vector(3072), nullable=True)
+
     options: Mapped[list["DecisionOption"]] = relationship(
         back_populates="decision",
         order_by="DecisionOption.created_at",
@@ -132,6 +145,7 @@ class DecisionOption(Base):
         JSONB, server_default="[]", nullable=False,
     )
     rejection_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    rejection_code: Mapped[str | None] = mapped_column(String(40), nullable=True)
     selected: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
     created_at: Mapped[datetime] = mapped_column(
@@ -171,6 +185,7 @@ class DecisionOutcome(Base):
         nullable=True,
     )
     feedback_received: Mapped[str | None] = mapped_column(Text, nullable=True)
+    feedback_code: Mapped[str | None] = mapped_column(String(40), nullable=True)
     feedback_by: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), nullable=True,
     )

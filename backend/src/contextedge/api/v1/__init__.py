@@ -7,7 +7,7 @@ from contextedge.api.v1 import (  # noqa: E402, F401
     sources, sync, evidence, threads, episodes,
     patterns, playbooks, runtime, evaluations, policies, drift, sessions,
     execution, decisions, contradictions, notifications, negative_knowledge,
-    identities, correlations, policy_assignments, graph,
+    identities, correlations, policy_assignments, graph, review_queue,
 )
 
 router.include_router(auth.router, prefix="/auth", tags=["auth"])
@@ -37,3 +37,4 @@ router.include_router(identities.router, prefix="/identities", tags=["identities
 router.include_router(correlations.router, prefix="/correlations", tags=["correlations"])
 router.include_router(policy_assignments.router, prefix="/policy-assignments", tags=["policy-assignments"])
 router.include_router(graph.router, prefix="/graph", tags=["graph"])
+router.include_router(review_queue.router, prefix="/review-queue", tags=["review-queue"])

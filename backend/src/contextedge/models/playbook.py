@@ -95,6 +95,7 @@ class PlaybookVersion(Base):
     evidence_refs: Mapped[list | None] = mapped_column(JSONB, nullable=True)
     playbook_confidence: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
     execution_confidence_guidance: Mapped[str | None] = mapped_column(Text, nullable=True)
+    verification_policy: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     published_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(

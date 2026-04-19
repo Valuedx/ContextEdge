@@ -25,6 +25,7 @@ import {
   PlayCircle,
   Scale,
   Waypoints,
+  CheckCircle2,
 } from "lucide-react";
 import { useAuthStore } from "@/lib/stores/auth-store";
 import { hasRole } from "@/lib/roles";
@@ -39,6 +40,7 @@ interface NavItem {
 
 const navItems: NavItem[] = [
   { label: "Overview", href: "/overview", icon: LayoutDashboard },
+  { label: "Review Queue", href: "/review", icon: CheckCircle2 },
   { label: "Sources", href: "/sources", icon: Database },
   { label: "Sync Operations", href: "/sync", icon: RefreshCw },
   { label: "Evidence", href: "/evidence", icon: FileSearch },

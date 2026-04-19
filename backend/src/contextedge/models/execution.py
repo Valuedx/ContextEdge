@@ -10,7 +10,7 @@ from contextedge.models.base import Base, TenantScopedMixin
 SAFETY_CLASSES = ("read_only", "low_side_effect", "high_side_effect", "destructive")
 EXECUTION_STATUSES = ("pending", "running", "awaiting_approval", "completed", "failed", "aborted")
 STEP_STATUSES = ("pending", "running", "awaiting_approval", "completed", "skipped", "failed")
-APPROVAL_STATUSES = ("pending", "approved", "denied")
+APPROVAL_STATUSES = ("pending", "approved", "denied", "modified")
 OUTCOMES = ("success", "partial", "failure", "aborted")
 
 
@@ -131,6 +131,8 @@ class ApprovalRequest(Base):
     decided_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     decision_comment: Mapped[str | None] = mapped_column(Text, nullable=True)
+    modification_diff: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    modification_reason_code: Mapped[str | None] = mapped_column(String(40), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False,
     )

@@ -52,6 +52,7 @@ Start with the system architecture, then follow the numbered deep dives:
 | [13-evaluation-drift-and-feedback.md](./13-evaluation-drift-and-feedback.md) | Offline evaluation, drift alerts, and the feedback loop |
 | [14-control-plane-tenants-roles-policies.md](./14-control-plane-tenants-roles-policies.md) | Tenant hierarchy, roles, policies, and admin control plane behavior |
 | [15-dashboard-and-operator-workflows.md](./15-dashboard-and-operator-workflows.md) | Dashboard navigation and how business workflows map to APIs |
+| [16-decision-traces.md](./16-decision-traces.md) | First-class decision trace model, structured reject/modify codes, and the reviewer-console bundle endpoint |
 
 ## Following one incident end to end
 

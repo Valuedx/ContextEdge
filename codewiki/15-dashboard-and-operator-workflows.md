@@ -115,6 +115,7 @@ The knowledge manager retires the legacy playbook and narrows the trigger condit
 | Runtime sandbox | `frontend/src/app/(dashboard)/runtime/page.tsx` | `RuntimePage`, `FeedbackTab` | Live retrieval and feedback |
 | Sessions | `frontend/src/app/(dashboard)/sessions/page.tsx` | `SessionsPage`, `NewSessionDialog`, `SessionDetail` | Incident coordination |
 | Execution approvals | `frontend/src/app/(dashboard)/execution/page.tsx` | `ExecutionPage`, `DecideDialog` | Human approval queue |
+| Review Queue (reviewer console) | `frontend/src/app/(dashboard)/review/page.tsx` | `ReviewPage`, `QueuePane`, `SessionDetail`, `RankedHypotheses`, `DecisionBar`, `RejectDialog`, `ModifyDialog`, `findPendingApproval` | Confidence-ranked pending decisions with Approve / Modify / Reject inline. Consumes `/decisions?status=pending&sort=confidence_desc` for the queue and `/review-queue/{id}/context` for the session bundle. Modify pre-fills the pending approval's step inputs as editable JSON and POSTs to `/execution/runs/{run_id}/approvals/{approval_id}/modify`. Zones 4 (evidence cards) and 6 (plan steps) deferred — see [KNOWN_GAPS.md](./KNOWN_GAPS.md) |
 | Negative knowledge | `frontend/src/app/(dashboard)/negative-knowledge/page.tsx` | `NegativeKnowledgePage`, `NKDialog` | Curating failed steps |
 | Policies | `frontend/src/app/(dashboard)/policies/page.tsx` | `PoliciesPage`, `PolicySection` | Governance admin |
 | Settings | `frontend/src/app/(dashboard)/settings/page.tsx` | `SettingsPage`, `NewWorkspaceDialog`, `NewDomainDialog` | Tenant admin |

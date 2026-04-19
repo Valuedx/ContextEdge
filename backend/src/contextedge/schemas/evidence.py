@@ -13,6 +13,7 @@ class EvidenceItemResponse(BaseModel):
     body_summary: str | None
     relevance_state: str
     relevance_score: float | None
+    delta_signal: str | None = None
     created_at_source: datetime | None
     ingested_at: datetime
     created_at: datetime
@@ -29,6 +30,8 @@ class EvidenceItemDetail(EvidenceItemResponse):
     sensitivity_label: str | None
     access_policy_id: UUID | None = None
     canonical_entity_refs: dict | None
+    baseline_ref: dict | None = None
+    delta_signal: str | None = None
 
 
 class EvidenceAccessPolicyUpdate(BaseModel):
