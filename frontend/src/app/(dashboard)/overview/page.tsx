@@ -22,7 +22,7 @@ import { api } from "@/lib/api";
 import type { Episode, EvidenceItem, Playbook, Source } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
-const LIMIT = "200";
+const LIMIT = "50";
 
 function StatTile({
   label,

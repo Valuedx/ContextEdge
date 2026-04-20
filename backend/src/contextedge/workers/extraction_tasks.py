@@ -10,6 +10,7 @@ from contextedge.ai.classifiers.relevance import classify_relevance as run_relev
 from contextedge.ai.embeddings import embed_evidence
 from contextedge.models.episode import EpisodeStep
 from contextedge.models.evidence import EvidenceItem, RawEvidenceObject
+from contextedge.models.tenant import Domain
 from contextedge.services.artifact_extraction_service import (
     load_raw_payload,
     register_attachment_artifacts,
@@ -238,11 +239,16 @@ async def _classify(db: AsyncSession, evidence_id: str, tenant_id: uuid.UUID) ->
     return {"evidence_id": evidence_id, "classification": ev.relevance_state}
 
 
-async def _reconstruct(db: AsyncSession, cluster_id: str, tenant_id: uuid.UUID) -> dict:
+async def _reconstruct(db: AsyncSession, cluster_id: str, tenant_id: uuid.UUID, domain_id: uuid.UUID | None = None) -> dict:
     """`cluster_id` is treated as a comma-separated list of evidence UUIDs for MVP wiring."""
     ids = [uuid.UUID(x.strip()) for x in cluster_id.split(",") if x.strip()]
     if len(ids) < 1:
         return {"error": "no_evidence_ids"}
+
+    if domain_id is None:
+        # Resolve a default domain for the tenant if not provided
+        dr = await db.execute(select(Domain.id).where(Domain.tenant_id == tenant_id).limit(1))
+        domain_id = dr.scalar_one_or_none()
 
     items = []
     for eid in ids:
@@ -264,7 +270,7 @@ async def _reconstruct(db: AsyncSession, cluster_id: str, tenant_id: uuid.UUID) 
     created_episodes = await create_episodes_from_evidence(
         db,
         tenant_id=tenant_id,
-        domain_id=None,
+        domain_id=domain_id,
         evidence_items=items,
         evidence_ids=[uuid.UUID(i["evidence_id"]) for i in items],
     )
@@ -282,7 +288,12 @@ async def _reconstruct(db: AsyncSession, cluster_id: str, tenant_id: uuid.UUID) 
     }
 
 
-@celery_app.task(bind=True, max_retries=3, default_retry_delay=60)
+@celery_app.task(
+    bind=True,
+    max_retries=3,
+    default_retry_delay=60,
+    name="extraction.normalize_evidence",
+)
 def normalize_evidence(self, raw_object_id: str, tenant_id: str):
     tid = uuid.UUID(tenant_id)
 
@@ -330,11 +341,12 @@ def classify_relevance_task(self, evidence_id: str, tenant_id: str):
     default_retry_delay=60,
     name="extraction.reconstruct_episode",
 )
-def reconstruct_episode_task(self, correlation_cluster_id: str, tenant_id: str):
+def reconstruct_episode_task(self, correlation_cluster_id: str, tenant_id: str, domain_id: str | None = None):
     tid = uuid.UUID(tenant_id)
+    did = uuid.UUID(domain_id) if domain_id else None
 
     async def work(db):
-        return await _reconstruct(db, correlation_cluster_id, tid)
+        return await _reconstruct(db, correlation_cluster_id, tid, did)
 
     try:
         return run_async(work)

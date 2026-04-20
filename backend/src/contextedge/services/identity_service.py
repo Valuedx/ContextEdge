@@ -170,7 +170,7 @@ async def link_evidence_identities(
             db.add(
                 EvidenceIdentityLink(
                     tenant_id=tenant_id,
-                    evidence_id=evidence.id,
+                    evidence_item=evidence,
                     identity_id=identity_id,
                     match_type=str(item.get("matched_via") or "alias"),
                     confidence=float(item.get("confidence") or 0.8),

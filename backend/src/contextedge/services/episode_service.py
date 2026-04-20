@@ -6,6 +6,7 @@ import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from contextedge.ai.provider import generate_embedding
 from contextedge.ai.extractors.episode_extractor import reconstruct_episode
 from contextedge.models.episode import Episode, EpisodeStep
 from contextedge.models.evidence import EvidenceItem
@@ -58,19 +59,29 @@ async def create_episodes_from_evidence(
     entity_refs = _merge_identity_refs([row[0] for row in evidence_result.all()])
     
     created_episodes = []
-
     for ep_data in extracted_episodes:
+        # Generate semantic embedding for the episode
+        title = ep_data.get("title", "Untitled Episode")
+        root_cause = ep_data.get("root_cause_summary", "")
+        emb_text = f"{title}\n\n{root_cause}"
+        try:
+            embedding = await generate_embedding(emb_text)
+        except Exception:
+            logger.warning("episode_embedding_failed", ep_title=title)
+            embedding = None
+
         episode = Episode(
             tenant_id=tenant_id,
             domain_id=domain_id,
-            title=ep_data.get("title", "Untitled Episode"),
+            title=title,
             status="draft",
             extraction_confidence=float(ep_data.get("overall_confidence", 0.5)),
-            root_cause_summary=ep_data.get("root_cause_summary"),
+            root_cause_summary=root_cause,
             final_outcome=ep_data.get("final_outcome"),
             reviewer_state="pending_review",
             evidence_ids=[str(eid) for eid in evidence_ids],
             entity_refs=entity_refs,
+            embedding=embedding,
         )
         db.add(episode)
         await db.flush()

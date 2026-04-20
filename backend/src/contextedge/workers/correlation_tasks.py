@@ -20,18 +20,25 @@ def correlate_evidence(self, evidence_id: str, tenant_id: str):
     eid = uuid.UUID(evidence_id)
 
     async def work(db):
-        return await correlate_evidence_item(db, tid, eid)
+        from sqlalchemy import select
+        from contextedge.models.evidence import EvidenceItem
+        
+        result = await correlate_evidence_item(db, tid, eid)
+        
+        domain_id = None
+        if result and result.get("status") == "ok" and result.get("correlations_created", 0) > 0:
+            # Fetch domain_id from evidence if not present in result
+            res = await db.execute(select(EvidenceItem.domain_id).where(EvidenceItem.id == eid))
+            domain_id = res.scalar_one_or_none()
+            
+        return result, domain_id
 
     try:
-        result = run_async(work)
+        result, domain_id = run_async(work)
         if result and result.get("status") == "ok" and result.get("correlations_created", 0) > 0:
             from contextedge.workers.extraction_tasks import reconstruct_episode_task
 
-            cluster_ids = [evidence_id]
-            canonical_case_id = result.get("canonical_case_id")
-            if canonical_case_id:
-                cluster_ids.append(canonical_case_id)
-            reconstruct_episode_task.delay(evidence_id, tenant_id)
+            reconstruct_episode_task.delay(evidence_id, tenant_id, domain_id=str(domain_id) if domain_id else None)
             logger.info(
                 "correlation.episode_reconstruction_enqueued",
                 evidence_id=evidence_id,

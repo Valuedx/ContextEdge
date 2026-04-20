@@ -74,10 +74,20 @@ async def create_source(body: SourceCreate, db: DbSession, user: AuthUser):
     )
 
     if body.credentials:
-        valid, message = await validate_source_credentials(
-            body.source_type, body.config, body.credentials
-        )
-        source.auth_status = "connected" if valid else "failed"
+        # Perform validation but don't let network timeouts crash the entire request
+        import asyncio
+        try:
+            valid, message = await asyncio.wait_for(
+                validate_source_credentials(
+                    body.source_type, body.config, body.credentials
+                ),
+                timeout=10.0
+            )
+            source.auth_status = "connected" if valid else "failed"
+        except asyncio.TimeoutError:
+            source.auth_status = "failed"
+        except Exception:
+            source.auth_status = "failed"
     else:
         source.auth_status = "pending"
 
@@ -96,6 +106,7 @@ async def create_source(body: SourceCreate, db: DbSession, user: AuthUser):
         await db.flush()
 
     await db.refresh(source)
+    await db.commit()
 
     await log_audit_event(
         db,
@@ -145,6 +156,7 @@ async def update_source(source_id: UUID, body: SourceUpdate, db: DbSession, user
         setattr(source, field, value)
     await db.flush()
     await db.refresh(source)
+    await db.commit()
 
     await log_audit_event(
         db,
@@ -170,6 +182,7 @@ async def trigger_discovery(source_id: UUID, db: DbSession, user: AuthUser):
         raise HTTPException(status_code=404, detail="Source not found")
 
     objects = await discover_source_objects(db, source)
+    await db.commit()
     return objects
 
 
@@ -227,6 +240,12 @@ async def approve_source_object(
         resource_id=str(so.id),
         details=update_data,
     )
+
+    # Trigger immediate sync if newly approved
+    if update_data.get("approved_for_sync") is True:
+        from contextedge.workers.sync_tasks import run_incremental_sync
+        run_incremental_sync.delay(str(source_id), str(object_id), str(user.tenant_id))
+
     return so
 
 
@@ -403,37 +422,68 @@ async def delete_source(source_id: UUID, db: DbSession, user: AuthUser):
     if not source:
         raise HTTPException(status_code=404, detail="Source not found")
 
-    from sqlalchemy import delete
+    from sqlalchemy import delete, or_
     from contextedge.models.evidence import EvidenceItem, RawEvidenceObject
     from contextedge.models.source import SourceObject, SyncRun
 
-    # 1. Delete Evidence Items
-    await db.execute(
-        delete(EvidenceItem).where(EvidenceItem.source_id == source_id)
+    # 1. Resolve Evidence IDs to delete dependencies
+    evidence_ids_q = await db.execute(
+        select(EvidenceItem.id).where(EvidenceItem.source_id == source_id)
     )
+    evidence_ids = evidence_ids_q.scalars().all()
+
+    if evidence_ids:
+        from contextedge.models.episode import CorrelationEdge
+        from contextedge.models.evidence import AttachmentArtifact
+
+        # 2. Delete Correlation Edges
+        await db.execute(
+            delete(CorrelationEdge).where(
+                or_(
+                    CorrelationEdge.source_evidence_id.in_(evidence_ids),
+                    CorrelationEdge.target_evidence_id.in_(evidence_ids)
+                )
+            )
+        )
+
+        # 3. Delete Attachment Artifacts
+        await db.execute(
+            delete(AttachmentArtifact).where(AttachmentArtifact.evidence_id.in_(evidence_ids))
+        )
+
+        # 4. Delete Evidence Items
+        await db.execute(
+            delete(EvidenceItem).where(EvidenceItem.source_id == source_id)
+        )
     
-    # 2. Delete Raw Evidence
+    # 5. Delete Threads
+    from contextedge.models.evidence import Thread
+    await db.execute(
+        delete(Thread).where(Thread.source_id == source_id)
+    )
+
+    # 6. Delete Raw Evidence
     await db.execute(
         delete(RawEvidenceObject).where(RawEvidenceObject.source_id == source_id)
     )
     
-    # 3. Delete Sync Runs
+    # 6. Delete Sync Runs
     await db.execute(
         delete(SyncRun).where(SyncRun.source_id == source_id)
     )
     
-    # 4. Delete Source Objects
+    # 7. Delete Source Objects
     await db.execute(
         delete(SourceObject).where(SourceObject.source_id == source_id)
     )
 
-    # 5. Delete Source Credentials
+    # 8. Delete Source Credentials
     from contextedge.models.source import SourceCredential
     await db.execute(
         delete(SourceCredential).where(SourceCredential.source_id == source_id)
     )
 
-    # Finally delte the source
+    # Finally delete the source
     await db.delete(source)
     await db.commit()
 

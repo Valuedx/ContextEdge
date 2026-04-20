@@ -11,6 +11,7 @@ from contextedge.schemas.evidence import (
     EvidenceAccessPolicyUpdate,
     EvidenceItemDetail,
     EvidenceItemResponse,
+    EvidenceBulkDeleteRequest,
     ThreadResponse,
 )
 from contextedge.services.policy_assignment import assert_policy_assignment
@@ -161,6 +162,117 @@ async def update_relevance(
     item.relevance_state = relevance_state
     await db.flush()
     return {"status": "updated"}
+
+
+@router.post("/bulk-delete", status_code=status.HTTP_204_NO_CONTENT)
+async def bulk_delete_evidence(
+    body: EvidenceBulkDeleteRequest,
+    db: DbSession,
+    user: AuthUser,
+):
+    """Permanently delete multiple evidence items."""
+    user.require_role("domain_admin")
+
+    from sqlalchemy import delete, or_
+    from contextedge.models.evidence import AttachmentArtifact, RawEvidenceObject
+    from contextedge.models.episode import CorrelationEdge
+
+    ids = body.ids
+    if not ids:
+        return None
+
+    # 1. Delete Correlation Edges
+    await db.execute(
+        delete(CorrelationEdge).where(
+            or_(
+                CorrelationEdge.source_evidence_id.in_(ids),
+                CorrelationEdge.target_evidence_id.in_(ids)
+            )
+        )
+    )
+
+    # 2. Delete Attachment Artifacts
+    await db.execute(
+        delete(AttachmentArtifact).where(AttachmentArtifact.evidence_id.in_(ids))
+    )
+
+    # 3. Delete Evidence Items
+    await db.execute(
+        delete(EvidenceItem).where(
+            EvidenceItem.id.in_(ids),
+            EvidenceItem.tenant_id == user.tenant_id
+        )
+    )
+
+    await db.commit()
+
+    await log_audit_event(
+        db,
+        tenant_id=user.tenant_id,
+        actor_id=user.user_id,
+        actor_email=user.email,
+        action="evidence.bulk_deleted",
+        resource_type="evidence",
+        resource_id="multiple",
+        details={"count": len(ids)},
+    )
+    return None
+
+
+@router.delete("/purge", status_code=status.HTTP_204_NO_CONTENT)
+async def purge_evidence(db: DbSession, user: AuthUser):
+    """Permanently delete ALL evidence records for the current tenant."""
+    user.require_role("domain_admin")
+
+    from sqlalchemy import delete, or_
+    from contextedge.models.evidence import RawEvidenceObject, AttachmentArtifact
+    from contextedge.models.episode import CorrelationEdge
+
+    # 1. Resolve Evidence IDs to delete dependencies
+    evidence_ids_q = await db.execute(
+        select(EvidenceItem.id).where(EvidenceItem.tenant_id == user.tenant_id)
+    )
+    evidence_ids = evidence_ids_q.scalars().all()
+
+    if evidence_ids:
+        # 2. Delete Correlation Edges
+        await db.execute(
+            delete(CorrelationEdge).where(
+                or_(
+                    CorrelationEdge.source_evidence_id.in_(evidence_ids),
+                    CorrelationEdge.target_evidence_id.in_(evidence_ids)
+                )
+            )
+        )
+
+        # 3. Delete Attachment Artifacts
+        await db.execute(
+            delete(AttachmentArtifact).where(AttachmentArtifact.evidence_id.in_(evidence_ids))
+        )
+
+        # 4. Delete Evidence Items
+        await db.execute(
+            delete(EvidenceItem).where(EvidenceItem.tenant_id == user.tenant_id)
+        )
+
+    # 5. Delete Raw Evidence Objects
+    await db.execute(
+        delete(RawEvidenceObject).where(RawEvidenceObject.tenant_id == user.tenant_id)
+    )
+
+    await db.commit()
+
+    await log_audit_event(
+        db,
+        tenant_id=user.tenant_id,
+        actor_id=user.user_id,
+        actor_email=user.email,
+        action="evidence.purged",
+        resource_type="evidence",
+        resource_id="all",
+        details={"message": "Bulk purge of all evidence items and raw objects"},
+    )
+    return None
 
 
 @router.delete("/{evidence_id}", status_code=status.HTTP_204_NO_CONTENT)

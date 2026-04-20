@@ -2,8 +2,10 @@
 
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { ColumnDef } from "@tanstack/react-table";
-import { BookOpen, Loader2, Network, List } from "lucide-react";
+import { BookOpen, Loader2, Network, List, Trash2 } from "lucide-react";
 import { useRouter } from "next/navigation";
+import { useQueryClient } from "@tanstack/react-query";
+import { format } from "date-fns";
 
 import { PageHeader } from "@/components/common/page-header";
 import { DataTable } from "@/components/common/data-table";
@@ -18,8 +20,10 @@ import { PatternGraph } from "@/components/patterns/pattern-graph";
 import { usePagination } from "@/lib/hooks/use-pagination";
 import { PaginationControls } from "@/components/common/pagination-controls";
 
-function PatternActions({ patternId }: { patternId: string; title: string }) {
+function PatternActions({ patternId, title }: { patternId: string; title: string }) {
   const router = useRouter();
+  const queryClient = useQueryClient();
+
   const generateMutation = useMutation({
     mutationFn: () => api.post("/playbooks/generate", { pattern_id: patternId }),
     onSuccess: () => {
@@ -31,21 +35,55 @@ function PatternActions({ patternId }: { patternId: string; title: string }) {
     },
   });
 
+  const deleteMutation = useMutation({
+    mutationFn: () => api.delete(`/patterns/${patternId}`),
+    onSuccess: () => {
+      toast.success(`Pattern "${title}" deleted`);
+      queryClient.invalidateQueries({ queryKey: ["patterns"] });
+    },
+    onError: (err: Error) => {
+      toast.error(err.message || "Failed to delete pattern");
+    },
+  });
+
+  const handleDelete = () => {
+    if (confirm(`Are you sure you want to delete pattern "${title}"?`)) {
+      deleteMutation.mutate();
+    }
+  };
+
   return (
-    <Button
-      variant="ghost"
-      size="icon"
-      className="text-muted-foreground hover:text-indigo-500"
-      title="Generate Playbook"
-      onClick={() => generateMutation.mutate()}
-      disabled={generateMutation.isPending}
-    >
-      {generateMutation.isPending ? (
-        <Loader2 className="h-4 w-4 animate-spin" />
-      ) : (
-        <BookOpen className="h-4 w-4" />
-      )}
-    </Button>
+    <div className="flex items-center gap-1">
+      <Button
+        variant="ghost"
+        size="icon"
+        className="text-muted-foreground hover:text-indigo-500"
+        title="Generate Playbook"
+        onClick={() => generateMutation.mutate()}
+        disabled={generateMutation.isPending}
+      >
+        {generateMutation.isPending ? (
+          <Loader2 className="h-4 w-4 animate-spin" />
+        ) : (
+          <BookOpen className="h-4 w-4" />
+        )}
+      </Button>
+
+      <Button
+        variant="ghost"
+        size="icon"
+        className="text-muted-foreground hover:text-red-500"
+        title="Delete Pattern"
+        onClick={handleDelete}
+        disabled={deleteMutation.isPending}
+      >
+        {deleteMutation.isPending ? (
+          <Loader2 className="h-4 w-4 animate-spin" />
+        ) : (
+          <Trash2 className="h-4 w-4" />
+        )}
+      </Button>
+    </div>
   );
 }
 
@@ -75,6 +113,17 @@ const columns: ColumnDef<Pattern>[] = [
     accessorKey: "freshness_score",
     header: "Freshness",
     cell: ({ row }) => ((row.getValue("freshness_score") as number) * 100).toFixed(0) + "%",
+  },
+  {
+    accessorKey: "created_at",
+    header: "Date",
+    cell: ({ row }) => {
+      try {
+        return format(new Date(row.getValue("created_at")), "MMM dd, yyyy");
+      } catch (e) {
+        return "N/A";
+      }
+    },
   },
   {
     id: "actions",

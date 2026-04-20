@@ -200,11 +200,20 @@ async def trigger_manual_reconstruction(
 
     from contextedge.workers.extraction_tasks import reconstruct_episode_task
     cluster_id = ",".join([str(eid) for eid in evidence_ids])
-    task = reconstruct_episode_task.delay(cluster_id, str(user.tenant_id))
+    
+    # Try to determine domain_id from evidence if possible, or fallback to default
+    domain_id = body.domain_id if hasattr(body, "domain_id") and body.domain_id else None
+    if not domain_id:
+        from contextedge.models.tenant import Domain
+        res = await db.execute(select(Domain.id).where(Domain.tenant_id == user.tenant_id).limit(1))
+        domain_id = res.scalar_one_or_none()
+
+    task = reconstruct_episode_task.delay(cluster_id, str(user.tenant_id), domain_id=str(domain_id) if domain_id else None)
 
     return {
         "status": "reconstruction_queued",
         "evidence_count": len(evidence_ids),
+        "domain_id": str(domain_id) if domain_id else None,
         "task_id": task.id,
     }
 
@@ -212,7 +221,7 @@ async def trigger_manual_reconstruction(
 @router.delete("/{episode_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_episode(episode_id: UUID, db: DbSession, user: AuthUser):
     """Permanently delete an episode and its steps."""
-    user.require_role("domain_admin")
+    user.require_role("knowledge_manager")
 
     episode = (
         await db.execute(

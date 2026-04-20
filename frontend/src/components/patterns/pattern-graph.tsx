@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { api } from "@/lib/api";
 import { Loader2, Info, Network } from "lucide-react";
 import { useEffect, useCallback } from "react";
+import { toast } from "sonner";
 import {
   ReactFlow,
   ReactFlowProvider,
@@ -58,6 +59,7 @@ const NODE_ROUTES: Partial<Record<string, string>> = {
   evidence: "/evidence",
   session: "/sessions",
   decision: "/decisions",
+  identity: "/identities",
 };
 
 // ── Inner canvas — must live inside ReactFlowProvider to call useReactFlow ──
@@ -103,28 +105,6 @@ function FlowCanvas({
         showInteractive={false}
         className="bg-slate-900 border-slate-700 fill-slate-200"
       />
-
-      {/* Legend — only shown when graph has rendered nodes */}
-      {hasData && (
-        <Panel
-          position="top-left"
-          className="bg-slate-900/90 border border-slate-700 p-3 rounded-lg text-xs space-y-2 backdrop-blur-sm shadow-xl"
-        >
-          <div className="font-semibold text-slate-400 mb-1 flex items-center gap-1.5">
-            <Network className="h-3 w-3" /> Legend
-          </div>
-          <div className="grid grid-cols-2 gap-x-4 gap-y-1.5">
-            {Object.entries(nodeColors).map(([type, c]) => (
-              <div key={type} className="flex items-center gap-2">
-                <div className={`w-2.5 h-2.5 rounded-sm ${c.dot}`} />
-                <span className="text-slate-300">
-                  {type.replace(/_/g, " ").replace(/\b\w/g, (l) => l.toUpperCase())}
-                </span>
-              </div>
-            ))}
-          </div>
-        </Panel>
-      )}
 
       {/* Click hint — only shown when graph has data */}
       {hasData && (
@@ -213,7 +193,15 @@ export function PatternGraph({ patternId }: { patternId: string }) {
       const [type, ...idParts] = node.id.split(":");
       const id = idParts.join(":");
       const route = NODE_ROUTES[type];
-      if (route) router.push(`${route}/${id}`);
+      
+      if (route) {
+        router.push(`${route}/${id}`);
+      } else {
+        toast.info(
+          `"${node.data.label}" is an enrichment concept. Dedicated detail pages are available for Episodes, Patterns, and Identities.`,
+          { duration: 4000 }
+        );
+      }
     },
     [router],
   );

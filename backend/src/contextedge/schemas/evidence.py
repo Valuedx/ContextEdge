@@ -134,6 +134,10 @@ class ReconstructRequest(BaseModel):
     evidence_ids: list[UUID] | None = None
 
 
+class EvidenceBulkDeleteRequest(BaseModel):
+    ids: list[UUID]
+
+
 class AttachmentArtifactResponse(BaseModel):
     id: UUID
     evidence_id: UUID

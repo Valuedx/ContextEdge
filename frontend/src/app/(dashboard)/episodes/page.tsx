@@ -2,7 +2,7 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ColumnDef } from "@tanstack/react-table";
-import { Sparkles, Loader2, Trash2, Brain } from "lucide-react";
+import { Sparkles, Loader2, Trash2 } from "lucide-react";
 
 import { PageHeader } from "@/components/common/page-header";
 import { DataTable } from "@/components/common/data-table";
@@ -33,36 +33,8 @@ function EpisodeActions({ episodeId, title }: { episodeId: string; title: string
     },
   });
 
-  const analyzeMutation = useMutation({
-    mutationFn: () => api.post("/patterns/discover", { episode_ids: [episodeId] }),
-    onSuccess: () => {
-      toast.success("Knowledge pattern discovered!");
-      router.push("/patterns");
-    },
-    onError: (err: Error) => {
-      toast.error(err.message || "Pattern analysis failed");
-    },
-  });
-
   return (
     <div className="flex gap-2">
-      <Button
-        variant="ghost"
-        size="icon"
-        className="text-muted-foreground hover:text-primary"
-        title="Analyze Pattern"
-        onClick={(e) => {
-          e.stopPropagation();
-          analyzeMutation.mutate();
-        }}
-        disabled={analyzeMutation.isPending}
-      >
-        {analyzeMutation.isPending ? (
-          <Loader2 className="h-4 w-4 animate-spin" />
-        ) : (
-          <Brain className="h-4 w-4" />
-        )}
-      </Button>
       <Button
         variant="ghost"
         size="icon"
@@ -128,6 +100,7 @@ const columns: ColumnDef<Episode>[] = [
 
 export default function EpisodesPage() {
   const [isReconstructing, setIsReconstructing] = useState(false);
+  const [isClustering, setIsClustering] = useState(false);
   const pg = usePagination(50);
 
   const { data = [], isLoading } = useQuery<Episode[]>({
@@ -150,24 +123,54 @@ export default function EpisodesPage() {
     }
   };
 
+  const handleConstructPattern = async () => {
+    try {
+      setIsClustering(true);
+      const res = await api.post<{ task_id: string; domain_id: string }>("/patterns/cluster", {});
+      const tid = res.task_id ? `${res.task_id.slice(0, 8)}…` : "unknown";
+      toast.success(
+        `Pattern construction queued. Celery task ${tid} is looking for approved episodes to cluster. Check the Patterns page in a few moments.`,
+      );
+    } catch (err) {
+      toast.error((err as Error).message || "Failed to trigger pattern construction");
+    } finally {
+      setIsClustering(false);
+    }
+  };
+
   return (
     <div className="space-y-6">
       <PageHeader 
         title="Episodes" 
         description="Reconstructed troubleshooting episodes from correlated evidence." 
         actions={
-          <Button 
-            onClick={handleReconstruct} 
-            disabled={isReconstructing}
-            className="bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700"
-          >
-            {isReconstructing ? (
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-            ) : (
-              <Sparkles className="mr-2 h-4 w-4" />
-            )}
-            Reconstruct
-          </Button>
+          <div className="flex gap-3">
+            <Button 
+              onClick={handleConstructPattern} 
+              disabled={isClustering}
+              variant="outline"
+              className="border-indigo-500/50 text-indigo-400 hover:bg-indigo-500/10 hover:text-indigo-300"
+            >
+              {isClustering ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : (
+                <Sparkles className="mr-2 h-4 w-4" />
+              )}
+              Construct Pattern
+            </Button>
+            <Button 
+              onClick={handleReconstruct} 
+              disabled={isReconstructing}
+              className="bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700"
+            >
+              {isReconstructing ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : (
+                <Sparkles className="mr-2 h-4 w-4" />
+              )}
+              Reconstruct
+            </Button>
+          </div>
         }
       />
       {isLoading ? (

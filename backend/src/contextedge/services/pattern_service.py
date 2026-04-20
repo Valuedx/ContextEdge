@@ -7,7 +7,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from contextedge.models.episode import Episode
 from contextedge.models.pattern import Pattern, PatternEvidenceLink
-from contextedge.graph.builder import persist_pattern_enrichment_edges
+from contextedge.graph.builder import persist_pattern_enrichment_edges, build_episode_graph
+from contextedge.services.identity_service import identity_ids_from_refs
 from contextedge.services.memory_service import promote_pattern_memory
 
 
@@ -45,6 +46,7 @@ async def create_pattern_from_episodes(
     db.add(pattern)
     await db.flush()
 
+    # 1. Relational Links (Membership)
     for ep_id in episode_ids:
         link = PatternEvidenceLink(
             pattern_id=pattern.id,
@@ -55,6 +57,7 @@ async def create_pattern_from_episodes(
 
     await db.flush()
 
+    # 2. Graph Enrichment Edges (Virtual Concepts -> Pattern)
     await persist_pattern_enrichment_edges(
         db,
         tenant_id,
@@ -66,6 +69,24 @@ async def create_pattern_from_episodes(
         root_causes=root_causes,
     )
 
+    # 3. Graph Membership & Impact Edges (Episode -> Pattern, Episode -> Identity)
+    # This powers the "Episode" and "Identity" nodes in the graph view.
+    # Fetch full episode data to get entity_refs
+    ep_result = await db.execute(
+        select(Episode).where(Episode.id.in_(episode_ids))
+    )
+    episodes = ep_result.scalars().all()
+    for ep in episodes:
+        await build_episode_graph(
+            db,
+            tenant_id,
+            ep.id,
+            pattern.id,
+            identity_ids_from_refs(ep.entity_refs),
+            domain_id=domain_id,
+        )
+
+    # 4. Long-term memory promotion
     await promote_pattern_memory(
         db,
         tenant_id=tenant_id,

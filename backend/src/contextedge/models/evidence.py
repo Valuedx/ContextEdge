@@ -52,7 +52,11 @@ class EvidenceItem(Base, TenantScopedMixin):
     content_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     embedding = mapped_column(Vector(3072), nullable=True)
 
-    search_tsvector: Mapped[object | None] = mapped_column(TSVECTOR, nullable=True)
+    search_tsvector: Mapped[object | None] = mapped_column(
+        TSVECTOR,
+        server_default=func.now(),  # Placeholder to indicate server-side management
+        deferred=True,
+    )
 
     thread: Mapped["Thread | None"] = relationship(back_populates="evidence_items")
     attachments: Mapped[list["AttachmentArtifact"]] = relationship(back_populates="evidence_item")
@@ -82,7 +86,7 @@ class AttachmentArtifact(Base):
     __tablename__ = "attachment_artifacts"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    evidence_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("evidence_items.id"), nullable=False)
+    evidence_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("evidence_items.id", ondelete="CASCADE"), nullable=False)
     filename: Mapped[str] = mapped_column(String(500), nullable=False)
     mime_type: Mapped[str | None] = mapped_column(String(100), nullable=True)
     size_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)

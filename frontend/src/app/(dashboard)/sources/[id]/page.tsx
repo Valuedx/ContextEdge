@@ -31,7 +31,7 @@ import {
 } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { api } from "@/lib/api";
-import type { PoliciesOverview, Source, SyncRun } from "@/lib/types";
+import type { PoliciesOverview, Source, SourceObject, SyncRun } from "@/lib/types";
 import { useAuthStore } from "@/lib/stores/auth-store";
 import { hasRole, canListPoliciesForSource } from "@/lib/roles";
 
@@ -99,11 +99,18 @@ export default function SourceDetailPage() {
   });
 
   const discoverMut = useMutation({
-    mutationFn: () => api.post(`/sources/${id}/discover`),
-    onSuccess: () => {
+    mutationFn: () => api.post<SourceObject[]>(`/sources/${id}/discover`),
+    onSuccess: (objects) => {
       qc.invalidateQueries({ queryKey: ["source", id] });
       qc.invalidateQueries({ queryKey: ["source-objects", id] });
+      toast.success(
+        objects?.length
+          ? `Discovery complete — ${objects.length} object${objects.length !== 1 ? "s" : ""} found.`
+          : "Discovery complete — no objects found for this source."
+      );
     },
+    onError: (err: Error) =>
+      toast.error(`Discovery failed: ${err.message || "Unknown error"}`),
   });
 
   const rotateCredsMut = useMutation({
@@ -179,7 +186,7 @@ export default function SourceDetailPage() {
         actions={
           <div className="flex flex-wrap gap-2">
             <Link
-              href={`/sources/${id}/discovery`}
+              href={`/inventory/${id}`}
               className={cn(buttonVariants({ variant: "outline" }))}
             >
               Discovery inventory
