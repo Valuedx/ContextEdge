@@ -54,6 +54,29 @@ function EvidenceActions({ evidenceId }: { evidenceId: string; title: string }) 
 
 const columns: ColumnDef<EvidenceItem>[] = [
   {
+    id: "select",
+    header: ({ table }) => (
+      <input
+        type="checkbox"
+        className="h-4 w-4 rounded border-black/20 bg-white/50 text-primary focus:ring-primary dark:border-white/20 dark:bg-white/5"
+        checked={table.getIsAllPageRowsSelected()}
+        onChange={(e) => table.toggleAllPageRowsSelected(!!e.target.checked)}
+        aria-label="Select all"
+      />
+    ),
+    cell: ({ row }) => (
+      <input
+        type="checkbox"
+        className="h-4 w-4 rounded border-black/20 bg-white/50 text-primary focus:ring-primary dark:border-white/20 dark:bg-white/5"
+        checked={row.getIsSelected()}
+        onChange={(e) => row.toggleSelected(!!e.target.checked)}
+        aria-label="Select row"
+      />
+    ),
+    enableSorting: false,
+    enableHiding: false,
+  },
+  {
     accessorKey: "title",
     header: "Title",
     cell: ({ row }) => (
@@ -94,7 +117,21 @@ const columns: ColumnDef<EvidenceItem>[] = [
 export default function EvidencePage() {
   const [search, setSearch] = useState("");
   const [appliedQuery, setAppliedQuery] = useState("");
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const pg = usePagination(50);
+  const queryClient = useQueryClient();
+
+  const bulkDeleteMutation = useMutation({
+    mutationFn: (ids: string[]) => api.post("/evidence/bulk-delete", { ids }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["evidence"] });
+      toast.success(`${selectedIds.length} records deleted`);
+      setSelectedIds([]);
+    },
+    onError: (err: Error) => {
+      toast.error(err.message || "Bulk delete failed");
+    },
+  });
 
   const { data = [], isLoading } = useQuery<EvidenceItem[]>({
     queryKey: ["evidence", appliedQuery, pg.page],
@@ -138,15 +175,57 @@ export default function EvidencePage() {
               pg.reset();
             }}
           >
-            Clear
+            Clear Search
           </Button>
+
+          <Button
+            type="button"
+            variant="destructive"
+            onClick={() => {
+              const confirmText = prompt("Type 'PURGE' to permanently delete ALL evidence records:");
+              if (confirmText === "PURGE") {
+                api.delete("/evidence/purge")
+                  .then(() => {
+                    toast.success("All evidence records purged");
+                    queryClient.invalidateQueries({ queryKey: ["evidence"] });
+                  })
+                  .catch((err) => toast.error(err.message || "Purge failed"));
+              }
+            }}
+          >
+            Purge All
+          </Button>
+
+          {selectedIds.length > 0 && (
+            <Button
+              type="button"
+              variant="destructive"
+              onClick={() => {
+                if (confirm(`Delete ${selectedIds.length} selected records?`)) {
+                  bulkDeleteMutation.mutate(selectedIds);
+                }
+              }}
+              disabled={bulkDeleteMutation.isPending}
+            >
+              {bulkDeleteMutation.isPending ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : (
+                <Trash2 className="mr-2 h-4 w-4" />
+              )}
+              Delete Selected
+            </Button>
+          )}
         </div>
       </div>
       {isLoading ? (
-        <DataTableSkeleton columns={5} />
+        <DataTableSkeleton columns={6} />
       ) : (
         <>
-          <DataTable columns={columns} data={data} />
+          <DataTable 
+            columns={columns} 
+            data={data} 
+            onSelectionChange={setSelectedIds}
+          />
           <PaginationControls
             page={pg.page}
             pageSize={pg.pageSize}

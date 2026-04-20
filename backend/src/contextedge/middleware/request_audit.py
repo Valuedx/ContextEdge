@@ -26,7 +26,12 @@ class RequestAuditMiddleware(BaseHTTPMiddleware):
     """Log mutating requests to structlog and insert a row into `audit_logs` when tenant is known."""
 
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
-        response = await call_next(request)
+        try:
+            response = await call_next(request)
+        except Exception:
+            # Re-raise so global exception handlers can catch it
+            # CORSMiddleware will still be able to add headers if this bubbles up correctly
+            raise
 
         if request.method not in ("POST", "PATCH", "PUT", "DELETE"):
             return response
@@ -51,6 +56,7 @@ class RequestAuditMiddleware(BaseHTTPMiddleware):
         )
 
         if tenant_id and response.status_code < 400:
+            import anyio
             try:
                 tid = uuid.UUID(str(tenant_id))
                 aid = uuid.UUID(str(user_id)) if user_id else None
@@ -64,30 +70,39 @@ class RequestAuditMiddleware(BaseHTTPMiddleware):
                         "causation_id": getattr(request.state, "causation_id", None),
                     }
                 )
-                with _engine().connect() as conn:
-                    conn.execute(
-                        text(
-                            """
-                            INSERT INTO audit_logs (
-                              id, tenant_id, actor_id, actor_email, action,
-                              resource_type, resource_id, details, ip_address, timestamp
-                            ) VALUES (
-                              :id, :tenant_id, :actor_id, :actor_email, :action,
-                              'http_request', NULL, CAST(:details AS JSONB), :ip, NOW()
+                
+                def _do_insert():
+                    try:
+                        with _engine().connect() as conn:
+                            conn.execute(
+                                text(
+                                    """
+                                    INSERT INTO audit_logs (
+                                      id, tenant_id, actor_id, actor_email, action,
+                                      resource_type, resource_id, details, ip_address, timestamp
+                                    ) VALUES (
+                                      :id, :tenant_id, :actor_id, :actor_email, :action,
+                                      'http_request', NULL, CAST(:details AS JSONB), :ip, NOW()
+                                    )
+                                    """
+                                ),
+                                {
+                                    "id": str(uuid.uuid4()),
+                                    "tenant_id": str(tid),
+                                    "actor_id": str(aid) if aid else None,
+                                    "actor_email": email,
+                                    "action": action[:100],
+                                    "details": details,
+                                    "ip": request.client.host if request.client else None,
+                                },
                             )
-                            """
-                        ),
-                        {
-                            "id": str(uuid.uuid4()),
-                            "tenant_id": str(tid),
-                            "actor_id": str(aid) if aid else None,
-                            "actor_email": email,
-                            "action": action[:100],
-                            "details": details,
-                            "ip": request.client.host if request.client else None,
-                        },
-                    )
-                    conn.commit()
+                            conn.commit()
+                    except Exception as e:
+                        logger.warning("audit_db_error", error=str(e))
+                
+                # Offload sync DB call to thread
+                await anyio.to_thread.run_sync(_do_insert)
+
             except Exception as exc:
                 logger.warning("audit_log.insert_failed", error=str(exc))
 

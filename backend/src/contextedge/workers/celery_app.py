@@ -6,6 +6,22 @@ celery_app = Celery(
     "contextedge",
     broker=settings.celery_broker_url,
     backend=settings.celery_result_backend,
+    include=[
+        "contextedge.workers.sync_tasks",
+        "contextedge.workers.hydration_tasks",
+        "contextedge.workers.extraction_tasks",
+        "contextedge.workers.artifact_tasks",
+        "contextedge.workers.correlation_tasks",
+        "contextedge.workers.pattern_tasks",
+        "contextedge.workers.evaluation_tasks",
+        # Merged-in modules from ForAEOpsSupport. The baseline task has an
+        # explicit name="extraction.compute_evidence_baseline" so the short-name
+        # routing below catches it. The review-queue prefetch task uses its
+        # default module-path name and falls into the `contextedge.workers.*`
+        # fallback route → default queue, which is fine for light prefetch work.
+        "contextedge.workers.evidence_baseline_tasks",
+        "contextedge.workers.review_queue_tasks",
+    ],
 )
 
 celery_app.conf.update(
@@ -18,41 +34,30 @@ celery_app.conf.update(
     task_acks_late=True,
     worker_prefetch_multiplier=1,
     task_routes={
-        "contextedge.workers.sync_tasks.*": {"queue": "sync"},
-        "contextedge.workers.hydration_tasks.*": {"queue": "hydration"},
-        "contextedge.workers.extraction_tasks.*": {"queue": "extraction"},
-        "contextedge.workers.artifact_tasks.*": {"queue": "extraction"},
-        "contextedge.workers.correlation_tasks.*": {"queue": "extraction"},
-        "contextedge.workers.evidence_baseline_tasks.*": {"queue": "extraction"},
-        "contextedge.workers.pattern_tasks.*": {"queue": "pattern"},
-        "contextedge.workers.evaluation_tasks.*": {"queue": "evaluation"},
+        "sync.*": {"queue": "sync"},
+        "hydration.*": {"queue": "hydration"},
+        "extraction.*": {"queue": "extraction"},
+        "artifact.*": {"queue": "extraction"},
+        "pattern.*": {"queue": "pattern"},
+        "evaluation.*": {"queue": "evaluation"},
+        # Fallback for any tasks still using full module paths
+        "contextedge.workers.*": {"queue": "default"},
     },
     task_default_queue="default",
     beat_schedule={
         "detect-drift-every-6h": {
-            "task": "contextedge.workers.evaluation_tasks.detect_drift",
+            "task": "evaluation.detect_drift",
             "schedule": 21600.0,
             "args": ("all",),
         },
         "scan-contradictions-every-12h": {
-            "task": "contextedge.workers.evaluation_tasks.scan_contradictions_task",
+            "task": "evaluation.scan_contradictions_task",
             "schedule": 43200.0,
             "args": ("all",),
         },
+        "trigger-syncs-every-15m": {
+            "task": "sync.trigger_scheduled_syncs",
+            "schedule": 900.0,
+        },
     },
-)
-
-celery_app.autodiscover_tasks(
-    [
-        "contextedge.workers.sync_tasks",
-        "contextedge.workers.hydration_tasks",
-        "contextedge.workers.extraction_tasks",
-        "contextedge.workers.artifact_tasks",
-        "contextedge.workers.correlation_tasks",
-        "contextedge.workers.pattern_tasks",
-        "contextedge.workers.evaluation_tasks",
-        "contextedge.workers.review_queue_tasks",
-        "contextedge.workers.evidence_baseline_tasks",
-    ],
-    force=True,
 )

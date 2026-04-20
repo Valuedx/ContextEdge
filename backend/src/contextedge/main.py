@@ -35,14 +35,16 @@ def _cors_origins() -> list[str]:
             if normalized and normalized not in origins:
                 origins.append(normalized)
 
-    return origins or ["http://localhost:3000"]
+    return origins or ["http://localhost:3000", "http://127.0.0.1:3000"]
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    import anyio
     app.state.redis = aioredis.from_url(settings.redis_url, decode_responses=True)
     try:
-        ensure_bucket()
+        # ensure_bucket is synchronous (boto3), offload to thread to prevent event loop blocking
+        await anyio.to_thread.run_sync(ensure_bucket)
         logger.info("object_store_bucket_ready", bucket=settings.minio_bucket)
     except Exception as exc:
         logger.warning("object_store_bucket_check_failed", error=str(exc))
@@ -74,6 +76,15 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    @app.exception_handler(Exception)
+    async def global_exception_handler(request, exc):
+        logger.error("unhandled_exception", error=str(exc), path=request.url.path)
+        from fastapi.responses import JSONResponse
+        return JSONResponse(
+            status_code=500,
+            content={"detail": str(exc)},
+        )
 
     Instrumentator().instrument(app).expose(app)
 

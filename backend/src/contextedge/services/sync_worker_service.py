@@ -477,14 +477,8 @@ async def run_incremental_job(
             .limit(1)
         )
     ).scalar_one_or_none()
-    if not ck_row:
-        run.status = "failed"
-        run.errors = {"message": "no_checkpoint_for_incremental"}
-        run.completed_at = datetime.now(UTC)
-        await db.flush()
-        return {"run_id": str(run.id), "status": run.status}
-
-    ck = Checkpoint(data=ck_row.checkpoint_data, captured_at=ck_row.captured_at)
+    
+    ck = Checkpoint(data=ck_row.checkpoint_data, captured_at=ck_row.captured_at) if ck_row else None
 
     try:
         result = await connector.fetch_changes(so.external_id, so.object_type, ck)
@@ -503,12 +497,13 @@ async def run_incremental_job(
             if (raw_created or raw_deduped)
             else None
         )
-        db.add(
-            SyncCheckpoint(
-                source_object_id=so.id,
-                checkpoint_data=result.new_checkpoint.data,
+        if result.new_checkpoint:
+            db.add(
+                SyncCheckpoint(
+                    source_object_id=so.id,
+                    checkpoint_data=result.new_checkpoint.data,
+                )
             )
-        )
         so.last_checkpoint_at = datetime.now(UTC)
         so.last_successful_sync_at = datetime.now(UTC)
     except Exception as exc:

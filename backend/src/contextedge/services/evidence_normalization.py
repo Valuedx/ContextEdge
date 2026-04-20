@@ -13,10 +13,34 @@ from contextedge.models.evidence import EvidenceItem, Thread
 
 def evidence_title_from_payload(payload: dict | None) -> str:
     p = payload or {}
-    return (
+    # 1. Try common title/subject fields
+    title = (
         p.get("title") or p.get("subject") or p.get("summary")
-        or p.get("short_description") or "Untitled"
+        or p.get("short_description") or p.get("subject_line")
     )
+    if title and isinstance(title, str) and title.strip():
+        return title.strip()
+
+    # 2. Try common name/filename fields
+    name = (
+        p.get("filename") or p.get("file_name") or p.get("name")
+        or p.get("display_name") or p.get("key")
+    )
+    if name and isinstance(name, str) and name.strip():
+        return name.strip()
+
+    # 3. Fallback to a snippet of the body
+    body = (p.get("body") or p.get("body_text") or p.get("description")
+            or p.get("text") or p.get("snippet"))
+    
+    if body and isinstance(body, str) and body.strip():
+        # Take first 60 chars, clean up newlines
+        snippet = " ".join(body.split())[:60].strip()
+        if snippet:
+            return f"{snippet}..." if len(body) > 60 else snippet
+
+    # 4. Global generic fallback
+    return "Untitled Evidence"
 
 
 def evidence_body_from_payload(payload: dict | None) -> str:

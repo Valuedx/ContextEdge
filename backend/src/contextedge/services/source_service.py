@@ -12,9 +12,22 @@ from contextedge.models.source import Source, SourceCredential, SourceObject, Sy
 
 def _get_fernet() -> Fernet:
     key = settings.fernet_key
-    if not key:
+    if not key or "change-me" in key:
+        import structlog
+        logger = structlog.get_logger()
+        logger.warning("invalid_fernet_key_using_transient", reason="placeholder_or_empty")
+        # Generate a transient key for this process session if none exists
+        # This is dangerous for persistence but prevents crashes during dev
         key = Fernet.generate_key().decode()
-    return Fernet(key.encode() if isinstance(key, str) else key)
+
+    try:
+        return Fernet(key.encode() if isinstance(key, str) else key)
+    except Exception as exc:
+        import structlog
+        logger = structlog.get_logger()
+        logger.error("fernet_initialization_failed", error=str(exc))
+        # Fallback to a one-time key to avoid crashing the whole API
+        return Fernet(Fernet.generate_key())
 
 
 async def encrypt_credentials(creds: dict) -> bytes:
@@ -51,19 +64,32 @@ async def discover_source_objects(
     if not cred:
         raise ValueError("No active credentials for source")
 
-    decrypted = await decrypt_credentials(cred.encrypted_credentials)
-    connector = get_connector(source.source_type, source.config, decrypted)
-    discovered = await connector.discover_objects()
+    try:
+        decrypted = await decrypt_credentials(cred.encrypted_credentials)
+        connector = get_connector(source.source_type, source.config, decrypted)
+        discovered = await connector.discover_objects()
+        
+        # If we got here, connection works
+        source.auth_status = "connected"
+    except Exception as exc:
+        source.auth_status = "failed"
+        await db.flush()
+        raise exc
 
-    created_objects = []
+    new_objects = []
     for obj in discovered:
-        existing = await db.execute(
+        existing_result = await db.execute(
             select(SourceObject).where(
                 SourceObject.source_id == source.id,
                 SourceObject.external_id == obj.external_id,
             )
         )
-        if existing.scalar_one_or_none():
+        existing_obj = existing_result.scalar_one_or_none()
+        if existing_obj:
+            # Update display_name and metadata in case they changed
+            existing_obj.display_name = obj.display_name
+            if obj.metadata:
+                existing_obj.metadata_extra = obj.metadata
             continue
 
         so = SourceObject(
@@ -78,11 +104,16 @@ async def discover_source_objects(
             metadata_extra=obj.metadata,
         )
         db.add(so)
-        created_objects.append(so)
+        new_objects.append(so)
 
     await db.flush()
     source.discovery_status = "completed"
-    return created_objects
+
+    # Return ALL objects for this source (existing + new) so callers get the full list
+    all_result = await db.execute(
+        select(SourceObject).where(SourceObject.source_id == source.id)
+    )
+    return list(all_result.scalars().all())
 
 
 async def create_sync_run(

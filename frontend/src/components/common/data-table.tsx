@@ -27,6 +27,7 @@ interface DataTableProps<TData, TValue> {
   totalCount?: number;
   page?: number;
   onPageChange?: (page: number) => void;
+  onSelectionChange?: (selectedIds: string[]) => void;
 }
 
 export function DataTable<TData, TValue>({
@@ -36,8 +37,10 @@ export function DataTable<TData, TValue>({
   totalCount,
   page = 0,
   onPageChange,
+  onSelectionChange,
 }: DataTableProps<TData, TValue>) {
   const [sorting, setSorting] = useState<SortingState>([]);
+  const [rowSelection, setRowSelection] = useState({});
 
   // eslint-disable-next-line react-hooks/incompatible-library
   const table = useReactTable({
@@ -46,7 +49,17 @@ export function DataTable<TData, TValue>({
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
     onSortingChange: setSorting,
-    state: { sorting },
+    onRowSelectionChange: (updater) => {
+        const next = typeof updater === 'function' ? updater(rowSelection) : updater;
+        setRowSelection(next);
+        if (onSelectionChange) {
+            // Get the IDs from the selected rows. 
+            // This assumes TData has an 'id' property.
+            const selectedRows = Object.keys(next).map(idx => (data[parseInt(idx)] as any)?.id).filter(Boolean);
+            onSelectionChange(selectedRows);
+        }
+    },
+    state: { sorting, rowSelection },
   });
 
   const totalPages = totalCount ? Math.ceil(totalCount / pageSize) : undefined;

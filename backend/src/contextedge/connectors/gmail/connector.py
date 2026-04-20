@@ -32,24 +32,37 @@ class GmailConnector(BaseConnector):
         super().__init__(source_config, credentials)
         self._access_token: str | None = None
 
-    async def _get_access_token(self, user_email: str) -> str:
-        """Get delegated access token for the target mailbox.
-
-        In production, this uses google-auth with service account JWT
-        and domain-wide delegation. Simplified here for structure.
+    async def _get_access_token(self, user_email: str | None = None) -> str:
+        """Get access token for Gmail API.
+        
+        Supports both:
+        1. Service Account with Domain-Wide Delegation (requires user_email to impersonate)
+        2. Personal OAuth2 Token (Authorized User flow, user_email ignored)
         """
         if self._access_token:
             return self._access_token
 
         from google.oauth2 import service_account  # type: ignore[import-untyped]
+        from google.oauth2.credentials import Credentials  # type: ignore[import-untyped]
         from google.auth.transport.requests import Request  # type: ignore[import-untyped]
 
-        creds = service_account.Credentials.from_service_account_info(
-            self.credentials.get("service_account_json", {}),
-            scopes=["https://www.googleapis.com/auth/gmail.readonly"],
-            subject=user_email,
-        )
-        creds.refresh(Request())
+        scopes = ["https://www.googleapis.com/auth/gmail.readonly"]
+
+        # 1. Try Personal OAuth2 Token (token.json)
+        user_info = self.credentials.get("user_oauth2_info")
+        if user_info:
+            creds = Credentials.from_authorized_user_info(user_info, scopes=scopes)
+        else:
+            # 2. Fallback to Service Account
+            creds = service_account.Credentials.from_service_account_info(
+                self.credentials.get("service_account_json", {}),
+                scopes=scopes,
+                subject=user_email,
+            )
+
+        if not creds.valid:
+            creds.refresh(Request())
+        
         self._access_token = creds.token
         return self._access_token
 
@@ -64,18 +77,65 @@ class GmailConnector(BaseConnector):
             resp.raise_for_status()
             return resp.json()
 
+    def _get_mailbox_list(self) -> list[str]:
+        """Return a normalised list of mailbox emails from config.
+
+        Handles both the singular key (mailbox_email) that the frontend
+        sends and the plural key (mailbox_emails) for backwards compatibility.
+        """
+        # Prefer the plural form if present
+        plural = self.source_config.get("mailbox_emails")
+        if plural:
+            if isinstance(plural, list):
+                return [e for e in plural if e]
+            return [str(plural)]
+
+        # Fall back to the singular form sent by the Add Source dialog
+        singular = self.source_config.get("mailbox_email")
+        if singular:
+            return [str(singular)]
+
+        return []
+
+    def _get_relevance_keywords(self) -> list[str]:
+        """Get keywords from config or use defaults."""
+        keywords = self.source_config.get("relevance_keywords")
+        if not keywords:
+            return []
+        if isinstance(keywords, str):
+            return [k.strip() for k in keywords.split(",") if k.strip()]
+        return [str(k).strip() for k in keywords if str(k).strip()]
+
+    def _matches_keywords(self, text: str, keywords: list[str]) -> bool:
+        """Check if any keyword is present in the text."""
+        if not keywords:
+            return True
+        text_lower = text.lower()
+        return any(kw.lower() in text_lower for kw in keywords)
+
     async def validate_credentials(self) -> CredentialStatus:
         try:
-            user_email = self.source_config.get("mailbox_email", "")
-            if not user_email:
+            mailboxes = self._get_mailbox_list()
+            # For personal accounts, we can validate using "me" profile
+            if not mailboxes and self.credentials.get("user_oauth2_info"):
+                await self._get_access_token()
+                return CredentialStatus(valid=True, message="Personal Gmail access verified")
+            
+            if not mailboxes:
                 return CredentialStatus(valid=False, message="No mailbox_email configured")
-            await self._get_access_token(user_email)
+            
+            await self._get_access_token(mailboxes[0])
             return CredentialStatus(valid=True, message="Gmail API access verified")
         except Exception as e:
             return CredentialStatus(valid=False, message=str(e))
 
     async def discover_objects(self) -> list[DiscoveredObject]:
-        mailboxes = self.source_config.get("mailbox_emails", [])
+        mailboxes = self._get_mailbox_list()
+        
+        # For personal OAuth2, if no mailbox is configured, we discover the "me" profile
+        if not mailboxes and self.credentials.get("user_oauth2_info"):
+            mailboxes = ["me"]
+
         objects: list[DiscoveredObject] = []
         for email in mailboxes:
             try:
@@ -92,12 +152,13 @@ class GmailConnector(BaseConnector):
                         },
                     )
                 )
-            except Exception:
+            except Exception as exc:
                 objects.append(
                     DiscoveredObject(
                         external_id=email,
                         object_type="gmail_mailbox",
                         display_name=f"{email} (access error)",
+                        metadata={"error": str(exc)},
                     )
                 )
         return objects
@@ -114,7 +175,12 @@ class GmailConnector(BaseConnector):
 
         after_epoch = int(window.start.timestamp())
         before_epoch = int(window.end.timestamp())
+        
+        keywords = self._get_relevance_keywords()
         query = f"after:{after_epoch} before:{before_epoch}"
+        if keywords:
+            kw_query = " OR ".join(keywords)
+            query += f" ({kw_query})"
 
         params: dict[str, str] = {"q": query, "maxResults": "50"}
         if checkpoint and checkpoint.data.get("page_token"):
@@ -177,7 +243,7 @@ class GmailConnector(BaseConnector):
         checkpoint: Checkpoint,
     ) -> ChangeResult:
         user_email = object_id
-        history_id = checkpoint.data.get("history_id")
+        history_id = checkpoint.data.get("history_id") if checkpoint else None
         events: list[IngestionEvent] = []
 
         if not history_id:
@@ -200,7 +266,29 @@ class GmailConnector(BaseConnector):
                 if tid:
                     changed_thread_ids.add(tid)
 
+        keywords = self._get_relevance_keywords()
         for tid in changed_thread_ids:
+            # For incremental sync, we check metadata first if keywords are set
+            if keywords:
+                try:
+                    thread_meta = await self._gmail_get(
+                        f"/users/{user_email}/threads/{tid}",
+                        user_email,
+                        {"format": "metadata", "metadataHeaders": "Subject"},
+                    )
+                    snippet = thread_meta.get("snippet", "")
+                    subject = ""
+                    for h in thread_meta.get("messages", [{}])[0].get("payload", {}).get("headers", []):
+                        if h["name"].lower() == "subject":
+                            subject = h["value"]
+                    
+                    if not self._matches_keywords(f"{subject} {snippet}", keywords):
+                        continue
+                except Exception:
+                    # If we can't fetch metadata, conservative approach is to ingest or skip
+                    # Here we skip to avoid noise if filtering is requested
+                    continue
+
             events.append(
                 IngestionEvent(
                     external_id=tid,

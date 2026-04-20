@@ -59,4 +59,26 @@ async def retry_sync_run(run_id: UUID, db: DbSession, user: AuthUser):
         run_backfill.delay(str(run.source_id), str(run.source_object_id), str(user.tenant_id))
     else:
         run_incremental_sync.delay(str(run.source_id), str(run.source_object_id), str(user.tenant_id))
-    return {"status": "retry_queued", "dispatched_as": run.run_type or "incremental"}
+@router.delete("/purge", status_code=204)
+async def purge_sync_runs(db: DbSession, user: AuthUser):
+    """Clear all sync run logs for the tenant."""
+    user.require_role("domain_admin")
+    from sqlalchemy import delete
+    await db.execute(delete(SyncRun).where(SyncRun.tenant_id == user.tenant_id))
+    await db.commit()
+    return None
+
+
+@router.delete("/{run_id}", status_code=204)
+async def delete_sync_run(run_id: UUID, db: DbSession, user: AuthUser):
+    """Delete a single sync run log."""
+    user.require_role("domain_admin")
+    result = await db.execute(
+        select(SyncRun).where(SyncRun.id == run_id, SyncRun.tenant_id == user.tenant_id)
+    )
+    run = result.scalar_one_or_none()
+    if not run:
+        raise HTTPException(status_code=404, detail="Sync run not found")
+    await db.delete(run)
+    await db.commit()
+    return None

@@ -136,7 +136,12 @@ async def _hydrate(db: AsyncSession, thread_id: str, source_id: str, tenant_id: 
     }
 
 
-@celery_app.task(bind=True, max_retries=3, default_retry_delay=60)
+@celery_app.task(
+    bind=True,
+    max_retries=3,
+    default_retry_delay=60,
+    name="hydration.hydrate_thread",
+)
 def hydrate_thread(self, thread_id: str, source_id: str, tenant_id: str):
     tid = uuid.UUID(tenant_id)
 

@@ -251,12 +251,14 @@ export default function PatternDetailPage() {
               
               {pattern.evidence_summary && (
                  <div className="mt-4 pt-4 border-t border-slate-800 grid grid-cols-2 gap-2">
-                    {Object.entries(pattern.evidence_summary).map(([key, val]) => (
-                      <div key={key} className="bg-slate-950/50 p-2 rounded border border-slate-800/50 flex flex-col">
-                         <span className="text-[10px] text-slate-500 uppercase tracking-tighter font-semibold">{key.replace("_", " ")}</span>
-                         <span className="text-lg font-bold text-slate-300">{val}</span>
-                      </div>
-                    ))}
+                    {Object.entries(pattern.evidence_summary)
+                      .filter(([key, val]) => key !== "memory_promotion" && (typeof val === "string" || typeof val === "number"))
+                      .map(([key, val]) => (
+                        <div key={key} className="bg-slate-950/50 p-2 rounded border border-slate-800/50 flex flex-col">
+                           <span className="text-[10px] text-slate-500 uppercase tracking-tighter font-semibold">{key.replace("_", " ")}</span>
+                           <span className="text-lg font-bold text-slate-300">{String(val)}</span>
+                        </div>
+                      ))}
                  </div>
               )}
             </CardContent>

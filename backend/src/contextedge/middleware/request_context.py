@@ -140,9 +140,13 @@ class TenantContextMiddleware(BaseHTTPMiddleware):
                 roles=tuple(request.state.roles or []),
             )
 
-            response = await call_next(request)
-            response.headers.setdefault("X-Request-ID", str(request_id))
-            response.headers.setdefault("X-Correlation-ID", str(correlation_id))
-            return response
+            try:
+                response = await call_next(request)
+                response.headers.setdefault("X-Request-ID", str(request_id))
+                response.headers.setdefault("X-Correlation-ID", str(correlation_id))
+                return response
+            except Exception:
+                # Let global exception handlers handle it, but don't crash the middleware
+                raise
         finally:
             reset_request_context(token)

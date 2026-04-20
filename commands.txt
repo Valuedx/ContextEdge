@@ -1,3 +1,16 @@
+Service acount-google cloud
+password-Dummy@2026
+
+Email
+saraswati27@zinc-prism-493509-q4.iam.gserviceaccount.com
+
+Unique ID
+
+109918022835271273397
+===========================================================================
+
+=========================================================================================
+
 WSL----->
 cd /mnt/d/ContextEdge/ContextEdge/backend
 source pvenv/bin/activate
@@ -15,7 +28,12 @@ npm run dev
 **********Start the Celery worker********
 
 cd backend
-python dev.py worker
+python dev.py worker 
+   
+           OR in PS--> 
+
+$env:PYTHONPATH="src"
+celery -A contextedge.workers.celery_app worker --loglevel=info -P solo -Q pattern,default
 
 
 *************Start Celery beat**************
@@ -28,12 +46,6 @@ python dev.py beat
 cd minio
 minio.exe server data --console-address ":9001"
 
-give me prompt--- now you have manually executed commands here for every step. 
-but i want to do it from frontend to show working pipeline in demo.   
- so at first step ---Step 1: Ingestion (Data Collection)   
-to fetch dat from local directory show browse option to select local directory or folder. 
-Step 2: Evidence → Threads, at page --http://localhost:3000/evidence  , give me option or command button to create Evidence and show on frontend , at Step 3: Thread → Episode, http://localhost:3000/episodes give me command button , 
-create and fetch episodes and show on webpage .
 
 MINIO_ROOT_USER=contextedge
 MINIO_ROOT_PASSWORD=contextedge-secret

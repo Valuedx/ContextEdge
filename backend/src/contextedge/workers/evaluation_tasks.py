@@ -11,7 +11,12 @@ from contextedge.workers.celery_app import celery_app
 logger = structlog.get_logger()
 
 
-@celery_app.task(bind=True, max_retries=2, default_retry_delay=120)
+@celery_app.task(
+    bind=True,
+    max_retries=2,
+    default_retry_delay=120,
+    name="evaluation.run_evaluation",
+)
 def run_evaluation(self, evaluation_run_id: str, tenant_id: str):
     """Run evaluation replay against historical dataset."""
 
@@ -29,7 +34,12 @@ def run_evaluation(self, evaluation_run_id: str, tenant_id: str):
         raise self.retry(exc=exc) from exc
 
 
-@celery_app.task(bind=True, max_retries=1, default_retry_delay=300)
+@celery_app.task(
+    bind=True,
+    max_retries=1,
+    default_retry_delay=300,
+    name="evaluation.detect_drift",
+)
 def detect_drift(self, tenant_id: str):
     """Check approved playbooks for drift, staleness, and contradictions.
 
@@ -71,7 +81,12 @@ def detect_drift(self, tenant_id: str):
         raise self.retry(exc=exc) from exc
 
 
-@celery_app.task(bind=True, max_retries=1, default_retry_delay=300)
+@celery_app.task(
+    bind=True,
+    max_retries=1,
+    default_retry_delay=300,
+    name="evaluation.scan_contradictions_task",
+)
 def scan_contradictions_task(self, tenant_id: str):
     """Scan approved playbooks against KB evidence for contradictions."""
     from sqlalchemy import select

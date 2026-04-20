@@ -31,7 +31,11 @@ class Playbook(Base, TenantScopedMixin):
     stable_key: Mapped[str] = mapped_column(String(255), nullable=False, unique=True, index=True)
     title: Mapped[str] = mapped_column(String(500), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
-    search_tsvector: Mapped[object | None] = mapped_column(TSVECTOR, nullable=True)
+    search_tsvector: Mapped[object | None] = mapped_column(
+        TSVECTOR,
+        server_default=func.now(),
+        deferred=True,
+    )
     lifecycle_state: Mapped[str] = mapped_column(
         String(30),
         default="candidate",

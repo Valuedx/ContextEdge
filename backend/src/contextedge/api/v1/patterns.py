@@ -13,6 +13,7 @@ from pydantic import BaseModel
 
 router = APIRouter()
 logger = structlog.get_logger()
+from contextedge.workers.pattern_tasks import cluster_episodes
 
 
 @router.get("", response_model=list[PatternResponse])
@@ -134,6 +135,41 @@ async def delete_pattern_evidence_link(
     return None
 
 
+@router.delete("/{pattern_id}", status_code=204)
+async def delete_pattern(
+    pattern_id: UUID,
+    db: DbSession,
+    user: AuthUser,
+):
+    """Delete a pattern and its associated evidence links."""
+    user.require_role("knowledge_manager")
+    
+    # 1. Fetch pattern to check ownership
+    pattern = (
+        await db.execute(
+            select(Pattern).where(
+                Pattern.id == pattern_id, 
+                Pattern.tenant_id == user.tenant_id
+            )
+        )
+    ).scalar_one_or_none()
+    
+    if not pattern:
+        raise HTTPException(status_code=404, detail="Pattern not found")
+        
+    # 2. Cleanup associated evidence links manually if not using SQL-level CASCADE
+    from sqlalchemy import delete
+    await db.execute(
+        delete(PatternEvidenceLink).where(PatternEvidenceLink.pattern_id == pattern_id)
+    )
+    
+    # 3. Delete the pattern itself
+    await db.delete(pattern)
+    await db.commit()
+    
+    return None
+
+
 class PatternDiscoverRequest(BaseModel):
     episode_ids: list[UUID]
 
@@ -223,3 +259,33 @@ async def discover_pattern(
         )
         await db.rollback()
         raise HTTPException(status_code=500, detail="Pattern synthesis failed")
+@router.post("/cluster", status_code=202)
+async def trigger_episode_clustering(
+    db: DbSession,
+    user: AuthUser,
+    domain_id: UUID | None = Query(None, description="Scope clustering to a specific domain"),
+):
+    """Trigger background clustering of approved episodes into patterns."""
+    user.require_role("domain_admin")
+
+    if not domain_id:
+        # Fallback: Find the first available domain for the tenant
+        from contextedge.models.tenant import Domain
+        res = await db.execute(
+            select(Domain.id).where(Domain.tenant_id == user.tenant_id).limit(1)
+        )
+        domain_id = res.scalar_one_or_none()
+
+    if not domain_id:
+        raise HTTPException(
+            status_code=400,
+            detail="No domain found to scope pattern clustering."
+        )
+
+    task = cluster_episodes.delay(str(domain_id), str(user.tenant_id))
+
+    return {
+        "status": "clustering_queued",
+        "domain_id": str(domain_id),
+        "task_id": task.id
+    }
