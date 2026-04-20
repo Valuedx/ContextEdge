@@ -17,6 +17,7 @@ node_modules/
 out/
 
 minio/minio.exe
+minio/data/
 
 # Environment
 .env
@@ -40,3 +41,12 @@ Thumbs.db
 .coverage
 htmlcov/
 .pytest_cache/
+
+# Local scratch / debug scripts — not committed artefacts
+backend/scratch/
+backend/check_links.py
+backend/cleanup_pattern.py
+backend/package-lock.json
+scratch/
+scratch_db_check.py
+diag_episodes.py
