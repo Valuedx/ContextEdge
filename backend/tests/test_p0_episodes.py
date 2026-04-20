@@ -13,7 +13,16 @@ from contextedge.api.v1 import episodes
 async def test_reconstruct_dispatches_celery():
     evidence_id = uuid4()
     user = make_user(roles=["domain_admin"])
-    db = SimpleNamespace(commit=AsyncMock())
+
+    # Handler now does a db.execute() lookup to derive a fallback domain_id
+    # when the request body doesn't carry one. Mock execute() → scalar_one_or_none = None
+    # so the handler's "no domain" branch runs and delay receives domain_id=None.
+    scalar_result = Mock()
+    scalar_result.scalar_one_or_none = Mock(return_value=None)
+    db = SimpleNamespace(
+        commit=AsyncMock(),
+        execute=AsyncMock(return_value=scalar_result),
+    )
     task = SimpleNamespace(id="task-123")
 
     with patch.object(episodes, "log_audit_event", AsyncMock()) as audit_mock:
@@ -27,14 +36,20 @@ async def test_reconstruct_dispatches_celery():
                 user=user,
             )
 
+    # Handler now also returns domain_id in the result dict.
     assert result == {
         "status": "reconstruction_queued",
         "evidence_count": 1,
+        "domain_id": None,
         "task_id": "task-123",
     }
     audit_mock.assert_awaited_once()
     db.commit.assert_awaited_once()
-    delay_mock.assert_called_once_with(str(evidence_id), str(user.tenant_id))
+    # delay now receives cluster_id (comma-joined ids) instead of the raw id,
+    # plus the tenant and domain_id kwarg.
+    delay_mock.assert_called_once_with(
+        str(evidence_id), str(user.tenant_id), domain_id=None,
+    )
 
 
 @pytest.mark.asyncio

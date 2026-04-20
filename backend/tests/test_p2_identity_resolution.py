@@ -8,6 +8,7 @@ import pytest
 from contextedge.models.episode import EvidenceIdentityLink
 from contextedge.models.episode import Episode
 from contextedge.models.episode import CorrelationEdge
+from contextedge.models.evidence import EvidenceItem
 from contextedge.search.hybrid_ranker import rank_playbooks
 from contextedge.services.correlation_service import correlate_evidence_item
 from contextedge.services.episode_service import create_episodes_from_evidence
@@ -43,7 +44,16 @@ async def test_link_evidence_identities_updates_refs_and_links():
     tenant_id = uuid4()
     evidence_id = uuid4()
     identity_id = uuid4()
-    evidence = SimpleNamespace(id=evidence_id, canonical_entity_refs=None)
+    # Service now passes evidence_item=<this> via ORM relationship; a
+    # SimpleNamespace lacks _sa_instance_state. Use a real EvidenceItem
+    # instance — no DB session required for in-memory construction.
+    evidence = EvidenceItem(
+        id=evidence_id,
+        tenant_id=tenant_id,
+        source_id=uuid4(),
+        evidence_type="message",
+        canonical_entity_refs=None,
+    )
     added = []
     db = SimpleNamespace(
         execute=AsyncMock(return_value=_ScalarsResult([])),

@@ -318,10 +318,16 @@ class TestTitleExtraction:
         assert evidence_title_from_payload({"title": "Meeting notes"}) == "Meeting notes"
 
     def test_fallback_untitled(self):
-        assert evidence_title_from_payload({"body": "just a body"}) == "Untitled"
+        # Title extraction falls back to the body text when no explicit
+        # title/subject/name/summary field is present. This gives evidence
+        # cards a meaningful label instead of every body-only record
+        # collapsing to "Untitled".
+        assert evidence_title_from_payload({"body": "just a body"}) == "just a body"
 
     def test_none_payload(self):
-        assert evidence_title_from_payload(None) == "Untitled"
+        # None payload → "Untitled Evidence" (the only path that still lands
+        # on the hard-coded fallback string).
+        assert evidence_title_from_payload(None) == "Untitled Evidence"
 
     def test_priority_order(self):
         """title > subject > summary > short_description."""
@@ -624,7 +630,7 @@ class TestHydratedMessageSubjectPropagation:
     def test_message_without_subject_gets_body_fallback(self):
         """Messages without subject should fall back to body for title extraction."""
         content = {"body": "Some body text", "from": "Bob", "type": "message"}
-        assert evidence_title_from_payload(content) == "Untitled"
+        assert evidence_title_from_payload(content) == "Some body text"
         assert evidence_body_from_payload(content) == "Some body text"
 
 
@@ -774,7 +780,8 @@ class TestCorrelationEpisodeTrigger:
         with (
             patch(
                 "contextedge.workers.correlation_tasks.run_async",
-                return_value=correlation_result,
+                # Worker now unpacks (result, domain_id) from run_async.
+                return_value=(correlation_result, None),
             ),
             patch(
                 "contextedge.workers.extraction_tasks.reconstruct_episode_task",
@@ -782,7 +789,11 @@ class TestCorrelationEpisodeTrigger:
         ):
             mock_reconstruct.delay = Mock()
             correlate_evidence(evidence_id, tenant_id)
-            mock_reconstruct.delay.assert_called_once_with(evidence_id, tenant_id)
+            # delay() now always receives domain_id kwarg (None when evidence
+            # has no domain set on the row).
+            mock_reconstruct.delay.assert_called_once_with(
+                evidence_id, tenant_id, domain_id=None,
+            )
 
     def test_correlation_without_new_edges_skips_episode_task(self):
         """When correlation creates no new edges, episode reconstruction
@@ -804,7 +815,7 @@ class TestCorrelationEpisodeTrigger:
         with (
             patch(
                 "contextedge.workers.correlation_tasks.run_async",
-                return_value=correlation_result,
+                return_value=(correlation_result, None),
             ),
             patch(
                 "contextedge.workers.extraction_tasks.reconstruct_episode_task",
@@ -823,7 +834,7 @@ class TestCorrelationEpisodeTrigger:
         with (
             patch(
                 "contextedge.workers.correlation_tasks.run_async",
-                return_value=correlation_result,
+                return_value=(correlation_result, None),
             ),
             patch(
                 "contextedge.workers.extraction_tasks.reconstruct_episode_task",

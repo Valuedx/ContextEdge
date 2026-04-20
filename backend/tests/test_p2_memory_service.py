@@ -130,13 +130,34 @@ async def test_create_pattern_from_episodes_promotes_long_term_memory():
     tenant_id = uuid4()
     episode_ids = [uuid4(), uuid4()]
     added = []
+    # Service now (a) calls persist_pattern_enrichment_edges, (b) queries
+    # db.execute(select(Episode)…) to fetch episode entity_refs, then
+    # (c) calls build_episode_graph per episode. Mock each piece so the test
+    # focuses on the memory-promotion contract it originally covered.
+    episodes_result = SimpleNamespace(
+        scalars=lambda: SimpleNamespace(all=lambda: []),
+    )
     db = SimpleNamespace(
         add=lambda obj: added.append(obj),
         flush=AsyncMock(),
         refresh=AsyncMock(),
+        execute=AsyncMock(return_value=episodes_result),
     )
 
-    with patch("contextedge.services.pattern_service.promote_pattern_memory", AsyncMock()) as promote_mock:
+    with (
+        patch(
+            "contextedge.services.pattern_service.persist_pattern_enrichment_edges",
+            AsyncMock(),
+        ),
+        patch(
+            "contextedge.services.pattern_service.build_episode_graph",
+            AsyncMock(),
+        ),
+        patch(
+            "contextedge.services.pattern_service.promote_pattern_memory",
+            AsyncMock(),
+        ) as promote_mock,
+    ):
         pattern = await create_pattern_from_episodes(
             db,
             tenant_id=tenant_id,
