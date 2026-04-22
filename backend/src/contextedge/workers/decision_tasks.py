@@ -1,4 +1,11 @@
-"""Celery tasks for decision pattern mining and confidence calibration."""
+"""Celery tasks for decision pattern mining and confidence calibration.
+
+Both tasks accept the literal string ``"all"`` as ``tenant_id`` to fan
+out across every tenant in the database — matches the pattern used by
+``evaluation.detect_drift`` and ``evaluation.scan_contradictions_task``
+so Celery Beat can schedule them with a single entry instead of one
+per tenant. Explicit task names route them to the ``evaluation`` queue.
+"""
 
 import uuid
 
@@ -6,6 +13,7 @@ import structlog
 from sqlalchemy import select, func as sa_func
 
 from contextedge.models.decision import Decision, DecisionOutcome
+from contextedge.models.tenant import Tenant
 from contextedge.services.event_log_service import append_operational_event
 from contextedge.workers.asyncio_runner import run_async
 from contextedge.workers.celery_app import celery_app
@@ -13,7 +21,17 @@ from contextedge.workers.celery_app import celery_app
 logger = structlog.get_logger()
 
 
-@celery_app.task(bind=True, max_retries=2, default_retry_delay=300)
+async def _list_tenant_ids(db) -> list[uuid.UUID]:
+    result = await db.execute(select(Tenant.id))
+    return [row[0] for row in result.all()]
+
+
+@celery_app.task(
+    bind=True,
+    max_retries=2,
+    default_retry_delay=300,
+    name="evaluation.mine_decision_patterns",
+)
 def mine_decision_patterns(self, tenant_id: str):
     """Scan completed decisions with outcomes to surface recurring patterns.
 
@@ -22,9 +40,7 @@ def mine_decision_patterns(self, tenant_id: str):
     e.g. "restart is ineffective for network share failures".
     """
 
-    async def work(db):
-        tid = uuid.UUID(tenant_id)
-
+    async def _mine_for_tenant(db, tid: uuid.UUID) -> list[dict]:
         stmt = (
             select(
                 Decision.decision_type,
@@ -75,7 +91,28 @@ def mine_decision_patterns(self, tenant_id: str):
                     "insights": insights[:20],
                 },
             )
+        return insights
 
+    async def work(db):
+        if tenant_id == "all":
+            tids = await _list_tenant_ids(db)
+            total = 0
+            for tid in tids:
+                try:
+                    insights = await _mine_for_tenant(db, tid)
+                    total += len(insights)
+                except Exception as exc:
+                    # Keep going — one broken tenant shouldn't kill the
+                    # beat for the rest. The per-tenant failure is logged
+                    # so it's still investigable.
+                    logger.exception(
+                        "decision.pattern_mining_tenant_failed",
+                        tenant_id=str(tid), error=str(exc),
+                    )
+            return {"tenants": len(tids), "insight_count": total}
+
+        tid = uuid.UUID(tenant_id)
+        insights = await _mine_for_tenant(db, tid)
         return {"tenant_id": tenant_id, "insights": insights}
 
     try:
@@ -85,18 +122,23 @@ def mine_decision_patterns(self, tenant_id: str):
         raise self.retry(exc=exc) from exc
 
 
-@celery_app.task(bind=True, max_retries=2, default_retry_delay=300)
+@celery_app.task(
+    bind=True,
+    max_retries=2,
+    default_retry_delay=300,
+    name="evaluation.calibrate_decision_confidence",
+)
 def calibrate_decision_confidence(self, tenant_id: str):
     """Compare decision confidence predictions to actual outcomes.
 
     Produces calibration stats: how well does the confidence score
     predict success? Buckets decisions by confidence range and
-    computes observed success rate per bucket.
+    computes observed success rate per bucket. Emits
+    ``decision.confidence_calibrated`` operational events that the
+    admin dashboard can chart over time.
     """
 
-    async def work(db):
-        tid = uuid.UUID(tenant_id)
-
+    async def _calibrate_for_tenant(db, tid: uuid.UUID) -> list[dict]:
         stmt = (
             select(Decision.confidence, DecisionOutcome.execution_result)
             .join(DecisionOutcome, DecisionOutcome.decision_id == Decision.id)
@@ -144,7 +186,26 @@ def calibrate_decision_confidence(self, tenant_id: str):
                     "calibration": calibration,
                 },
             )
+        return calibration
 
+    async def work(db):
+        if tenant_id == "all":
+            tids = await _list_tenant_ids(db)
+            total_buckets = 0
+            for tid in tids:
+                try:
+                    cal = await _calibrate_for_tenant(db, tid)
+                    total_buckets += len(cal)
+                except Exception as exc:
+                    # One bad tenant shouldn't block the rest of the beat.
+                    logger.exception(
+                        "decision.calibration_tenant_failed",
+                        tenant_id=str(tid), error=str(exc),
+                    )
+            return {"tenants": len(tids), "bucket_count": total_buckets}
+
+        tid = uuid.UUID(tenant_id)
+        calibration = await _calibrate_for_tenant(db, tid)
         return {"tenant_id": tenant_id, "calibration": calibration}
 
     try:

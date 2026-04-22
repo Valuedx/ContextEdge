@@ -74,6 +74,13 @@ class Settings(BaseSettings):
     # customer has a perf profile to measure against.
     redaction_enabled: bool = True
 
+    # Per-tenant prompt A/B overrides. JSON map:
+    #     {"<tenant-uuid>": {"relevance": "v2", "episode": "v3"}}
+    # Empty / absent → every tenant uses the default version registered
+    # via ``register_prompt(..., default=True)``. See
+    # ``contextedge/ai/prompts/__init__.py`` for resolution precedence.
+    tenant_prompt_variants_json: str = "{}"
+
 
 settings = Settings()
 

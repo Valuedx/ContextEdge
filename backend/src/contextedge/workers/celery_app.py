@@ -98,6 +98,10 @@ celery_app = Celery(
         # fallback route → default queue, which is fine for light prefetch work.
         "contextedge.workers.evidence_baseline_tasks",
         "contextedge.workers.review_queue_tasks",
+        # Decision analytics: pattern mining + confidence calibration.
+        # Tasks register under ``evaluation.*`` names so they hit the
+        # evaluation queue via the routing rule below.
+        "contextedge.workers.decision_tasks",
     ],
 )
 
@@ -135,6 +139,21 @@ celery_app.conf.update(
         "trigger-syncs-every-15m": {
             "task": "sync.trigger_scheduled_syncs",
             "schedule": 900.0,
+        },
+        # Decision analytics beats — fanning out across tenants in a
+        # single task keeps the beat simple and lets the worker
+        # parallelise per-tenant iteration internally. Daily cadence is
+        # fine for both: calibration and pattern mining both operate on
+        # completed decisions, which accrue on a per-incident basis.
+        "calibrate-decision-confidence-daily": {
+            "task": "evaluation.calibrate_decision_confidence",
+            "schedule": 86400.0,
+            "args": ("all",),
+        },
+        "mine-decision-patterns-daily": {
+            "task": "evaluation.mine_decision_patterns",
+            "schedule": 86400.0,
+            "args": ("all",),
         },
     },
 )

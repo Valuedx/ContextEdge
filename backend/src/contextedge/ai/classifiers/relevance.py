@@ -5,12 +5,12 @@ processing (embedding, identity/decision extraction). Runs inline in the
 normalize worker before embedding, so items the classifier marks
 ``not_relevant`` with high confidence skip the costly fan-out entirely.
 
-Prompt is split into a stable ``SYSTEM_PROMPT`` (instructions + schema)
-and a dynamic user message (the evidence content). This lets OpenAI's
-automatic prefix cache and Anthropic's ``cache_control: {"type": "ephemeral"}``
-header both kick in — the system block is identical across all
-classification calls, so after the first warm-up call per worker the
-instruction tokens hit the cache at 10-25% of normal cost.
+Prompt text lives in ``contextedge.ai.prompts.relevance`` so it can be
+versioned and A/B-tested per tenant (W10-12.2). The system block is
+identical across all calls for a given version, so OpenAI's automatic
+prefix cache and Anthropic's ``cache_control: {"type": "ephemeral"}``
+header both kick in and the instruction tokens hit the cache at
+10-25% of normal cost after the first warm-up call per worker.
 """
 
 from __future__ import annotations
@@ -18,36 +18,14 @@ from __future__ import annotations
 import uuid as _uuid
 from typing import Any
 
+from contextedge.ai.prompts import get_prompt
 from contextedge.ai.provider import llm_complete_json
 
-# Static — stays identical across all classification calls so it caches.
-SYSTEM_PROMPT = """You classify operational-evidence items for an IT operations memory platform.
-
-You receive a single evidence item and return a JSON classification.
-
-Valid classifications:
-- "operational": Directly relevant to operational troubleshooting, incident response, or remediation.
-- "possibly_relevant": May contain useful operational context but is not primary troubleshooting content.
-- "not_relevant": Social, administrative, off-topic, or non-operational content (marketing, calendar invites, newsletters, personal chat).
-
-Respond ONLY with a JSON object matching this exact schema:
-{
-  "classification": "operational" | "possibly_relevant" | "not_relevant",
-  "confidence": <float between 0.0 and 1.0>,
-  "reasoning": "<one-sentence justification>"
-}
-
-Be conservative: only mark "operational" when the content clearly describes an incident, error, failure, outage, or remediation. Ambiguous content goes to "possibly_relevant". Default to "not_relevant" when unsure."""
-
-
-# Dynamic — one per call.
-USER_PROMPT_TEMPLATE = """Classify this evidence item:
-
-Title: {title}
-Source Type: {source_type}
-Evidence Type: {evidence_type}
-Content:
-{body}"""
+# Re-exported for legacy importers. New code should go through
+# ``get_prompt("relevance", tenant_id)`` so per-tenant variants route
+# correctly.
+SYSTEM_PROMPT = get_prompt("relevance").system
+USER_PROMPT_TEMPLATE = get_prompt("relevance").user_template
 
 
 async def classify_relevance(
@@ -64,9 +42,12 @@ async def classify_relevance(
     When ``tenant_id`` is passed the call is instrumented (Prometheus
     counters, structured log, operational event). Callers running inside
     a DB-backed worker should pass both ``tenant_id`` and ``db`` so the
-    admin cost dashboard captures per-tenant spend.
+    admin cost dashboard captures per-tenant spend and the resolved
+    ``prompt_version`` lands in the ``llm.usage`` event for per-version
+    quality / cost analysis.
     """
-    user_prompt = USER_PROMPT_TEMPLATE.format(
+    prompt = get_prompt("relevance", tenant_id)
+    user_prompt = prompt.format_user(
         title=title or "",
         source_type=source_type,
         evidence_type=evidence_type,
@@ -75,9 +56,11 @@ async def classify_relevance(
     result = await llm_complete_json(
         user_prompt,
         task="classification",
-        system_prompt=SYSTEM_PROMPT,
+        system_prompt=prompt.system,
         tenant_id=tenant_id,
         db=db,
+        prompt_name=prompt.name,
+        prompt_version=prompt.version,
     )
     return {
         "classification": result.get("classification", "not_relevant"),

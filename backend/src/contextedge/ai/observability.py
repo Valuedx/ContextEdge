@@ -107,6 +107,8 @@ async def record_llm_usage(
     usage: dict[str, int] | None = None,
     outcome: str = "ok",
     duration_ms: int | None = None,
+    prompt_name: str | None = None,
+    prompt_version: str | None = None,
     db: Any | None = None,
 ) -> dict[str, int]:
     """Record a completed LLM call across Prometheus, logs, and optionally DB.
@@ -152,6 +154,10 @@ async def record_llm_usage(
     }
     if duration_ms is not None:
         log_context["duration_ms"] = duration_ms
+    if prompt_name is not None:
+        log_context["prompt_name"] = prompt_name
+    if prompt_version is not None:
+        log_context["prompt_version"] = prompt_version
     request_id = current_request_id()
     correlation_id = current_correlation_id()
     causation_id = current_causation_id()
@@ -185,6 +191,8 @@ async def record_llm_usage(
                     "total_tokens": usage["total_tokens"],
                     "outcome": outcome,
                     "duration_ms": duration_ms,
+                    "prompt_name": prompt_name,
+                    "prompt_version": prompt_version,
                 },
             )
         except Exception as exc:

@@ -58,6 +58,8 @@ async def llm_complete(
     system_prompt: str | None = None,
     tenant_id: _uuid.UUID | str | None = None,
     db: Any | None = None,
+    prompt_name: str | None = None,
+    prompt_version: str | None = None,
 ) -> str:
     """Call LLM with the appropriate model for the task type.
 
@@ -72,6 +74,11 @@ async def llm_complete(
       spend visibility. Background tasks that don't have a DB session
       handy can pass ``tenant_id`` alone; metrics still flow to Prometheus
       + structured logs, only the operational-event persist is skipped.
+    - ``prompt_name`` / ``prompt_version`` — identifies the versioned
+      prompt behind this call. Threaded into ``llm.usage`` events so the
+      admin dashboard can break down cost + quality by prompt version.
+      Callers using ``contextedge.ai.prompts.get_prompt`` get these for
+      free; legacy callers pass ``None`` and events record ``null``.
     """
     model = model or get_model_for_task(task)
 
@@ -166,6 +173,8 @@ async def llm_complete(
                 outcome=outcome,
                 duration_ms=duration_ms,
                 db=db,
+                prompt_name=prompt_name,
+                prompt_version=prompt_version,
             )
         except Exception as exc:
             logger.warning("llm.usage_record_failed", error=str(exc))
@@ -226,6 +235,8 @@ async def llm_complete_json(
     system_prompt: str | None = None,
     tenant_id: _uuid.UUID | str | None = None,
     db: Any | None = None,
+    prompt_name: str | None = None,
+    prompt_version: str | None = None,
 ) -> dict | list:
     """Call LLM and parse JSON response with robust repair for truncation.
 
@@ -248,6 +259,8 @@ async def llm_complete_json(
         system_prompt=system_prompt,
         tenant_id=tenant_id,
         db=db,
+        prompt_name=prompt_name,
+        prompt_version=prompt_version,
     )
     try:
         return json.loads(result)
