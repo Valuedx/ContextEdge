@@ -18,7 +18,7 @@ AI reads your tickets and messages faster than any human—but everything it pro
 
 4. **Relevance classification** — `ai/classifiers/relevance.py` `classify_relevance` builds a short prompt and returns `classification`, `confidence`, `reasoning` via `llm_complete_json`. The Celery task `classify_relevance_task` in `extraction_tasks.py` invokes this to move evidence out of `unclassified`.
 
-5. **Episode reconstruction** — `ai/extractors/episode_extractor.py` `reconstruct_episode` sends ordered evidence text through a large structured prompt; output is a list of episodes with steps and confidence. `episode_service.create_episodes_from_evidence` persists `Episode` and `EpisodeStep` rows.
+5. **Episode reconstruction** — `ai/extractors/episode_extractor.py` `reconstruct_episode` sends ordered evidence text through a large structured prompt; output is a list of episodes with steps and confidence. `episode_service.create_episodes_from_evidence` persists `Episode` and `EpisodeStep` rows. **Large clusters are chunked**: clusters of more than `MAX_ITEMS_PER_CALL` (default 20) evidence items are split into per-chunk LLM calls and the resulting episode lists concatenated. Each evidence body is also truncated to `PER_ITEM_CHAR_LIMIT` (default 2000 chars) before prompt assembly, so a single pathological item can't blow the per-call token budget. Cross-chunk episode dedup is deferred to downstream pattern-mining and correlation services. `chunk_count` is emitted via the `episode_extractor.chunked` structured log for observability.
 
 6. **Other extractors** — `ai/extractors/pattern_extractor.py` and `identity_extractor.py` (pattern and identity flows) follow the same "prompt + JSON" style where used by services.
 

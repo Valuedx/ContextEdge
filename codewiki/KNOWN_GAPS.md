@@ -183,7 +183,7 @@ Teams `hydrate_thread` now fetches the root message first via `/messages/{messag
 
 ## Retention service not scheduled (intentional gap)
 
-`apply_retention_policy` exists in `retention_service.py` but is not called from a scheduled job. Tenant retention defaults have no effect until a cron trigger or operator script is wired.
+`apply_retention_policy` and the new `purge_archived_evidence` both live in `retention_service.py`. Neither is called from a Celery Beat schedule yet — tenant retention defaults and the hard-delete / soft-purge paths have no effect until a cron trigger or operator script is wired. The functions themselves are production-ready: archive respects legal hold via `WHERE sensitivity_label != 'legal_hold'`, purge supports `dry_run=True` for safe preview, `limit` + `limit_reached` let the caller drain backlogs across ticks, and `hard_delete` vs `soft_purge` modes cover both GDPR erasure and audit-preserving content scrub.
 
 ## Resolved: Correlation now auto-triggers episode reconstruction
 

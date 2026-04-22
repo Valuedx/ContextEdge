@@ -12,10 +12,20 @@ Organizations need to keep incident data long enough to learn from it, but not f
 
 ### Retention service
 
-- `apply_retention_policy` in `retention_service.py` selects `EvidenceItem` rows for a tenant, skips items with `sensitivity_label == "legal_hold"`, classifies each via `classify_evidence_memory_class` in `memory_service`, compares `ingested_at` to cutoffs from `memory_retention_windows(retention_days)`, and sets `relevance_state = "archived"` for expired items. Returns count archived; logs structured summary.
+Retention now happens in **two phases**:
+
+**Phase 1 — archive.** `apply_retention_policy` in `retention_service.py` selects `EvidenceItem` rows for a tenant, skips items with `sensitivity_label == "legal_hold"`, classifies each via `classify_evidence_memory_class` in `memory_service`, compares `ingested_at` to cutoffs from `memory_retention_windows(retention_days)`, and sets `relevance_state = "archived"` for expired items. Archived rows stay in the database and remain searchable (they still have embeddings). Returns count archived; logs structured summary.
+
+**Phase 2 — purge.** `purge_archived_evidence` removes or scrubs rows that have been archived long enough to pass the `archive_grace_days` window (default `DEFAULT_ARCHIVE_GRACE_DAYS = 30`). Two modes:
+
+- `hard_delete` — issues a real `DELETE` against the row. Cascades via FK to `attachment_artifacts`, `correlation_edges`, `contradiction_scan_state`. Leaves `graph_edges` entries referencing the deleted evidence id orphaned — cleaned up by a separate graph-compact job. Use for GDPR right-to-erasure.
+- `soft_purge` — NULLs `embedding`, `body_text`, `body_summary` and replaces `title` with `"[purged]"`. Row stays for audit / reference linking but content is unrecoverable and similarity search no longer matches. Use when the customer wants content removed but IDs / links preserved.
+
+Both modes honour legal hold in the SQL `WHERE` clause, not via post-filtering. `dry_run=True` returns the candidate count without mutation (powers the admin cost-dashboard pre-purge preview). The `limit` parameter (default 1000) caps rows touched per invocation so a single cron tick doesn't churn millions of rows; `limit_reached` in the return dict signals the caller that another tick will find more work.
+
+**Helpers:**
 
 - `apply_legal_hold` sets `sensitivity_label = "legal_hold"` for given evidence ids.
-
 - Optional `source_class` filter narrows by `evidence_type`.
 
 ### Memory classification
@@ -86,7 +96,13 @@ Archived items have their `relevance_state` set to `archived` but remain recover
 
 ## Design decisions
 
-- **Archive via state flag vs hard delete** — *Why:* safer recovery and simpler compliance story; hard delete can be a later phase. *Tradeoff:* storage still occupied until vacuum/compaction policies exist.
+- **Two-phase archive → purge** — *Why:* decouples "stop surfacing this" (cheap, reversible) from "remove it for compliance" (irreversible, regulated). The grace window between phases gives operators a recovery aperture and a dry-run preview before any real delete. *Tradeoff:* two jobs to schedule instead of one; a misconfigured grace window can delete more than intended.
+
+- **`updated_at` as archived-at proxy** — *Why:* avoids a new column on a hot table; `updated_at` is bumped whenever `relevance_state` flips to `"archived"`, so day-accurate grace is fine with the 30-day default. *Tradeoff:* minute-accurate compliance would require an explicit `archived_at` column.
+
+- **Hard-delete cascades vs graph cleanup** — *Why:* foreign-key cascades handle the common tables (`attachment_artifacts`, `correlation_edges`, `contradiction_scan_state`) but `graph_edges` is intentionally left orphaned — the graph-compact job handles edge hygiene. *Tradeoff:* there's a window where orphaned graph edges reference deleted evidence ids.
+
+- **Soft-purge preserves the row** — *Why:* some customers need content gone but refuse to break reference-link integrity (incident postmortems, existing playbook citations). NULLing content while keeping the id serves that use case. *Tradeoff:* more retention modes = more policy decisions per tenant.
 
 - **Legal hold as sensitivity label** — *Why:* one column checked uniformly in retention queries. *Tradeoff:* label semantics must not be reused casually for other meanings.
 
@@ -98,7 +114,7 @@ Archived items have their `relevance_state` set to `archived` but remain recover
 
 | Concern | Module path | Key symbols | When it runs |
 | --- | --- | --- | --- |
-| Retention | `backend/src/contextedge/services/retention_service.py` | `apply_retention_policy`, `apply_legal_hold` | Scheduled / admin job |
+| Retention | `backend/src/contextedge/services/retention_service.py` | `apply_retention_policy`, `apply_legal_hold`, `purge_archived_evidence`, `DEFAULT_ARCHIVE_GRACE_DAYS`, `PurgeMode` | Scheduled / admin job |
 | Memory classes | `backend/src/contextedge/services/memory_service.py` | `classify_evidence_memory_class`, `memory_retention_windows`, `LONG_TERM_MEMORY`, … | Retention / events |
 | Evidence model | `backend/src/contextedge/models/evidence.py` | `EvidenceItem` (`relevance_state`, `sensitivity_label`, `ingested_at`) | ORM |
 | Tenant schemas | `backend/src/contextedge/schemas/tenant.py` | `TenantCreate`, `TenantUpdate` (`retention_defaults`) | API validation |

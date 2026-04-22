@@ -50,7 +50,11 @@ The context graph also captures **operational decisions** — both governed acti
 
 ### Contradictions
 
-- `contradiction_service` compares playbook step text to KB-typed evidence (`kb_article`, `sop`, `documentation`), uses token overlap heuristics (`should_compare_contradiction`), then may call `llm_complete_json` for a structured judgment, persists `Contradiction` rows, adds graph edges, emits operational events, and can notify via `notification_service`.
+- `contradiction_service.scan_contradictions` uses a **three-gate** flow to keep LLM spend bounded:
+  1. **HNSW top-K KB candidates** — for each `(playbook_version, step)` pair, the scanner pulls only the `top_k` (default 20) most similar KB-typed evidence rows via `pgvector` HNSW cosine search, instead of the old full-KB sweep. This alone turns the old `O(playbooks × KB × steps)` shape into `O(playbooks × K × steps)`.
+  2. **Incremental cursor** — the `contradiction_scan_state` table (migration `0022`) records one row per `(playbook_version_id, evidence_id)` pair the scanner has seen, with `last_scanned_at` + `result`. Pairs scanned inside the rescan-staleness window short-circuit without any further work. Warm tenants skip most pairs entirely.
+  3. **Token-overlap gate + LLM budget** — surviving pairs still go through the token-overlap heuristic as the final pre-LLM filter, with a hard `max_llm_calls` cap (default 1000) that terminates the scan when exhausted. The return dict reports `llm_calls_used`, `token_skips`, `cursor_skips`, `budget_skips`, `budget_exhausted` for observability.
+- The system/user prompt is split so the schema + instruction block is prompt-cacheable on both Anthropic and OpenAI backends. On a hit, an LLM call persists a `Contradiction` row, adds graph edges, emits an operational event, and can notify via `notification_service`.
 - `scan_contradictions_task` runs tenant-scoped scans on a schedule.
 
 ### Graph queries

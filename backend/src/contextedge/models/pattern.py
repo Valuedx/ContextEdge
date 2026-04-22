@@ -74,6 +74,52 @@ class Contradiction(Base, TenantScopedMixin):
     resolved_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
 
 
+class ContradictionScanState(Base, TenantScopedMixin):
+    """Tracks which (playbook_version, evidence) pairs have been scanned for
+    contradictions and what the outcome was.
+
+    Used by ``contradiction_service.scan_contradictions`` to:
+
+    - Skip pairs already scanned since the evidence's last update (incremental).
+    - Record "skipped" outcomes (token-overlap gate, budget cap) so operators
+      can see queue depth without re-scanning.
+    - Age out stale results when evidence is re-ingested — callers check
+      ``last_scanned_at >= evidence.updated_at`` and re-scan when false.
+
+    A new ``playbook_version_id`` (i.e. a published new version of the
+    playbook) implicitly invalidates all prior rows for the old version
+    because rows are keyed on the version id, not the playbook id. The
+    scan then starts fresh for the new version.
+    """
+
+    __tablename__ = "contradiction_scan_state"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=False, index=True)
+    playbook_version_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("playbook_versions.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    evidence_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("evidence_items.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    last_scanned_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+        index=True,
+    )
+    # result ∈ {"contradicts", "no_contradiction", "skipped_token_overlap",
+    #          "skipped_budget", "skipped_llm_error"}
+    result: Mapped[str] = mapped_column(String(30), nullable=False)
+    skip_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
 class GraphEdge(Base):
     """Adjacency table for the context/pattern graph."""
     __tablename__ = "graph_edges"

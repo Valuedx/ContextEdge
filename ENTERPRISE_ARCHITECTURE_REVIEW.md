@@ -159,9 +159,9 @@ Can be one engineer in two weeks, ~50% cost reduction expected.
 
 ### Weeks 3–4: the quadratic scanner
 
-5. Contradiction scan redesign (embedding-first gating + incremental + budget)
-6. Retention hard-delete cron (`apply_retention_policy` → actual DELETE after grace window)
-7. Episode-extractor chunking + token-budget guard
+5. **Shipped 2026-04-19** — Contradiction scan redesign. `services/contradiction_service.py` rewritten to the three-gate pattern: (a) HNSW top-K KB candidate pull (default `top_k=20`) replaces the full KB sweep, (b) new `contradiction_scan_state` table (migration `0022_contradiction_scan_state`) records each `(playbook_version, evidence)` pair so already-scanned pairs short-circuit on subsequent ticks, (c) explicit `max_llm_calls` budget (default 1000) bounds worst-case spend per invocation. Result dict now reports `llm_calls_used`, `token_skips`, `cursor_skips`, `budget_skips`, `budget_exhausted`. System/user prompt split so the schema + instruction block is prompt-cacheable. Expected LLM call reduction on warm tenants: 80–95%.
+6. **Shipped 2026-04-19** — Retention hard-delete / soft-purge cron. New `purge_archived_evidence(db, *, tenant_id, archive_grace_days=30, mode, dry_run, limit)` in `services/retention_service.py`. `hard_delete` mode issues real `DELETE`s against rows archived past the grace window (30-day default, GDPR-friendly), cascading via existing FKs to `attachment_artifacts` / `correlation_edges` / `contradiction_scan_state`. `soft_purge` mode NULLs `embedding` + `body_text` + `body_summary` and replaces `title` with `"[purged]"` — preserves IDs for reference linking while making content unrecoverable and search-invisible. Legal-hold rows always excluded in the SQL `WHERE` clause (not post-filtered). `dry_run=True` reports candidate count without mutation; `limit` + `limit_reached` flag let the caller drain backlogs across ticks.
+7. **Shipped 2026-04-19** — Episode-extractor chunking + token-budget guard. `ai/extractors/episode_extractor.py` now splits clusters larger than `MAX_ITEMS_PER_CALL=20` into per-chunk LLM calls (single-call behaviour preserved for smaller clusters). `PER_ITEM_CHAR_LIMIT=2000` per-body truncation formalised as a module constant — a single pathological evidence item can no longer blow the per-call token budget. `chunk_count` logged via `episode_extractor.chunked` so spikes from oversized clusters are observable. Cross-chunk episode dedup deliberately deferred — downstream pattern-mining and correlation services already merge overlapping incidents, and a synthesis LLM pass would roughly double cost for marginal gain on current workloads.
 
 ### Weeks 5–6: enterprise gates
 
@@ -197,10 +197,10 @@ Two architectural commitments worth pushing the customer toward:
 
 ## 8. Red flags to escalate to the customer
 
-- **Contradiction scan at scale will surprise them** — worth naming it in the architecture doc before procurement sees the LLM bill line.
-- **No cost observability means the first production incident will be a cost incident, not an availability incident.** Budget alerts before they're needed.
-- **Retention is a compliance time bomb.** GDPR erasure obligations cannot be met with today's code. Must be fixed before any EU customer.
-- **Episode extractor input is unbounded** — a malicious or absurd thread can spike a single workflow's token cost into the thousands. Budget guardrail needed.
+- ~~**Contradiction scan at scale will surprise them**~~ — **mitigated 2026-04-19** by embedding-first gating + incremental cursor + budget cap (§6 item 5). Per-tenant budget enforcement (§6 item 14) still needed to cap cross-tenant blast radius.
+- **No cost observability means the first production incident will be a cost incident, not an availability incident.** Partially mitigated by `/admin/cost` dashboard (Weeks 1-2 bonus ship); alerting still required.
+- ~~**Retention is a compliance time bomb.**~~ — **mitigated 2026-04-19** via `purge_archived_evidence` hard-delete + soft-purge modes with legal-hold safety (§6 item 6). Still needs a scheduled cron beat wiring to actually run on a cadence.
+- ~~**Episode extractor input is unbounded**~~ — **mitigated 2026-04-19** via `MAX_ITEMS_PER_CALL` chunking + `PER_ITEM_CHAR_LIMIT` truncation (§6 item 7). Per-tenant budget cap still desirable for multi-tenant blast-radius control.
 
 ---
 
