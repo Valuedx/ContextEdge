@@ -21,7 +21,7 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useState } from "react";
+import { Suspense, useState } from "react";
 
 import { PageHeader } from "@/components/common/page-header";
 import { StatusBadge } from "@/components/common/status-badge";
@@ -838,7 +838,25 @@ function SessionDetail({ sessionId }: { sessionId: string }) {
 // Page
 // ---------------------------------------------------------------------------
 
+// Next.js 16 App Router: useSearchParams triggers a client-side bailout
+// during SSR prerender. Wrap the content in a Suspense boundary so the
+// shell renders statically while the param resolves on the client —
+// required for `next build` to succeed on this route.
 export default function ReviewPage() {
+  return (
+    <Suspense fallback={<ReviewPageFallback />}>
+      <ReviewPageContent />
+    </Suspense>
+  );
+}
+
+function ReviewPageFallback() {
+  return (
+    <div className="p-6 text-sm text-muted-foreground">Loading review queue…</div>
+  );
+}
+
+function ReviewPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const selectedSessionId = searchParams.get("session");

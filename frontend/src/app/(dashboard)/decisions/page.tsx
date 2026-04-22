@@ -2,7 +2,7 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { ColumnDef } from "@tanstack/react-table";
-import { useState } from "react";
+import { Suspense, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { Link2 } from "lucide-react";
 
@@ -99,7 +99,19 @@ const columns: ColumnDef<Decision>[] = [
   },
 ];
 
+// Next.js 16 App Router: useSearchParams triggers a client-side bailout
+// during SSR prerender. Wrapping the content in a Suspense boundary
+// lets the shell render statically while the params resolve on the
+// client — required for `next build` to succeed on this route.
 export default function DecisionsPage() {
+  return (
+    <Suspense fallback={<DataTableSkeleton rows={10} />}>
+      <DecisionsPageContent />
+    </Suspense>
+  );
+}
+
+function DecisionsPageContent() {
   const searchParams = useSearchParams();
   const initialId = searchParams.get("id");
 
