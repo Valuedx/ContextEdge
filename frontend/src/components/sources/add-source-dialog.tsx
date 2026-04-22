@@ -32,6 +32,7 @@ const sourceSchema = z.object({
   display_name: z.string().min(1, "Display name is required").max(255),
   source_type: z.string().min(1, "Source type is required"),
   purpose: z.string().optional(),
+  relevance_keywords: z.string().optional(),
   // Gmail specific fields
   gmail_auth_method: z.enum(["service_account", "personal"]).optional(),
   mailbox_email: z.string().email("Invalid email address").optional().or(z.literal("")),

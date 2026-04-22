@@ -14,21 +14,25 @@
  * shift within a minute).
  */
 
-import { useQuery } from "@tanstack/react-query";
-import { useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useState } from "react";
 import {
   AlertTriangle,
   DollarSign,
   Gauge,
   Layers,
   Percent,
+  ShieldCheck,
   TrendingUp,
 } from "lucide-react";
+import { toast } from "sonner";
 
 import { PageHeader } from "@/components/common/page-header";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import {
   Select,
   SelectContent,
@@ -38,7 +42,12 @@ import {
 } from "@/components/ui/select";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
-import type { LlmUsageResponse } from "@/lib/types";
+import type {
+  LlmUsageResponse,
+  TenantBudget,
+  TenantBudgetStatus,
+  TenantBudgetUpsert,
+} from "@/lib/types";
 
 // Windows the dashboard offers — not free-form so we can cache consistently.
 const WINDOW_OPTIONS = [
@@ -144,6 +153,365 @@ function BreakdownBar({
       <div className="bg-emerald-500/70" style={{ width: `${pctCached}%` }} />
       <div className="bg-violet-500/70" style={{ width: `${pctCompletion}%` }} />
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Daily budget panel (GET/PUT /admin/tenant-budget + /status)
+// ---------------------------------------------------------------------------
+
+/**
+ * Shows today's spend against the tenant's configured daily cap and
+ * lets tenant_admin edit the cap inline. A null `budget` means "no
+ * cap configured" — the tenant is uncapped.
+ *
+ * The "block" vs "warn" action is intentionally a dropdown rather
+ * than a boolean: rolling out a new cap is safer when you can land
+ * as `warn` first, watch the dashboard for a day, then flip to
+ * `block` once the warnings are tuned out.
+ */
+function BudgetPanel() {
+  const qc = useQueryClient();
+  const [isEditing, setIsEditing] = useState(false);
+
+  const { data, isLoading, error } = useQuery<TenantBudgetStatus>({
+    queryKey: ["admin-tenant-budget-status"],
+    queryFn: () => api.get<TenantBudgetStatus>("/admin/tenant-budget/status"),
+    refetchInterval: 60_000,
+  });
+
+  const upsert = useMutation({
+    mutationFn: (body: TenantBudgetUpsert) =>
+      api.put<TenantBudget>("/admin/tenant-budget", body),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["admin-tenant-budget-status"] });
+      qc.invalidateQueries({ queryKey: ["admin-llm-usage"] });
+      setIsEditing(false);
+      toast.success("Budget updated");
+    },
+    onError: (e: Error) => {
+      toast.error(e.message || "Failed to update budget");
+    },
+  });
+
+  if (error) {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-sm">Daily budget</CardTitle>
+        </CardHeader>
+        <CardContent className="text-xs text-muted-foreground">
+          Unable to load budget status: {error.message}
+        </CardContent>
+      </Card>
+    );
+  }
+
+  if (isLoading || !data) {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-sm">Daily budget</CardTitle>
+        </CardHeader>
+        <CardContent className="text-xs text-muted-foreground py-4">
+          Loading budget…
+        </CardContent>
+      </Card>
+    );
+  }
+
+  const { budget, current_tokens, current_cost_usd, allowed, reason } = data;
+
+  if (isEditing) {
+    return (
+      <BudgetEditForm
+        initial={budget}
+        onCancel={() => setIsEditing(false)}
+        onSubmit={(body) => upsert.mutate(body)}
+        submitting={upsert.isPending}
+      />
+    );
+  }
+
+  // Derive progress ratios only when a cap is set; uncapped axes
+  // render as "no cap".
+  const tokenRatio =
+    budget?.daily_token_limit && budget.daily_token_limit > 0
+      ? Math.min(current_tokens / budget.daily_token_limit, 1)
+      : null;
+  const costRatio =
+    budget?.daily_cost_cap_usd && budget.daily_cost_cap_usd > 0
+      ? Math.min(current_cost_usd / budget.daily_cost_cap_usd, 1)
+      : null;
+
+  return (
+    <Card>
+      <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
+        <div className="flex items-center gap-2">
+          <ShieldCheck className="h-4 w-4 text-muted-foreground" />
+          <CardTitle className="text-sm">Daily budget</CardTitle>
+          {budget ? (
+            <Badge
+              variant="outline"
+              className={cn(
+                "text-[10px] font-mono",
+                budget.action_on_exceed === "block"
+                  ? "bg-rose-500/15 text-rose-300 border-rose-500/30"
+                  : "bg-amber-500/15 text-amber-300 border-amber-500/30",
+              )}
+            >
+              on-exceed: {budget.action_on_exceed}
+            </Badge>
+          ) : (
+            <Badge variant="secondary" className="text-[10px]">
+              uncapped
+            </Badge>
+          )}
+          {!allowed && (
+            <Badge
+              variant="outline"
+              className="text-[10px] font-mono bg-rose-500/15 text-rose-300 border-rose-500/30"
+            >
+              {reason}
+            </Badge>
+          )}
+        </div>
+        <Button variant="outline" size="sm" onClick={() => setIsEditing(true)}>
+          {budget ? "Edit budget" : "Set budget"}
+        </Button>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <BudgetAxis
+          label="Tokens"
+          current={current_tokens}
+          limit={budget?.daily_token_limit ?? null}
+          ratio={tokenRatio}
+          formatValue={formatNumber}
+        />
+        <BudgetAxis
+          label="Cost"
+          current={current_cost_usd}
+          limit={budget?.daily_cost_cap_usd ?? null}
+          ratio={costRatio}
+          formatValue={formatCurrency}
+        />
+        <div className="text-[11px] text-muted-foreground pt-1">
+          Usage aggregates today&apos;s <code>llm.usage</code> events (UTC day).
+          {budget?.action_on_exceed === "warn" &&
+            " Warning mode: calls still go through, but each one emits an llm.budget_warning event."}
+          {budget?.action_on_exceed === "block" &&
+            " Blocking mode: llm_complete raises TenantBudgetExceeded once the cap is reached — callers are expected to degrade gracefully."}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function BudgetAxis({
+  label,
+  current,
+  limit,
+  ratio,
+  formatValue,
+}: {
+  label: string;
+  current: number;
+  limit: number | null;
+  ratio: number | null;
+  formatValue: (n: number) => string;
+}) {
+  const percent = ratio !== null ? Math.round(ratio * 100) : null;
+  const barTone =
+    ratio === null
+      ? "bg-muted-foreground/20"
+      : ratio >= 1
+        ? "bg-rose-500/70"
+        : ratio >= 0.8
+          ? "bg-amber-500/70"
+          : "bg-emerald-500/70";
+  return (
+    <div className="space-y-1.5">
+      <div className="flex items-baseline justify-between text-xs">
+        <span className="text-muted-foreground">{label}</span>
+        <span className="font-mono">
+          {formatValue(current)}
+          {limit !== null && limit > 0 ? (
+            <>
+              {" / "}
+              <span className="text-muted-foreground">{formatValue(limit)}</span>
+              {percent !== null && (
+                <span className="ml-2 text-muted-foreground">({percent}%)</span>
+              )}
+            </>
+          ) : (
+            <span className="ml-2 text-muted-foreground">(no cap)</span>
+          )}
+        </span>
+      </div>
+      <div className="h-1.5 w-full rounded-sm overflow-hidden bg-muted">
+        <div
+          className={cn("h-full transition-all", barTone)}
+          style={{ width: `${ratio !== null ? Math.max(ratio * 100, 1) : 0}%` }}
+        />
+      </div>
+    </div>
+  );
+}
+
+function BudgetEditForm({
+  initial,
+  onCancel,
+  onSubmit,
+  submitting,
+}: {
+  initial: TenantBudget | null;
+  onCancel: () => void;
+  onSubmit: (body: TenantBudgetUpsert) => void;
+  submitting: boolean;
+}) {
+  // Strings so the inputs can be blank-ish. Blank → null (uncapped).
+  const [tokenLimit, setTokenLimit] = useState<string>(
+    initial?.daily_token_limit?.toString() ?? "",
+  );
+  const [costCap, setCostCap] = useState<string>(
+    initial?.daily_cost_cap_usd?.toString() ?? "",
+  );
+  const [action, setAction] = useState<"block" | "warn">(
+    initial?.action_on_exceed ?? "warn",
+  );
+  const [localError, setLocalError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setLocalError(null);
+  }, [tokenLimit, costCap, action]);
+
+  function parseOrNull(raw: string): number | null | "invalid" {
+    const trimmed = raw.trim();
+    if (trimmed === "") return null;
+    const n = Number(trimmed);
+    if (!Number.isFinite(n) || n < 0) return "invalid";
+    return n;
+  }
+
+  function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    const t = parseOrNull(tokenLimit);
+    const c = parseOrNull(costCap);
+    if (t === "invalid") {
+      setLocalError("Token limit must be a non-negative number or blank.");
+      return;
+    }
+    if (c === "invalid") {
+      setLocalError("Cost cap must be a non-negative number or blank.");
+      return;
+    }
+    if (t === null && c === null) {
+      setLocalError("Set at least one of token limit or cost cap, or delete the budget row entirely.");
+      return;
+    }
+    onSubmit({
+      daily_token_limit: t,
+      daily_cost_cap_usd: c,
+      action_on_exceed: action,
+    });
+  }
+
+  return (
+    <Card>
+      <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
+        <div className="flex items-center gap-2">
+          <ShieldCheck className="h-4 w-4 text-muted-foreground" />
+          <CardTitle className="text-sm">
+            {initial ? "Edit daily budget" : "Set daily budget"}
+          </CardTitle>
+        </div>
+      </CardHeader>
+      <CardContent>
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="space-y-1.5">
+              <Label htmlFor="token-limit" className="text-xs">
+                Daily token limit
+              </Label>
+              <Input
+                id="token-limit"
+                type="number"
+                inputMode="numeric"
+                min={0}
+                step={1000}
+                placeholder="blank = no cap"
+                value={tokenLimit}
+                onChange={(e) => setTokenLimit(e.target.value)}
+              />
+              <div className="text-[11px] text-muted-foreground">
+                Counts prompt + completion. Cached tokens still count.
+              </div>
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="cost-cap" className="text-xs">
+                Daily cost cap (USD)
+              </Label>
+              <Input
+                id="cost-cap"
+                type="number"
+                inputMode="decimal"
+                min={0}
+                step={0.01}
+                placeholder="blank = no cap"
+                value={costCap}
+                onChange={(e) => setCostCap(e.target.value)}
+              />
+              <div className="text-[11px] text-muted-foreground">
+                Estimated from provider per-million-token rates.
+              </div>
+            </div>
+          </div>
+
+          <div className="space-y-1.5">
+            <Label className="text-xs">On exceed</Label>
+            <Select
+              value={action}
+              onValueChange={(v) => {
+                if (v === "block" || v === "warn") setAction(v);
+              }}
+            >
+              <SelectTrigger className="w-[220px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="warn">Warn (allow, log event)</SelectItem>
+                <SelectItem value="block">Block (raise exception)</SelectItem>
+              </SelectContent>
+            </Select>
+            <div className="text-[11px] text-muted-foreground">
+              Roll out new caps as <code>warn</code> first; flip to{" "}
+              <code>block</code> once the warning volume is acceptable.
+            </div>
+          </div>
+
+          {localError && (
+            <div className="text-xs text-rose-300 bg-rose-500/10 border border-rose-500/30 rounded-md p-2">
+              {localError}
+            </div>
+          )}
+
+          <div className="flex items-center gap-2 pt-1">
+            <Button type="submit" size="sm" disabled={submitting}>
+              {submitting ? "Saving…" : "Save budget"}
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={onCancel}
+              disabled={submitting}
+            >
+              Cancel
+            </Button>
+          </div>
+        </form>
+      </CardContent>
+    </Card>
   );
 }
 
@@ -285,6 +653,9 @@ export default function AdminCostPage() {
               icon={Gauge}
             />
           </section>
+
+          {/* Daily budget panel — configure + live usage vs cap. */}
+          <BudgetPanel />
 
           {/* Cache-hit badge call-out — single line of ground truth */}
           {totals && totals.prompt_tokens > 0 && (

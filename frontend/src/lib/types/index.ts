@@ -765,6 +765,28 @@ export interface LlmUsageBreakdownEntry {
   estimated_cost_usd: number;
 }
 
+export interface TenantBudget {
+  tenant_id: string;
+  daily_token_limit: number | null;
+  daily_cost_cap_usd: number | null;
+  action_on_exceed: "block" | "warn";
+  updated_at: string;
+}
+
+export interface TenantBudgetStatus {
+  budget: TenantBudget | null;
+  current_tokens: number;
+  current_cost_usd: number;
+  allowed: boolean;
+  reason: string;
+}
+
+export interface TenantBudgetUpsert {
+  daily_token_limit: number | null;
+  daily_cost_cap_usd: number | null;
+  action_on_exceed: "block" | "warn";
+}
+
 export interface LlmUsageResponse {
   window_hours: number;
   from_time: string;
