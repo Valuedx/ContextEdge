@@ -1,5 +1,7 @@
 # ContextEdge Demo Architecture & Use-Case Plan
 
+> **Superseded in part (2026-04-22)**: Option 2b (Section 5) and Phase A task ordering (Sections 10–11) have been replaced by the deeper integration plan in [AEAIHUB_INTEGRATION_PLAN.md](AEAIHUB_INTEGRATION_PLAN.md), which takes advantage of the confirmed ability to modify AEAIHubOrchestrator in lockstep with ContextEdge. The federation/CMDB lens, three-tier execution model, and demo use-case inventory in this doc remain authoritative.
+
 Planning doc for end-to-end demos of ContextEdge as the operational-memory layer inside a real IT-ops stack: chat UI for human personas, AEAIHubOrchestrator for agentic workflows, AutomationEdge for deterministic execution, MCP-exposed enterprise systems for reads and lightweight writes, and ContextEdge for the reasoning / memory layer.
 
 This document consolidates an architectural thread covering: integration options, the CMDB-replication anti-pattern, enterprise production gaps, the role of deterministic execution (AutomationEdge), and MCP-tool integration. Treat it as the current working plan, not a final design. Open questions are listed at the end.

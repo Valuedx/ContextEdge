@@ -13,6 +13,9 @@ ContextEdge turns fragmented operational evidence from tickets, chat, email, and
 | [**API reference**](docs/API.md) | Auth, `/api/v1` router surface, runtime semantics, observability URLs |
 | [**Runbook**](docs/RUNBOOK.md) | Operational commands, migrations, workers, troubleshooting |
 | [**Implementation plan**](CONTEXTEDGE_IMPLEMENTATION_PLAN.md) | Phased checklist and repository-status planning document |
+| [**Enterprise architecture review**](ENTERPRISE_ARCHITECTURE_REVIEW.md) | Technical review with cost-optimisation + 90-day roadmap (ContextEdge-only scope) |
+| [**AIHub integration plan**](AEAIHUB_INTEGRATION_PLAN.md) | Cross-system plan for ContextEdge ↔ AEAIHubOrchestrator ↔ AutomationEdge with deep AIHub modifications |
+| [**Demo architecture plan**](DEMO_ARCHITECTURE_PLAN.md) | Three-tier execution model, federation lens, demo use-case inventory |
 | [**Product requirements**](STANDALONE_OPERATIONAL_MEMORY_PRD.md) | Product-level scope and behavior |
 | [**Code wiki**](codewiki/README.md) | Narrative technical blueprints (pipeline, design rationale, code map per subsystem) |
 

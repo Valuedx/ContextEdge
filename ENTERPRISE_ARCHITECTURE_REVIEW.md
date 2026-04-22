@@ -5,7 +5,9 @@
 > **Date**: 2026-04-22
 > **Status**: Working review — roadmap items tracked separately
 >
-> **Related docs**: [TECHNICAL_BLUEPRINT.md](docs/TECHNICAL_BLUEPRINT.md), [DEMO_ARCHITECTURE_PLAN.md](DEMO_ARCHITECTURE_PLAN.md), [CONTEXTEDGE_IMPLEMENTATION_PLAN.md](CONTEXTEDGE_IMPLEMENTATION_PLAN.md), [codewiki/KNOWN_GAPS.md](codewiki/KNOWN_GAPS.md), [docs/MIGRATIONS.md](docs/MIGRATIONS.md)
+> **Related docs**: [TECHNICAL_BLUEPRINT.md](docs/TECHNICAL_BLUEPRINT.md), [AEAIHUB_INTEGRATION_PLAN.md](AEAIHUB_INTEGRATION_PLAN.md), [DEMO_ARCHITECTURE_PLAN.md](DEMO_ARCHITECTURE_PLAN.md), [CONTEXTEDGE_IMPLEMENTATION_PLAN.md](CONTEXTEDGE_IMPLEMENTATION_PLAN.md), [codewiki/KNOWN_GAPS.md](codewiki/KNOWN_GAPS.md), [docs/MIGRATIONS.md](docs/MIGRATIONS.md)
+>
+> **Scope note**: this review treats ContextEdge standalone. For the cross-system architecture (ContextEdge + AEAIHubOrchestrator + AutomationEdge), see [AEAIHUB_INTEGRATION_PLAN.md](AEAIHUB_INTEGRATION_PLAN.md) — the integration plan supersedes this review's implicit "build everything in ContextEdge" framing where the three-system split applies.
 
 ## Contents
 
