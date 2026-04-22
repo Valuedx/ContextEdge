@@ -36,7 +36,7 @@ async def link_evidence_decisions(
 
     Returns the list of extracted+resolved decision dicts.
     """
-    raw_decisions = await extract_decisions(content)
+    raw_decisions = await extract_decisions(content, tenant_id=tenant_id, db=db)
     if not raw_decisions:
         return []
 

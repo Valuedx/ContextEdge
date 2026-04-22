@@ -1,63 +1,16 @@
-"""Playbook candidate generation from pattern clusters."""
+"""Playbook candidate generation from pattern clusters.
 
-from contextedge.ai.provider import llm_complete_json
-
-PLAYBOOK_PROMPT = """You are generating a living playbook for an operational troubleshooting pattern.
-
-Pattern Title: {pattern_title}
-Pattern Description: {pattern_description}
-Episode Count: {episode_count}
-
-Episode Summaries:
-{episode_summaries}
-
-Negative Knowledge (steps that repeatedly fail):
-{negative_knowledge}
-
-Generate a structured playbook candidate with:
-1. Trigger conditions: when should this playbook be invoked
-2. Steps with branching logic: diagnostic and remediation flow
-3. Risk assessment
-4. Rollback notes from negative knowledge
-5. Confidence breakdown
-
-Respond in JSON:
-{{
-  "title": "...",
-  "description": "...",
-  "risk_tier": "low" | "medium" | "high" | "critical",
-  "trigger_conditions": {{
-    "symptoms": ["..."],
-    "entities": ["..."],
-    "conditions": ["..."]
-  }},
-  "steps": [
-    {{
-      "order": 1,
-      "type": "diagnostic" | "action" | "check" | "branch" | "escalation",
-      "text": "...",
-      "expected_outcome": "...",
-      "on_failure": "...",
-      "evidence_quality": "high" | "medium" | "low"
-    }}
-  ],
-  "branching_logic": {{
-    "decision_points": [
-      {{
-        "after_step": 1,
-        "condition": "...",
-        "if_true_goto": 2,
-        "if_false_goto": 3
-      }}
-    ]
-  }},
-  "inputs": ["..."],
-  "outputs": ["..."],
-  "rollback_notes": "...",
-  "playbook_confidence": 0.0-1.0,
-  "execution_confidence_guidance": "..."
-}}
+Prompt text lives in ``contextedge.ai.prompts.playbook`` (registry-
+versioned, A/B-routable per tenant).
 """
+
+from __future__ import annotations
+
+import uuid as _uuid
+from typing import Any
+
+from contextedge.ai.prompts import get_prompt
+from contextedge.ai.provider import llm_complete_json
 
 
 async def generate_playbook_candidate(
@@ -66,6 +19,9 @@ async def generate_playbook_candidate(
     episode_count: int,
     episode_summaries: list[dict],
     negative_knowledge: list[str],
+    *,
+    tenant_id: _uuid.UUID | str | None = None,
+    db: Any | None = None,
 ) -> dict:
     """Generate a playbook candidate from pattern analysis."""
     summaries_text = ""
@@ -76,14 +32,26 @@ async def generate_playbook_candidate(
         if ep.get("outcome"):
             summaries_text += f"\n   Outcome: {ep['outcome']}"
 
-    neg_text = "\n".join(f"- {nk}" for nk in negative_knowledge[:20]) if negative_knowledge else "None identified"
+    neg_text = (
+        "\n".join(f"- {nk}" for nk in negative_knowledge[:20])
+        if negative_knowledge
+        else "None identified"
+    )
 
-    prompt = PLAYBOOK_PROMPT.format(
+    prompt = get_prompt("playbook", tenant_id)
+    user = prompt.format_user(
         pattern_title=pattern_title,
         pattern_description=pattern_description or "",
         episode_count=episode_count,
         episode_summaries=summaries_text,
         negative_knowledge=neg_text,
     )
-
-    return await llm_complete_json(prompt, task="extraction")
+    return await llm_complete_json(
+        user,
+        task="extraction",
+        system_prompt=prompt.system,
+        tenant_id=tenant_id,
+        db=db,
+        prompt_name=prompt.name,
+        prompt_version=prompt.version,
+    )

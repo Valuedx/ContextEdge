@@ -177,4 +177,12 @@ def get_prompt(
 # Import submodules so their ``register_prompt`` calls execute at
 # package import time. Adding a new prompt family = adding a new
 # submodule here.
-from contextedge.ai.prompts import relevance  # noqa: E402, F401
+from contextedge.ai.prompts import (  # noqa: E402, F401
+    contradiction,
+    decision,
+    episode,
+    identity,
+    pattern,
+    playbook,
+    relevance,
+)

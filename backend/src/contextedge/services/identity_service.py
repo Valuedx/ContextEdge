@@ -125,7 +125,7 @@ async def resolve_entities_from_text(
     source_id: uuid.UUID | None = None,
 ) -> list[dict]:
     """Extract entities from text and resolve against canonical identities."""
-    extracted = await extract_identities(content)
+    extracted = await extract_identities(content, tenant_id=tenant_id, db=db)
     return await resolve_extracted_entities(db, tenant_id, extracted, source_id=source_id)
 
 

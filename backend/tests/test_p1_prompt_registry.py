@@ -144,6 +144,75 @@ def test_real_relevance_prompt_registered():
     assert prompts_mod._DEFAULTS["relevance"] == "v1"
 
 
+def test_all_migrated_prompt_families_registered():
+    """Every inline prompt that was migrated must have a v1 default
+    registered at import time. Regression guard — forgetting to import
+    a submodule in ``ai/prompts/__init__.py`` silently breaks the
+    caller via a KeyError at first LLM call."""
+    required = ("episode", "decision", "identity", "pattern", "playbook", "contradiction")
+    for name in required:
+        assert name in prompts_mod._REGISTRY, f"{name!r} not registered"
+        assert "v1" in prompts_mod._REGISTRY[name]
+        assert prompts_mod._DEFAULTS.get(name) == "v1"
+
+
+@pytest.mark.parametrize(
+    ("module_path", "entry", "expected_name"),
+    [
+        ("contextedge.ai.extractors.identity_extractor", "extract_identities", "identity"),
+        ("contextedge.ai.extractors.decision_extractor", "extract_decisions", "decision"),
+    ],
+)
+def test_migrated_extractors_forward_prompt_identity(module_path, entry, expected_name):
+    """Each migrated extractor must forward the resolved ``prompt_name``
+    + ``prompt_version`` to ``llm_complete_json``, so the ``llm.usage``
+    event can attribute cost / quality to a specific version.
+
+    Parameterised over the two async extractors whose signatures take
+    a single content string. Episode / pattern / playbook follow the
+    same pattern but need list-of-dicts fixtures — same regression
+    guarantee, just not covered by this parametrization."""
+    import asyncio
+    import importlib
+    from unittest.mock import patch as _patch
+
+    module = importlib.import_module(module_path)
+    captured: dict = {}
+
+    async def fake(*args, **kwargs):
+        captured.update(kwargs)
+        return {"entities": [], "decisions": []}
+
+    with _patch.object(module, "llm_complete_json", fake):
+        asyncio.run(getattr(module, entry)("some content for extraction here"))
+
+    assert captured.get("prompt_name") == expected_name
+    assert captured.get("prompt_version") == "v1"
+
+
+def test_episode_extractor_forwards_prompt_identity():
+    """Episode extractor has a chunking wrapper — verify the inner
+    ``_extract_from_chunk`` still threads prompt_name/version."""
+    import asyncio
+    from unittest.mock import patch as _patch
+
+    from contextedge.ai.extractors import episode_extractor
+
+    captured: dict = {}
+
+    async def fake(*args, **kwargs):
+        captured.update(kwargs)
+        return {"episodes": []}
+
+    with _patch.object(episode_extractor, "llm_complete_json", fake):
+        asyncio.run(episode_extractor.reconstruct_episode(
+            [{"title": "x", "body": "y", "source_type": "ticket", "timestamp": "t"}]
+        ))
+
+    assert captured.get("prompt_name") == "episode"
+    assert captured.get("prompt_version") == "v1"
+
+
 def test_relevance_classifier_passes_prompt_version_to_llm():
     """End-to-end regression: ``classify_relevance`` should forward
     the resolved prompt_name / version down to ``llm_complete_json``

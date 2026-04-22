@@ -215,7 +215,7 @@ async def discover_pattern(
 
     # 3. Call AI to synthesize pattern
     try:
-        synthesis = await synthesize_pattern(ep_data)
+        synthesis = await synthesize_pattern(ep_data, tenant_id=user.tenant_id, db=db)
 
         # 4. Create the Pattern in DB
         pattern = await create_pattern_from_episodes(

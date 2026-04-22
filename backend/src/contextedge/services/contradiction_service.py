@@ -113,24 +113,27 @@ async def _latest_published_version(
     return result.scalar_one_or_none()
 
 
-async def _llm_confirms_contradiction(step_text: str, kb_text: str) -> tuple[bool, str | None]:
-    prompt = (
-        f"Operational step:\n{step_text}\n\n"
-        f"Knowledge-base text:\n{kb_text}\n"
-    )
-    # Split out the instruction/schema block so OpenAI's prefix cache and
-    # Anthropic's ephemeral cache can both hit on repeated scans.
-    system_prompt = (
-        "Decide whether the knowledge-base text contradicts the operational step. "
-        "Return JSON with keys contradiction (boolean) and reason (string). "
-        "Only mark contradiction=true when the KB explicitly recommends or asserts "
-        "something that directly conflicts with the step's instruction. Tangential "
-        "references or unrelated guidance are not contradictions."
-    )
+async def _llm_confirms_contradiction(
+    step_text: str,
+    kb_text: str,
+    *,
+    tenant_id: uuid.UUID | None = None,
+    db: AsyncSession | None = None,
+) -> tuple[bool, str | None]:
+    """Confirm contradiction via LLM, using the registry-versioned prompt
+    so per-tenant variants + ``llm.usage`` version tagging work."""
+    from contextedge.ai.prompts import get_prompt
+
+    prompt = get_prompt("contradiction", tenant_id)
+    user = prompt.format_user(step_text=step_text, kb_text=kb_text)
     result = await llm_complete_json(
-        prompt,
+        user,
         task="classification",
-        system_prompt=system_prompt,
+        system_prompt=prompt.system,
+        tenant_id=tenant_id,
+        db=db,
+        prompt_name=prompt.name,
+        prompt_version=prompt.version,
     )
     if not isinstance(result, dict):
         return False, None
@@ -387,7 +390,9 @@ async def scan_contradictions(
                 scanned_pairs += 1
                 llm_calls_used += 1
                 try:
-                    contradicted, reason = await _llm_confirms_contradiction(step_text, kb_text)
+                    contradicted, reason = await _llm_confirms_contradiction(
+                        step_text, kb_text, tenant_id=tenant_id, db=db,
+                    )
                 except Exception as exc:
                     logger.warning(
                         "contradiction_check_failed",

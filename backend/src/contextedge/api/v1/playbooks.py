@@ -397,7 +397,9 @@ async def generate_playbook(
             pattern.description or "",
             len(episodes),
             ep_summaries,
-            negative_knowledge
+            negative_knowledge,
+            tenant_id=user.tenant_id,
+            db=db,
         )
 
         # 3. Create Playbook Shell

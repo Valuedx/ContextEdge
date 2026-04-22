@@ -43,7 +43,9 @@ async def create_episodes_from_evidence(
 ) -> list[Episode]:
     """Run LLM extraction and create one or more episodes with steps."""
     try:
-        extracted_episodes = await reconstruct_episode(evidence_items)
+        extracted_episodes = await reconstruct_episode(
+            evidence_items, tenant_id=tenant_id, db=db,
+        )
     except Exception as exc:
         logger.warning(
             "episode_reconstruction_llm_failed",

@@ -151,7 +151,7 @@ def cluster_episodes(self, domain_id: str, tenant_id: str):
                 ]
 
                 # Call AI to synthesize pattern from the cluster
-                synthesis = await synthesize_pattern(ep_data)
+                synthesis = await synthesize_pattern(ep_data, tenant_id=tid, db=db)
                 
                 await create_pattern_from_episodes(
                     db,
@@ -254,6 +254,8 @@ def generate_playbook_candidate(self, pattern_id: str, tenant_id: str):
             episode_count=len(episodes),
             episode_summaries=summaries,
             negative_knowledge=neg,
+            tenant_id=tid,
+            db=db,
         )
 
         ur = await db.execute(select(User).where(User.tenant_id == tid).limit(1))

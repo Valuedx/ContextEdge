@@ -1,36 +1,41 @@
-"""Decision/action extraction from evidence content."""
+"""Decision/action extraction from evidence content.
 
-from contextedge.ai.provider import llm_complete_json
-
-DECISION_PROMPT = """Extract operational decisions and actions from the following evidence content.
-A decision or action is anything a person explicitly did or chose to do — there is no
-fixed category list. Use a short, descriptive label that fits the action.
-
-Content:
-{content}
-
-Common examples of decision_type labels (use these when they fit, but invent a
-more accurate label whenever none of these match):
-  approval, denial, remediation, escalation, configuration_change, restart,
-  access_grant, access_revoke, rollback, deployment, migration, workaround,
-  investigation, scheduling, delegation, policy_change, communication, purchase,
-  maintenance, decommission
-
-Respond in JSON with key "decisions" containing a list of objects:
-{{"decisions": [{{"decision_type": "short_label_for_the_action", "actor": "person who decided or acted", "target": "system, service, or resource acted upon", "action": "concise description of what was done", "context": "brief surrounding context"}}]}}
-
-Only extract clearly stated decisions or actions. Do not fabricate.
-If no decisions or actions are found, return {{"decisions": []}}.
+Prompt text lives in ``contextedge.ai.prompts.decision`` (registry-
+versioned, A/B-routable per tenant).
 """
 
+from __future__ import annotations
 
-async def extract_decisions(content: str) -> list[dict]:
+import uuid as _uuid
+from typing import Any
+
+from contextedge.ai.prompts import get_prompt
+from contextedge.ai.provider import llm_complete_json
+
+
+async def extract_decisions(
+    content: str,
+    *,
+    tenant_id: _uuid.UUID | str | None = None,
+    db: Any | None = None,
+) -> list[dict]:
     """Extract operational decisions and actions from evidence text."""
     if not content or len(content.strip()) < 10:
         return []
 
-    prompt = DECISION_PROMPT.format(content=content[:4000])
-    result = await llm_complete_json(prompt, task="classification")
+    prompt = get_prompt("decision", tenant_id)
+    user = prompt.format_user(content=content[:4000])
+    result = await llm_complete_json(
+        user,
+        task="classification",
+        system_prompt=prompt.system,
+        tenant_id=tenant_id,
+        db=db,
+        prompt_name=prompt.name,
+        prompt_version=prompt.version,
+    )
     if isinstance(result, list):
         return result
+    if not isinstance(result, dict):
+        return []
     return result.get("decisions", [])
