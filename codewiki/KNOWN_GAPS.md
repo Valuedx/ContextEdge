@@ -132,8 +132,21 @@ Also shipped in the same slice: `GET /api/v1/admin/llm-usage` + `/admin/cost` re
 ## Resolved: Weeks 10-12 — agent quality
 
 - **Decision calibration + pattern mining on Beat.** `evaluation.calibrate_decision_confidence` and `evaluation.mine_decision_patterns` (in `workers/decision_tasks.py`) accept the `"all"` sentinel for per-tenant fan-out with isolated exception handling and are scheduled daily.
-- **Prompt versioning + per-tenant A/B.** New `ai/prompts/` package with `Prompt` dataclass + `register_prompt` / `get_prompt` / `resolve_version`. Per-tenant variants via `settings.tenant_prompt_variants_json`. `prompt_name` + `prompt_version` threaded through `llm_complete` into `llm.usage` events. Relevance classifier is the first migrated family (`v1` default).
+- **Prompt versioning + per-tenant A/B.** New `ai/prompts/` package with `Prompt` dataclass + `register_prompt` / `get_prompt` / `resolve_version`. Per-tenant variants via `settings.tenant_prompt_variants_json`. `prompt_name` + `prompt_version` threaded through `llm_complete` into `llm.usage` events. All seven LLM prompt families register a `v1` default at import time: `relevance`, `episode`, `decision`, `identity`, `pattern`, `playbook`, `contradiction`.
 - **Golden eval scaffold.** `backend/evals/` with `golden.jsonl` format + `run_regression.py` CLI (confusion matrix, non-zero exit on failure). Weekly Beat deferred — see "Scheduled jobs that need wiring".
+
+## Resolved: Watch-list JSONB indexes
+
+The two JSONB hot spots flagged in `ENTERPRISE_ARCHITECTURE_REVIEW.md` §5 are now indexed (migration `0025_jsonb_gin_indexes`):
+
+- `ix_graph_edges_metadata_extra_gin` — future `metadata.reason = X` edge traversals hit an index.
+- `ix_evidence_items_canonical_entity_refs_gin` — identity / decision / correlation filters that hit the JSONB blob are indexed, whole-column rather than `->'identities'` so `decisions` filters benefit too.
+
+Both are `jsonb_path_ops` GIN indexes (smaller, faster for the `@>` containment operator current code uses) built `CONCURRENTLY`. Other JSONB columns (`context_snapshot`, `evidence_summary`, `baseline_ref`, `modification_diff`) remain un-indexed by design — add targeted GIN only when a specific filter path shows up.
+
+## Resolved: Frontend production build unblocked
+
+Two pre-existing SSR issues on `/review` and `/decisions` (both called `useSearchParams()` without a Suspense boundary) blocked `next build` once the `add-source-dialog.tsx` type error was fixed. Both pages now follow the standard Next.js 16 pattern: a thin default export that renders `<Suspense fallback={…}>` wrapping a `*PageContent` component that owns the hook call. `npm run build` is green end-to-end; both routes render as `○ (Static)`.
 
 ## Resolved: Semantic similar-decision retrieval
 
