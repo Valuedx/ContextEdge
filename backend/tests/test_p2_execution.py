@@ -435,3 +435,166 @@ def test_approval_modification_request_rejects_invalid_code():
             modification_diff={"inputs": {}},
             modification_reason_code="bogus",
         )
+
+
+# ---------------------------------------------------------------------------
+# Shadow automation_mode (W5-6.1)
+# ---------------------------------------------------------------------------
+
+
+def test_caller_max_safety_shadow_admin_gets_destructive():
+    """Shadow mode lets admins attempt destructive actions since nothing
+    real executes — the whole point is to surface what a full_auto run
+    would do without causing side effects."""
+    assert _caller_max_safety_class(["tenant_admin"], "shadow") == "destructive"
+    assert _caller_max_safety_class(["platform_super_admin"], "shadow") == "destructive"
+    assert _caller_max_safety_class(["domain_admin"], "shadow") == "destructive"
+
+
+def test_caller_max_safety_shadow_nonadmin_capped_at_high_side_effect():
+    """Non-admins can still shadow through high_side_effect — destructive
+    shadows stay gated behind an admin role so a sales rep can't dry-run
+    `delete-prod-db` without explicit clearance."""
+    assert _caller_max_safety_class(["knowledge_manager"], "shadow") == "high_side_effect"
+    assert _caller_max_safety_class(["analyst"], "shadow") == "high_side_effect"
+
+
+def test_is_shadow_mode_helper():
+    from contextedge.models.playbook import is_shadow_mode
+
+    assert is_shadow_mode("shadow") is True
+    assert is_shadow_mode("suggest_only") is False
+    assert is_shadow_mode("full_auto") is False
+    assert is_shadow_mode(None) is False
+    assert is_shadow_mode("") is False
+
+
+def test_automation_modes_constant_contains_shadow():
+    from contextedge.models.playbook import AUTOMATION_MODES
+
+    assert "shadow" in AUTOMATION_MODES
+    # Ordering matters — code reasons about monotonic permissiveness.
+    assert AUTOMATION_MODES.index("suggest_only") < AUTOMATION_MODES.index("shadow")
+    assert AUTOMATION_MODES.index("shadow") < AUTOMATION_MODES.index("full_auto")
+
+
+def test_playbook_create_accepts_shadow_and_rejects_garbage():
+    from contextedge.schemas.playbook import PlaybookCreate
+
+    ok = PlaybookCreate(title="t", automation_mode="shadow")
+    assert ok.automation_mode == "shadow"
+
+    with pytest.raises(ValueError, match="automation_mode must be one of"):
+        PlaybookCreate(title="t", automation_mode="silent_mode")
+
+
+def test_playbook_update_accepts_none_and_shadow():
+    from contextedge.schemas.playbook import PlaybookUpdate
+
+    # None passthrough — lets callers PATCH without touching automation.
+    assert PlaybookUpdate(automation_mode=None).automation_mode is None
+    assert PlaybookUpdate(automation_mode="shadow").automation_mode == "shadow"
+
+    with pytest.raises(ValueError, match="automation_mode must be one of"):
+        PlaybookUpdate(automation_mode="nope")
+
+
+@pytest.mark.asyncio
+async def test_record_tool_invocation_under_shadow_tags_outputs_and_status():
+    """When the parent run is in shadow mode, record_tool_invocation must
+    tag outputs with ``shadow=True``, force status to ``shadow_executed``,
+    and fire a ``tool.shadow_executed`` operational event."""
+    from contextedge.services.execution_service import record_tool_invocation
+
+    tenant_id = uuid4()
+    step_run_id = uuid4()
+    execution_run_id = uuid4()
+
+    step = SimpleNamespace(
+        id=step_run_id, tenant_id=tenant_id, execution_run_id=execution_run_id,
+    )
+    run = SimpleNamespace(id=execution_run_id, automation_mode="shadow")
+
+    async def get(model, obj_id):
+        # First call returns step, second returns the run.
+        if obj_id == step_run_id:
+            return step
+        return run
+
+    captured: dict = {}
+
+    async def fake_append(db, **kwargs):
+        captured["event"] = kwargs
+
+    captured_add: list = []
+    db = SimpleNamespace(
+        get=AsyncMock(side_effect=get),
+        add=lambda obj: captured_add.append(obj),
+        flush=AsyncMock(),
+    )
+
+    with patch(
+        "contextedge.services.execution_service.append_operational_event",
+        new=AsyncMock(side_effect=fake_append),
+    ):
+        invocation = await record_tool_invocation(
+            db,
+            tenant_id=tenant_id,
+            step_run_id=step_run_id,
+            tool_name="delete_user",
+            safety_class="destructive",
+            outputs={"deleted_count": 5},
+        )
+
+    assert invocation is not None
+    assert invocation.status == "shadow_executed"
+    assert invocation.outputs["shadow"] is True
+    assert invocation.outputs["deleted_count"] == 5
+    assert captured["event"]["event_type"] == "tool.shadow_executed"
+    assert captured["event"]["payload"]["shadow"] is True
+
+
+@pytest.mark.asyncio
+async def test_record_tool_invocation_non_shadow_unchanged():
+    """Non-shadow runs keep the exact prior behavior — no ``shadow`` key
+    leaks into outputs, status is whatever the caller passed."""
+    from contextedge.services.execution_service import record_tool_invocation
+
+    tenant_id = uuid4()
+    step_run_id = uuid4()
+    execution_run_id = uuid4()
+    step = SimpleNamespace(
+        id=step_run_id, tenant_id=tenant_id, execution_run_id=execution_run_id,
+    )
+    run = SimpleNamespace(id=execution_run_id, automation_mode="full_auto")
+
+    async def get(model, obj_id):
+        return step if obj_id == step_run_id else run
+
+    db = SimpleNamespace(
+        get=AsyncMock(side_effect=get),
+        add=lambda obj: None,
+        flush=AsyncMock(),
+    )
+
+    captured: dict = {}
+
+    async def fake_append(db, **kwargs):
+        captured["event"] = kwargs
+
+    with patch(
+        "contextedge.services.execution_service.append_operational_event",
+        new=AsyncMock(side_effect=fake_append),
+    ):
+        invocation = await record_tool_invocation(
+            db,
+            tenant_id=tenant_id,
+            step_run_id=step_run_id,
+            tool_name="ping",
+            outputs={"rtt_ms": 12},
+        )
+
+    assert invocation.status == "completed"
+    assert "shadow" not in invocation.outputs
+    assert captured["event"]["event_type"] == "tool.completed"
+    assert captured["event"]["payload"]["shadow"] is False

@@ -133,6 +133,14 @@ async def record_llm_usage(
     LLM_REQUESTS_TOTAL.labels(tenant_label, model, task, outcome).inc()
 
     # Structured log — one line per call with everything in one place.
+    # Correlation IDs are pulled from the request-context ContextVar so the
+    # same log line can be grepped across HTTP → Celery → LLM boundaries.
+    from contextedge.middleware.request_context import (
+        current_causation_id,
+        current_correlation_id,
+        current_request_id,
+    )
+
     log_context = {
         "tenant_id": tenant_label,
         "model": model,
@@ -144,6 +152,15 @@ async def record_llm_usage(
     }
     if duration_ms is not None:
         log_context["duration_ms"] = duration_ms
+    request_id = current_request_id()
+    correlation_id = current_correlation_id()
+    causation_id = current_causation_id()
+    if request_id is not None:
+        log_context["request_id"] = str(request_id)
+    if correlation_id is not None:
+        log_context["correlation_id"] = str(correlation_id)
+    if causation_id is not None:
+        log_context["causation_id"] = str(causation_id)
     logger.info("llm.usage", **log_context)
 
     # Operational event — optional, skipped when no db is passed (e.g. from

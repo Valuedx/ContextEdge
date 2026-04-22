@@ -18,7 +18,7 @@ from contextedge.models.execution import (
     ToolInvocation,
 )
 from contextedge.graph.builder import ensure_edge
-from contextedge.models.playbook import Playbook, PlaybookVersion
+from contextedge.models.playbook import Playbook, PlaybookVersion, is_shadow_mode
 from contextedge.services.decision_trace_service import create_decision, record_outcome
 from contextedge.services.event_log_service import append_operational_event
 from contextedge.services.session_service import append_trace_event
@@ -40,6 +40,15 @@ def _caller_max_safety_class(roles: list[str], automation_mode: str) -> str:
     if automation_mode == "suggest_only":
         return "read_only"
     admin_roles = {"platform_super_admin", "tenant_admin", "domain_admin"}
+    if is_shadow_mode(automation_mode):
+        # Shadow mode: every tool call is a dry-run, so the cap on real
+        # side effects doesn't apply — admins get destructive so the
+        # shadow trace mirrors what a real full_auto run would attempt.
+        # Non-admins still cap at high_side_effect to keep destructive
+        # shadows behind an admin approval.
+        if set(roles) & admin_roles:
+            return "destructive"
+        return "high_side_effect"
     if set(roles) & admin_roles:
         if automation_mode == "full_auto":
             return "destructive"
@@ -178,6 +187,7 @@ async def start_execution(
             "playbook_id": str(playbook.id),
             "playbook_version_id": str(version.id),
             "automation_mode": playbook.automation_mode,
+            "shadow": is_shadow_mode(playbook.automation_mode),
             "max_safety_class": effective_safety_class,
             "step_count": len(steps),
             "approval_request_count": approval_count,
@@ -226,6 +236,7 @@ async def start_execution(
             "playbook_version_id": str(version.id),
             "execution_run_id": str(run.id),
             "automation_mode": playbook.automation_mode,
+            "shadow": is_shadow_mode(playbook.automation_mode),
             "max_safety_class": effective_safety_class,
         },
         status="pending",
@@ -338,6 +349,10 @@ async def record_tool_invocation(
     step = await db.get(ExecutionStepRun, step_run_id)
     if step is None or step.tenant_id != tenant_id:
         return None
+
+    run = await db.get(ExecutionRun, step.execution_run_id)
+    shadow = run is not None and is_shadow_mode(run.automation_mode)
+
     now = datetime.now(UTC)
     invocation = ToolInvocation(
         step_run_id=step_run_id,
@@ -346,8 +361,10 @@ async def record_tool_invocation(
         tool_version=tool_version,
         safety_class=safety_class,
         inputs=inputs or {},
-        outputs=outputs or {},
-        status=status,
+        # Shadow outputs are tagged explicitly so analytics can separate
+        # real outcomes from dry-run traces when computing success rates.
+        outputs={**(outputs or {}), "shadow": True} if shadow else (outputs or {}),
+        status="shadow_executed" if shadow else status,
         error_message=error_message,
         duration_ms=duration_ms,
         started_at=now,
@@ -361,13 +378,14 @@ async def record_tool_invocation(
         tenant_id=tenant_id,
         entity_type="tool_invocation",
         entity_id=invocation.id,
-        event_type=f"tool.{status}",
+        event_type="tool.shadow_executed" if shadow else f"tool.{status}",
         payload={
             "execution_run_id": str(step.execution_run_id),
             "step_run_id": str(step_run_id),
             "tool_name": tool_name,
             "safety_class": safety_class,
             "duration_ms": duration_ms,
+            "shadow": shadow,
         },
     )
     return invocation

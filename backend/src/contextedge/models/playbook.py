@@ -7,6 +7,42 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from contextedge.models.base import Base, TenantScopedMixin
 
+# The operating modes a playbook can run under. Kept in order of
+# increasing permissiveness so code can reason about "more automation"
+# monotonically.
+#
+# - ``suggest_only``   — generate a recommendation; never execute.
+# - ``shadow``         — execute through the motions but tool calls are
+#                         recorded as dry-runs (no real side effects).
+#                         Use this to validate a playbook against real
+#                         production traffic before flipping to
+#                         supervised / full_auto. Approval requests are
+#                         still created for audit visibility but tool
+#                         invocations short-circuit to a shadow outcome.
+# - ``human_confirmed`` — execute one step at a time with explicit
+#                         human approval per step.
+# - ``supervised``     — execute with a human-in-loop watching;
+#                         high_side_effect+ actions still require
+#                         per-step approval.
+# - ``full_auto``      — execute without approval for admin roles up
+#                         through destructive safety class.
+AUTOMATION_MODES = (
+    "suggest_only",
+    "shadow",
+    "human_confirmed",
+    "supervised",
+    "full_auto",
+)
+
+
+def is_shadow_mode(automation_mode: str | None) -> bool:
+    """Return True when the given mode indicates shadow execution.
+
+    Centralised so callers that need to branch on "is this a dry-run?"
+    don't open-code the string comparison and silently diverge.
+    """
+    return automation_mode == "shadow"
+
 
 class Playbook(Base, TenantScopedMixin):
     __tablename__ = "playbooks"

@@ -4,6 +4,15 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from contextedge.models.execution import SAFETY_CLASSES
+from contextedge.models.playbook import AUTOMATION_MODES
+
+
+def _validate_automation_mode(value: str) -> str:
+    if value not in AUTOMATION_MODES:
+        raise ValueError(
+            f"automation_mode must be one of {AUTOMATION_MODES}, got {value!r}"
+        )
+    return value
 
 
 class PlaybookStep(BaseModel):
@@ -140,6 +149,11 @@ class PlaybookCreate(BaseModel):
     pattern_id: UUID | None = None
     approval_policy_id: UUID | None = None
 
+    @field_validator("automation_mode")
+    @classmethod
+    def _check_automation_mode(cls, value: str) -> str:
+        return _validate_automation_mode(value)
+
 
 class PlaybookUpdate(BaseModel):
     title: str | None = None
@@ -148,6 +162,13 @@ class PlaybookUpdate(BaseModel):
     automation_mode: str | None = None
     approval_policy_id: UUID | None = None
     reviewer_user_id: UUID | None = None
+
+    @field_validator("automation_mode")
+    @classmethod
+    def _check_automation_mode(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        return _validate_automation_mode(value)
 
 
 class PlaybookTransition(BaseModel):

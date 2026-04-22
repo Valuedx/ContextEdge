@@ -67,6 +67,13 @@ class Settings(BaseSettings):
     # JSON map: token string -> { "tenant_id": "uuid", "user_id": "uuid", "email": "...", "roles": ["service_account"] }
     service_tokens_json: str = "{}"
 
+    # PII / secret redaction at ingest. On by default — set to False only
+    # for local debugging where seeing the raw payload is useful. Runs
+    # before embedding + LLM extraction so PII / secrets never leave the
+    # tenant boundary. Regex MVP; Presidio is a follow-up when the
+    # customer has a perf profile to measure against.
+    redaction_enabled: bool = True
+
 
 settings = Settings()
 

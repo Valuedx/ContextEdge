@@ -122,14 +122,14 @@ Cost shift: roughly neutral (Haiku cheaper than 4o-mini, Sonnet slightly pricier
 
 Tier-1 must-haves before any serious pilot, not yet in the codebase:
 
-- **SSO / OIDC federation** — the seeded-JWT fallback won't pass procurement. `backend/src/contextedge/middleware/auth.py` has OIDC helpers; wire them to Entra/Okta with JIT user provisioning.
-- **PII/secret redaction at ingest** — tickets routinely contain passwords, API keys, PHI. Before `embed_evidence` fires, run a regex + Presidio pass. Reduces tokens AND risk.
-- **Correlation ID propagation** — `X-Request-ID` is set on the API client but not propagated to Celery workers or downstream LLM provider calls. One ID from chat → orchestrator → ContextEdge → worker → provider. Foundation for observability.
-- **Per-tenant cost observability** — nobody's tracking which tenant/decision-type burns the LLM budget. Minimum viable: log token counts + model from every `llm_complete_json` call with tenant ID tag, Grafana panel. One afternoon of work, saves you from the first "why is our bill $X" customer call.
+- **SSO / OIDC federation** — the seeded-JWT fallback won't pass procurement. `backend/src/contextedge/middleware/auth.py` has OIDC helpers; wire them to Entra/Okta with JIT user provisioning. **Deferred pending customer IdP choice** (§6 item 8).
+- ~~**PII/secret redaction at ingest**~~ — **shipped 2026-04-23** via `services/redaction_service.py` regex MVP (EMAIL, PHONE, SSN, CREDIT_CARD, AWS_ACCESS_KEY, AWS_SECRET_KEY, PRIVATE_KEY) wired into `_normalize` before embed + extraction. Presidio upgrade still worth scheduling.
+- ~~**Correlation ID propagation**~~ — **shipped 2026-04-23** via Celery `before_task_publish` / `task_prerun` / `task_postrun` signal handlers in `workers/celery_app.py` plus `llm.usage` structlog enrichment. One ID now flows HTTP → Celery → LLM.
+- **Per-tenant cost observability** — nobody's tracking which tenant/decision-type burns the LLM budget. Minimum viable: log token counts + model from every `llm_complete_json` call with tenant ID tag, Grafana panel. One afternoon of work, saves you from the first "why is our bill $X" customer call. **Partially mitigated** by the Weeks 1-2 `llm.usage` instrumentation + `/admin/cost` dashboard; Grafana alerting still pending.
 - **Per-tenant budget guardrails** — hard cap at N tokens/day/tenant; graceful degradation to cheaper models or skip-and-queue.
 - **Output schema validation + retry on every LLM call** — `llm_complete_json` returns unstructured sometimes; retry with a reminder of the schema. Prompt-injection hardening also needs this.
 - **Per-tenant model pinning** — EU customers won't accept US-hosted inference. `litellm` supports this; needs a `tenant_model_config` table.
-- **Shadow mode as first-class state** — `automation_mode` exists; shadow (emit decisions but skip all side effects) isn't one of the values. Add it. Non-negotiable for trust-building rollout.
+- ~~**Shadow mode as first-class state**~~ — **shipped 2026-04-23** via `AUTOMATION_MODES` enum (§6 item 11). `"shadow"` is now a validated, observable state with tool-invocation dry-run tagging.
 
 ---
 
@@ -165,10 +165,10 @@ Can be one engineer in two weeks, ~50% cost reduction expected.
 
 ### Weeks 5–6: enterprise gates
 
-8. SSO/OIDC wire-up with one demo IdP (Entra)
-9. Redaction pass at ingest (Presidio or regex MVP)
-10. Correlation ID propagation through Celery + LLM calls
-11. Shadow mode as first-class `automation_mode` value
+8. **Deferred** — SSO/OIDC wire-up with one demo IdP (Entra). Parked until the customer confirms an IdP choice. Existing JWT bearer auth (`jose.jwt` + `TenantContextMiddleware`) covers local-credential login, and the service-token path covers integrations — both will remain as the fallback once OIDC is the default.
+9. **Shipped 2026-04-23** — Redaction pass at ingest (regex MVP). `services/redaction_service.py` introduces `redact(text)` and `redact_evidence_fields(title, body)` covering emails, phone numbers, SSN, credit-card-ish digit runs, AWS access keys, AWS secret keys, and `-----BEGIN … PRIVATE KEY-----` blocks. Wired into `_normalize` so title + body + the identity/decision-extractor prompt blob all run through redaction before any LLM / embed call — PII never leaves the tenant boundary on the ingest path. Per-kind counts are emitted as an `evidence.redacted` structlog event for audit. Gated by `settings.redaction_enabled` (on by default; flip to false only for local debugging). Deduplication hash is computed over the pre-redaction payload so tuning the regex rules doesn't break dedup.
+10. **Shipped 2026-04-23** — Correlation ID propagation through Celery + LLM calls. `workers/celery_app.py` now wires three signal handlers: `before_task_publish` reads the current HTTP request's `request_id` / `correlation_id` / `causation_id` from the ContextVar and injects them into the outgoing Celery message headers; `task_prerun` rebinds them into the worker's ContextVar so any service code running inside the task automatically inherits the IDs; `task_postrun` resets the token. `append_operational_event` already pulled from the ContextVar, so worker-emitted events now carry correlation IDs without code changes. `ai/observability.record_llm_usage` also enriches the `llm.usage` structlog line with `request_id` / `correlation_id` / `causation_id`, so a single reviewer action can be grepped across HTTP → Celery → LLM log lines.
+11. **Shipped 2026-04-23** — Shadow mode as first-class `automation_mode` value. `models/playbook.AUTOMATION_MODES` introduces an ordered enum (`suggest_only`, `shadow`, `human_confirmed`, `supervised`, `full_auto`) with Pydantic-level validation on `PlaybookCreate` / `PlaybookUpdate`. `execution_service._caller_max_safety_class` now permits admins to attempt destructive actions under shadow (since nothing real executes) and caps non-admins at `high_side_effect`. `record_tool_invocation` detects the shadow mode of the parent run via `is_shadow_mode(run.automation_mode)` and tags tool outputs with `shadow: True`, forces status to `shadow_executed`, and fires a `tool.shadow_executed` operational event — so analytics can separate real outcomes from dry-run traces when computing success rates.
 
 ### Weeks 7–9: scale foundations
 

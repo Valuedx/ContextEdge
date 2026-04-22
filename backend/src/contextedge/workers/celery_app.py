@@ -1,6 +1,83 @@
+import uuid
+
 from celery import Celery
+from celery.signals import before_task_publish, task_postrun, task_prerun
 
 from contextedge.config import settings
+from contextedge.middleware.request_context import (
+    bind_request_context,
+    current_causation_id,
+    current_correlation_id,
+    current_request_id,
+    reset_request_context,
+)
+
+# ContextVar token per worker task, indexed by the task's celery request id.
+# We cannot rely on a module-level variable because Celery can run tasks
+# concurrently inside one worker process (gevent / eventlet pools) — each
+# task must own its own reset token.
+_WORKER_CONTEXT_TOKENS: dict[str, object] = {}
+
+_CORRELATION_HEADER_KEYS = ("request_id", "correlation_id", "causation_id")
+
+
+@before_task_publish.connect
+def _inject_correlation_headers(sender=None, headers=None, **_) -> None:
+    """Attach the current HTTP request's correlation IDs to outgoing task
+    messages so the worker can rebind them on prerun. Celery propagates
+    the ``headers`` dict through the broker protocol; nothing else needs
+    to change at the enqueue site (``task.delay(...)`` just works)."""
+    if headers is None:
+        return
+    values = {
+        "request_id": current_request_id(),
+        "correlation_id": current_correlation_id(),
+        "causation_id": current_causation_id(),
+    }
+    for key, value in values.items():
+        if value is None:
+            continue
+        # Don't clobber anything the caller already set explicitly.
+        headers.setdefault(key, str(value))
+
+
+@task_prerun.connect
+def _bind_worker_context(task_id=None, task=None, **_) -> None:
+    """Rebind correlation IDs from task headers into the worker's
+    ContextVar so logs + operational_events emitted by service code
+    running under this task inherit them automatically."""
+    if task is None or task_id is None:
+        return
+    request = getattr(task, "request", None)
+    if request is None:
+        return
+    raw_headers = getattr(request, "headers", None) or {}
+    values: dict[str, uuid.UUID] = {}
+    for key in _CORRELATION_HEADER_KEYS:
+        raw = raw_headers.get(key)
+        if not raw:
+            continue
+        try:
+            values[key] = uuid.UUID(str(raw))
+        except (TypeError, ValueError):
+            continue
+    if not values:
+        return
+    token = bind_request_context(**values)
+    _WORKER_CONTEXT_TOKENS[task_id] = token
+
+
+@task_postrun.connect
+def _release_worker_context(task_id=None, **_) -> None:
+    token = _WORKER_CONTEXT_TOKENS.pop(task_id, None) if task_id else None
+    if token is not None:
+        try:
+            reset_request_context(token)
+        except Exception:
+            # A different task may have already reset it (pool recycling);
+            # don't let postrun crash the worker on cleanup.
+            pass
+
 
 celery_app = Celery(
     "contextedge",

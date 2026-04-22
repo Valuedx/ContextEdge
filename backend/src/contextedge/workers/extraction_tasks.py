@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from contextedge.ai.classifiers.relevance import classify_relevance as run_relevance_classifier
 from contextedge.ai.embeddings import embed_evidence
+from contextedge.config import settings
 from contextedge.models.episode import EpisodeStep
 from contextedge.models.evidence import EvidenceItem, RawEvidenceObject
 from contextedge.models.tenant import Domain
@@ -23,6 +24,7 @@ from contextedge.services.evidence_normalization import (
 )
 from contextedge.services.decision_service import link_evidence_decisions
 from contextedge.services.identity_service import link_evidence_identities
+from contextedge.services.redaction_service import redact, redact_evidence_fields
 from contextedge.workers.asyncio_runner import run_async
 from contextedge.workers.celery_app import celery_app
 from contextedge.workers.correlation_tasks import correlate_evidence
@@ -51,7 +53,26 @@ async def _normalize(db: AsyncSession, raw_object_id: str, tenant_id: uuid.UUID)
 
     title = evidence_title_from_payload(payload)
     body = evidence_body_from_payload(payload)
+    # Hash the pre-redaction payload so two ingests of the same upstream
+    # row still dedupe correctly — redaction is non-deterministic
+    # across placeholder-format changes and we don't want to break
+    # dedup when we tune the regex rules.
     h = evidence_content_hash_from_payload(payload)
+
+    # Redact PII / secrets before anything downstream sees the text.
+    # Classifier, embedder, identity / decision extractors, and DB
+    # storage all read from ``title`` / ``body`` after this point.
+    title, body, redaction_counts = redact_evidence_fields(
+        title, body, enabled=settings.redaction_enabled,
+    )
+    if redaction_counts:
+        logger.info(
+            "evidence.redacted",
+            tenant_id=str(tenant_id),
+            raw_object_id=raw_object_id,
+            counts=redaction_counts,
+        )
+
     identity_content = "\n".join(
         part for part in [
             title or "",
@@ -59,6 +80,13 @@ async def _normalize(db: AsyncSession, raw_object_id: str, tenant_id: uuid.UUID)
             json.dumps(payload, default=str)[:2000] if payload else "",
         ]
         if part and part.strip()
+    )
+    # The raw payload JSON can contain PII fields the title/body
+    # extractors missed (e.g. nested custom fields in Jira issues).
+    # Re-redact the composed blob before it ships to the identity /
+    # decision LLM extractors.
+    identity_content, _ = redact(
+        identity_content, enabled=settings.redaction_enabled,
     )
 
     source_ts = None
