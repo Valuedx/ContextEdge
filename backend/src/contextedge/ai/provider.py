@@ -11,6 +11,10 @@ import structlog
 from contextedge.config import settings
 
 litellm.set_verbose = False
+litellm.telemetry = False
+litellm.add_all_callbacks = False
+litellm.logging_worker = False
+os.environ["LITELLM_LOGGING_WORKER"] = "False"
 logger = structlog.get_logger()
 
 # Ensure Google API Key is set for LiteLLM

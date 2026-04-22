@@ -5,6 +5,7 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime, timedelta
 
+import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -28,6 +29,8 @@ from contextedge.services.sync_ingestion_queue import (
     NormalizeEnqueueError,
     queue_normalize_raw_objects,
 )
+
+logger = structlog.get_logger()
 
 
 async def run_discovery_job(db: AsyncSession, source_id: uuid.UUID, tenant_id: uuid.UUID) -> dict:
@@ -364,16 +367,17 @@ async def run_backfill_job(
     tenant_id: uuid.UUID,
     window_days: int = 90,
 ) -> dict:
-    r = await db.execute(
-        select(SourceObject).where(
-            SourceObject.id == source_object_id,
-            SourceObject.source_id == source_id,
-            SourceObject.tenant_id == tenant_id,
-        )
-    )
-    so = r.scalar_one_or_none()
+    so = await db.get(SourceObject, source_object_id)
     if not so:
-        return {"error": "source_object_not_found"}
+        logger.error("backfill.source_object_missing", object_id=str(source_object_id))
+        return {"error": "source_object_missing"}
+
+    if so.source_id != source_id or so.tenant_id != tenant_id:
+        logger.error("backfill.context_mismatch",
+                     object_id=str(so.id),
+                     requested_source=str(source_id),
+                     actual_source=str(so.source_id))
+        return {"error": "source_object_context_mismatch"}
 
     if not so.approved_for_backfill:
         return {"error": "source_object_not_approved_for_backfill"}
@@ -448,16 +452,17 @@ async def run_incremental_job(
     source_object_id: uuid.UUID,
     tenant_id: uuid.UUID,
 ) -> dict:
-    r = await db.execute(
-        select(SourceObject).where(
-            SourceObject.id == source_object_id,
-            SourceObject.source_id == source_id,
-            SourceObject.tenant_id == tenant_id,
-        )
-    )
-    so = r.scalar_one_or_none()
+    so = await db.get(SourceObject, source_object_id)
     if not so:
-        return {"error": "source_object_not_found"}
+        logger.error("incremental.source_object_missing", object_id=str(source_object_id))
+        return {"error": "source_object_missing"}
+
+    if so.source_id != source_id or so.tenant_id != tenant_id:
+        logger.error("incremental.context_mismatch",
+                     object_id=str(so.id),
+                     requested_source=str(source_id),
+                     actual_source=str(so.source_id))
+        return {"error": "source_object_context_mismatch"}
 
     if not so.approved_for_sync:
         return {"error": "source_object_not_approved_for_sync"}

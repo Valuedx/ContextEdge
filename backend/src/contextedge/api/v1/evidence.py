@@ -181,7 +181,7 @@ async def bulk_delete_evidence(
     if not ids:
         return None
 
-    # 1. Delete Correlation Edges
+    # 1. Delete Correlation Edges (Handled by DB cascade but good to have)
     await db.execute(
         delete(CorrelationEdge).where(
             or_(
@@ -191,12 +191,36 @@ async def bulk_delete_evidence(
         )
     )
 
-    # 2. Delete Attachment Artifacts
+    # 2. Delete Case Links (NECESSARY - No DB cascade)
+    from contextedge.models.session import CaseLink
+    await db.execute(
+        delete(CaseLink).where(CaseLink.evidence_id.in_(ids))
+    )
+
+    # 3. Delete Pattern Evidence Links (Cleanup)
+    from contextedge.models.pattern import PatternEvidenceLink, GraphEdge
+    await db.execute(
+        delete(PatternEvidenceLink).where(PatternEvidenceLink.evidence_id.in_(ids))
+    )
+
+    # 4. Delete Graph Edges (Cleanup)
+    await db.execute(
+        delete(GraphEdge).where(
+            (GraphEdge.source_node_type == "evidence") & (GraphEdge.source_node_id.in_(ids))
+        )
+    )
+    await db.execute(
+        delete(GraphEdge).where(
+            (GraphEdge.target_node_type == "evidence") & (GraphEdge.target_node_id.in_(ids))
+        )
+    )
+
+    # 5. Delete Attachment Artifacts
     await db.execute(
         delete(AttachmentArtifact).where(AttachmentArtifact.evidence_id.in_(ids))
     )
 
-    # 3. Delete Evidence Items
+    # 6. Delete Evidence Items
     await db.execute(
         delete(EvidenceItem).where(
             EvidenceItem.id.in_(ids),
@@ -245,17 +269,35 @@ async def purge_evidence(db: DbSession, user: AuthUser):
             )
         )
 
-        # 3. Delete Attachment Artifacts
+        # 3. Delete Case Links
+        from contextedge.models.session import CaseLink
+        await db.execute(
+            delete(CaseLink).where(CaseLink.tenant_id == user.tenant_id)
+        )
+
+        # 4. Delete Pattern Links & Graph Edges
+        from contextedge.models.pattern import PatternEvidenceLink, GraphEdge
+        await db.execute(
+            delete(PatternEvidenceLink).where(PatternEvidenceLink.evidence_id.in_(evidence_ids))
+        )
+        await db.execute(
+            delete(GraphEdge).where(
+                (GraphEdge.tenant_id == user.tenant_id) & 
+                ((GraphEdge.source_node_type == "evidence") | (GraphEdge.target_node_type == "evidence"))
+            )
+        )
+
+        # 5. Delete Attachment Artifacts
         await db.execute(
             delete(AttachmentArtifact).where(AttachmentArtifact.evidence_id.in_(evidence_ids))
         )
 
-        # 4. Delete Evidence Items
+        # 6. Delete Evidence Items
         await db.execute(
             delete(EvidenceItem).where(EvidenceItem.tenant_id == user.tenant_id)
         )
 
-    # 5. Delete Raw Evidence Objects
+    # 7. Delete Raw Evidence Objects
     await db.execute(
         delete(RawEvidenceObject).where(RawEvidenceObject.tenant_id == user.tenant_id)
     )
@@ -289,6 +331,30 @@ async def delete_evidence(evidence_id: UUID, db: DbSession, user: AuthUser):
     item = result.scalar_one_or_none()
     if not item:
         raise HTTPException(status_code=404, detail="Evidence not found")
+
+    from sqlalchemy import delete, or_
+    from contextedge.models.session import CaseLink
+    from contextedge.models.pattern import PatternEvidenceLink, GraphEdge
+    from contextedge.models.episode import CorrelationEdge
+
+    # Manually clean up dependencies not covered by CASCADE
+    await db.execute(delete(CaseLink).where(CaseLink.evidence_id == evidence_id))
+    await db.execute(delete(PatternEvidenceLink).where(PatternEvidenceLink.evidence_id == evidence_id))
+    await db.execute(
+        delete(GraphEdge).where(
+            ((GraphEdge.source_node_type == "evidence") & (GraphEdge.source_node_id == evidence_id)) |
+            ((GraphEdge.target_node_type == "evidence") & (GraphEdge.target_node_id == evidence_id))
+        )
+    )
+    # Ensure correlations are also removed manually as a safety measure
+    await db.execute(
+        delete(CorrelationEdge).where(
+            or_(
+                CorrelationEdge.source_evidence_id == evidence_id,
+                CorrelationEdge.target_evidence_id == evidence_id
+            )
+        )
+    )
 
     await db.delete(item)
     await db.commit()

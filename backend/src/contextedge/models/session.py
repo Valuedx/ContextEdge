@@ -101,10 +101,15 @@ class CaseLink(Base):
     external_id: Mapped[str] = mapped_column(String(500), nullable=False)
     evidence_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("evidence_items.id"),
+        ForeignKey("evidence_items.id", ondelete="CASCADE"),
         nullable=True,
     )
     confidence: Mapped[float] = mapped_column(Float, default=1.0, nullable=False)
+    
+    evidence_item: Mapped["EvidenceItem | None"] = relationship(
+        back_populates="case_links",
+        passive_deletes=True,
+    )
     first_seen: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),

@@ -68,7 +68,10 @@ class EvidenceIdentityLink(Base):
         nullable=False,
     )
 
-    evidence_item: Mapped["EvidenceItem"] = relationship(back_populates="identity_links")
+    evidence_item: Mapped["EvidenceItem"] = relationship(
+        back_populates="identity_links",
+        passive_deletes=True,
+    )
     identity: Mapped["CanonicalIdentity"] = relationship(back_populates="evidence_links")
 
 
@@ -83,6 +86,17 @@ class CorrelationEdge(Base, TenantScopedMixin):
     confidence: Mapped[float] = mapped_column(Float, default=0.5, nullable=False)
     explanation: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_by: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    
+    source_evidence: Mapped["EvidenceItem"] = relationship(
+        back_populates="correlations_as_source",
+        foreign_keys="CorrelationEdge.source_evidence_id",
+        passive_deletes=True,
+    )
+    target_evidence: Mapped["EvidenceItem"] = relationship(
+        back_populates="correlations_as_target",
+        foreign_keys="CorrelationEdge.target_evidence_id",
+        passive_deletes=True,
+    )
 
 
 class Episode(Base, TenantScopedMixin):
@@ -111,7 +125,7 @@ class EpisodeStep(Base):
     __tablename__ = "episode_steps"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    episode_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("episodes.id"), nullable=False, index=True)
+    episode_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("episodes.id", ondelete="CASCADE"), nullable=False, index=True)
     step_order: Mapped[int] = mapped_column(Integer, nullable=False)
     step_type: Mapped[str] = mapped_column(String(30), nullable=False)
     text: Mapped[str] = mapped_column(Text, nullable=False)

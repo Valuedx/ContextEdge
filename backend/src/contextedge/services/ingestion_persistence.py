@@ -10,7 +10,7 @@ from collections.abc import Sequence
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from contextedge.models.evidence import RawEvidenceObject
+from contextedge.models.evidence import RawEvidenceObject, EvidenceItem
 from contextedge.services.object_store import upload_raw
 
 OFFLOAD_THRESHOLD_BYTES = 32_768
@@ -68,7 +68,21 @@ async def persist_ingestion_events(
             )
         ).scalar_one_or_none()
         if dup:
-            skipped += 1
+            # CHECK: Has this raw object been normalized into an EvidenceItem yet?
+            # If not, we still need to queue it for normalization.
+            ev_exists = (
+                await db.execute(
+                    select(EvidenceItem.id).where(
+                        EvidenceItem.tenant_id == tenant_id,
+                        EvidenceItem.raw_object_ref == dup,
+                    )
+                )
+            ).scalar_one_or_none()
+            if not ev_exists:
+                new_ids.append(dup)
+                created += 1 # Count as 'processed' for the run summary
+            else:
+                skipped += 1
             continue
 
         raw = RawEvidenceObject(

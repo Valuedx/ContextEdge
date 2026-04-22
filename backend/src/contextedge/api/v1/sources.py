@@ -393,6 +393,15 @@ async def local_ingest(body: LocalIngestRequest, db: DbSession, user: AuthUser):
             from contextedge.workers.extraction_tasks import _classify
             await _classify(db, norm_res["evidence_id"], user.tenant_id)
 
+            # Trigger background tasks that were bypassed by the synchronous ingest
+            from contextedge.workers.correlation_tasks import correlate_evidence
+            from contextedge.workers.evidence_baseline_tasks import (
+                compute_evidence_baseline_task,
+            )
+
+            correlate_evidence.delay(norm_res["evidence_id"], str(user.tenant_id))
+            compute_evidence_baseline_task.delay(norm_res["evidence_id"], str(user.tenant_id))
+
     await db.commit()
 
     await log_audit_event(
@@ -423,20 +432,40 @@ async def delete_source(source_id: UUID, db: DbSession, user: AuthUser):
         raise HTTPException(status_code=404, detail="Source not found")
 
     from sqlalchemy import delete, or_
-    from contextedge.models.evidence import EvidenceItem, RawEvidenceObject
-    from contextedge.models.source import SourceObject, SyncRun
+    from contextedge.models.evidence import EvidenceItem, RawEvidenceObject, Thread, AttachmentArtifact
+    from contextedge.models.source import SourceObject, SyncRun, SyncCheckpoint, SourceCredential
+    from contextedge.models.session import CaseLink
+    from contextedge.models.pattern import PatternEvidenceLink, GraphEdge
+    from contextedge.models.episode import CorrelationEdge
 
     # 1. Resolve Evidence IDs to delete dependencies
     evidence_ids_q = await db.execute(
         select(EvidenceItem.id).where(EvidenceItem.source_id == source_id)
     )
-    evidence_ids = evidence_ids_q.scalars().all()
+    evidence_ids = list(evidence_ids_q.scalars().all())
 
     if evidence_ids:
-        from contextedge.models.episode import CorrelationEdge
-        from contextedge.models.evidence import AttachmentArtifact
+        # 2. Delete Case Links
+        await db.execute(
+            delete(CaseLink).where(CaseLink.evidence_id.in_(evidence_ids))
+        )
 
-        # 2. Delete Correlation Edges
+        # 3. Delete Pattern Evidence Links
+        await db.execute(
+            delete(PatternEvidenceLink).where(PatternEvidenceLink.evidence_id.in_(evidence_ids))
+        )
+
+        # 4. Delete Graph Edges (where evidence is source or target)
+        await db.execute(
+            delete(GraphEdge).where(
+                or_(
+                    GraphEdge.source_node_id.in_(evidence_ids),
+                    GraphEdge.target_node_id.in_(evidence_ids)
+                )
+            )
+        )
+
+        # 5. Delete Correlation Edges
         await db.execute(
             delete(CorrelationEdge).where(
                 or_(
@@ -446,39 +475,48 @@ async def delete_source(source_id: UUID, db: DbSession, user: AuthUser):
             )
         )
 
-        # 3. Delete Attachment Artifacts
+        # 6. Delete Attachment Artifacts
         await db.execute(
             delete(AttachmentArtifact).where(AttachmentArtifact.evidence_id.in_(evidence_ids))
         )
 
-        # 4. Delete Evidence Items
+        # 7. Delete Evidence Items
         await db.execute(
             delete(EvidenceItem).where(EvidenceItem.source_id == source_id)
         )
     
-    # 5. Delete Threads
-    from contextedge.models.evidence import Thread
+    # 8. Delete Threads
     await db.execute(
         delete(Thread).where(Thread.source_id == source_id)
     )
 
-    # 6. Delete Raw Evidence
+    # 9. Delete Raw Evidence
     await db.execute(
         delete(RawEvidenceObject).where(RawEvidenceObject.source_id == source_id)
     )
+
+    # 10. Resolve Source Object IDs to delete checkpoints
+    source_obj_ids_q = await db.execute(
+        select(SourceObject.id).where(SourceObject.source_id == source_id)
+    )
+    source_obj_ids = list(source_obj_ids_q.scalars().all())
+
+    if source_obj_ids:
+        await db.execute(
+            delete(SyncCheckpoint).where(SyncCheckpoint.source_object_id.in_(source_obj_ids))
+        )
     
-    # 6. Delete Sync Runs
+    # 11. Delete Sync Runs
     await db.execute(
         delete(SyncRun).where(SyncRun.source_id == source_id)
     )
     
-    # 7. Delete Source Objects
+    # 12. Delete Source Objects
     await db.execute(
         delete(SourceObject).where(SourceObject.source_id == source_id)
     )
 
-    # 8. Delete Source Credentials
-    from contextedge.models.source import SourceCredential
+    # 13. Delete Source Credentials
     await db.execute(
         delete(SourceCredential).where(SourceCredential.source_id == source_id)
     )

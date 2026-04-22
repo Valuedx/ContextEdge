@@ -102,6 +102,35 @@ async def get_pattern_subgraph(
     edges_result = await db.execute(q)
     edges = edges_result.scalars().all()
 
+    # Also fetch 2nd-hop edges (episode→identity, etc.) but limit to specific types to avoid explosion
+    episode_ids: list[uuid.UUID] = []
+    for e in edges:
+        if e.source_node_type == "episode":
+            episode_ids.append(e.source_node_id)
+        elif e.target_node_type == "episode":
+            episode_ids.append(e.target_node_id)
+
+    second_hop_edges: list = []
+    if episode_ids:
+        # Only pull high-value 2nd-hop relations (like identities affected)
+        q2 = select(GraphEdge).where(
+            GraphEdge.tenant_id == tenant_id,
+            or_(
+                GraphEdge.source_node_id.in_(episode_ids),
+                GraphEdge.target_node_id.in_(episode_ids),
+            ),
+            GraphEdge.edge_type.in_(["mentions_identity", "affects", "references_identity", "derived_from"])
+        ).limit(20) # Global cap on secondary expansion
+        
+        if domain_id is not None:
+            q2 = q2.where(
+                (GraphEdge.domain_id == domain_id) | GraphEdge.domain_id.is_(None)
+            )
+        second_hop_result = await db.execute(q2)
+        second_hop_edges = second_hop_result.scalars().all()
+
+    all_edges = list(edges) + [e for e in second_hop_edges if e.id not in {x.id for x in edges}]
+
     nodes: dict[str, dict] = {}
 
     def add_node(ntype: str, nid: str, title: str | None = None):
@@ -113,17 +142,141 @@ async def get_pattern_subgraph(
 
     add_node("pattern", str(pattern_id), pattern.title)
 
+    # Enrichment node types that store their label in edge metadata
+    ENRICHMENT_TYPES = {"trigger", "entity", "error", "root_cause"}
+
     edge_list = []
-    for e in edges:
-        label = (e.metadata_extra or {}).get("label")
-        add_node(e.source_node_type, str(e.source_node_id), label)
-        add_node(e.target_node_type, str(e.target_node_id), label)
+    for e in all_edges:
+        meta_label = (e.metadata_extra or {}).get("label")
+        # Enrichment nodes (source) carry their name in edge metadata
+        if e.source_node_type in ENRICHMENT_TYPES:
+            add_node(e.source_node_type, str(e.source_node_id), meta_label)
+        else:
+            add_node(e.source_node_type, str(e.source_node_id))
+        # Target is rarely an enrichment node but handle both anyway
+        if e.target_node_type in ENRICHMENT_TYPES:
+            add_node(e.target_node_type, str(e.target_node_id), meta_label)
+        else:
+            add_node(e.target_node_type, str(e.target_node_id))
+
         edge_list.append({
             "source": f"{e.source_node_type}:{e.source_node_id}",
             "target": f"{e.target_node_type}:{e.target_node_id}",
             "type": e.edge_type,
             "weight": e.weight,
         })
+
+    # Fetch real titles for DB-backed node types
+    from contextedge.models.episode import Episode
+    from contextedge.models.evidence import EvidenceItem
+
+    ep_ids = [
+        uuid.UUID(v["id"]) for v in nodes.values()
+        if v["type"] == "episode" and not v.get("title")
+    ]
+    if ep_ids:
+        ep_res = await db.execute(
+            select(Episode.id, Episode.title).where(Episode.id.in_(ep_ids))
+        )
+        for row in ep_res.all():
+            key = f"episode:{row.id}"
+            if key in nodes:
+                nodes[key]["title"] = row.title
+
+    ev_ids = [
+        uuid.UUID(v["id"]) for v in nodes.values()
+        if v["type"] == "evidence" and not v.get("title")
+    ]
+    if ev_ids:
+        ev_res = await db.execute(
+            select(EvidenceItem.id, EvidenceItem.title).where(EvidenceItem.id.in_(ev_ids))
+        )
+        for row in ev_res.all():
+            key = f"evidence:{row.id}"
+            if key in nodes:
+                nodes[key]["title"] = row.title
+
+    # Identity Pruning: Only show shared or significant identities to avoid clutter
+    id_counts: dict[str, int] = {}
+    for e in all_edges:
+        if e.source_node_type == "identity":
+            id_counts[e.source_node_id] = id_counts.get(str(e.source_node_id), 0) + 1
+        if e.target_node_type == "identity":
+            id_counts[str(e.target_node_id)] = id_counts.get(str(e.target_node_id), 0) + 1
+
+    # Fetch identity names
+    try:
+        from contextedge.models.episode import CanonicalIdentity
+        all_id_keys = [k for k, v in nodes.items() if v["type"] == "identity"]
+        id_ids = [uuid.UUID(k.split(":")[1]) for k in all_id_keys]
+        
+        if id_ids:
+            # Join with canonical_identities to get real names
+            id_res = await db.execute(
+                select(CanonicalIdentity.id, CanonicalIdentity.canonical_name)
+                .where(CanonicalIdentity.id.in_(id_ids))
+            )
+            for row in id_res.all():
+                key = f"identity:{row.id}"
+                if key in nodes:
+                    nodes[key]["title"] = row.canonical_name
+
+        # 2. Pruning: Keep only those with titles AND limit to top 8 by frequency
+        sorted_ids = sorted(
+            [k for k in all_id_keys if nodes[k].get("title")],
+            key=lambda k: id_counts.get(k.split(":")[1], 0),
+            reverse=True
+        )[:8]
+
+        # 3. Deduplication: Merge identities with nearly identical names
+        merged_ids: dict[str, str] = {} # original_key -> canonical_key
+        name_map: dict[str, str] = {}   # normalized_name -> canonical_key
+        
+        # Sort for deterministic canonical keys
+        for nid in sorted(sorted_ids, key=len):
+            title = nodes[nid].get("title", "").lower()
+            norm = "".join(c for c in title if c.isalnum())
+            if not norm: continue
+            
+            if norm in name_map:
+                merged_ids[nid] = name_map[norm]
+            else:
+                name_map[norm] = nid
+                merged_ids[nid] = nid
+
+        # Final set of nodes to keep
+        final_id_set = set(name_map.values())
+        
+        # Remove pruned or merged identities from nodes
+        for k in all_id_keys:
+            if k not in final_id_set:
+                del nodes[k]
+        
+        # Remap edges to point to canonical nodes
+        edge_list = [
+            {
+                **e,
+                "source": merged_ids.get(e["source"], e["source"]),
+                "target": merged_ids.get(e["target"], e["target"])
+            }
+            for e in edge_list 
+            if not (e["source"].startswith("identity:") and e["source"] not in merged_ids and e["source"] not in final_id_set)
+            and not (e["target"].startswith("identity:") and e["target"] not in merged_ids and e["target"] not in final_id_set)
+        ]
+        
+        # Deduplicate resulting edges
+        seen_edges = set()
+        final_edges = []
+        for e in edge_list:
+            ekey = f"{e['source']}-{e['target']}-{e['type']}"
+            if ekey not in seen_edges:
+                seen_edges.add(ekey)
+                final_edges.append(e)
+        edge_list = final_edges
+
+    except Exception as e:
+        import structlog
+        structlog.get_logger().error("identity_resolution_failed", error=str(e))
 
     return {
         "nodes": list(nodes.values()),

@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from contextedge.ai.classifiers.relevance import classify_relevance as run_relevance_classifier
 from contextedge.ai.embeddings import embed_evidence
 from contextedge.models.episode import EpisodeStep
-from contextedge.models.evidence import EvidenceItem, RawEvidenceObject
+from contextedge.models.evidence import EvidenceItem, RawEvidenceObject, Thread
 from contextedge.models.tenant import Domain
 from contextedge.services.artifact_extraction_service import (
     load_raw_payload,
@@ -226,20 +226,76 @@ async def _classify(db: AsyncSession, evidence_id: str, tenant_id: uuid.UUID) ->
     if not ev or ev.tenant_id != tenant_id:
         return {"error": "evidence_not_found"}
 
+    # If already classified by another process, return early
+    if ev.relevance_state != "unclassified":
+        return {"evidence_id": evidence_id, "classification": ev.relevance_state}
+
+    # Thread-level optimization: check if the thread is already classified
+    if ev.thread_id:
+        thread = await db.get(Thread, ev.thread_id)
+        if thread and thread.relevance_state != "unclassified":
+            ev.relevance_state = thread.relevance_state
+            ev.relevance_score = 1.0  # Inherited
+            # Inherit metadata if available
+            if not ev.canonical_entity_refs:
+                ev.canonical_entity_refs = {}
+            ev.canonical_entity_refs["classification_meta"] = {
+                "inherited": True,
+                "thread_id": str(thread.id)
+            }
+            await db.flush()
+            return {"evidence_id": evidence_id, "classification": ev.relevance_state, "cached": True}
+
+    # Perform LLM classification
     out = await run_relevance_classifier(
         ev.title or "",
         ev.body_text or "",
         "unknown",
         ev.evidence_type,
     )
-    label = out.get("classification", "not_relevant")
-    ev.relevance_state = label.replace(" ", "_")
+    
+    label = out.get("classification", "NOT_RELEVANT")
+    # Map to internal states
+    if label == "OPERATIONAL_INCIDENT":
+        state = "operational"
+    elif label == "POSSIBLY_RELEVANT":
+        state = "possibly_relevant"
+    else:
+        state = "discarded"
+    
+    ev.relevance_state = state
     ev.relevance_score = float(out.get("confidence", 0.0))
+    
+    # Store extended metadata
+    metadata = {
+        "issue_type": out.get("issue_type"),
+        "affected_system": out.get("affected_system"),
+        "user_impact": out.get("user_impact"),
+        "urgency_level": out.get("urgency_level"),
+        "stage2_confidence": out.get("confidence")
+    }
+    
+    if not ev.canonical_entity_refs:
+        ev.canonical_entity_refs = {}
+    ev.canonical_entity_refs["classification_meta"] = metadata
+    
+    # Also update the parent thread if it exists
+    if ev.thread_id:
+        thread = await db.get(Thread, ev.thread_id)
+        if thread:
+            thread.relevance_state = state
+            
     await db.flush()
     return {"evidence_id": evidence_id, "classification": ev.relevance_state}
 
 
-async def _reconstruct(db: AsyncSession, cluster_id: str, tenant_id: uuid.UUID, domain_id: uuid.UUID | None = None) -> dict:
+async def _reconstruct(
+    db: AsyncSession,
+    cluster_id: str,
+    tenant_id: uuid.UUID,
+    domain_id: uuid.UUID | None = None,
+    target_episode_id: uuid.UUID | None = None,
+) -> dict:
     """`cluster_id` is treated as a comma-separated list of evidence UUIDs for MVP wiring."""
     ids = [uuid.UUID(x.strip()) for x in cluster_id.split(",") if x.strip()]
     if len(ids) < 1:
@@ -250,20 +306,90 @@ async def _reconstruct(db: AsyncSession, cluster_id: str, tenant_id: uuid.UUID, 
         dr = await db.execute(select(Domain.id).where(Domain.tenant_id == tenant_id).limit(1))
         domain_id = dr.scalar_one_or_none()
 
-    items = []
+    # --- Step 1: Load all seed evidence items and collect their thread_ids ---
+    seen_ids: set[uuid.UUID] = set()
+    thread_ids: set[uuid.UUID] = set()
+    seed_items: list[EvidenceItem] = []
+
     for eid in ids:
         ev = await db.get(EvidenceItem, eid)
         if ev and ev.tenant_id == tenant_id:
-            items.append({
-                "title": ev.title,
-                "body": ev.body_text,
-                "source_type": "evidence",
-                "timestamp": str(ev.created_at_source or ev.ingested_at),
-                "evidence_id": str(ev.id),
-            })
+            seen_ids.add(ev.id)
+            seed_items.append(ev)
+            if ev.thread_id:
+                thread_ids.add(ev.thread_id)
 
-    if not items:
+    if not seed_items:
         return {"error": "no_evidence_found"}
+
+    # --- Step 2: Expand cluster by fetching ALL siblings from the same threads ---
+    # This ensures every email in the trail is included, not just the correlated subset.
+    if thread_ids:
+        thread_res = await db.execute(
+            select(EvidenceItem).where(
+                EvidenceItem.tenant_id == tenant_id,
+                EvidenceItem.thread_id.in_(thread_ids),
+                EvidenceItem.id.not_in(seen_ids),
+            )
+        )
+        for sibling in thread_res.scalars().all():
+            seed_items.append(sibling)
+            seen_ids.add(sibling.id)
+
+    # --- Step 2.1: Secondary Fallback Expansion (by Subject/Title) ---
+    # If we have very few items and thread_id expansion didn't yield much, try matching by title.
+    if len(seed_items) < 3:
+        from contextedge.services.episode_service import _normalize_title
+        
+        # Collect normalized titles of current items
+        norm_titles = set()
+        for ev in seed_items:
+            if ev.title:
+                norm_titles.add(_normalize_title(ev.title))
+        
+        if norm_titles:
+            # We look for evidence items with similar normalized titles in the last 7 days
+            from datetime import timedelta, UTC
+            since = datetime.now(UTC) - timedelta(days=7)
+            
+            # This is a broad search but limited by tenant and time
+            # We filter in Python for exact normalized title match to be safe
+            potential_res = await db.execute(
+                select(EvidenceItem).where(
+                    EvidenceItem.tenant_id == tenant_id,
+                    EvidenceItem.id.not_in(seen_ids),
+                    EvidenceItem.ingested_at >= since
+                )
+            )
+            for pot in potential_res.scalars().all():
+                if pot.title and _normalize_title(pot.title) in norm_titles:
+                    seed_items.append(pot)
+                    seen_ids.add(pot.id)
+
+    # --- Step 3: Sort by timestamp ascending so the LLM sees events in order ---
+    from datetime import UTC
+    min_dt = datetime.min.replace(tzinfo=UTC)
+    seed_items.sort(key=lambda ev: (ev.created_at_source or ev.ingested_at or min_dt))
+
+    items = [
+        {
+            "title": ev.title,
+            "body": ev.body_text,
+            "source_type": "evidence",
+            "timestamp": str(ev.created_at_source or ev.ingested_at),
+            "evidence_id": str(ev.id),
+            "thread_id": str(ev.thread_id) if ev.thread_id else None,
+        }
+        for ev in seed_items
+    ]
+
+    logger.info(
+        "reconstruct.expanded_cluster",
+        seed_count=len(ids),
+        total_count=len(items),
+        thread_count=len(thread_ids),
+        fallback_active=len(seed_items) > len(ids) and not thread_ids
+    )
 
     from contextedge.services.episode_service import create_episodes_from_evidence
 
@@ -272,10 +398,11 @@ async def _reconstruct(db: AsyncSession, cluster_id: str, tenant_id: uuid.UUID, 
         tenant_id=tenant_id,
         domain_id=domain_id,
         evidence_items=items,
-        evidence_ids=[uuid.UUID(i["evidence_id"]) for i in items],
+        evidence_ids=list(seen_ids),
+        target_episode_id=target_episode_id,
     )
     await db.flush()
-    
+
     total_steps = 0
     for episode in created_episodes:
         res = await db.execute(select(EpisodeStep).where(EpisodeStep.episode_id == episode.id))
@@ -284,7 +411,8 @@ async def _reconstruct(db: AsyncSession, cluster_id: str, tenant_id: uuid.UUID, 
     return {
         "episode_ids": [str(ep.id) for ep in created_episodes],
         "count": len(created_episodes),
-        "total_steps": total_steps
+        "total_steps": total_steps,
+        "evidence_count": len(items),
     }
 
 
@@ -310,13 +438,8 @@ def normalize_evidence(self, raw_object_id: str, tenant_id: str):
                 for artifact_id in attachment_ids:
                     extract_attachment_artifact.delay(artifact_id, tenant_id)
             else:
-                from contextedge.workers.evidence_baseline_tasks import (
-                    compute_evidence_baseline_task,
-                )
-
+                # Chain classification. Correlation and baseline only run if relevance is operational
                 classify_relevance_task.delay(res["evidence_id"], tenant_id)
-                correlate_evidence.delay(res["evidence_id"], tenant_id)
-                compute_evidence_baseline_task.delay(res["evidence_id"], tenant_id)
         return res
     except Exception as exc:
         raise self.retry(exc=exc) from exc
@@ -335,7 +458,16 @@ def classify_relevance_task(self, evidence_id: str, tenant_id: str):
         return await _classify(db, evidence_id, tid)
 
     try:
-        return run_async(work)
+        res = run_async(work)
+        if res and res.get("classification") in ["operational", "possibly_relevant"]:
+            from contextedge.workers.correlation_tasks import correlate_evidence
+            from contextedge.workers.evidence_baseline_tasks import (
+                compute_evidence_baseline_task,
+            )
+
+            correlate_evidence.delay(evidence_id, tenant_id)
+            compute_evidence_baseline_task.delay(evidence_id, tenant_id)
+        return res
     except Exception as exc:
         raise self.retry(exc=exc) from exc
 
@@ -346,12 +478,13 @@ def classify_relevance_task(self, evidence_id: str, tenant_id: str):
     default_retry_delay=60,
     name="extraction.reconstruct_episode",
 )
-def reconstruct_episode_task(self, correlation_cluster_id: str, tenant_id: str, domain_id: str | None = None):
+def reconstruct_episode_task(self, correlation_cluster_id: str, tenant_id: str, domain_id: str | None = None, target_episode_id: str | None = None):
     tid = uuid.UUID(tenant_id)
     did = uuid.UUID(domain_id) if domain_id else None
+    teid = uuid.UUID(target_episode_id) if target_episode_id else None
 
     async def work(db):
-        return await _reconstruct(db, correlation_cluster_id, tid, did)
+        return await _reconstruct(db, correlation_cluster_id, tid, did, teid)
 
     try:
         return run_async(work)

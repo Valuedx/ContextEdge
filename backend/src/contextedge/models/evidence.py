@@ -61,8 +61,33 @@ class EvidenceItem(Base, TenantScopedMixin):
     )
 
     thread: Mapped["Thread | None"] = relationship(back_populates="evidence_items")
-    attachments: Mapped[list["AttachmentArtifact"]] = relationship(back_populates="evidence_item")
-    identity_links: Mapped[list["EvidenceIdentityLink"]] = relationship(back_populates="evidence_item")
+    attachments: Mapped[list["AttachmentArtifact"]] = relationship(
+        back_populates="evidence_item",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+    identity_links: Mapped[list["EvidenceIdentityLink"]] = relationship(
+        back_populates="evidence_item",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+    case_links: Mapped[list["CaseLink"]] = relationship(
+        back_populates="evidence_item",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+    correlations_as_source: Mapped[list["CorrelationEdge"]] = relationship(
+        back_populates="source_evidence",
+        foreign_keys="CorrelationEdge.source_evidence_id",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+    correlations_as_target: Mapped[list["CorrelationEdge"]] = relationship(
+        back_populates="target_evidence",
+        foreign_keys="CorrelationEdge.target_evidence_id",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
 
 
 class Thread(Base, TenantScopedMixin):

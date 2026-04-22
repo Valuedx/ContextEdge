@@ -5,20 +5,40 @@ Lightweight first-pass classification to gate expensive downstream processing.
 
 from contextedge.ai.provider import llm_complete_json
 
-RELEVANCE_PROMPT = """Classify the following operational evidence item for relevance to IT operations troubleshooting.
+RELEVANCE_PROMPT = """You are an enterprise IT operations classifier.
 
-Evidence:
-Title: {title}
-Content: {body}
+Your task is to analyze an email thread and determine whether it contains operationally relevant incident or troubleshooting information.
+
+Classify the email into one of the following categories:
+1. OPERATIONAL_INCIDENT (login issues, outages, errors, failures, tickets)
+2. POSSIBLY_RELEVANT (partial signals, unclear issue, needs more context)
+3. NOT_RELEVANT (HR emails, newsletters, approvals, casual communication)
+
+Strict rules:
+- Focus ONLY on operational IT issues (SSO, VPN, application errors, outages, alerts, infra issues)
+- Ignore greetings, signatures, and noise
+- Detect intent (complaint, escalation, troubleshooting)
+
+Also extract:
+- issue_type
+- affected_system
+- user_impact
+- urgency_level (low, medium, high, critical)
+
+Evidence Title: {title}
 Source Type: {source_type}
-Evidence Type: {evidence_type}
+Content (Thread snippet):
+{body}
 
-Classify into ONE of:
-- "operational": Directly relevant to operational troubleshooting, incident response, or remediation
-- "possibly_relevant": May contain useful operational context but not primary troubleshooting content
-- "not_relevant": Social, administrative, off-topic, or non-operational content
-
-Respond in JSON with keys: "classification", "confidence" (0-1), "reasoning" (one sentence).
+Return JSON only:
+{{
+"classification": "",
+"confidence": 0-1,
+"issue_type": "",
+"affected_system": "",
+"user_impact": "",
+"urgency_level": ""
+}}
 """
 
 
@@ -37,7 +57,10 @@ async def classify_relevance(
     )
     result = await llm_complete_json(prompt, task="classification")
     return {
-        "classification": result.get("classification", "not_relevant"),
+        "classification": result.get("classification", "not_relevant").upper(),
         "confidence": float(result.get("confidence", 0.5)),
-        "reasoning": result.get("reasoning", ""),
+        "issue_type": result.get("issue_type"),
+        "affected_system": result.get("affected_system"),
+        "user_impact": result.get("user_impact"),
+        "urgency_level": result.get("urgency_level"),
     }

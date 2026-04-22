@@ -10,16 +10,11 @@ celery_app = Celery(
         "contextedge.workers.sync_tasks",
         "contextedge.workers.hydration_tasks",
         "contextedge.workers.extraction_tasks",
+        "contextedge.workers.evidence_baseline_tasks",  # Moved up for reliable registration
         "contextedge.workers.artifact_tasks",
         "contextedge.workers.correlation_tasks",
         "contextedge.workers.pattern_tasks",
         "contextedge.workers.evaluation_tasks",
-        # Merged-in modules from ForAEOpsSupport. The baseline task has an
-        # explicit name="extraction.compute_evidence_baseline" so the short-name
-        # routing below catches it. The review-queue prefetch task uses its
-        # default module-path name and falls into the `contextedge.workers.*`
-        # fallback route → default queue, which is fine for light prefetch work.
-        "contextedge.workers.evidence_baseline_tasks",
         "contextedge.workers.review_queue_tasks",
     ],
 )
@@ -33,6 +28,7 @@ celery_app.conf.update(
     task_track_started=True,
     task_acks_late=True,
     worker_prefetch_multiplier=1,
+    task_create_missing_queues=True,
     task_routes={
         "sync.*": {"queue": "sync"},
         "hydration.*": {"queue": "hydration"},
@@ -61,3 +57,12 @@ celery_app.conf.update(
         },
     },
 )
+
+# Explicitly import task modules to ensure registration in environments
+# where the 'include' configuration might be delayed or shadowed.
+try:
+    import contextedge.workers.extraction_tasks
+    import contextedge.workers.evidence_baseline_tasks
+    import contextedge.workers.correlation_tasks
+except ImportError:
+    pass

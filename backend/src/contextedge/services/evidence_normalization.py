@@ -3,12 +3,23 @@
 from __future__ import annotations
 
 import hashlib
+import re
 import uuid
+from datetime import datetime, timedelta
 
-from sqlalchemy import select
+from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from contextedge.models.evidence import EvidenceItem, Thread
+
+
+def _normalize_title(title: str) -> str:
+    if not title:
+        return ""
+    # Remove common prefixes: Re:, Fw:, URGENT:, [EXTERNAL], etc.
+    t = re.sub(r"(?i)^(re|fw|fwd|urgent|\[[^\]]+\]|important|alert):\s*", "", title.strip())
+    # Collapse whitespace
+    return " ".join(t.lower().split())
 
 
 def evidence_title_from_payload(payload: dict | None) -> str:
@@ -53,7 +64,10 @@ def evidence_body_from_payload(payload: dict | None) -> str:
 
 def evidence_content_hash_from_payload(payload: dict | None) -> str:
     body = evidence_body_from_payload(payload)
-    return hashlib.sha256(body.encode("utf-8", errors="replace")).hexdigest()
+    # Normalize for hashing: collapse all whitespace, lower case, strip basic reply markers
+    norm_body = " ".join(body.split()).lower()
+    norm_body = re.sub(r"^[> \t]+", "", norm_body, flags=re.MULTILINE)
+    return hashlib.sha256(norm_body.encode("utf-8", errors="replace")).hexdigest()
 
 
 async def ensure_thread_for_evidence(
@@ -68,34 +82,69 @@ async def ensure_thread_for_evidence(
     Links the evidence to the thread and returns the thread's UUID, or ``None``
     if the payload carries no thread reference.
     """
-    external_thread_id = (payload or {}).get("_thread_id")
-    if not external_thread_id:
-        return None
-
+    p = payload or {}
+    external_thread_id = p.get("_thread_id")
     source_id = evidence.source_id
-    thread = (
-        await db.execute(
+    
+    thread = None
+
+    # 1. Try explicit external thread ID if available
+    if external_thread_id:
+        thread = (
+            await db.execute(
+                select(Thread).where(
+                    Thread.tenant_id == tenant_id,
+                    Thread.source_id == source_id,
+                    Thread.external_thread_id == str(external_thread_id),
+                )
+            )
+        ).scalar_one_or_none()
+
+    # 2. Fallback: Title-based matching for fragmented trails
+    if thread is None:
+        raw_title = evidence_title_from_payload(p)
+        norm_title = _normalize_title(raw_title)
+        
+        # Check for existing threads within the last 30 days with the same normalized title
+        since = datetime.now(timezone.utc) - timedelta(days=30) if "timezone" in globals() else datetime.utcnow() - timedelta(days=30)
+        
+        # We need to fetch threads and compare normalized titles (or we could index norm_title)
+        # For now, we'll fetch recent threads from this source
+        recent_threads = await db.execute(
             select(Thread).where(
                 Thread.tenant_id == tenant_id,
                 Thread.source_id == source_id,
-                Thread.external_thread_id == str(external_thread_id),
-            )
+                Thread.last_message_at >= since
+            ).order_by(Thread.last_message_at.desc()).limit(20)
         )
-    ).scalar_one_or_none()
+        
+        for t in recent_threads.scalars().all():
+            if _normalize_title(t.title) == norm_title:
+                thread = t
+                break
 
     if thread is None:
-        title = evidence_title_from_payload(payload)
+        raw_title = evidence_title_from_payload(p)
         thread = Thread(
             id=uuid.uuid4(),
             tenant_id=tenant_id,
             source_id=source_id,
             source_object_id=evidence.source_object_id,
-            external_thread_id=str(external_thread_id),
-            title=title[:500] if title else None,
+            external_thread_id=str(external_thread_id) if external_thread_id else f"fuzzy:{uuid.uuid4()}",
+            title=raw_title[:500] if raw_title else None,
             hydration_status="pending",
+            first_message_at=evidence.created_at_source or evidence.ingested_at,
+            last_message_at=evidence.created_at_source or evidence.ingested_at,
         )
         db.add(thread)
         await db.flush()
+    else:
+        # Update thread timestamps
+        msg_ts = evidence.created_at_source or evidence.ingested_at
+        if not thread.first_message_at or msg_ts < thread.first_message_at:
+            thread.first_message_at = msg_ts
+        if not thread.last_message_at or msg_ts > thread.last_message_at:
+            thread.last_message_at = msg_ts
 
     evidence.thread_id = thread.id
     await db.flush()

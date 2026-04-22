@@ -136,11 +136,20 @@ async def correlate_evidence_item(
     canonical_case_id = (
         existing_links[0].canonical_case_id if existing_links else (uuid.uuid4() if candidates else None)
     )
+    # 1. Thread-based clustering: find all items sharing the same database thread_id
+    thread_evidence_ids = set()
+    if evidence.thread_id is not None:
+        tr = await db.execute(select(EvidenceItem.id).where(EvidenceItem.thread_id == evidence.thread_id, EvidenceItem.id != evidence.id))
+        thread_evidence_ids = set(tr.scalars().all())
+
+    # 2. Case-link clustering: find all items sharing the same external case IDs
     related_evidence_ids = {
         link.evidence_id
         for link in existing_links
         if link.evidence_id is not None and link.evidence_id != evidence.id
     }
+    # Add thread-related items to the cluster
+    related_evidence_ids.update(thread_evidence_ids)
     identity_ids = await get_identity_ids_for_evidence(db, tenant_id, evidence.id)
     identity_related_evidence_ids = await find_related_evidence_ids_by_identity_ids(
         db,
@@ -149,7 +158,7 @@ async def correlate_evidence_item(
         exclude_evidence_id=evidence.id,
     )
     related_evidence_ids.update(identity_related_evidence_ids)
-    if not candidates and not identity_related_evidence_ids:
+    if not candidates and not identity_related_evidence_ids and not thread_evidence_ids:
         return {"status": "skipped", "reason": "no_candidates"}
 
     now = datetime.now(timezone.utc)

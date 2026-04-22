@@ -7,7 +7,11 @@ Supports history-based incremental sync and thread-centric processing.
 from datetime import datetime, timezone
 from typing import Any
 
+import base64
 import httpx
+import structlog
+
+logger = structlog.get_logger(__name__)
 
 from contextedge.connectors.base import (
     BackfillResult,
@@ -113,6 +117,66 @@ class GmailConnector(BaseConnector):
         text_lower = text.lower()
         return any(kw.lower() in text_lower for kw in keywords)
 
+    def _is_operationally_relevant_stage1(self, subject: str, from_addr: str, message_count: int, snippet: str | None) -> bool:
+        """Lightweight Stage 1 filter based on headers and thread size."""
+        # 1. Subject/snippet analysis for priority and keywords
+        op_keywords = [
+            "issue", "error", "failure", "urgent", "down", "not working", 
+            "login", "unable", "problem", "incident", "escalation",
+            "outage", "alert", "critical", "sso", "vpn", "access", 
+            "overheating", "connectivity", "service", "help",
+            "resolved", "fix", "stable", "maintenance", "update"
+        ]
+        text_full = f"{subject or ''} {snippet or ''}".lower()
+        has_keywords = any(kw in text_full for kw in op_keywords)
+        is_high_priority = any(p in text_full for p in ["urgent", "critical", "emergency"])
+
+        # 2. Rule: Ignore 1-message threads (noise) UNLESS it is High Priority
+        if message_count <= 1 and not is_high_priority:
+            logger.debug("gmail.stage1.skipped_size", subject=subject, count=message_count)
+            return False
+
+        # 3. Rule: Must match keywords or be from a signal sender
+        if not has_keywords:
+            op_senders = ["support@", "noreply", "alert", "status", "monitoring"]
+            from_lower = (from_addr or "").lower()
+            if not any(s in from_lower for s in op_senders):
+                logger.debug("gmail.stage1.skipped_noise", subject=subject, from_addr=from_addr)
+                return False
+        
+        logger.info("gmail.stage1.passed", subject=subject, count=message_count, priority=is_high_priority)
+        return True
+
+    def _get_text_body(self, payload: dict) -> str:
+        """Recursively find search for text/plain body in Gmail message payload."""
+        # 1. Check if this part itself has data
+        body_data = payload.get("body", {}).get("data")
+        mime_type = payload.get("mimeType", "")
+        
+        if body_data and (mime_type == "text/plain" or not mime_type):
+            try:
+                return base64.urlsafe_b64decode(body_data).decode("utf-8", errors="replace")
+            except Exception:
+                return ""
+        
+        # 2. Check sub-parts
+        parts = payload.get("parts", [])
+        # Multiparts: we prefer text/plain
+        # If we find text/plain, return it immediately
+        for part in parts:
+            if part.get("mimeType") == "text/plain":
+                res = self._get_text_body(part)
+                if res.strip():
+                    return res
+        
+        # If no direct text/plain, search recursively in all parts (e.g. multipart/related)
+        for part in parts:
+            res = self._get_text_body(part)
+            if res.strip():
+                return res
+            
+        return ""
+
     async def validate_credentials(self) -> CredentialStatus:
         try:
             mailboxes = self._get_mailbox_list()
@@ -189,37 +253,74 @@ class GmailConnector(BaseConnector):
         data = await self._gmail_get(f"/users/{user_email}/threads", user_email, params)
 
         for thread_summary in data.get("threads", []):
-            thread_data = await self._gmail_get(
-                f"/users/{user_email}/threads/{thread_summary['id']}",
-                user_email,
-                {"format": "metadata", "metadataHeaders": "Subject,From,To,Date"},
-            )
-            messages = thread_data.get("messages", [])
-            headers_map = {}
-            for msg in messages:
-                for h in msg.get("payload", {}).get("headers", []):
-                    headers_map[h["name"].lower()] = h["value"]
-
-            events.append(
-                IngestionEvent(
-                    external_id=thread_summary["id"],
-                    source_type="gmail",
-                    object_type="email_thread",
-                    content={
-                        "subject": headers_map.get("subject", ""),
-                        "from": headers_map.get("from", ""),
-                        "to": headers_map.get("to", ""),
-                        "message_count": len(messages),
-                        "snippet": thread_data.get("snippet", ""),
-                    },
-                    thread_id=f"{user_email}:{thread_summary['id']}",
-                    timestamp=datetime.fromtimestamp(
-                        int(messages[0].get("internalDate", "0")) / 1000,
-                        tz=timezone.utc,
-                    ) if messages else None,
-                    metadata={"mailbox": user_email},
+            try:
+                thread_data = await self._gmail_get(
+                    f"/users/{user_email}/threads/{thread_summary['id']}",
+                    user_email,
+                    {"format": "metadata", "metadataHeaders": ["Subject", "From", "To", "Date"]},
                 )
-            )
+                messages = thread_data.get("messages", [])
+                if not messages:
+                    logger.debug("gmail.backfill.empty_thread", thread_id=thread_summary["id"])
+                    continue
+
+                headers_map = {}
+                for msg in messages:
+                    for h in msg.get("payload", {}).get("headers", []):
+                        headers_map[h["name"].lower()] = h["value"]
+
+                subject = headers_map.get("subject", "")
+                from_addr = headers_map.get("from", "")
+                snippet = thread_data.get("snippet", "")
+                msg_count = len(messages)
+
+                # Stage 1 Filtering
+                if not self._is_operationally_relevant_stage1(subject, from_addr, msg_count, snippet):
+                    continue
+
+                ingest_ts = None
+                if messages:
+                    try:
+                        ingest_ts = datetime.fromtimestamp(
+                            int(messages[0].get("internalDate", "0")) / 1000,
+                            tz=timezone.utc,
+                        )
+                    except (ValueError, TypeError):
+                        ingest_ts = datetime.now(timezone.utc)
+
+                events.append(
+                    IngestionEvent(
+                        external_id=thread_summary["id"],
+                        source_type="gmail",
+                        object_type="email_thread",
+                        content={
+                            "subject": subject,
+                            "from": from_addr,
+                            "to": headers_map.get("to", ""),
+                            "message_count": msg_count,
+                            "snippet": snippet,
+                            "thread_id": thread_summary["id"],
+                            "_thread_id": f"{user_email}:{thread_summary['id']}",
+                            "needs_hydration": True,
+                        },
+                        thread_id=f"{user_email}:{thread_summary['id']}",
+                        timestamp=ingest_ts,
+                        metadata={"mailbox": user_email},
+                    )
+                )
+            except Exception as exc:
+                error_msg = str(exc)
+                if not error_msg and hasattr(exc, "response"):
+                    # For httpx errors, try to get the response body
+                    try:
+                        error_msg = exc.response.text
+                    except Exception:
+                        error_msg = repr(exc)
+                elif not error_msg:
+                    error_msg = repr(exc)
+                    
+                logger.error("gmail.backfill.thread_error", thread_id=thread_summary.get("id"), error=error_msg)
+                continue
 
         page_token = data.get("nextPageToken")
 
@@ -268,37 +369,56 @@ class GmailConnector(BaseConnector):
 
         keywords = self._get_relevance_keywords()
         for tid in changed_thread_ids:
-            # For incremental sync, we check metadata first if keywords are set
-            if keywords:
-                try:
-                    thread_meta = await self._gmail_get(
-                        f"/users/{user_email}/threads/{tid}",
-                        user_email,
-                        {"format": "metadata", "metadataHeaders": "Subject"},
-                    )
-                    snippet = thread_meta.get("snippet", "")
-                    subject = ""
-                    for h in thread_meta.get("messages", [{}])[0].get("payload", {}).get("headers", []):
-                        if h["name"].lower() == "subject":
-                            subject = h["value"]
-                    
-                    if not self._matches_keywords(f"{subject} {snippet}", keywords):
-                        continue
-                except Exception:
-                    # If we can't fetch metadata, conservative approach is to ingest or skip
-                    # Here we skip to avoid noise if filtering is requested
+            try:
+                # For incremental sync, we check metadata first if keywords are set
+                thread_meta = await self._gmail_get(
+                    f"/users/{user_email}/threads/{tid}",
+                    user_email,
+                    {"format": "metadata", "metadataHeaders": ["Subject", "From", "To", "Date"]},
+                )
+                
+                messages = thread_meta.get("messages", [])
+                if not messages:
                     continue
 
-            events.append(
-                IngestionEvent(
-                    external_id=tid,
-                    source_type="gmail",
-                    object_type="email_thread",
-                    content={"thread_id": tid, "needs_hydration": True},
-                    thread_id=f"{user_email}:{tid}",
-                    metadata={"mailbox": user_email},
+                subject = ""
+                from_addr = ""
+                snippet = thread_meta.get("snippet", "")
+                
+                for h in messages[0].get("payload", {}).get("headers", []):
+                    ln = h["name"].lower()
+                    if ln == "subject":
+                        subject = h["value"]
+                    elif ln == "from":
+                        from_addr = h["value"]
+                
+                msg_count = len(messages)
+                
+                # Apply Stage 1 hardcoded operational filter
+                if not self._is_operationally_relevant_stage1(subject, from_addr, msg_count, snippet):
+                    continue
+                
+                # Apply configured custom keywords if any
+                if keywords and not self._matches_keywords(f"{subject} {snippet}", keywords):
+                    continue
+
+                events.append(
+                    IngestionEvent(
+                        external_id=tid,
+                        source_type="gmail",
+                        object_type="email_thread",
+                        content={
+                            "thread_id": tid,
+                            "_thread_id": f"{user_email}:{tid}",
+                            "needs_hydration": True
+                        },
+                        thread_id=f"{user_email}:{tid}",
+                        metadata={"mailbox": user_email},
+                    )
                 )
-            )
+            except Exception as exc:
+                logger.error("gmail.sync.thread_error", thread_id=tid, error=str(exc))
+                continue
 
         new_history_id = data.get("historyId", history_id)
         return ChangeResult(
@@ -320,17 +440,10 @@ class GmailConnector(BaseConnector):
         messages = []
         participants: set[str] = set()
         for msg in data.get("messages", []):
-            headers = {h["name"].lower(): h["value"] for h in msg.get("payload", {}).get("headers", [])}
-            body = ""
             payload = msg.get("payload", {})
-            if payload.get("body", {}).get("data"):
-                import base64
-                body = base64.urlsafe_b64decode(payload["body"]["data"]).decode("utf-8", errors="replace")
-            elif payload.get("parts"):
-                for part in payload["parts"]:
-                    if part.get("mimeType") == "text/plain" and part.get("body", {}).get("data"):
-                        body = base64.urlsafe_b64decode(part["body"]["data"]).decode("utf-8", errors="replace")
-                        break
+            headers = {h["name"].lower(): h["value"] for h in payload.get("headers", [])}
+            
+            body = self._get_text_body(payload)
 
             from_addr = headers.get("from", "")
             participants.add(from_addr)

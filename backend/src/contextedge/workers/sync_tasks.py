@@ -1,5 +1,6 @@
 import uuid
 
+import structlog
 from sqlalchemy import select
 from contextedge.services.sync_worker_service import (
     run_backfill_job,
@@ -7,6 +8,8 @@ from contextedge.services.sync_worker_service import (
 )
 from contextedge.workers.asyncio_runner import run_async
 from contextedge.workers.celery_app import celery_app
+
+logger = structlog.get_logger()
 
 
 @celery_app.task(
@@ -44,6 +47,13 @@ def run_backfill(
     tenant_id: str,
     window_days: int = 90,
 ):
+    logger.info(
+        "sync.run_backfill.received",
+        source_id=source_id,
+        source_object_id=source_object_id,
+        tenant_id=tenant_id,
+        window_days=window_days,
+    )
     sid = uuid.UUID(source_id)
     oid = uuid.UUID(source_object_id)
     tid = uuid.UUID(tenant_id)
@@ -64,6 +74,12 @@ def run_backfill(
     name="sync.run_incremental_sync",
 )
 def run_incremental_sync(self, source_id: str, source_object_id: str, tenant_id: str):
+    logger.info(
+        "sync.run_incremental_sync.received",
+        source_id=source_id,
+        source_object_id=source_object_id,
+        tenant_id=tenant_id,
+    )
     sid = uuid.UUID(source_id)
     oid = uuid.UUID(source_object_id)
     tid = uuid.UUID(tenant_id)

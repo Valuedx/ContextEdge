@@ -135,6 +135,7 @@ class EvidenceSearchParams(BaseModel):
 
 class ReconstructRequest(BaseModel):
     evidence_ids: list[UUID] | None = None
+    domain_id: UUID | None = None
 
 
 class EvidenceBulkDeleteRequest(BaseModel):

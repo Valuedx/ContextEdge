@@ -1,4 +1,5 @@
 from uuid import UUID
+import structlog
 
 from datetime import datetime, timedelta, UTC
 from fastapi import APIRouter, HTTPException, Query, status
@@ -18,6 +19,7 @@ from contextedge.schemas.evidence import (
 )
 
 router = APIRouter()
+logger = structlog.get_logger()
 
 
 @router.get("", response_model=list[EpisodeResponse])
@@ -201,19 +203,82 @@ async def trigger_manual_reconstruction(
     from contextedge.workers.extraction_tasks import reconstruct_episode_task
     cluster_id = ",".join([str(eid) for eid in evidence_ids])
     
-    # Try to determine domain_id from evidence if possible, or fallback to default
-    domain_id = body.domain_id if hasattr(body, "domain_id") and body.domain_id else None
+    # Use domain_id from request body or fallback to default domain
+    domain_id = body.domain_id
     if not domain_id:
         from contextedge.models.tenant import Domain
         res = await db.execute(select(Domain.id).where(Domain.tenant_id == user.tenant_id).limit(1))
         domain_id = res.scalar_one_or_none()
 
-    task = reconstruct_episode_task.delay(cluster_id, str(user.tenant_id), domain_id=str(domain_id) if domain_id else None)
+    logger.info(
+        "api.episodes.dispatch_reconstruction",
+        tenant_id=str(user.tenant_id),
+        domain_id=str(domain_id) if domain_id else None,
+        evidence_count=len(evidence_ids),
+    )
+
+    task = reconstruct_episode_task.delay(
+        cluster_id, 
+        str(user.tenant_id), 
+        domain_id=str(domain_id) if domain_id else None
+    )
 
     return {
         "status": "reconstruction_queued",
         "evidence_count": len(evidence_ids),
         "domain_id": str(domain_id) if domain_id else None,
+        "task_id": task.id,
+    }
+
+
+@router.post("/{episode_id}/re-extract", status_code=status.HTTP_202_ACCEPTED)
+async def re_extract_episode(episode_id: UUID, db: DbSession, user: AuthUser):
+    """Re-trigger step extraction for an existing episode.
+
+    Clears existing steps and re-queues all evidence linked to the episode
+    (expanded to include all thread siblings) for fresh LLM reconstruction.
+    """
+    from contextedge.models.evidence import EvidenceItem
+    from sqlalchemy import delete as sa_delete
+
+    episode = (
+        await db.execute(
+            select(Episode).where(Episode.id == episode_id, Episode.tenant_id == user.tenant_id)
+        )
+    ).scalar_one_or_none()
+    if not episode:
+        raise HTTPException(status_code=404, detail="Episode not found")
+
+    # Collect evidence IDs from episode; fall back to a broad recent search if empty
+    evidence_ids: list[str] = list(episode.evidence_ids or [])
+    if not evidence_ids:
+        raise HTTPException(status_code=400, detail="Episode has no linked evidence IDs to re-extract from.")
+
+    # Reset status so it shows as pending in UI
+    episode.reviewer_state = "pending_review"
+    await db.flush()
+    await db.commit()
+ 
+    from contextedge.workers.extraction_tasks import reconstruct_episode_task
+    cluster_id = ",".join(evidence_ids)
+    task = reconstruct_episode_task.delay(
+        cluster_id,
+        str(user.tenant_id),
+        domain_id=str(episode.domain_id) if episode.domain_id else None,
+        target_episode_id=str(episode_id),
+    )
+
+    logger.info(
+        "api.episodes.re_extract_queued",
+        episode_id=str(episode_id),
+        evidence_count=len(evidence_ids),
+        task_id=task.id,
+    )
+
+    return {
+        "status": "re_extraction_queued",
+        "episode_id": str(episode_id),
+        "evidence_count": len(evidence_ids),
         "task_id": task.id,
     }
 
@@ -233,13 +298,19 @@ async def delete_episode(episode_id: UUID, db: DbSession, user: AuthUser):
 
     from sqlalchemy import delete
     from contextedge.models.episode import EpisodeStep
+    from contextedge.models.pattern import PatternEvidenceLink
 
     # 1. Delete Episode Steps
     await db.execute(
         delete(EpisodeStep).where(EpisodeStep.episode_id == episode_id)
     )
 
-    # 2. Finally delete the episode itself
+    # 2. Delete Pattern Evidence Links
+    await db.execute(
+        delete(PatternEvidenceLink).where(PatternEvidenceLink.episode_id == episode_id)
+    )
+
+    # 3. Finally delete the episode itself
     await db.delete(episode)
     await db.commit()
 

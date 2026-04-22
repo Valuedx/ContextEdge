@@ -54,6 +54,16 @@ async def discover_source_objects(
     db: AsyncSession,
     source: Source,
 ) -> list[SourceObject]:
+    if source.source_type == "local_file":
+        source.auth_status = "connected"
+        source.discovery_status = "completed"
+        await db.flush()
+
+        all_result = await db.execute(
+            select(SourceObject).where(SourceObject.source_id == source.id)
+        )
+        return list(all_result.scalars().all())
+
     cred_result = await db.execute(
         select(SourceCredential).where(
             SourceCredential.source_id == source.id,
