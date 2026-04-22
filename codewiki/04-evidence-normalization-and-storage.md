@@ -112,6 +112,39 @@ Note: `canonical_entity_refs` is empty at this point. Identity resolution popula
 
 Three raws with the same VPN error text collapse to one `EvidenceItem` after normalization hash match; a long Teams export exceeds 32 KiB and stores JSON in **MinIO**, while the database row points to it—so Acme analysts still see one searchable card with correct provenance.
 
+## Partitioning plan (deferred, index-only groundwork shipped in `0024`)
+
+`evidence_items` is the hottest append-mostly table in the schema. As tenants grow, maintenance operations (VACUUM, index rebuild, retention purge) on a single physical table become increasingly painful. The enterprise architecture review (`ENTERPRISE_ARCHITECTURE_REVIEW.md` §6 item 12) flagged table partitioning as the scale-foundation move. This section captures the plan so the conversion can be executed when customer volume warrants it.
+
+### What `0024_evidence_scale_indexes` ships today
+
+Three indexes that improve the hot paths *without* a table rewrite:
+
+- BRIN on `(tenant_id, ingested_at)` — excellent for time-range admin / drift / retention queries at ~1 KB overhead per million rows.
+- Partial B-tree on `(tenant_id, relevance_state) WHERE relevance_state IN ('relevant','unclassified')` — keeps the reviewer-queue index size proportional to the actionable tail, not the archived/irrelevant bulk.
+- Partial B-tree on `(tenant_id, updated_at) WHERE relevance_state = 'archived'` — same shape, tuned for `purge_archived_evidence` sweeps.
+
+### Full partition design (when conversion is needed)
+
+**Partition key.** `LIST (tenant_id)` as the top-level partition — each tenant isolated for per-tenant purge, per-tenant backup/restore, and zero noisy-neighbour effect on VACUUM. Optional sub-partitioning by `RANGE (ingested_at)` on a month boundary for very large tenants where retention runs across old months need to drop whole partitions.
+
+**Indexes.** HNSW and FTS GIN indexes must be declared per-partition (PostgreSQL 16 has no global HNSW). The partial + BRIN indexes in `0024` port cleanly to partitions.
+
+**FK constraints.** `attachment_artifacts.evidence_id`, `playbook_evidence_links.evidence_id`, `correlation_edges`, `contradiction_scan_state` all currently FK to `evidence_items(id)`. PostgreSQL 12+ supports FKs to partitioned parents, so no referential change is required — but the FK is enforced via an index on every partition, so each partition carries its own partial unique index on `id`.
+
+**Cutover runbook sketch.**
+
+1. `CREATE TABLE evidence_items_new (... LIKE evidence_items INCLUDING ALL) PARTITION BY LIST (tenant_id);`
+2. Create one partition per existing tenant plus a `DEFAULT` partition for future tenants.
+3. `INSERT INTO evidence_items_new SELECT * FROM evidence_items;` under `REPEATABLE READ` — on a maintenance window, or via logical replication for zero-downtime.
+4. Swap names in a single transaction: `ALTER TABLE evidence_items RENAME TO evidence_items_legacy; ALTER TABLE evidence_items_new RENAME TO evidence_items;`
+5. Rebuild HNSW + FTS indexes on each partition (parallelisable).
+6. Drop `evidence_items_legacy` after a safety window (24h).
+
+**Triggers for the default partition.** When a tenant is created, a Celery task must `CREATE TABLE evidence_items_tenant_<uuid> PARTITION OF evidence_items FOR VALUES IN ('<uuid>');` so new tenants don't fall into the default. The default partition is a safety net, not a hot path.
+
+**What we won't know until customer volume ships.** Exact partition granularity (per-tenant vs per-tenant-month), whether HASH partitioning gives better skew than LIST at tenant count >100, and the downtime tolerance for the initial swap. All of those depend on real data.
+
 ## Further reading
 
 - [03-ingestion-connectors-and-sync.md](./03-ingestion-connectors-and-sync.md) — where raws are created  

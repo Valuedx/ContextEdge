@@ -172,10 +172,10 @@ Can be one engineer in two weeks, ~50% cost reduction expected.
 
 ### Weeks 7–9: scale foundations
 
-12. Evidence table partitioning by tenant + month
-13. Read replica for reviewer-queue hot path
-14. Per-tenant budget enforcement (`tenant_llm_budget` table + middleware)
-15. Output schema validation + retry wrapper
+12. **Shipped scoped MVP 2026-04-23** — Evidence-table scale readiness. Migration `0024_evidence_scale_indexes` adds three hot-path indexes built with `CREATE INDEX CONCURRENTLY`: a BRIN on `(tenant_id, ingested_at)` for time-range admin / drift / retention queries, a partial B-tree on `(tenant_id, relevance_state) WHERE relevance_state IN ('relevant', 'unclassified')` for the reviewer queue, and a partial B-tree on `(tenant_id, updated_at) WHERE relevance_state = 'archived'` for the retention purge sweep. The full partition-conversion (per-tenant list partitioning with optional per-month range sub-partitioning) is **deferred** with a detailed runbook at `codewiki/04-evidence-normalization-and-storage.md` → "Partitioning plan (deferred)" — because the partition-key choice (LIST vs HASH at 100+ tenants, sub-partition granularity) depends on real customer volume that doesn't exist yet. Shipping indexes now gives 80% of the scale benefit with 0% of the conversion risk.
+13. **Deferred** — Read replica for reviewer-queue hot path. Requires live infra to validate; no useful shippable code without a replica to connect to.
+14. **Shipped 2026-04-23** — Per-tenant LLM budget enforcement. New `tenant_llm_budgets` table (migration `0023`) with `daily_token_limit` + `daily_cost_cap_usd` + `action_on_exceed` (`block` / `warn`). `services/tenant_budget_service.check_budget` sums the current UTC day's usage from the existing `llm.usage` operational events (no second source of truth), cached with a 60s TTL so enforcement costs one aggregation per minute per tenant, not per LLM call. Pre-call gate in `ai/provider.llm_complete` raises `TenantBudgetExceeded` on `block` or logs + emits `llm.budget_warning` on `warn`. Admin API `GET/PUT /admin/tenant-budget` + `GET /admin/tenant-budget/status` (tenant_admin gated) lets operators configure and monitor live. Token-limit check precedes cost-cap check when both are set.
+15. **Shipped 2026-04-23** — Output schema validation + retry. New `ai/provider.llm_complete_json_validated(prompt, schema, ...)` takes a Pydantic model, validates the response, and on failure sends one repair call that includes the raw prior response + the Pydantic validation errors + the JSON Schema of the target model. Retry budget is hard-capped at 1 — two LLM calls per extraction is already a real cost line. Raises `ValueError` naming the schema when the retry also fails, which is cheaper for callers to catch than chasing `ValidationError` up the stack.
 
 ### Weeks 10–12: agent quality
 

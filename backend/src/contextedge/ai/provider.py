@@ -5,10 +5,11 @@ import os
 import re
 import time
 import uuid as _uuid
-from typing import Any
+from typing import Any, TypeVar
 
 import litellm
 import structlog
+from pydantic import BaseModel, ValidationError
 
 from contextedge.ai.observability import build_messages, record_llm_usage
 from contextedge.config import settings
@@ -73,6 +74,65 @@ async def llm_complete(
       + structured logs, only the operational-event persist is skipped.
     """
     model = model or get_model_for_task(task)
+
+    # Per-tenant daily budget enforcement. When a tenant has a
+    # ``tenant_llm_budgets`` row and the current-day usage has hit the
+    # configured cap, raise ``TenantBudgetExceeded`` before spending
+    # real tokens. A ``warn`` action logs + emits an event but allows
+    # the call through (see services/tenant_budget_service).
+    if tenant_id is not None and db is not None:
+        try:
+            tid = tenant_id if isinstance(tenant_id, _uuid.UUID) else _uuid.UUID(str(tenant_id))
+            from contextedge.services.tenant_budget_service import (
+                TenantBudgetExceeded,
+                check_budget,
+            )
+
+            check = await check_budget(db, tid)
+            if not check.allowed:
+                if check.action == "block":
+                    raise TenantBudgetExceeded(check)
+                # warn: log, emit operational event, fall through.
+                logger.warning(
+                    "llm.budget_warning",
+                    tenant_id=str(tid),
+                    reason=check.reason,
+                    current_tokens=check.current_tokens,
+                    token_limit=check.token_limit,
+                    current_cost_usd=check.current_cost_usd,
+                    cost_cap_usd=check.cost_cap_usd,
+                )
+                try:
+                    from contextedge.services.event_log_service import (
+                        append_operational_event,
+                    )
+
+                    await append_operational_event(
+                        db,
+                        tenant_id=tid,
+                        entity_type="tenant",
+                        event_type="llm.budget_warning",
+                        payload={
+                            "reason": check.reason,
+                            "current_tokens": check.current_tokens,
+                            "token_limit": check.token_limit,
+                            "current_cost_usd": check.current_cost_usd,
+                            "cost_cap_usd": check.cost_cap_usd,
+                            "model": model,
+                            "task": task,
+                        },
+                    )
+                except Exception as event_exc:
+                    # Never let a failed audit write block the call.
+                    logger.warning(
+                        "llm.budget_warning_event_failed", error=str(event_exc),
+                    )
+        except ImportError:
+            # The module is always importable at runtime; this except
+            # branch exists so broken test mocks (no DB, no tenant
+            # models) don't derail the main path.
+            pass
+
     messages = build_messages(system_prompt, prompt, cache_system=bool(system_prompt))
     kwargs: dict[str, Any] = {
         "model": model,
@@ -234,6 +294,140 @@ async def llm_complete_json(
             raw=result[:500],
         )
         raise ValueError(f"LLM returned invalid JSON for task '{task}'")
+
+
+T_Schema = TypeVar("T_Schema", bound=BaseModel)
+
+
+def _format_validation_errors(err: ValidationError, limit: int = 5) -> str:
+    """Render the first ``limit`` Pydantic errors as a bulleted list
+    for inclusion in the repair prompt. Keep it short — too much
+    error detail crowds the model's context with its own mistakes."""
+    lines: list[str] = []
+    for e in err.errors()[:limit]:
+        loc = ".".join(str(p) for p in e.get("loc") or [])
+        msg = e.get("msg", "")
+        kind = e.get("type", "")
+        lines.append(f"- `{loc}`: {msg} (type: {kind})")
+    if len(err.errors()) > limit:
+        lines.append(f"- ... {len(err.errors()) - limit} more")
+    return "\n".join(lines)
+
+
+def _build_repair_prompt(
+    original_prompt: str,
+    raw_output: Any,
+    err: ValidationError | None,
+    schema: type[BaseModel],
+) -> str:
+    """Build the retry prompt. Intentionally short — we want the model
+    to re-read the schema + its previous mistake, not to re-digest the
+    original evidence which it already has cached on the provider side."""
+    try:
+        schema_json = json.dumps(schema.model_json_schema(), indent=2)
+    except Exception:
+        schema_json = schema.__name__
+
+    raw_snippet = json.dumps(raw_output, default=str)[:2000] if raw_output is not None else ""
+    if err is None:
+        error_detail = "Your previous response could not be parsed as JSON at all."
+    else:
+        error_detail = (
+            "Your previous response parsed as JSON but did not match the "
+            "required schema. Validation errors:\n" + _format_validation_errors(err)
+        )
+
+    return (
+        f"Your previous response was rejected.\n\n"
+        f"{error_detail}\n\n"
+        f"Required schema (JSON Schema):\n```json\n{schema_json}\n```\n\n"
+        f"Your previous (invalid) response:\n```json\n{raw_snippet}\n```\n\n"
+        f"Original request:\n{original_prompt}\n\n"
+        f"Return ONLY valid JSON conforming to the schema. No prose, no "
+        f"markdown, no explanation — just the JSON."
+    )
+
+
+async def llm_complete_json_validated(
+    prompt: str,
+    schema: type[T_Schema],
+    task: str = "extraction",
+    model: str | None = None,
+    temperature: float = 0.0,
+    *,
+    system_prompt: str | None = None,
+    tenant_id: _uuid.UUID | str | None = None,
+    db: Any | None = None,
+    max_retries: int = 1,
+) -> T_Schema:
+    """Parse LLM output against a Pydantic schema, with a bounded repair retry.
+
+    Drops into place for callers of ``llm_complete_json`` that want
+    hard guarantees on the return shape. On the first failure (either
+    the raw output isn't valid JSON, or it is but fails Pydantic
+    validation) the wrapper builds a repair prompt including the raw
+    response + the exact validation errors + the target JSON schema,
+    and re-sends once at ``temperature=0``. Retries beyond the first
+    are deliberately not supported — two LLM calls per extraction is
+    already a real cost line; callers who still need more should
+    upgrade the prompt, not tune the retry budget.
+
+    Raises ``ValueError`` if parsing fails after the retry budget.
+    """
+    raw: Any = None
+    first_err: ValidationError | None = None
+    try:
+        raw = await llm_complete_json(
+            prompt,
+            task=task,
+            model=model,
+            temperature=temperature,
+            system_prompt=system_prompt,
+            tenant_id=tenant_id,
+            db=db,
+        )
+        return schema.model_validate(raw)
+    except ValidationError as err:
+        first_err = err
+        logger.warning(
+            "llm.schema_validation_failed",
+            task=task,
+            schema=schema.__name__,
+            error_count=len(err.errors()),
+            first_error=err.errors()[0] if err.errors() else None,
+        )
+        if max_retries <= 0:
+            raise
+    except ValueError:
+        # llm_complete_json raises ValueError on un-parseable JSON.
+        # Treat it the same as a validation failure — the repair prompt
+        # just has no prior JSON to quote back.
+        logger.warning("llm.json_parse_failed_retrying", task=task, schema=schema.__name__)
+        if max_retries <= 0:
+            raise
+
+    repair = _build_repair_prompt(prompt, raw, first_err, schema)
+    second = await llm_complete_json(
+        repair,
+        task=task,
+        model=model,
+        temperature=0.0,
+        system_prompt=system_prompt,
+        tenant_id=tenant_id,
+        db=db,
+    )
+    try:
+        return schema.model_validate(second)
+    except ValidationError as err:
+        logger.error(
+            "llm.schema_validation_failed_after_retry",
+            task=task,
+            schema=schema.__name__,
+            error_count=len(err.errors()),
+        )
+        raise ValueError(
+            f"LLM output failed schema '{schema.__name__}' validation after retry"
+        ) from err
 
 
 async def generate_embedding(

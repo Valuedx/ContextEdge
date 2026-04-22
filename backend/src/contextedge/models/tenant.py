@@ -1,7 +1,8 @@
 import uuid
 from datetime import datetime
+from decimal import Decimal
 
-from sqlalchemy import DateTime, ForeignKey, String, Text, func
+from sqlalchemy import BigInteger, DateTime, ForeignKey, Numeric, String, Text, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -105,3 +106,37 @@ class RoleBinding(Base, TenantScopedMixin):
     )
 
     user: Mapped["User"] = relationship(back_populates="role_bindings")
+
+
+# Valid values for ``TenantLLMBudget.action_on_exceed``. Matches the
+# CHECK constraint on the column.
+BUDGET_ACTIONS = ("block", "warn")
+
+
+class TenantLLMBudget(Base):
+    """Per-tenant daily cap on LLM spend.
+
+    Rows are optional — tenants without a row have no cap. See
+    ``services/tenant_budget_service.py`` for enforcement semantics and
+    ``ENTERPRISE_ARCHITECTURE_REVIEW.md`` §6 item 14 for motivation.
+    """
+
+    __tablename__ = "tenant_llm_budgets"
+
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("tenants.id", ondelete="CASCADE"),
+        primary_key=True,
+        nullable=False,
+    )
+    daily_token_limit: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    daily_cost_cap_usd: Mapped[Decimal | None] = mapped_column(Numeric(12, 4), nullable=True)
+    action_on_exceed: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="warn", server_default="warn",
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
