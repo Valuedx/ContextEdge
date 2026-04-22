@@ -135,9 +135,9 @@ Tier-1 must-haves before any serious pilot, not yet in the codebase:
 
 ## 5. Architectural concerns — watch list
 
-- **`graph_edges` will need a GIN index on `metadata_extra`** once anyone queries "find edges where `metadata.reason = X`". Graph queries today are on `(source_node_type, source_node_id)` which is indexed, but richer traversals will hit scan problems.
-- **JSONB-heavy schemas** (`context_snapshot`, `evidence_summary`, `result_details`, `baseline_ref`, `modification_diff`) are flexible but unindexed. Any tenant-facing filter over these pays full-scan cost. Add targeted GIN indexes as specific filter paths emerge; don't index everything.
-- **`canonical_entity_refs` on `EvidenceItem`** is a JSONB hot spot — used by identity resolution, decision extraction, and now correlation. If you ever filter by entity, GIN-index the `identities` path specifically.
+- ~~**`graph_edges` will need a GIN index on `metadata_extra`**~~ — **mitigated 2026-04-23** by migration `0025_jsonb_gin_indexes` (jsonb_path_ops GIN, built `CONCURRENTLY`). Richer edge-metadata traversals now hit an index instead of full-scanning.
+- **JSONB-heavy schemas** (`context_snapshot`, `evidence_summary`, `result_details`, `baseline_ref`, `modification_diff`) are flexible but unindexed. Any tenant-facing filter over these pays full-scan cost. Add targeted GIN indexes as specific filter paths emerge; don't index everything — `0025` deliberately kept out these columns until a real query path justifies the write-amplification cost.
+- ~~**`canonical_entity_refs` on `EvidenceItem`**~~ — **mitigated 2026-04-23** by the same migration (`ix_evidence_items_canonical_entity_refs_gin`, jsonb_path_ops). Whole-column rather than `->'identities'` specifically, so any filter against `decisions` or future sub-keys benefits too.
 - **Celery task queue design** is reasonable but has no priority ordering. A customer's P1 incident ingestion competes with back-fill jobs. Add priority queues (`extraction-priority`, `extraction-bulk`) and route P1 session evidence to the priority lane.
 - **Decision provenance endpoint** (`get_decision_provenance`) joins `Source` + `SourceObject` per evidence — single query today, but N=20 evidence × 2-table join doesn't scale past 100 evidence. Bundle the source info onto `EvidenceItem` as denormalised `source_cache_json` if this becomes a hot path.
 - **Celery workers lack fair-share per tenant**. One noisy tenant can starve others. Add concurrency limits via `worker_max_tasks_per_child` tagged per tenant.
