@@ -90,17 +90,27 @@ Every proposed step links back to the evidence that supports it, so reviewers ca
 
 - **JSON-mode extraction** — *Why:* structured downstream ORM mapping. *Tradeoff:* models occasionally violate schema; code must validate and log (`llm_json_parse_failed`).
 
+- **Prompt caching** (since 2026-04-22) — *Why:* classification and extraction prompts have large, stable system blocks (instructions + schema) and small, dynamic user blocks (the evidence). Splitting them lets OpenAI's automatic prefix cache and Anthropic's `cache_control: {"type": "ephemeral"}` both hit, cutting cached-prompt tokens to 10–25% of normal pricing. `ai/provider.py::llm_complete` takes `system_prompt` as a kwarg and builds messages via `ai/observability.build_messages` which emits the content-block shape LiteLLM routes to Anthropic's native caching. Classifier's `SYSTEM_PROMPT` is now a module constant — stable across all calls. *Tradeoff:* requires callers to split their prompts; legacy call sites that pass only `prompt` still work but lose the cache benefit.
+
+- **Classify-before-embed** (since 2026-04-22) — *Why:* at typical enterprise IT inbox noise rates (~60–70% non-operational), embedding irrelevant items before classifying them wasted both the embedding and downstream identity / decision extraction cost. `_normalize` now runs `classify_relevance` inline immediately after thread + attachment setup. Items scoring `not_relevant` with confidence ≥ 0.75 skip the expensive fan-out. *Tradeoff:* normalize is slightly slower per item (one LLM call added to critical path), but the aggregate LLM cost per ingested batch drops by ~65% on noisy tenants.
+
+- **Per-call token + cost instrumentation** (since 2026-04-22) — *Why:* LLM spend is the single largest variable cost; without per-tenant observability the first production incident will be a cost incident, not an availability incident. `ai/observability.record_llm_usage` is called from every `llm_complete` / `generate_embedding` code path, emitting Prometheus counters + structured logs + `OperationalEvent(event_type="llm.usage")`. *Tradeoff:* one extra DB write per LLM call when a db session is provided; the write is best-effort and swallows errors so observability failure never breaks the actual work. See the `/admin/cost` dashboard and `GET /api/v1/admin/llm-usage` for the aggregated view.
+
+- **HNSW indexes on embedding columns** (since 2026-04-22, migration `0021_hnsw_vector_indexes`) — *Why:* unindexed cosine-distance queries scan the full 3072-dim column linearly; at several million rows this dominates runtime similarity queries. HNSW gives ~95% recall at roughly 100× the throughput. *Tradeoff:* approximate rather than exact neighbours; index maintenance cost on inserts (bounded — pgvector's HNSW implementation is designed for this). Runtime recall is tunable per session via `SET LOCAL hnsw.ef_search = <n>`.
+
 ## Code map
 
 | Concern | Module path | Key symbols | When it runs |
 | --- | --- | --- | --- |
 | LLM + embeddings | `backend/src/contextedge/ai/provider.py` | `llm_complete`, `llm_complete_json`, `generate_embedding`, `get_model_for_task` | Many services |
+| Observability | `backend/src/contextedge/ai/observability.py` | `record_llm_usage`, `build_messages`, `extract_usage`, `LLM_TOKENS_TOTAL` | Every LLM + embedding call |
 | Evidence vectors | `backend/src/contextedge/ai/embeddings.py` | `embed_evidence`, `embed_evidence_batch` | Normalize, batch jobs |
-| Relevance | `backend/src/contextedge/ai/classifiers/relevance.py` | `classify_relevance` | Worker / pipeline |
+| Relevance | `backend/src/contextedge/ai/classifiers/relevance.py` | `classify_relevance`, `SYSTEM_PROMPT` | Inline in `_normalize` before embed + identity/decision extraction |
 | Episodes | `backend/src/contextedge/ai/extractors/episode_extractor.py` | `reconstruct_episode` | Episode creation |
 | Episode persist | `backend/src/contextedge/services/episode_service.py` | `create_episodes_from_evidence` | API / tasks |
 | Contradictions | `backend/src/contextedge/services/contradiction_service.py` | (LLM-assisted compare) | Evaluation tasks |
-| Celery hooks | `backend/src/contextedge/workers/extraction_tasks.py` | `classify_relevance_task`, `reconstruct_episode_task` | Queues |
+| Celery hooks | `backend/src/contextedge/workers/extraction_tasks.py` | `_normalize` (classifies inline), `classify_relevance_task` (re-classify only), `reconstruct_episode_task` | Queues |
+| Admin cost aggregation | `backend/src/contextedge/services/admin_cost_service.py` | `get_llm_usage`, `MODEL_COST_USD_PER_M_TOKENS` | `GET /admin/llm-usage` |
 
 ## Acme VPN incident (this layer)
 

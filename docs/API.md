@@ -89,6 +89,7 @@ Prefixes are relative to `/api/v1`.
 | `/execution` | execution | Governed playbook execution runs and approvals |
 | `/decisions` | decisions | First-class decision traces with options, outcomes, and similarity search |
 | `/review-queue` | review-queue | Reviewer console bundle — session + top decision + similar aggregate in one call |
+| `/admin` | admin | Cost observability (LLM token spend, cache-hit rate, model×task breakdown). Gated to `tenant_admin` / `platform_super_admin`. |
 
 ---
 
@@ -608,6 +609,66 @@ Returns `404` when the session does not exist.
 
 ---
 
+## Admin — LLM cost observability
+
+Base path: `/api/v1/admin`.
+
+Implementation: `contextedge.api.v1.admin_cost`, `contextedge.services.admin_cost_service`, `contextedge.ai.observability`.
+
+Every LLM call in the engine flows through `record_llm_usage` (`ai/observability.py`) which emits:
+
+1. **Prometheus counters** — `contextedge_llm_tokens_total` (labelled by `tenant_id`, `model`, `task`, `token_type ∈ {prompt,completion,cached}`) and `contextedge_llm_requests_total` (labelled by tenant, model, task, `outcome ∈ {ok,error}`). Scrape via `/metrics`.
+2. **Structured logs** — one `llm.usage` log line per call with full token breakdown + duration.
+3. **Operational events** — persisted row with `event_type="llm.usage"`, queried by the admin dashboard.
+
+Cache-hit tokens are normalised across providers: OpenAI `usage.prompt_tokens_details.cached_tokens` and Anthropic `usage.cache_read_input_tokens` both land in a single `cached_tokens` counter.
+
+### `GET /admin/llm-usage`
+
+Returns aggregated token spend + cache-hit rate + model×task breakdown for the caller's tenant over a configurable window.
+
+| Parameter | Type | Required | Description |
+| --- | --- | --- | --- |
+| `window_hours` | int (1–720) | no | Aggregation window, default 24. Max 30 days. |
+| `top_n_breakdown` | int (1–50) | no | How many model×task rows to return (ranked by cost desc), default 10. |
+
+Response shape (`LlmUsageResponse`):
+
+```json
+{
+  "window_hours": 24,
+  "from_time": "...",
+  "to_time": "...",
+  "totals": {
+    "request_count": 1523,
+    "prompt_tokens": 842000,
+    "completion_tokens": 95000,
+    "cached_tokens": 620000,
+    "total_tokens": 937000,
+    "estimated_cost_usd": 1.83,
+    "cache_hit_rate": 0.736
+  },
+  "by_model_task": [
+    {
+      "model": "gpt-4o-mini",
+      "task": "classification",
+      "request_count": 1200,
+      "prompt_tokens": 600000,
+      "completion_tokens": 30000,
+      "cached_tokens": 480000,
+      "total_tokens": 630000,
+      "estimated_cost_usd": 0.042
+    }
+  ]
+}
+```
+
+Cost estimates derive from a rate table in `services.admin_cost_service.MODEL_COST_USD_PER_M_TOKENS`. Non-authoritative — the LLM provider's billing dashboard is the invoice of record. Cache-hit rate = `cached_tokens / prompt_tokens` (0 when no prompt tokens in window).
+
+Requires `tenant_admin` or `platform_super_admin`. Paired with the frontend `/admin/cost` dashboard.
+
+---
+
 ## Observability
 
 HTTP endpoints:
@@ -629,8 +690,11 @@ HTTP endpoints:
 | Graph router | `contextedge.api.v1.graph` |
 | Decisions router | `contextedge.api.v1.decisions` |
 | Review-queue router | `contextedge.api.v1.review_queue` |
+| Admin cost router | `contextedge.api.v1.admin_cost` |
 | Decision trace service | `contextedge.services.decision_trace_service` |
 | Review-queue service | `contextedge.services.review_queue_service` |
+| Admin cost service | `contextedge.services.admin_cost_service` |
+| LLM observability | `contextedge.ai.observability` |
 | Schemas | `contextedge.schemas.*` |
 
 When you add or rename routers, update this file and the document map in [TECHNICAL_BLUEPRINT.md](TECHNICAL_BLUEPRINT.md).

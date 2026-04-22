@@ -26,6 +26,7 @@ import {
   Scale,
   Waypoints,
   CheckCircle2,
+  DollarSign,
 } from "lucide-react";
 import { useAuthStore } from "@/lib/stores/auth-store";
 import { hasRole } from "@/lib/roles";
@@ -60,6 +61,7 @@ const navItems: NavItem[] = [
   { label: "Drift", href: "/drift", icon: Activity },
   { label: "Policies", href: "/policies", icon: Shield, requiredRoles: ["tenant_admin"] },
   { label: "Audit Log", href: "/audit", icon: ClipboardList, requiredRoles: ["tenant_admin", "domain_admin"] },
+  { label: "LLM Cost", href: "/admin/cost", icon: DollarSign, requiredRoles: ["tenant_admin"] },
   { label: "Settings", href: "/settings", icon: Settings },
 ];
 

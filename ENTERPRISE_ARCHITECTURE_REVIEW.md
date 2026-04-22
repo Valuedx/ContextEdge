@@ -148,10 +148,12 @@ Tier-1 must-haves before any serious pilot, not yet in the codebase:
 
 Can be one engineer in two weeks, ~50% cost reduction expected.
 
-1. Prompt caching on classification + extraction system prompts (`backend/src/contextedge/ai/provider.py`)
-2. Flip normalize order: classify → then embed, not embed → then classify (`backend/src/contextedge/workers/extraction_tasks.py`)
-3. Token-count + model-name logging per LLM call → Prometheus counter tagged by tenant
-4. HNSW index migration on both embedding columns
+1. **Shipped 2026-04-22** — Prompt caching on classification + extraction system prompts. `ai/provider.py::llm_complete` now splits system/user messages and marks the system block with `cache_control: {"type": "ephemeral"}` via `ai/observability.build_messages`. Classifier prompt rewritten with stable `SYSTEM_PROMPT` for cache-prefix hits.
+2. **Shipped 2026-04-22** — Normalize order flipped. `workers/extraction_tasks._normalize` now classifies inline *before* embedding and identity/decision extraction. Items confidently classified `not_relevant` (confidence ≥ 0.75) skip the expensive fan-out entirely. `classify_relevance_task` removed from post-normalize dispatch (retained for manual re-classification).
+3. **Shipped 2026-04-22** — Token-count + model-name logging per LLM call. New `ai/observability.py` module with Prometheus counters (`contextedge_llm_tokens_total`, `contextedge_llm_requests_total` labelled by tenant/model/task/type), structured `llm.usage` logs, and operational-event persistence for historical dashboard queries. Embedding calls + completion calls both instrumented. `extract_usage` normalises OpenAI `prompt_tokens_details.cached_tokens` and Anthropic `cache_read_input_tokens` into one `cached_tokens` metric.
+4. **Shipped 2026-04-22** — HNSW migration. `alembic/versions/0021_hnsw_vector_indexes.py` creates cosine-ops HNSW indexes on both `evidence_items.embedding` and `decisions.embedding` using `CONCURRENTLY` (no table lock). `pyproject.toml` bumped to `pgvector>=0.5`.
+
+**Bonus ship 2026-04-22**: admin observability surface. New `GET /api/v1/admin/llm-usage` endpoint (`api/v1/admin_cost.py`) aggregates the `llm.usage` operational events into headline KPIs (total cost estimate, token split, cache-hit rate, avg cost/request) plus a top-N model×task breakdown. Frontend `/admin/cost` route (`tenant_admin` gated) renders the dashboard with KPI cards, a cache-health tone indicator (green/amber/red using the same thresholds as the reviewer-console confidence badge), and a CSS-only stacked-bar breakdown of prompt-non-cached / cached / completion tokens per row. 60-second auto-refresh so effects of prompt-caching or model swaps are visible in near-real-time.
 
 ### Weeks 3–4: the quadratic scanner
 

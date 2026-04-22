@@ -46,6 +46,9 @@ def test_extract_case_link_candidates_includes_external_and_thread():
 
 
 def test_normalize_chains_correlation_task():
+    """After the classify-before-embed refactor, normalize runs classification
+    inline and no longer dispatches classify_relevance_task. The post-normalize
+    fan-out is trimmed to correlation + baseline."""
     from contextedge.workers import evidence_baseline_tasks
 
     evidence_id = str(uuid4())
@@ -61,7 +64,9 @@ def test_normalize_chains_correlation_task():
         result = extraction_tasks.normalize_evidence.run(str(uuid4()), str(uuid4()))
 
     assert result == {"evidence_id": evidence_id}
-    classify_mock.assert_called_once()
+    # classify_relevance_task is NOT part of the default fan-out anymore —
+    # classification is done inline in _normalize before the expensive work.
+    classify_mock.assert_not_called()
     correlate_mock.assert_called_once_with(evidence_id, ANY)
     baseline_mock.assert_called_once_with(evidence_id, ANY)
 

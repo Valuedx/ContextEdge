@@ -93,6 +93,17 @@ The bundle endpoint is read-through cached (`review_queue:{tenant_id}:{session_i
 - **Typed Modify forms** — see limitation above.
 - **Frontend tests** — no test runner is configured for the frontend package (`npm test` stubs out). Add one alongside the next slice.
 
+## Resolved: LLM cost observability + Week-1-2 cost wins
+
+Four issues flagged in [`ENTERPRISE_ARCHITECTURE_REVIEW.md`](../ENTERPRISE_ARCHITECTURE_REVIEW.md)'s Weeks 1–2 roadmap are now shipped:
+
+1. **Prompt caching** — `ai/provider.py::llm_complete` splits messages into a stable system block (marked `cache_control: {"type": "ephemeral"}` via `ai/observability.build_messages`) and a dynamic user block. OpenAI's automatic prefix cache and Anthropic's ephemeral cache both hit once the system prompt warms per worker. Classifier prompt rewritten accordingly.
+2. **Classify-before-embed** — `workers/extraction_tasks._normalize` runs relevance classification inline before embedding + identity + decision extraction. Items scoring `not_relevant` with confidence ≥ 0.75 skip the downstream LLM fan-out entirely. `classify_relevance_task` is no longer part of the default fan-out (still available for manual re-classification from the admin UI / attachment extraction path).
+3. **Per-call token + cache logging** — new `ai/observability.py` emits Prometheus counters (`contextedge_llm_tokens_total`, `contextedge_llm_requests_total`) tagged with tenant/model/task/token-type/outcome, a structured `llm.usage` log line per call, and an `OperationalEvent(event_type="llm.usage")` for historical dashboard queries. Both `llm_complete`/`llm_complete_json` and `generate_embedding`/`generate_embeddings_batch` instrumented.
+4. **HNSW indexes on embedding columns** — migration `0021_hnsw_vector_indexes` builds cosine-ops HNSW indexes on `evidence_items.embedding` and `decisions.embedding` with `CONCURRENTLY`, resolving the full-scan problem flagged in the architecture review. Requires `pgvector>=0.5`.
+
+Also shipped in the same slice: `GET /api/v1/admin/llm-usage` + `/admin/cost` reviewer UI that renders per-tenant spend, cache-hit rate, and top-N model×task breakdown. Gated to `tenant_admin` / `platform_super_admin`. Refetches every 60 seconds.
+
 ## Resolved: Semantic similar-decision retrieval
 
 `Decision.embedding` (Vector(3072)) is populated inline during `create_decision` from `decision_type + compact_trace + rationale_summary`. `find_similar_decisions` and `find_similar_decisions_aggregate` accept `query_decision_id` (uses that decision's stored embedding) or `query_text` (embedded on the fly) and order results by `embedding <=> query` cosine distance. JSONB containment on `workflow` / `environment` / `impacted_dependency` remains as a structural pre-filter in both paths so structural scoping still works with semantic ordering. When no query embedding resolves (neither param passed, or provider failure), retrieval falls back to the pre-C3 `created_at DESC` ordering — no caller breakage. Embedding write failures at `create_decision` are swallowed; the decision lands with `embedding = NULL` and participates in structural retrieval until re-embedded.

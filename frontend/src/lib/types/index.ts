@@ -741,3 +741,34 @@ export interface DecisionProvenanceResponse {
   episodes: ProvenanceEpisodeItem[];
   patterns: ProvenancePatternItem[];
 }
+
+// --- Admin LLM cost dashboard ---
+
+export interface LlmUsageTotals {
+  request_count: number;
+  prompt_tokens: number;
+  completion_tokens: number;
+  cached_tokens: number;
+  total_tokens: number;
+  estimated_cost_usd: number;
+  cache_hit_rate: number;
+}
+
+export interface LlmUsageBreakdownEntry {
+  model: string;
+  task: string;
+  request_count: number;
+  prompt_tokens: number;
+  completion_tokens: number;
+  cached_tokens: number;
+  total_tokens: number;
+  estimated_cost_usd: number;
+}
+
+export interface LlmUsageResponse {
+  window_hours: number;
+  from_time: string;
+  to_time: string;
+  totals: LlmUsageTotals;
+  by_model_task: LlmUsageBreakdownEntry[];
+}

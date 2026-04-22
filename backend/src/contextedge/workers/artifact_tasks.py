@@ -33,6 +33,11 @@ def extract_attachment_artifact(self, artifact_id: str, tenant_id: str):
             )
             from contextedge.workers.extraction_tasks import classify_relevance_task
 
+            # Artifacts (attachments) enter the pipeline after normalize has
+            # already classified the parent. But since an attachment's body is
+            # materially different from the parent (e.g., extracted text from
+            # a PDF that was a blob before), re-classify so the attachment's
+            # own extraction gating reflects its actual content.
             classify_relevance_task.delay(result["evidence_id"], tenant_id)
             correlate_evidence.delay(result["evidence_id"], tenant_id)
             compute_evidence_baseline_task.delay(result["evidence_id"], tenant_id)

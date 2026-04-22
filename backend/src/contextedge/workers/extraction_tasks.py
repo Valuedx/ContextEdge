@@ -160,8 +160,57 @@ async def _normalize(db: AsyncSession, raw_object_id: str, tenant_id: uuid.UUID)
     await ensure_thread_for_evidence(
         db, tenant_id=tenant_id, evidence=ev, payload=payload,
     )
+    attachments = await register_attachment_artifacts(
+        db,
+        tenant_id=tenant_id,
+        evidence=ev,
+        payload=payload,
+    )
+
+    # Classify BEFORE expensive downstream work. At typical IT inbox noise
+    # rates (~60-70% non-operational), this short-circuits the embed +
+    # identity + decision extraction path for the majority of items.
+    # Irrelevant items still exist as EvidenceItem rows (audit trail) but
+    # don't contribute tokens to embeddings or extraction LLM calls.
+    classification_label: str | None = None
+    classification_confidence: float | None = None
+    try:
+        cls = await run_relevance_classifier(
+            ev.title or "",
+            ev.body_text or "",
+            "unknown",
+            ev.evidence_type,
+            tenant_id=tenant_id,
+            db=db,
+        )
+        classification_label = cls.get("classification", "not_relevant")
+        classification_confidence = float(cls.get("confidence", 0.0))
+        ev.relevance_state = classification_label.replace(" ", "_")
+        ev.relevance_score = classification_confidence
+        await db.flush()
+    except Exception as cls_exc:
+        # Classifier failure shouldn't block ingestion — fall through to the
+        # full path as the pre-flip behaviour did.
+        logger.warning(
+            "relevance_classification_failed",
+            evidence_id=str(ev.id),
+            error=str(cls_exc),
+        )
+
+    # Gate: skip expensive fan-out for confidently-irrelevant items.
+    # Threshold kept conservative (0.75) so ambiguous items still get the
+    # full treatment — false-negative cost (miss a real incident) is much
+    # higher than the false-positive cost of extracting on noise.
+    skip_extraction = (
+        classification_label == "not_relevant"
+        and classification_confidence is not None
+        and classification_confidence >= 0.75
+    )
+
     identity_count = 0
-    if identity_content.strip():
+    decision_count = 0
+    embedded = False
+    if not skip_extraction and identity_content.strip():
         try:
             refs = await link_evidence_identities(
                 db,
@@ -180,8 +229,6 @@ async def _normalize(db: AsyncSession, raw_object_id: str, tenant_id: uuid.UUID)
                 evidence_id=str(ev.id),
                 error=str(exc),
             )
-    decision_count = 0
-    if identity_content.strip():
         try:
             decision_refs = await link_evidence_decisions(
                 db,
@@ -199,23 +246,26 @@ async def _normalize(db: AsyncSession, raw_object_id: str, tenant_id: uuid.UUID)
                 evidence_id=str(ev.id),
                 error=str(exc),
             )
-    attachments = await register_attachment_artifacts(
-        db,
-        tenant_id=tenant_id,
-        evidence=ev,
-        payload=payload,
-    )
-    try:
-        embedded = await _ensure_embedding(db, ev)
-    except Exception as embed_exc:
-        logger.warning("embedding_failed", evidence_id=str(ev.id), error=str(embed_exc))
-        embedded = False
+        try:
+            embedded = await _ensure_embedding(db, ev)
+        except Exception as embed_exc:
+            logger.warning("embedding_failed", evidence_id=str(ev.id), error=str(embed_exc))
+            embedded = False
+    elif skip_extraction:
+        logger.info(
+            "normalize.skipped_extraction_not_relevant",
+            evidence_id=str(ev.id),
+            confidence=classification_confidence,
+        )
+
     return {
         "evidence_id": str(ev.id),
         "deduped": False,
         "embedded": embedded,
         "identity_count": identity_count,
         "decision_count": decision_count,
+        "relevance_state": ev.relevance_state,
+        "skipped_extraction": skip_extraction,
         "attachment_ids": [str(artifact.id) for artifact in attachments],
     }
 
@@ -314,7 +364,11 @@ def normalize_evidence(self, raw_object_id: str, tenant_id: str):
                     compute_evidence_baseline_task,
                 )
 
-                classify_relevance_task.delay(res["evidence_id"], tenant_id)
+                # Classification is now done inline in _normalize before
+                # the embed/identity/decision fan-out so we can short-circuit
+                # expensive work on irrelevant items. classify_relevance_task
+                # remains available for manual re-classification from the
+                # admin UI but is no longer part of the default fan-out.
                 correlate_evidence.delay(res["evidence_id"], tenant_id)
                 compute_evidence_baseline_task.delay(res["evidence_id"], tenant_id)
         return res
