@@ -204,8 +204,11 @@ Implementation lives in `services/playbook_service.py`.
 | Services | `services/` | Application-layer orchestration and domain logic |
 | Search | `search/` | FTS, vector search, risk gating, hybrid ranking |
 | Graph, patterning, decisions | `graph/`, `api/v1/graph.py`, `services/decision_service.py`, `ai/extractors/decision_extractor.py`, parts of `services/`, `workers/pattern_tasks.py` | Graph HTTP API, BFS traversal, aggregate stats, relationship, pattern, and decision signals |
-| AI integration | `ai/` | Embeddings, classification, generation helpers, decision extraction |
-| Worker wrappers | `workers/` | Celery tasks and async session bridge |
+| AI integration | `ai/` | Embeddings, classification, generation helpers, decision extraction, versioned prompt registry (`ai/prompts/`), schema-validated retry wrapper (`llm_complete_json_validated`) |
+| Cost & budget | `services/admin_cost_service.py`, `services/tenant_budget_service.py`, `api/v1/admin_cost.py` | Per-tenant LLM spend aggregation, daily token/cost caps with pre-call enforcement |
+| Redaction | `services/redaction_service.py` | Regex PII/secret redaction at ingest, before any embed / LLM call |
+| Worker wrappers | `workers/` | Celery tasks, async session bridge, correlation-ID propagation via Celery signals |
+| Golden evals | `backend/evals/` | Per-extractor `golden.jsonl` + `run_regression.py` CLI for regression smoke tests |
 
 ---
 

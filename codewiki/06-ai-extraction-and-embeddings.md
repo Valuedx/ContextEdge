@@ -26,6 +26,10 @@ AI reads your tickets and messages faster than any human—but everything it pro
 
 8. **Configuration** — Model names and keys come from `config.py` / environment (documented in setup and runbook); changing models is an ops concern, not a code change.
 
+9. **Versioned prompt registry** — `ai/prompts/` registers each prompt as a `Prompt(name, version, system, user_template)` object. Callers resolve via `get_prompt("relevance", tenant_id)`, which returns the tenant's configured variant (from `settings.tenant_prompt_variants_json`) or the registered default. `prompt_name` + `prompt_version` are threaded through `llm_complete` / `llm_complete_json` into the `llm.usage` structlog line and operational event, so the admin cost dashboard can break down cost + quality per version. The relevance classifier is the first migrated family (`v1` default); migrate others by adding a submodule that calls `register_prompt`. Treat versions as immutable: edit = ship a new version, never mutate a released one, so historical events stay accurate.
+
+10. **Schema-validated retry** — `llm_complete_json_validated(prompt, schema, ...)` takes a Pydantic model, validates the parsed JSON against it, and on failure sends exactly one repair call that includes the raw invalid response + the Pydantic validation errors + the JSON Schema of the target model. Retry budget is hard-capped at 1 (two LLM calls per extraction is already a real cost line). Raises `ValueError` naming the schema when the retry also fails — cheaper for callers to catch than chasing `ValidationError` up the stack.
+
 ## Example: Acme VPN data at this stage
 
 **Input — evidence text sent to the relevance classifier**
@@ -102,14 +106,16 @@ Every proposed step links back to the evidence that supports it, so reviewers ca
 
 | Concern | Module path | Key symbols | When it runs |
 | --- | --- | --- | --- |
-| LLM + embeddings | `backend/src/contextedge/ai/provider.py` | `llm_complete`, `llm_complete_json`, `generate_embedding`, `get_model_for_task` | Many services |
+| LLM + embeddings | `backend/src/contextedge/ai/provider.py` | `llm_complete`, `llm_complete_json`, `llm_complete_json_validated`, `generate_embedding`, `get_model_for_task` | Many services |
 | Observability | `backend/src/contextedge/ai/observability.py` | `record_llm_usage`, `build_messages`, `extract_usage`, `LLM_TOKENS_TOTAL` | Every LLM + embedding call |
+| Prompt registry | `backend/src/contextedge/ai/prompts/__init__.py`, submodules per family | `Prompt`, `register_prompt`, `get_prompt`, `resolve_version` | Import-time registration; per-call resolution |
 | Evidence vectors | `backend/src/contextedge/ai/embeddings.py` | `embed_evidence`, `embed_evidence_batch` | Normalize, batch jobs |
-| Relevance | `backend/src/contextedge/ai/classifiers/relevance.py` | `classify_relevance`, `SYSTEM_PROMPT` | Inline in `_normalize` before embed + identity/decision extraction |
-| Episodes | `backend/src/contextedge/ai/extractors/episode_extractor.py` | `reconstruct_episode` | Episode creation |
+| Relevance | `backend/src/contextedge/ai/classifiers/relevance.py` | `classify_relevance` (resolves versioned prompt per call) | Inline in `_normalize` before embed + identity/decision extraction |
+| Episodes | `backend/src/contextedge/ai/extractors/episode_extractor.py` | `reconstruct_episode`, `MAX_ITEMS_PER_CALL`, `PER_ITEM_CHAR_LIMIT` | Episode creation |
 | Episode persist | `backend/src/contextedge/services/episode_service.py` | `create_episodes_from_evidence` | API / tasks |
-| Contradictions | `backend/src/contextedge/services/contradiction_service.py` | (LLM-assisted compare) | Evaluation tasks |
-| Celery hooks | `backend/src/contextedge/workers/extraction_tasks.py` | `_normalize` (classifies inline), `classify_relevance_task` (re-classify only), `reconstruct_episode_task` | Queues |
+| Contradictions | `backend/src/contextedge/services/contradiction_service.py` | `scan_contradictions` (HNSW top-K + cursor + budget) | Evaluation tasks |
+| Celery hooks | `backend/src/contextedge/workers/extraction_tasks.py` | `_normalize` (redacts → classifies → embeds), `classify_relevance_task`, `reconstruct_episode_task` | Queues |
+| Tenant budget | `backend/src/contextedge/services/tenant_budget_service.py` | `check_budget`, `TenantBudgetExceeded`, `get_current_day_usage` | Pre-call gate in `llm_complete` |
 | Admin cost aggregation | `backend/src/contextedge/services/admin_cost_service.py` | `get_llm_usage`, `MODEL_COST_USD_PER_M_TOKENS` | `GET /admin/llm-usage` |
 
 ## Acme VPN incident (this layer)

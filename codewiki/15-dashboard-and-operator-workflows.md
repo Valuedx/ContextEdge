@@ -87,6 +87,12 @@ The drift page shows:
 
 The knowledge manager retires the legacy playbook and narrows the trigger conditions on the certificate rotation playbook based on the feedback.
 
+**Afternoon — Tenant admin checks the LLM cost dashboard**
+
+At `/admin/cost` (tenant_admin gated), the admin sees headline KPI cards (estimated USD, total tokens, cache-hit rate, avg cost / request) over a selectable window, plus a top-N model×task breakdown with a CSS-only stacked bar showing prompt-non-cached / cached / completion split per row. Cache-hit rate is tone-coded (green ≥ 50%, amber ≥ 20%, red otherwise) so rollouts that should have lit up prompt caching but didn't are obvious at a glance.
+
+Below the KPIs, the **Daily budget panel** shows the tenant's configured cap (if any) against today's actual usage as two progress bars (tokens + cost USD), colour-toned the same way (emerald < 80%, amber ≥ 80%, rose at 100%). A badge next to the title shows the `action_on_exceed` mode (`block` or `warn`). "Edit budget" opens an inline form with three fields — daily token limit, daily cost cap USD, on-exceed action — each optional except that at least one cap must be set. The form posts to `PUT /admin/tenant-budget`; on save, the panel and the cost dashboard refetch. Typical rollout pattern: land a new cap as `warn` first, watch `llm.budget_warning` events for a day, flip to `block` once the warning volume looks right.
+
 ## Design decisions
 
 - **Thin client over API-first backend** - Why: the same rules should apply to the dashboard, service integrations, and future clients. Tradeoff: some product capabilities appear in the API before the UI catches up.
@@ -119,6 +125,7 @@ The knowledge manager retires the legacy playbook and narrows the trigger condit
 | Negative knowledge | `frontend/src/app/(dashboard)/negative-knowledge/page.tsx` | `NegativeKnowledgePage`, `NKDialog` | Curating failed steps |
 | Policies | `frontend/src/app/(dashboard)/policies/page.tsx` | `PoliciesPage`, `PolicySection` | Governance admin |
 | Settings | `frontend/src/app/(dashboard)/settings/page.tsx` | `SettingsPage`, `NewWorkspaceDialog`, `NewDomainDialog` | Tenant admin |
+| Admin cost + budget | `frontend/src/app/(dashboard)/admin/cost/page.tsx` | `AdminCostPage`, `KpiCard`, `BreakdownBar`, `BudgetPanel`, `BudgetEditForm`, `BudgetAxis` | LLM spend dashboard + per-tenant daily cap config (tenant_admin) |
 | Graph Explorer page | `frontend/src/app/(dashboard)/graph-explorer/page.tsx` | `GraphExplorerPage` | Graph investigation |
 | Graph subgraph visualization | `frontend/src/components/graph/graph-subgraph.tsx` | `GraphSubgraph` | Subgraph tab |
 | Graph neighbors browser | `frontend/src/components/graph/graph-neighbors.tsx` | `GraphNeighbors` | Neighbors tab |

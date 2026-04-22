@@ -66,6 +66,19 @@ Both tasks are wired into Celery Beat via `celery_app.beat_schedule`; see [08-wo
 
 This means a pattern of bad runtime outcomes surfaces in the next scheduled drift pass—operators do not need to manually flag each affected playbook.
 
+### Decision analytics — calibration and pattern mining
+
+`workers/decision_tasks.py` registers two evaluation-queue tasks that mine the first-class `Decision` / `DecisionOutcome` rows (see [16-decision-traces.md](./16-decision-traces.md)) for reviewer-visible quality signals:
+
+- **`evaluation.calibrate_decision_confidence`** buckets completed decisions by their predicted `confidence` (0.1-granularity) and computes the observed success rate per bucket. A well-calibrated extractor has bucket `0.9 → 0.9 ± 0.1` observed success; a miscalibrated one shows "high confidence, low success" buckets that deserve prompt tuning. Results persist as `decision.confidence_calibrated` operational events the admin dashboard can chart over time.
+- **`evaluation.mine_decision_patterns`** groups `(decision_type, execution_result)` pairs with count ≥ 3 and surfaces failure rates so recurring mistakes ("restart is ineffective for network-share failures") are visible without a human eyeballing every run. Emits `decision.patterns_mined`.
+
+Both tasks accept the `"all"` sentinel for per-tenant fan-out with isolated exception handling — one broken tenant doesn't kill the beat for the rest. They're scheduled daily via Celery Beat (`calibrate-decision-confidence-daily`, `mine-decision-patterns-daily`).
+
+### Golden eval scaffolding
+
+`backend/evals/` holds hand-curated `golden.jsonl` files per extractor (one case per line: `id`, inputs, `expected_classification`, optional `min_confidence`). `backend/evals/run_regression.py` is a CLI that runs a golden set through the live extractor, prints per-case pass/fail + a confusion matrix, and exits non-zero on any failure so it can be wired into CI. Ship paths today: run manually on model or prompt changes. The weekly-beat automation is deferred until customer pass-bar criteria are signed off — see `backend/evals/README.md`.
+
 ## Example: Acme VPN data at this stage
 
 **Input — evaluation dataset curated by Acme's reviewer**
@@ -164,6 +177,8 @@ The legacy playbook is automatically transitioned from `approved` to `expired` a
 | Drift alerts (read) | `backend/src/contextedge/services/drift_service.py` | `list_drift_alerts` | HTTP GET / beat task |
 | Drift transition (mutate) | `backend/src/contextedge/services/drift_service.py` | `apply_expired_playbook_transitions`, `check_playbook_drift` | Celery beat |
 | Evaluation & drift tasks | `backend/src/contextedge/workers/evaluation_tasks.py` | `run_evaluation`, `detect_drift`, `scan_contradictions_task` | Celery beat |
+| Decision analytics tasks | `backend/src/contextedge/workers/decision_tasks.py` | `calibrate_decision_confidence`, `mine_decision_patterns` (named `evaluation.*`) | Celery beat (daily) |
+| Golden evals | `backend/evals/` | `relevance/golden.jsonl`, `run_regression.py` CLI | Manual / CI on prompt or model change |
 | Hybrid ranker (shared) | `backend/src/contextedge/search/hybrid_ranker.py` | `rank_playbooks` | Eval + runtime |
 
 ## Acme VPN incident (this layer)

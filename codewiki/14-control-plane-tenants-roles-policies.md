@@ -46,6 +46,10 @@ The product ships with a practical role ladder so organizations can delegate aut
 
 7. **Admin mutations are auditable** - Tenant, workspace, domain, user, and source changes call `log_audit_event`, which means the control plane is not just configurable; it is traceable. In code: `backend/src/contextedge/middleware/audit.py`, `backend/src/contextedge/api/v1/tenants.py`, `backend/src/contextedge/api/v1/workspaces.py`, `backend/src/contextedge/api/v1/domains.py`, `backend/src/contextedge/api/v1/users.py`.
 
+8. **Per-tenant LLM budget is a first-class control-plane artefact** - `TenantLLMBudget` (one row per tenant, optional) carries `daily_token_limit`, `daily_cost_cap_usd`, and `action_on_exceed` (`"block"` raises from `llm_complete`; `"warn"` logs + emits `llm.budget_warning` but lets the call through). Enforcement happens pre-call via `tenant_budget_service.check_budget`, which sums the current UTC day's `llm.usage` events. Config lives behind `GET/PUT /admin/tenant-budget` (and `GET /admin/tenant-budget/status` for live usage vs cap); the operator UI is the `BudgetPanel` on `/admin/cost`. Tenants without a row are uncapped. See [API.md — Admin LLM cost & budget](../docs/API.md#admin--llm-cost--budget).
+
+9. **Per-tenant prompt A/B is config-only** - `settings.tenant_prompt_variants_json` maps tenant id → prompt-name → version string, e.g. `{"<tenant-uuid>": {"relevance": "v2"}}`. Versions register at import time via `contextedge.ai.prompts.register_prompt`; unknown override versions fall back to the default with a log. `prompt_name` + `prompt_version` are recorded on every `llm.usage` event so the admin cost dashboard can break cost + quality down by version. See [06-ai-extraction-and-embeddings.md](./06-ai-extraction-and-embeddings.md) for the registry details.
+
 ## Example: Acme VPN data at this stage
 
 **Setting up the organization**
@@ -145,6 +149,11 @@ The product ships with a practical role ladder so organizations can delegate aut
 | Policy assignment API | `backend/src/contextedge/api/v1/policy_assignments.py` | `assign_policy`, `delete_policy_assignment` | Resource governance |
 | Admin UI | `frontend/src/app/(dashboard)/settings/page.tsx` | `SettingsPage` | Dashboard settings |
 | Policy UI | `frontend/src/app/(dashboard)/policies/page.tsx` | `PoliciesPage`, `PolicySection` | Dashboard governance |
+| LLM budget model | `backend/src/contextedge/models/tenant.py` | `TenantLLMBudget`, `BUDGET_ACTIONS` | Data modeling |
+| LLM budget service | `backend/src/contextedge/services/tenant_budget_service.py` | `check_budget`, `upsert_budget`, `TenantBudgetExceeded` | Pre-call gate in `llm_complete` |
+| LLM budget API | `backend/src/contextedge/api/v1/admin_cost.py` | `GET/PUT /admin/tenant-budget`, `GET /admin/tenant-budget/status` | Tenant admin |
+| LLM budget UI | `frontend/src/app/(dashboard)/admin/cost/page.tsx` | `BudgetPanel`, `BudgetEditForm` | `/admin/cost` dashboard |
+| Prompt variants config | `backend/src/contextedge/config.py` | `settings.tenant_prompt_variants_json` | Per-tenant prompt A/B routing |
 
 ## Acme VPN incident (this layer)
 

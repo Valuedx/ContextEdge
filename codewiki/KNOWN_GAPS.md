@@ -45,7 +45,14 @@ The current frontend notification experience is the header dropdown in `AppHeade
 
 ## Operational events and retention jobs
 
-`apply_retention_policy` in `retention_service.py` is intended to be invoked from a scheduled job or operator script. If nothing calls it, tenant retention defaults have no effect yet.
+`apply_retention_policy` and `purge_archived_evidence` in `retention_service.py` are production-ready services (legal-hold safe, dry-run preview, `limit`/`limit_reached` cross-tick drain), but neither is wired into Celery Beat. Tenant retention defaults have no effect until a cron trigger or operator script calls them. See [11-retention-and-operational-events.md](./11-retention-and-operational-events.md) for the two-phase archive → purge model; see "Scheduled jobs that need wiring" below for the tracked deferrals.
+
+## Scheduled jobs that need wiring
+
+These tasks are coded, tested, and safe to run — they're just not yet in `celery_app.beat_schedule`:
+
+- **Retention archive (`apply_retention_policy`)** and **purge (`purge_archived_evidence`)** — per-tenant memory-class archive, then hard-delete or soft-purge past the configured `archive_grace_days`. Wire when the customer confirms their desired cadence (typical: archive daily, purge weekly).
+- **Weekly golden eval regression** — `backend/evals/run_regression.py` runs today manually or in CI; the weekly Beat entry is deferred until the customer signs off on what pass bar (absolute accuracy? week-over-week delta?) should trip an alert.
 
 ## Object storage blobs are not lifecycle-managed in-app
 
@@ -103,6 +110,30 @@ Four issues flagged in [`ENTERPRISE_ARCHITECTURE_REVIEW.md`](../ENTERPRISE_ARCHI
 4. **HNSW indexes on embedding columns** — migration `0021_hnsw_vector_indexes` builds cosine-ops HNSW indexes on `evidence_items.embedding` and `decisions.embedding` with `CONCURRENTLY`, resolving the full-scan problem flagged in the architecture review. Requires `pgvector>=0.5`.
 
 Also shipped in the same slice: `GET /api/v1/admin/llm-usage` + `/admin/cost` reviewer UI that renders per-tenant spend, cache-hit rate, and top-N model×task breakdown. Gated to `tenant_admin` / `platform_super_admin`. Refetches every 60 seconds.
+
+## Resolved: Weeks 3-4 — quadratic scanner / retention / episode chunking
+
+- **Contradiction scanner redesign.** `services/contradiction_service.scan_contradictions` now uses HNSW top-K KB candidates + incremental cursor (new `contradiction_scan_state` table, migration `0022`) + explicit `max_llm_calls` budget. Result dict reports `llm_calls_used` / `token_skips` / `cursor_skips` / `budget_skips` / `budget_exhausted`. Expected 80-95% LLM-call reduction on warm tenants.
+- **Retention hard-delete + soft-purge.** New `purge_archived_evidence(mode="hard_delete"|"soft_purge", dry_run, limit)` in `services/retention_service.py`. Hard-delete cascades via FK to `attachment_artifacts` / `correlation_edges` / `contradiction_scan_state`; soft-purge NULLs embedding + body and replaces title with `"[purged]"`. Legal hold is in the SQL `WHERE` clause (never post-filtered). Beat scheduling deferred — see "Scheduled jobs that need wiring" above.
+- **Episode extractor chunking.** `ai/extractors/episode_extractor.reconstruct_episode` now splits clusters larger than `MAX_ITEMS_PER_CALL=20` into per-chunk LLM calls; per-item body truncated at `PER_ITEM_CHAR_LIMIT=2000`. Logs `episode_extractor.chunked` on the split path so oversize clusters are observable.
+
+## Resolved: Weeks 5-6 — enterprise gates
+
+- **Shadow automation_mode.** `models/playbook.AUTOMATION_MODES` is now a validated enum `("suggest_only", "shadow", "human_confirmed", "supervised", "full_auto")`. `record_tool_invocation` detects shadow runs and tags outputs with `shadow: True`, forces status to `shadow_executed`, and fires `tool.shadow_executed` events so analytics can separate dry-runs from real outcomes.
+- **Correlation-ID propagation.** Celery `before_task_publish` / `task_prerun` / `task_postrun` handlers in `workers/celery_app.py` thread `request_id` / `correlation_id` / `causation_id` through the HTTP → worker boundary. `llm.usage` structlog line also enriched so a single reviewer action is greppable across HTTP → Celery → LLM log lines.
+- **Ingest-time redaction.** `services/redaction_service.py` regex MVP covers EMAIL / PHONE / SSN / CREDIT_CARD / AWS_ACCESS_KEY / AWS_SECRET_KEY / PRIVATE_KEY blocks. Wired into `_normalize` before the classifier / embedder / identity / decision extractor see anything. `content_hash` computed on the pre-redaction payload so future regex tuning doesn't break dedup. Gated by `settings.redaction_enabled` (default True).
+
+## Resolved: Weeks 7-9 — scale foundations
+
+- **Per-tenant LLM budget enforcement.** New `tenant_llm_budgets` table (migration `0023`) + `services/tenant_budget_service` + pre-call gate in `llm_complete` that raises `TenantBudgetExceeded` on `block` or emits `llm.budget_warning` on `warn`. Admin API `GET/PUT /admin/tenant-budget` + `GET /admin/tenant-budget/status` + `BudgetPanel` UI on `/admin/cost`.
+- **Schema-validated LLM JSON.** `ai/provider.llm_complete_json_validated(prompt, schema)` accepts a Pydantic model, validates the parsed JSON, and on failure sends exactly one repair call with the raw prior response + validation errors + JSON Schema. Retry budget hard-capped at 1.
+- **Evidence-table scale indexes** (migration `0024`): BRIN on `(tenant_id, ingested_at)`, partial B-tree on `(tenant_id, relevance_state)` for the reviewer queue, partial B-tree on `(tenant_id, updated_at)` for the retention purge sweep. All `CREATE INDEX CONCURRENTLY`. Full partition-conversion runbook deferred in `codewiki/04-evidence-normalization-and-storage.md` until customer volume numbers land.
+
+## Resolved: Weeks 10-12 — agent quality
+
+- **Decision calibration + pattern mining on Beat.** `evaluation.calibrate_decision_confidence` and `evaluation.mine_decision_patterns` (in `workers/decision_tasks.py`) accept the `"all"` sentinel for per-tenant fan-out with isolated exception handling and are scheduled daily.
+- **Prompt versioning + per-tenant A/B.** New `ai/prompts/` package with `Prompt` dataclass + `register_prompt` / `get_prompt` / `resolve_version`. Per-tenant variants via `settings.tenant_prompt_variants_json`. `prompt_name` + `prompt_version` threaded through `llm_complete` into `llm.usage` events. Relevance classifier is the first migrated family (`v1` default).
+- **Golden eval scaffold.** `backend/evals/` with `golden.jsonl` format + `run_regression.py` CLI (confusion matrix, non-zero exit on failure). Weekly Beat deferred — see "Scheduled jobs that need wiring".
 
 ## Resolved: Semantic similar-decision retrieval
 
@@ -180,10 +211,6 @@ Teams `hydrate_thread` now fetches the root message first via `/messages/{messag
 - `discover_source` Celery task removed (discovery runs directly via API and `discover_source_objects`)
 - `validate_service_account_token` stub removed from `middleware/auth.py`
 - Unused `symptoms` parameter removed from `rank_playbooks`
-
-## Retention service not scheduled (intentional gap)
-
-`apply_retention_policy` and the new `purge_archived_evidence` both live in `retention_service.py`. Neither is called from a Celery Beat schedule yet — tenant retention defaults and the hard-delete / soft-purge paths have no effect until a cron trigger or operator script is wired. The functions themselves are production-ready: archive respects legal hold via `WHERE sensitivity_label != 'legal_hold'`, purge supports `dry_run=True` for safe preview, `limit` + `limit_reached` let the caller drain backlogs across ticks, and `hard_delete` vs `soft_purge` modes cover both GDPR erasure and audit-preserving content scrub.
 
 ## Resolved: Correlation now auto-triggers episode reconstruction
 

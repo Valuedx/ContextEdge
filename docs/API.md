@@ -89,7 +89,7 @@ Prefixes are relative to `/api/v1`.
 | `/execution` | execution | Governed playbook execution runs and approvals |
 | `/decisions` | decisions | First-class decision traces with options, outcomes, and similarity search |
 | `/review-queue` | review-queue | Reviewer console bundle — session + top decision + similar aggregate in one call |
-| `/admin` | admin | Cost observability (LLM token spend, cache-hit rate, model×task breakdown). Gated to `tenant_admin` / `platform_super_admin`. |
+| `/admin` | admin | Cost observability (`GET /admin/llm-usage`) and per-tenant LLM budget config (`GET/PUT /admin/tenant-budget`, `GET /admin/tenant-budget/status`). Gated to `tenant_admin` / `platform_super_admin`. See §"Admin — LLM cost & budget" below. |
 
 ---
 
@@ -694,7 +694,31 @@ HTTP endpoints:
 | Decision trace service | `contextedge.services.decision_trace_service` |
 | Review-queue service | `contextedge.services.review_queue_service` |
 | Admin cost service | `contextedge.services.admin_cost_service` |
+| Tenant budget service | `contextedge.services.tenant_budget_service` |
 | LLM observability | `contextedge.ai.observability` |
+| Prompt registry | `contextedge.ai.prompts` |
 | Schemas | `contextedge.schemas.*` |
 
 When you add or rename routers, update this file and the document map in [TECHNICAL_BLUEPRINT.md](TECHNICAL_BLUEPRINT.md).
+
+---
+
+## Admin — LLM cost & budget
+
+All routes gated to `tenant_admin` or `platform_super_admin`. Tenant-scoped: a caller can only see / edit their own tenant's rows, regardless of role.
+
+### `GET /admin/llm-usage`
+
+Query params: `window_hours` (1-720, default 24), `top_n_breakdown` (1-50, default 10). Returns aggregated token + estimated USD spend for the window plus a top-N breakdown by `(model, task)`. Reads from `operational_events` rows with `event_type = "llm.usage"` written by `ai/observability.record_llm_usage`. Cache-hit rate is `cached_tokens / prompt_tokens` — target > 0.5 after worker warm-up.
+
+### `GET /admin/tenant-budget`
+
+Returns the caller's tenant's `TenantLLMBudget` row (daily token limit, daily USD cap, `action_on_exceed` ∈ `{"block", "warn"}`) or `null` when no budget is configured. Tenants without a row are uncapped.
+
+### `PUT /admin/tenant-budget`
+
+Body: `{daily_token_limit: int|null, daily_cost_cap_usd: float|null, action_on_exceed: "block"|"warn"}`. Creates or replaces the row. Nulls mean "don't cap on this axis" — at least one of token limit / cost cap must be set for the row to do anything. `action_on_exceed = "warn"` logs + emits `llm.budget_warning` events but lets calls through; `"block"` raises `TenantBudgetExceeded` from `llm_complete` so callers can degrade. Returns the saved row.
+
+### `GET /admin/tenant-budget/status`
+
+Live view combining the budget config with the current UTC day's usage, computed fresh (not cached). Response includes `current_tokens`, `current_cost_usd`, `allowed`, and `reason` (`"ok"` | `"no_budget"` | `"token_limit_exceeded"` | `"cost_cap_exceeded"`). Powers the header of the `/admin/cost` dashboard page. See `services/tenant_budget_service.py` for the 60-second usage cache semantics used by the pre-call gate.

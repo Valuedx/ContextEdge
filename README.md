@@ -31,8 +31,10 @@ OpenAPI for a running local API:
 - **Database:** PostgreSQL 16 with pgvector, stored tsvector FTS columns with GIN indexes
 - **Queue:** Celery with Redis (queues: default, sync, hydration, extraction, pattern, evaluation)
 - **Object storage:** MinIO (S3-compatible) for raw evidence offload and attachments
-- **AI integration:** LiteLLM with provider-specific keys (OpenAI, Anthropic, Google/Vertex AI)
-- **Auth:** Bearer JWT for users and optional `X-Service-Token` for service integrations
+- **AI integration:** LiteLLM with provider-specific keys (OpenAI, Anthropic, Google/Vertex AI). Prompt caching on static system blocks, HNSW indexes on embedding columns (migration `0021`), versioned prompt registry (`ai/prompts/`) with per-tenant A/B routing via `settings.tenant_prompt_variants_json`, schema-validated JSON with 1-retry repair (`llm_complete_json_validated`)
+- **Cost & budget:** Per-tenant daily LLM cap (`tenant_llm_budgets` table, migration `0023`) with pre-call enforcement (`block` raises / `warn` logs). Live spend + cap config at `/admin/cost` for `tenant_admin`
+- **Redaction:** Regex PII/secret redaction at ingest (`services/redaction_service.py`: EMAIL, PHONE, SSN, CREDIT_CARD, AWS_ACCESS_KEY, AWS_SECRET_KEY, PRIVATE_KEY) runs before any LLM / embed call
+- **Auth:** Bearer JWT for users and optional `X-Service-Token` for service integrations. `request_id` / `correlation_id` / `causation_id` propagate HTTP → Celery → LLM via Celery signal handlers
 - **Graph:** PostgreSQL adjacency table (`graph_edges`) for pattern, entity, contradiction, and decision relationships
 - **Decision capture:** Three-tier decision graph — first-class `Decision` nodes with typed edges (`based_on`, `considered`, `chose`, `applied_policy`, `required_approval`, `resulted_in`, `followed_by`), governed execution edges from the execution engine, and AI-extracted decision edges from ingested evidence text
 - **Human-in-the-loop feedback:** Approve / Modify / Reject flow with structured reason codes (`wrong_diagnosis`, `plan_incomplete`, `needs_human_judgment`, `user_context_missing`, `policy_violation`, `other`) that feed `get_decision_effectiveness` analytics instead of free-text

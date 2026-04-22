@@ -24,14 +24,16 @@ Background processing ensures that heavy work like AI extraction, pattern detect
 
 4. **Representative tasks**
    - **sync:** `run_backfill`, `run_incremental_sync` (`sync_tasks.py`) — historical backfill and incremental pull per source object.
-   - **extraction:** `normalize_evidence` (including inline identity linking, decision extraction, and embedding), `classify_relevance_task`, `reconstruct_episode_task` (`extraction_tasks.py`).
+   - **extraction:** `normalize_evidence` (redacts PII → classifies → embeds → links identities & decisions), `classify_relevance_task`, `reconstruct_episode_task` (`extraction_tasks.py`).
    - **hydration:** `hydrate_thread` (`hydration_tasks.py`) for fuller thread payloads.
    - **correlation:** `correlate_evidence` (`correlation_tasks.py`).
    - **artifacts:** `extract_attachment_artifact` (`artifact_tasks.py`).
    - **pattern:** `cluster_episodes`, `generate_playbook_candidate` (`pattern_tasks.py`).
-   - **evaluation:** `run_evaluation`, `detect_drift`, `scan_contradictions_task` (`evaluation_tasks.py`).
+   - **evaluation:** `run_evaluation`, `detect_drift`, `scan_contradictions_task` (`evaluation_tasks.py`); `evaluation.calibrate_decision_confidence`, `evaluation.mine_decision_patterns` (`decision_tasks.py`). Each of these accepts the literal string `"all"` as `tenant_id` to fan out across every tenant with per-tenant exception isolation (one bad tenant won't kill the beat for the rest).
 
-5. **Beat schedule** — Same file defines periodic tasks: `detect_drift` every 6 hours (`args: ("all",)`), `scan_contradictions_task` every 12 hours.
+5. **Beat schedule** — Same file defines periodic tasks: `detect_drift` every 6 hours, `scan_contradictions_task` every 12 hours, `trigger_scheduled_syncs` every 15 minutes, `calibrate-decision-confidence-daily` and `mine-decision-patterns-daily` every 24 hours. All tenant-scanning entries use `args: ("all",)`.
+
+6. **Correlation-ID propagation** — `celery_app.py` registers three Celery signal handlers so a single `request_id` / `correlation_id` / `causation_id` triad follows an HTTP request into the workers: `before_task_publish` reads the ContextVar set by `TenantContextMiddleware` and stamps it onto the outgoing task headers; `task_prerun` rebinds the IDs into the worker's ContextVar so any service code (and `append_operational_event`) picks them up automatically; `task_postrun` resets the token. Malformed headers are skipped; overlapping tasks each own their own reset token so concurrent pools don't stomp on each other.
 
 6. **Enqueue from API/services** — `sync_ingestion_queue.queue_normalize_raw_objects` imports `normalize_evidence` and calls `.delay` per raw id after commit. `api/v1/sync.py` and `api/v1/sources.py` enqueue **sync** tasks for retry and backfill. Other paths enqueue correlation, pattern jobs, etc.
 
@@ -137,6 +139,8 @@ Each task runs independently and retries on failure, so a temporary AI provider 
 | Attachments | `backend/src/contextedge/workers/artifact_tasks.py` | `extract_attachment_artifact` | extraction |
 | Patterns | `backend/src/contextedge/workers/pattern_tasks.py` | `cluster_episodes`, `generate_playbook_candidate` | pattern |
 | Eval / drift / contradictions | `backend/src/contextedge/workers/evaluation_tasks.py` | `run_evaluation`, `detect_drift`, `scan_contradictions_task` | evaluation |
+| Decision analytics | `backend/src/contextedge/workers/decision_tasks.py` | `calibrate_decision_confidence`, `mine_decision_patterns` (registered as `evaluation.*`) | evaluation |
+| Correlation-ID signals | `backend/src/contextedge/workers/celery_app.py` | `_inject_correlation_headers`, `_bind_worker_context`, `_release_worker_context` | publisher + worker boundary |
 | Sync | `backend/src/contextedge/workers/sync_tasks.py` | `run_backfill`, `run_incremental_sync` | sync |
 | Enqueue helper | `backend/src/contextedge/services/sync_ingestion_queue.py` | `queue_normalize_raw_objects` | extraction |
 
