@@ -98,3 +98,24 @@ def download_artifact(key: str) -> bytes:
         return body.read()
     finally:
         body.close()
+
+
+def delete_object(key: str) -> bool:
+    """Delete an object from MinIO by key. Returns True if deleted,
+    False if the key was already absent (treated as success). Any
+    other ClientError propagates so the caller can decide whether
+    to retry.
+
+    Used by the hard-delete cleanup sweep (review F-18) to reap
+    orphaned raw + artifact blobs after their evidence row has been
+    deleted via ``purge_archived_evidence(mode="hard_delete")``.
+    """
+    client = get_s3_client()
+    try:
+        client.delete_object(Bucket=settings.minio_bucket, Key=key)
+        return True
+    except ClientError as exc:
+        code = str(exc.response.get("Error", {}).get("Code", ""))
+        if code in {"404", "NoSuchKey", "NotFound"}:
+            return False
+        raise

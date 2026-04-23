@@ -102,6 +102,8 @@ celery_app = Celery(
         # Tasks register under ``evaluation.*`` names so they hit the
         # evaluation queue via the routing rule below.
         "contextedge.workers.decision_tasks",
+        # Post-hard-delete orphan sweeps (review F-18 / F-20).
+        "contextedge.workers.cleanup_tasks",
     ],
 )
 
@@ -156,6 +158,13 @@ celery_app.conf.update(
         },
         "mine-decision-patterns-daily": {
             "task": "evaluation.mine_decision_patterns",
+            "schedule": 86400.0,
+            "args": ("all",),
+        },
+        # Reap orphaned MinIO blobs + dangling graph_edges after
+        # retention hard-deletes. Cheap when there's nothing to do.
+        "cleanup-hard-deleted-daily": {
+            "task": "evaluation.cleanup_hard_deleted_evidence",
             "schedule": 86400.0,
             "args": ("all",),
         },

@@ -16,10 +16,18 @@ Retention happens in two phases:
 
    - ``hard_delete`` — ``DELETE`` the row. Cascades via existing FK
      constraints to ``attachment_artifacts``, ``correlation_edges``,
-     ``contradiction_scan_state`` (all ``ON DELETE CASCADE``). Leaves
-     ``graph_edges`` entries referencing the deleted evidence id
-     orphaned — those are cleaned up by a separate graph-compact job.
-     Use when the customer wants true deletion (GDPR right-to-erasure).
+     ``contradiction_scan_state`` (all ``ON DELETE CASCADE``), plus
+     ``playbook_evidence_links.evidence_id`` which is
+     ``ON DELETE SET NULL`` (migration ``0027``) so the link row
+     survives as an audit record with a NULL pointer.
+     Leaves two classes of orphans that the daily
+     ``evaluation.cleanup_hard_deleted_evidence`` Beat task reaps:
+     (a) ``raw_evidence_objects`` rows + their MinIO blobs (no FK
+     from evidence to raw), and (b) ``graph_edges`` entries whose
+     ``source_node_id`` / ``target_node_id`` pointed at the deleted
+     evidence (the edge columns are plain UUIDs, no FK). See
+     ``workers/cleanup_tasks.py``. Use when the customer wants true
+     deletion (GDPR right-to-erasure).
    - ``soft_purge`` — NULLs ``embedding``, ``body_text``, ``body_summary``,
      ``canonical_entity_refs`` (strips extracted identity + decision
      names — see review F-17) and ``raw_object_ref`` (so the S3 blob

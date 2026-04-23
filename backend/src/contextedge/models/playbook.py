@@ -162,7 +162,15 @@ class PlaybookEvidenceLink(Base):
         nullable=False,
         index=True,
     )
-    evidence_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    evidence_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        # ON DELETE SET NULL — preserves the "this playbook version cited
+        # evidence that has since been purged" audit record (review F-19,
+        # migration 0027). A hard-delete of the evidence leaves the link
+        # row with a NULL evidence_id.
+        ForeignKey("evidence_items.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     episode_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     link_type: Mapped[str] = mapped_column(String(50), nullable=False)
     created_at: Mapped[datetime] = mapped_column(

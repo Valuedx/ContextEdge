@@ -106,7 +106,7 @@ make test
 Notes:
 
 - `make dev` starts the full Docker development stack.
-- Current Alembic head is `0026_dedup_uniqueness`. Run `make migrate` after pulling to apply any new revisions.
+- Current Alembic head is `0027_playbook_evidence_link_fk`. Run `make migrate` after pulling to apply any new revisions.
 - Frontend `npm test` is currently a placeholder script; there is no real frontend unit-test suite yet.
 - The backend enforces a non-default `JWT_SECRET_KEY` when `APP_ENV` is not `development`. Set a real secret before deploying to staging or production.
 
