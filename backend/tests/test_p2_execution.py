@@ -579,6 +579,92 @@ async def test_record_tool_invocation_under_shadow_tags_outputs_and_status():
 
 
 @pytest.mark.asyncio
+async def test_shadow_mode_auto_approves_gated_steps():
+    """Review F-13: a shadow run that hits an approval-gated step must
+    not sit in awaiting_approval forever. start_execution creates the
+    approval_request row for audit ("what would this have asked for?")
+    but immediately stamps it approved with a shadow-mode comment and
+    reverts the run + step back to running."""
+    from contextedge.services.execution_service import start_execution
+
+    tenant_id = uuid4()
+    actor_id = uuid4()
+    playbook_id = uuid4()
+    version_id = uuid4()
+    playbook = SimpleNamespace(
+        id=playbook_id,
+        tenant_id=tenant_id,
+        lifecycle_state="approved",
+        automation_mode="shadow",  # the key bit
+        title="Shadow test",
+        expiry_at=None,
+    )
+    version = SimpleNamespace(
+        id=version_id,
+        playbook_id=playbook_id,
+        published_at=datetime.now(timezone.utc),
+        semantic_version="1.0.0",
+        steps=[
+            # One destructive step that would normally require approval.
+            {"title": "nuke", "safety_class": "destructive", "requires_approval": True},
+        ],
+    )
+
+    added_rows = []
+
+    class _PlaybookVersionResult:
+        def scalar_one_or_none(self):
+            return version
+
+    async def _execute(*args, **kwargs):
+        return _PlaybookVersionResult()
+
+    async def _get(model, pk):
+        if pk == playbook_id:
+            return playbook
+        if pk == version_id:
+            return version
+        return None
+
+    db = SimpleNamespace(
+        get=AsyncMock(side_effect=_get),
+        execute=AsyncMock(side_effect=_execute),
+        add=lambda obj: added_rows.append(obj),
+        flush=AsyncMock(),
+        refresh=AsyncMock(),
+    )
+
+    with (
+        patch("contextedge.services.execution_service.append_operational_event", AsyncMock()),
+        patch("contextedge.services.execution_service.ensure_edge", AsyncMock()),
+        patch("contextedge.services.execution_service.create_decision", AsyncMock()),
+        patch("contextedge.services.execution_service.append_trace_event", AsyncMock()),
+    ):
+        run = await start_execution(
+            db,
+            tenant_id=tenant_id,
+            actor_id=actor_id,
+            roles=["platform_super_admin"],
+            playbook_id=playbook_id,
+            requested_max_safety_class="destructive",
+        )
+
+    # Approval rows were created for audit.
+    approval_rows = [r for r in added_rows if isinstance(r, ApprovalRequest)]
+    assert len(approval_rows) == 1
+    approval = approval_rows[0]
+    # But they were immediately auto-approved rather than pending.
+    assert approval.status == "approved"
+    assert approval.decision_comment is not None
+    assert "shadow" in approval.decision_comment.lower()
+    # The run + step reverted back to running so nothing blocks.
+    assert run.status == "running"
+    step_rows = [r for r in added_rows if isinstance(r, ExecutionStepRun)]
+    assert len(step_rows) == 1
+    assert step_rows[0].status == "running"
+
+
+@pytest.mark.asyncio
 async def test_start_execution_rejects_expired_playbook():
     """Review F-12: a playbook that transitioned to approved but has an
     explicit expiry_at in the past must not be executable."""

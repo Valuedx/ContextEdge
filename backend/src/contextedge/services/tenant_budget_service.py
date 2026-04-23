@@ -26,6 +26,7 @@ spikes; tighter real-time guarantees can upgrade to Redis later.
 
 from __future__ import annotations
 
+import asyncio
 import time
 import uuid
 from dataclasses import dataclass
@@ -47,6 +48,27 @@ BudgetAction = Literal["block", "warn"]
 # tokens — a 60-second lag means at most one over-cap call slips through
 # before we catch up. Tighten later if needed.
 USAGE_CACHE_TTL_SECONDS = 60.0
+
+# Review F-29: a per-tenant asyncio.Lock serialises check_budget calls
+# inside one worker process. Two concurrent HTTP / Celery calls on the
+# same tenant can otherwise both read the usage cache, both see room
+# under the cap, and both proceed — overshooting the cap by one
+# call's worth of tokens. With the lock, the second caller waits for
+# the first to finish and then sees the updated usage (cache TTL aside).
+#
+# This does NOT protect against cross-worker races (gunicorn replicas,
+# multiple Celery workers). For that, swap the in-memory cache + lock
+# for a Redis-backed counter with INCRBY + atomic compare-against-limit.
+# See the module docstring.
+_TENANT_LOCKS: dict[uuid.UUID, asyncio.Lock] = {}
+
+
+def _lock_for_tenant(tenant_id: uuid.UUID) -> asyncio.Lock:
+    lock = _TENANT_LOCKS.get(tenant_id)
+    if lock is None:
+        lock = asyncio.Lock()
+        _TENANT_LOCKS[tenant_id] = lock
+    return lock
 
 
 @dataclass(frozen=True)
@@ -160,7 +182,14 @@ async def check_budget(
     Ordering: tokens checked before cost. A tenant with only a token
     cap configured will never see ``cost_cap_exceeded`` even if spend
     spikes. A tenant with both configured sees whichever fires first.
+
+    Review F-29: serialised per tenant inside one worker process via
+    an ``asyncio.Lock``. Concurrent callers on the same tenant queue
+    rather than all reading the same stale usage number and all
+    overshooting the cap by one call each. Note this is not
+    cross-worker — see the note at the top of this module.
     """
+    # Short-circuit: no budget row means no cap, no need to lock.
     budget = await get_budget(db, tenant_id)
     if budget is None:
         return BudgetCheckResult(
@@ -173,6 +202,17 @@ async def check_budget(
             cost_cap_usd=None,
         )
 
+    async with _lock_for_tenant(tenant_id):
+        return await _check_budget_locked(db, tenant_id, budget, use_cache=use_cache)
+
+
+async def _check_budget_locked(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    budget: TenantLLMBudget,
+    *,
+    use_cache: bool = True,
+) -> BudgetCheckResult:
     action: BudgetAction = (
         budget.action_on_exceed if budget.action_on_exceed in BUDGET_ACTIONS else "warn"
     )  # type: ignore[assignment]

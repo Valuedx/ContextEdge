@@ -163,10 +163,12 @@ async def start_execution(
     await db.flush()
 
     approval_count = 0
+    shadow_approvals: list[ApprovalRequest] = []
+    is_shadow = is_shadow_mode(playbook.automation_mode)
     for step_run in step_runs:
         if not step_run.requires_approval:
             continue
-        await request_approval(
+        req = await request_approval(
             db,
             tenant_id=tenant_id,
             execution_run_id=run.id,
@@ -182,6 +184,32 @@ async def start_execution(
             },
         )
         approval_count += 1
+        if is_shadow:
+            shadow_approvals.append(req)
+
+    # Review F-13: shadow runs must not block waiting for a human.
+    # We deliberately still CREATED the approval_request rows above so
+    # "what would this run have asked approval for?" stays queryable
+    # in the audit log — but we immediately stamp them as approved
+    # with a shadow-mode comment, and revert the run/step status flips
+    # that request_approval left behind.
+    if shadow_approvals:
+        now = datetime.now(UTC)
+        for req in shadow_approvals:
+            req.status = "approved"
+            req.decided_by = actor_id
+            req.decided_at = now
+            req.decision_comment = "shadow mode — auto-approved (no human intervention)"
+        # Restore the run + every approval-gated step_run back to
+        # `running`. Normally request_approval flips them to
+        # `awaiting_approval`; we force them to `running` regardless of
+        # the intermediate state so a shadow run is never blocked
+        # behind a human decision.
+        run.status = "running"
+        for step_run in step_runs:
+            if step_run.requires_approval:
+                step_run.status = "running"
+        await db.flush()
 
     await db.refresh(run)
 
