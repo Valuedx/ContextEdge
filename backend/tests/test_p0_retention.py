@@ -60,6 +60,8 @@ def _archived_item(age_days: int, legal_hold: bool = False):
         body_text="original body",
         body_summary="original summary",
         title="original title",
+        canonical_entity_refs={"identities": [{"canonical_id": "id-1", "name": "alice"}]},
+        raw_object_ref=uuid4(),
     )
 
 
@@ -112,6 +114,12 @@ async def test_purge_soft_purge_scrubs_content_but_keeps_row():
     assert item.body_text is None
     assert item.body_summary is None
     assert item.title == "[purged]"
+    # Review F-17: identity refs + raw-object pointer must also be cleared
+    # so "content unrecoverable" actually holds. PII like extracted person
+    # names lives in canonical_entity_refs; raw_object_ref points at the
+    # S3 blob from which the whole body could be rehydrated.
+    assert item.canonical_entity_refs is None
+    assert item.raw_object_ref is None
     # Never deleted
     db.delete.assert_not_awaited()
 

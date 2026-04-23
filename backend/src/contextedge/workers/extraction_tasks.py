@@ -331,7 +331,14 @@ async def _reconstruct(db: AsyncSession, cluster_id: str, tenant_id: uuid.UUID, 
     items = []
     for eid in ids:
         ev = await db.get(EvidenceItem, eid)
-        if ev and ev.tenant_id == tenant_id:
+        # Legal-hold items must never reach the LLM — see review F-04.
+        # Mirrors the SQL WHERE used by retention + contradiction paths
+        # (``services.evidence_filters.exclude_legal_hold``).
+        if (
+            ev is not None
+            and ev.tenant_id == tenant_id
+            and ev.sensitivity_label != "legal_hold"
+        ):
             items.append({
                 "title": ev.title,
                 "body": ev.body_text,

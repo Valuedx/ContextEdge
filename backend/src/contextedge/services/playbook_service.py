@@ -103,8 +103,15 @@ async def transition_playbook(
     new_state: str,
     actor_id: uuid.UUID,
     comments: str | None = None,
+    *,
+    redis=None,
 ) -> Playbook:
-    """Transition playbook to a new lifecycle state."""
+    """Transition playbook to a new lifecycle state.
+
+    ``redis`` is optional; when provided, any cached runtime-match
+    responses for this tenant are invalidated so stale scoring /
+    explanations can't survive a transition. See review F-09.
+    """
     current = playbook.lifecycle_state
     allowed = VALID_TRANSITIONS.get(current, set())
     approved_version: PlaybookVersion | None = None
@@ -157,7 +164,46 @@ async def transition_playbook(
             version=approved_version,
             actor_id=actor_id,
         )
+
+    # Invalidate any runtime-match cache for this tenant. The cached
+    # payload may reference this playbook's old lifecycle_state; a
+    # reviewer who just flipped it to "restricted" / "retired" should
+    # not still see the old entry in /runtime/explain. The TTL is
+    # 3600s so an at-most-hour of staleness becomes an at-most-
+    # transition-flush here. See review F-09.
+    if redis is not None:
+        await _invalidate_runtime_match_cache(redis, playbook.tenant_id)
+
     return playbook
+
+
+async def _invalidate_runtime_match_cache(redis, tenant_id: uuid.UUID) -> None:
+    """Drop every ``runtime:match:*`` key belonging to ``tenant_id``.
+
+    The cache key is opaque (match_id, UUID-random) so we can't target
+    by tenant without SCAN-ing. SCAN is cursor-based and non-blocking;
+    at a 3600s TTL the working set per tenant is small, and this is a
+    rare path (reviewer transitions, not per-request work).
+    """
+    import json as _json
+
+    try:
+        async for key in redis.scan_iter(match="runtime:match:*", count=200):
+            try:
+                raw = await redis.get(key)
+                if not raw:
+                    continue
+                data = _json.loads(raw)
+                if data.get("tenant_id") == str(tenant_id):
+                    await redis.delete(key)
+            except Exception:
+                # One bad key mustn't abort the sweep.
+                continue
+    except Exception:
+        # Redis unavailable — log and move on. Transition still commits;
+        # stale cache entries simply TTL out normally.
+        logger = __import__("structlog").get_logger()
+        logger.warning("runtime_match_cache_invalidation_failed", tenant_id=str(tenant_id))
 
 
 async def create_playbook_version(

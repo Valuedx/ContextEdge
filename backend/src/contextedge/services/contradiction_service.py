@@ -192,21 +192,28 @@ async def _top_k_kb_candidates(
     ~O(log n) nearest-neighbour — the main cost lever of the redesign.
     Evidence without embeddings is excluded; they'd miss the gate anyway.
     """
+    # Build all predicates BEFORE the ORDER BY + LIMIT so HNSW cooperates
+    # with the filter (review F-22). Legal-hold evidence must never reach
+    # the LLM (review F-23) — `exclude_legal_hold` is the shared invariant.
+    from contextedge.services.evidence_filters import exclude_legal_hold
+
+    predicates = [
+        EvidenceItem.tenant_id == tenant_id,
+        EvidenceItem.evidence_type.in_(KB_EVIDENCE_TYPES),
+        EvidenceItem.embedding.is_not(None),
+        exclude_legal_hold(),
+    ]
+    if domain_id is not None:
+        # Domain-scoped scan — include domain-wide + tenant-wide evidence.
+        predicates.append(
+            (EvidenceItem.domain_id == domain_id) | EvidenceItem.domain_id.is_(None)
+        )
     stmt = (
         select(EvidenceItem)
-        .where(
-            EvidenceItem.tenant_id == tenant_id,
-            EvidenceItem.evidence_type.in_(KB_EVIDENCE_TYPES),
-            EvidenceItem.embedding.is_not(None),
-        )
+        .where(*predicates)
         .order_by(EvidenceItem.embedding.cosine_distance(step_embedding))
         .limit(k)
     )
-    if domain_id is not None:
-        # Domain-scoped scan — include domain-wide + tenant-wide evidence.
-        stmt = stmt.where(
-            (EvidenceItem.domain_id == domain_id) | EvidenceItem.domain_id.is_(None)
-        )
     return list((await db.execute(stmt)).scalars().all())
 
 

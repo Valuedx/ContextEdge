@@ -4,7 +4,7 @@ import uuid as uuid_mod
 from datetime import UTC, datetime
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, HTTPException, Query, Request, status
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 import structlog
@@ -158,7 +158,9 @@ async def update_playbook(playbook_id: UUID, body: PlaybookUpdate, db: DbSession
 
 
 @router.post("/{playbook_id}/transition", response_model=PlaybookResponse)
-async def transition(playbook_id: UUID, body: PlaybookTransition, db: DbSession, user: AuthUser):
+async def transition(
+    playbook_id: UUID, body: PlaybookTransition, request: Request, db: DbSession, user: AuthUser,
+):
     user.require_role("playbook_reviewer")
     result = await db.execute(
         select(Playbook).where(Playbook.id == playbook_id, Playbook.tenant_id == user.tenant_id)
@@ -174,6 +176,9 @@ async def transition(playbook_id: UUID, body: PlaybookTransition, db: DbSession,
             body.new_state,
             user.user_id,
             body.comments,
+            # Pass Redis so the runtime-match cache drops any entries
+            # that reference this playbook — see review F-09.
+            redis=getattr(request.app.state, "redis", None),
         )
     except InvalidTransitionError as e:
         raise HTTPException(status_code=400, detail=str(e))

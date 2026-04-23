@@ -189,3 +189,107 @@ async def test_create_playbook_version_emits_operational_event():
 
     assert version.playbook_id == playbook.id
     event_mock.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# F-09: runtime-match cache is invalidated on transition
+# ---------------------------------------------------------------------------
+
+
+class _FakeRedis:
+    """Minimal async Redis stub covering scan_iter / get / delete."""
+
+    def __init__(self, entries: dict):
+        self._entries = dict(entries)
+        self.deleted: list[str] = []
+
+    async def scan_iter(self, match: str, count: int = 100):
+        import fnmatch as _fn
+        for key in list(self._entries.keys()):
+            if _fn.fnmatch(key, match):
+                yield key
+
+    async def get(self, key):
+        return self._entries.get(key)
+
+    async def delete(self, key):
+        self.deleted.append(key)
+        self._entries.pop(key, None)
+
+
+@pytest.mark.asyncio
+async def test_transition_invalidates_runtime_match_cache_for_same_tenant():
+    """Review F-09: when a playbook transitions, any cached
+    runtime:match:* entries for THAT tenant are dropped; other
+    tenants' caches survive."""
+    import json as _json
+
+    tenant_a = uuid4()
+    tenant_b = uuid4()
+    playbook = SimpleNamespace(
+        id=uuid4(), tenant_id=tenant_a, lifecycle_state="under_review",
+        current_version_id=uuid4(), approver_user_id=None,
+        last_validated_at=None,
+    )
+    version = SimpleNamespace(
+        id=playbook.current_version_id, playbook_id=playbook.id,
+        published_at=None, published_by=None,
+    )
+    db = SimpleNamespace(
+        get=AsyncMock(return_value=version),
+        add=Mock(),
+        flush=AsyncMock(),
+    )
+    redis = _FakeRedis({
+        "runtime:match:own-1": _json.dumps({"tenant_id": str(tenant_a), "results": []}),
+        "runtime:match:own-2": _json.dumps({"tenant_id": str(tenant_a), "results": []}),
+        "runtime:match:other": _json.dumps({"tenant_id": str(tenant_b), "results": []}),
+        "runtime:match:malformed": "not-json",  # must not crash the sweep
+        "unrelated:key": "untouched",
+    })
+
+    with (
+        patch("contextedge.services.playbook_service.append_operational_event", AsyncMock()),
+        patch("contextedge.services.playbook_service.promote_playbook_memory", AsyncMock()),
+    ):
+        await transition_playbook(
+            db, playbook, "approved", uuid4(), comments=None, redis=redis,
+        )
+
+    # Tenant A's two keys deleted; tenant B and unrelated keys preserved.
+    assert "runtime:match:own-1" in redis.deleted
+    assert "runtime:match:own-2" in redis.deleted
+    assert "runtime:match:other" not in redis.deleted
+    assert "unrelated:key" not in redis.deleted
+    # Malformed JSON must not crash the sweep (still in _entries since
+    # we never delete it, but the call must have returned cleanly).
+    assert "runtime:match:malformed" in redis._entries
+
+
+@pytest.mark.asyncio
+async def test_transition_without_redis_still_works():
+    """Redis is optional — service must not break when it's absent."""
+    playbook = SimpleNamespace(
+        id=uuid4(), tenant_id=uuid4(), lifecycle_state="under_review",
+        current_version_id=uuid4(), approver_user_id=None,
+        last_validated_at=None,
+    )
+    version = SimpleNamespace(
+        id=playbook.current_version_id, playbook_id=playbook.id,
+        published_at=None, published_by=None,
+    )
+    db = SimpleNamespace(
+        get=AsyncMock(return_value=version),
+        add=Mock(),
+        flush=AsyncMock(),
+    )
+
+    with (
+        patch("contextedge.services.playbook_service.append_operational_event", AsyncMock()),
+        patch("contextedge.services.playbook_service.promote_playbook_memory", AsyncMock()),
+    ):
+        result = await transition_playbook(
+            db, playbook, "approved", uuid4(), comments=None, redis=None,
+        )
+
+    assert result.lifecycle_state == "approved"

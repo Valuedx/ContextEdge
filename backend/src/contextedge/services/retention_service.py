@@ -20,11 +20,14 @@ Retention happens in two phases:
      ``graph_edges`` entries referencing the deleted evidence id
      orphaned — those are cleaned up by a separate graph-compact job.
      Use when the customer wants true deletion (GDPR right-to-erasure).
-   - ``soft_purge`` — NULLs ``embedding``, ``body_text``, ``body_summary``
-     and replaces ``title`` with ``"[purged]"``. Row stays for audit /
-     reference linking but the content is unrecoverable and similarity
-     search no longer matches. Use when the customer wants content
-     removed but IDs / links preserved.
+   - ``soft_purge`` — NULLs ``embedding``, ``body_text``, ``body_summary``,
+     ``canonical_entity_refs`` (strips extracted identity + decision
+     names — see review F-17) and ``raw_object_ref`` (so the S3 blob
+     can be lifecycle-reaped and a re-ingest can't rehydrate the
+     content); replaces ``title`` with ``"[purged]"``. Row stays for
+     audit / reference linking but content is unrecoverable and
+     similarity search no longer matches. Use when the customer wants
+     content removed but IDs / links preserved.
 
 Legal hold is honoured in both archive and purge paths — items with
 ``sensitivity_label == "legal_hold"`` are always skipped.
@@ -34,10 +37,11 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Literal
 
-from sqlalchemy import or_, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from contextedge.models.evidence import EvidenceItem
+from contextedge.services.evidence_filters import exclude_legal_hold
 from contextedge.services.memory_service import (
     LONG_TERM_MEMORY,
     SHORT_TERM_MEMORY,
@@ -72,10 +76,7 @@ async def apply_retention_policy(
 
     q = select(EvidenceItem).where(
         EvidenceItem.tenant_id == tenant_id,
-        or_(
-            EvidenceItem.sensitivity_label.is_(None),
-            EvidenceItem.sensitivity_label != "legal_hold",
-        ),
+        exclude_legal_hold(),
     )
     if source_class:
         q = q.where(EvidenceItem.evidence_type == source_class)
@@ -166,10 +167,7 @@ async def purge_archived_evidence(
         .where(
             EvidenceItem.tenant_id == tenant_id,
             EvidenceItem.relevance_state == "archived",
-            or_(
-                EvidenceItem.sensitivity_label.is_(None),
-                EvidenceItem.sensitivity_label != "legal_hold",
-            ),
+            exclude_legal_hold(),
             # updated_at is a proxy for "when it last changed state". Exact
             # archived_at would require a new column — defer unless a
             # customer needs minute-accurate GDPR compliance; day-accurate
@@ -197,6 +195,13 @@ async def purge_archived_evidence(
             item.body_text = None
             item.body_summary = None
             item.title = "[purged]"
+            # Identity / decision refs carry extracted person and service
+            # names in clear text — NULL them so "content unrecoverable"
+            # actually holds (review F-17). Drop the pointer into the raw
+            # payload too, so a re-ingest can't rehydrate the content
+            # from S3.
+            item.canonical_entity_refs = None
+            item.raw_object_ref = None
 
     await db.flush()
     logger.info(
