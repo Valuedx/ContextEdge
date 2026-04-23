@@ -309,6 +309,11 @@ async def _classify(db: AsyncSession, evidence_id: str, tenant_id: uuid.UUID) ->
         ev.body_text or "",
         "unknown",
         ev.evidence_type,
+        # Review F-02: manual re-classification must also land in
+        # /admin/cost and respect the tenant budget gate; mirror the
+        # inline call at L206.
+        tenant_id=tenant_id,
+        db=db,
     )
     label = out.get("classification", "not_relevant")
     ev.relevance_state = label.replace(" ", "_")

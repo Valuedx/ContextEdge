@@ -174,6 +174,12 @@ async def purge_archived_evidence(
             # is fine with the 30-day default grace.
             EvidenceItem.updated_at < cutoff,
         )
+        # Review F-16: deterministic oldest-first drain across ticks. Without
+        # the ORDER BY, LIMIT picks any matching rows and the "drain backlog
+        # over several ticks" pattern the docstring promises doesn't hold —
+        # genuinely ancient rows can linger while arbitrary recent archives
+        # get hit first.
+        .order_by(EvidenceItem.updated_at.asc())
         .limit(limit)
     )
     candidates = list((await db.execute(stmt)).scalars().all())

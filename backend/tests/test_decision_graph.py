@@ -507,7 +507,7 @@ async def test_start_execution_creates_executed_playbook_edge():
     playbook = SimpleNamespace(
         id=playbook_id, tenant_id=tenant_id,
         lifecycle_state="approved", automation_mode="human_confirmed",
-        title="Test Playbook",
+        title="Test Playbook", expiry_at=None,
     )
     version = SimpleNamespace(
         id=version_id, playbook_id=playbook_id,
@@ -558,7 +558,7 @@ async def test_start_execution_no_edge_without_session():
     playbook = SimpleNamespace(
         id=playbook_id, tenant_id=tenant_id,
         lifecycle_state="approved", automation_mode="human_confirmed",
-        title="Test Playbook",
+        title="Test Playbook", expiry_at=None,
     )
     version = SimpleNamespace(
         id=version_id, playbook_id=playbook_id,

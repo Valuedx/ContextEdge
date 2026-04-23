@@ -152,6 +152,7 @@ async def test_start_execution_creates_pending_approval_for_gated_step():
         lifecycle_state="approved",
         automation_mode="full_auto",
         title="Reimage Host Playbook",
+        expiry_at=None,
     )
     version = SimpleNamespace(
         id=version_id,
@@ -552,6 +553,107 @@ async def test_record_tool_invocation_under_shadow_tags_outputs_and_status():
     assert invocation.outputs["deleted_count"] == 5
     assert captured["event"]["event_type"] == "tool.shadow_executed"
     assert captured["event"]["payload"]["shadow"] is True
+
+
+@pytest.mark.asyncio
+async def test_start_execution_rejects_expired_playbook():
+    """Review F-12: a playbook that transitioned to approved but has an
+    explicit expiry_at in the past must not be executable."""
+    from datetime import datetime, timedelta, timezone
+
+    tenant_id = uuid4()
+    playbook_id = uuid4()
+    expired_playbook = SimpleNamespace(
+        id=playbook_id,
+        tenant_id=tenant_id,
+        lifecycle_state="approved",
+        automation_mode="suggest_only",
+        expiry_at=datetime.now(timezone.utc) - timedelta(days=1),
+    )
+    db = SimpleNamespace(
+        get=AsyncMock(return_value=expired_playbook),
+        add=lambda obj: None,
+        flush=AsyncMock(),
+        refresh=AsyncMock(),
+    )
+
+    with pytest.raises(ExecutionPolicyError, match="expired"):
+        await start_execution(
+            db, tenant_id=tenant_id, actor_id=uuid4(),
+            roles=["domain_admin"], playbook_id=playbook_id,
+        )
+
+
+@pytest.mark.asyncio
+async def test_decide_approval_deny_skips_foreign_tenant_step_run():
+    """Review F-11: the deny branch must verify step.tenant_id before
+    mutating the step_run, matching the guard that modify_approval
+    already applies."""
+    from contextedge.services.execution_service import decide_approval
+
+    tenant_id = uuid4()
+    foreign_tenant = uuid4()
+    approval_id = uuid4()
+    step_run_id = uuid4()
+    execution_run_id = uuid4()
+
+    approval = SimpleNamespace(
+        id=approval_id,
+        tenant_id=tenant_id,
+        status="pending",
+        execution_run_id=execution_run_id,
+        step_run_id=step_run_id,
+        requested_action="execute_step:0",
+        safety_class="low_side_effect",
+        decided_by=None,
+        decided_at=None,
+        decision_comment=None,
+    )
+    run = SimpleNamespace(
+        id=execution_run_id, tenant_id=tenant_id, session_id=None,
+        status="awaiting_approval",
+    )
+    # The step_run belongs to a DIFFERENT tenant — simulating a bug where
+    # an approval_request id was somehow associated with a foreign step.
+    foreign_step = SimpleNamespace(
+        id=step_run_id, tenant_id=foreign_tenant,
+        status="awaiting_approval", error_message=None, completed_at=None,
+    )
+
+    async def fake_get(model, pk):
+        from contextedge.models.execution import (
+            ApprovalRequest,
+            ExecutionRun,
+            ExecutionStepRun,
+        )
+        if model is ApprovalRequest:
+            return approval
+        if model is ExecutionRun:
+            return run
+        if model is ExecutionStepRun:
+            return foreign_step
+        return None
+
+    db = SimpleNamespace(
+        get=AsyncMock(side_effect=fake_get),
+        flush=AsyncMock(),
+        refresh=AsyncMock(),
+    )
+
+    with (
+        patch("contextedge.services.execution_service.append_operational_event", AsyncMock()),
+        patch("contextedge.services.execution_service.ensure_edge", AsyncMock()),
+        patch("contextedge.services.execution_service.create_decision", AsyncMock()),
+    ):
+        await decide_approval(
+            db, tenant_id=tenant_id, approval_request_id=approval_id,
+            decided_by=uuid4(), decision="denied", comment="policy",
+        )
+
+    # Foreign-tenant step must NOT have been mutated.
+    assert foreign_step.status == "awaiting_approval"
+    assert foreign_step.error_message is None
+    assert foreign_step.completed_at is None
 
 
 @pytest.mark.asyncio

@@ -77,6 +77,16 @@ async def start_execution(
         raise ExecutionPolicyError(
             f"Cannot execute playbook in '{playbook.lifecycle_state}' state; only 'approved' playbooks may be executed"
         )
+    # Review F-12: a playbook that transitioned to approved a long time
+    # ago and now has an explicit expiry_at in the past must not be
+    # executable. The drift detector already flips such playbooks to a
+    # non-approved state on its own schedule, but between drift beats
+    # an expired playbook is still ``lifecycle_state = 'approved'``, so
+    # check it here too.
+    if playbook.expiry_at is not None and playbook.expiry_at < datetime.now(UTC):
+        raise ExecutionPolicyError(
+            f"Playbook expired at {playbook.expiry_at.isoformat()} — re-validate before executing"
+        )
 
     if playbook_version_id is not None:
         version = await db.get(PlaybookVersion, playbook_version_id)
@@ -475,7 +485,13 @@ async def decide_approval(
             run.outcome_summary = f"Approval denied: {comment or 'no reason given'}"
         if req.step_run_id is not None:
             step = await db.get(ExecutionStepRun, req.step_run_id)
-            if step is not None:
+            # Review F-11: the step_run must be verified in-tenant before
+            # mutation. `modify_approval` already does this check; this
+            # branch previously did not, so a caller with another
+            # tenant's approval-request id (obtainable only by guessing
+            # a 128-bit UUID, but still a code-level invariant break)
+            # could mark a foreign step as failed.
+            if step is not None and step.tenant_id == tenant_id:
                 step.status = "failed"
                 step.error_message = "Approval denied"
                 step.completed_at = now
@@ -484,7 +500,12 @@ async def decide_approval(
             run.status = "running"
         if req.step_run_id is not None:
             step = await db.get(ExecutionStepRun, req.step_run_id)
-            if step is not None and step.status == "awaiting_approval":
+            # Mirror the same tenant guard (see F-11 note above).
+            if (
+                step is not None
+                and step.tenant_id == tenant_id
+                and step.status == "awaiting_approval"
+            ):
                 step.status = "running"
 
     await db.flush()
