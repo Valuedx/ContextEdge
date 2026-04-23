@@ -26,7 +26,12 @@ from contextedge.workers.celery_app import celery_app
 logger = structlog.get_logger()
 
 
-@celery_app.task(bind=True, max_retries=2, default_retry_delay=30)
+@celery_app.task(
+    bind=True,
+    max_retries=2,
+    default_retry_delay=30,
+    name="review_queue.prefetch_review_context",
+)
 def prefetch_review_context(self, tenant_id: str, session_id: str):
     """Build the review-queue bundle and SETEX it into Redis.
 

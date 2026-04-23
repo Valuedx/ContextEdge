@@ -1,9 +1,28 @@
-"""Embedding generation for evidence items and decision traces."""
+"""Embedding generation for evidence items and decision traces.
+
+All public helpers accept the same ``tenant_id`` + ``db`` instrumentation
+kwargs as ``llm_complete`` so embedding cost lands in ``/admin/cost``
+and the pre-call tenant budget gate fires (review C-04 / F-03). Callers
+that don't have those handy can still pass ``None`` — the underlying
+``generate_embedding`` treats them as "no instrumentation" and the
+call still works, it just doesn't show up in the dashboard.
+"""
+
+from __future__ import annotations
+
+import uuid as _uuid
+from typing import Any
 
 from contextedge.ai.provider import generate_embedding, generate_embeddings_batch
 
 
-async def embed_evidence(title: str | None, body: str | None) -> list[float]:
+async def embed_evidence(
+    title: str | None,
+    body: str | None,
+    *,
+    tenant_id: _uuid.UUID | str | None = None,
+    db: Any | None = None,
+) -> list[float]:
     """Generate embedding for an evidence item by combining title and body."""
     text_parts = []
     if title:
@@ -13,13 +32,16 @@ async def embed_evidence(title: str | None, body: str | None) -> list[float]:
     text = "\n\n".join(text_parts) if text_parts else ""
     if not text:
         return [0.0] * 3072
-    return await generate_embedding(text)
+    return await generate_embedding(text, tenant_id=tenant_id, db=db)
 
 
 async def embed_decision(
     decision_type: str | None,
     rationale_summary: str | None,
     compact_trace: str | None = None,
+    *,
+    tenant_id: _uuid.UUID | str | None = None,
+    db: Any | None = None,
 ) -> list[float]:
     """Generate embedding for a Decision's reasoning.
 
@@ -39,7 +61,7 @@ async def embed_decision(
     text = "\n\n".join(parts) if parts else ""
     if not text:
         return [0.0] * 3072
-    return await generate_embedding(text)
+    return await generate_embedding(text, tenant_id=tenant_id, db=db)
 
 
 async def embed_evidence_batch(items: list[tuple[str | None, str | None]]) -> list[list[float]]:

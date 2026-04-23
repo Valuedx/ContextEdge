@@ -121,6 +121,10 @@ celery_app.conf.update(
         "artifact.*": {"queue": "extraction"},
         "pattern.*": {"queue": "pattern"},
         "evaluation.*": {"queue": "evaluation"},
+        # Lightweight cache-warming after session creation. Routes to
+        # default explicitly so the short-name task isn't silently
+        # picked up by the catch-all below (review C-03).
+        "review_queue.*": {"queue": "default"},
         # Fallback for any tasks still using full module paths
         "contextedge.workers.*": {"queue": "default"},
     },

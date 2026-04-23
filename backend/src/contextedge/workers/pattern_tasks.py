@@ -69,7 +69,11 @@ def cluster_episodes(self, domain_id: str, tenant_id: str):
             if not emb_text:
                 continue
             try:
-                ep.embedding = await generate_embedding(emb_text)
+                # Review F-03: pass tenant_id + db so embedding spend
+                # shows up in /admin/cost and the budget gate fires.
+                ep.embedding = await generate_embedding(
+                    emb_text, tenant_id=tid, db=db,
+                )
                 await db.flush()
                 repaired += 1
             except Exception as emb_exc:

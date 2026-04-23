@@ -2,7 +2,7 @@
 
 from datetime import datetime, timezone
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 from uuid import uuid4
 
 import pytest
@@ -17,6 +17,17 @@ from contextedge.services.execution_service import (
     modify_approval,
     start_execution,
 )
+
+
+def _execute_returning(approval):
+    """Build an AsyncMock that satisfies the ApprovalRequest lookup shape
+    used after the F-15 row-lock change (select + with_for_update +
+    scalar_one_or_none). Also tolerates being called for other models
+    in the same test — returns the same result for each SELECT, which
+    is fine because the service looks up other entities via db.get()."""
+    result = Mock()
+    result.scalar_one_or_none.return_value = approval
+    return AsyncMock(return_value=result)
 
 
 def test_safety_class_ordering():
@@ -101,6 +112,7 @@ async def test_decide_approval_rejects_invalid_decision():
 
     db = SimpleNamespace(
         get=AsyncMock(return_value=approval),
+        execute=_execute_returning(approval),
         flush=AsyncMock(),
     )
 
@@ -128,6 +140,7 @@ async def test_decide_approval_rejects_already_decided():
 
     db = SimpleNamespace(
         get=AsyncMock(return_value=approval),
+        execute=_execute_returning(approval),
     )
 
     with pytest.raises(ExecutionPolicyError, match="already"):
@@ -266,7 +279,10 @@ async def test_modify_approval_rejects_already_decided():
         id=uuid4(), tenant_id=tenant_id, status="approved",
         execution_run_id=uuid4(), step_run_id=None,
     )
-    db = SimpleNamespace(get=AsyncMock(return_value=approval))
+    db = SimpleNamespace(
+        get=AsyncMock(return_value=approval),
+        execute=_execute_returning(approval),
+    )
 
     with pytest.raises(ExecutionPolicyError, match="already"):
         await modify_approval(
@@ -281,7 +297,10 @@ async def test_modify_approval_rejects_already_decided():
 
 @pytest.mark.asyncio
 async def test_modify_approval_returns_none_for_missing():
-    db = SimpleNamespace(get=AsyncMock(return_value=None))
+    db = SimpleNamespace(
+        get=AsyncMock(return_value=None),
+        execute=_execute_returning(None),
+    )
     result = await modify_approval(
         db,
         tenant_id=uuid4(),
@@ -351,7 +370,11 @@ async def test_modify_approval_happy_path(mock_op_event, mock_edge, mock_create_
             return step
         return None
 
-    db = SimpleNamespace(get=_get, flush=AsyncMock())
+    db = SimpleNamespace(
+        get=_get,
+        execute=_execute_returning(approval),
+        flush=AsyncMock(),
+    )
 
     req = await modify_approval(
         db,
@@ -636,6 +659,7 @@ async def test_decide_approval_deny_skips_foreign_tenant_step_run():
 
     db = SimpleNamespace(
         get=AsyncMock(side_effect=fake_get),
+        execute=_execute_returning(approval),
         flush=AsyncMock(),
         refresh=AsyncMock(),
     )

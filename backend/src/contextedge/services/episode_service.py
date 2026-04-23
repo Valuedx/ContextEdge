@@ -67,7 +67,11 @@ async def create_episodes_from_evidence(
         root_cause = ep_data.get("root_cause_summary", "")
         emb_text = f"{title}\n\n{root_cause}"
         try:
-            embedding = await generate_embedding(emb_text)
+            # Review F-03: thread tenant_id + db so the embedding call lands
+            # in /admin/cost and respects the per-tenant budget gate.
+            embedding = await generate_embedding(
+                emb_text, tenant_id=tenant_id, db=db,
+            )
         except Exception:
             logger.warning("episode_embedding_failed", ep_title=title)
             embedding = None

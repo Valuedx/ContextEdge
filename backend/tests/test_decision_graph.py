@@ -5,7 +5,7 @@ Tier 1: AI decision extraction and graph linking from evidence
 """
 
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 from uuid import uuid4
 
 import pytest
@@ -620,6 +620,11 @@ async def test_decide_approval_creates_approved_by_edge():
 
     db, _ = _make_db()
     db.get = AsyncMock(side_effect=lambda cls, id: req if id == approval_id else run)
+    # F-15 row-lock: decide_approval now loads the approval via
+    # db.execute(select(...).with_for_update()); mock accordingly.
+    _approval_result = Mock()
+    _approval_result.scalar_one_or_none.return_value = req
+    db.execute = AsyncMock(return_value=_approval_result)
 
     with (
         patch("contextedge.services.execution_service.ensure_edge", side_effect=capture_ensure_edge),
@@ -669,6 +674,10 @@ async def test_decide_approval_creates_denied_by_edge():
 
     db, _ = _make_db()
     db.get = AsyncMock(side_effect=lambda cls, id: req if id == approval_id else run)
+    # F-15 row-lock (see same-test above).
+    _approval_result = Mock()
+    _approval_result.scalar_one_or_none.return_value = req
+    db.execute = AsyncMock(return_value=_approval_result)
 
     with (
         patch("contextedge.services.execution_service.ensure_edge", side_effect=capture_ensure_edge),

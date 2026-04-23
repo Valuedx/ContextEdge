@@ -461,7 +461,15 @@ async def decide_approval(
     decision: str,
     comment: str | None = None,
 ) -> ApprovalRequest | None:
-    req = await db.get(ApprovalRequest, approval_request_id)
+    # Review F-15: lock the row so two concurrent decide/modify calls
+    # on the same approval can't both pass the pending check and both
+    # mutate. SELECT ... FOR UPDATE serialises the read-then-write.
+    req_result = await db.execute(
+        select(ApprovalRequest)
+        .where(ApprovalRequest.id == approval_request_id)
+        .with_for_update()
+    )
+    req = req_result.scalar_one_or_none()
     if req is None or req.tenant_id != tenant_id:
         return None
     if req.status != "pending":
@@ -590,7 +598,14 @@ async def modify_approval(
     if not isinstance(modification_diff, dict) or not modification_diff:
         raise ExecutionPolicyError("modification_diff must be a non-empty object")
 
-    req = await db.get(ApprovalRequest, approval_request_id)
+    # Review F-15: row-lock the read so concurrent decide+modify on
+    # the same approval can't both pass the pending check.
+    req_result = await db.execute(
+        select(ApprovalRequest)
+        .where(ApprovalRequest.id == approval_request_id)
+        .with_for_update()
+    )
+    req = req_result.scalar_one_or_none()
     if req is None or req.tenant_id != tenant_id:
         return None
     if req.status != "pending":
