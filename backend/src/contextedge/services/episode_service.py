@@ -55,6 +55,17 @@ async def create_episodes_from_evidence(
         )
         return []
 
+    # Review F-06: an empty extractor response is valid JSON but
+    # distinct from "LLM failed" — log it so ops can tell drift
+    # ("extractor stopped finding episodes") from outages.
+    if not extracted_episodes:
+        logger.info(
+            "episode_reconstruction_zero_result",
+            tenant_id=str(tenant_id),
+            evidence_count=len(evidence_items),
+        )
+        return []
+
     evidence_result = await db.execute(
         select(EvidenceItem.canonical_entity_refs).where(EvidenceItem.id.in_(evidence_ids))
     )

@@ -127,6 +127,28 @@ def invalidate_cache(tenant_id: uuid.UUID | None = None) -> None:
         _USAGE_CACHE.pop(tenant_id, None)
 
 
+# Review F-30: hook a SQLAlchemy after_delete listener on
+# TenantLLMBudget so a tenant CASCADE-delete (or any explicit delete
+# of the budget row) also evicts the cache entry. Without this, a
+# stale cache entry could linger until TTL — harmless in practice
+# (the tenant is gone) but confusing when debugging. The listener is
+# process-local; it fires in whichever worker process committed the
+# delete. Other worker processes still rely on TTL expiry, matching
+# the existing cache semantics.
+def _register_cache_invalidation_listener() -> None:
+    from sqlalchemy import event as _sa_event
+
+    @_sa_event.listens_for(TenantLLMBudget, "after_delete")
+    def _after_delete(mapper, connection, target):  # type: ignore[no-redef]
+        try:
+            invalidate_cache(target.tenant_id)
+        except Exception:  # pragma: no cover — listener must never raise
+            pass
+
+
+_register_cache_invalidation_listener()
+
+
 async def get_budget(db: AsyncSession, tenant_id: uuid.UUID) -> TenantLLMBudget | None:
     return await db.get(TenantLLMBudget, tenant_id)
 

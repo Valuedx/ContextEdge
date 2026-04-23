@@ -78,7 +78,13 @@ def should_compare_contradiction(step_text: str, kb_text: str) -> bool:
     if not step_tokens or not kb_tokens:
         return False
     overlap = step_tokens & kb_tokens
-    return len(overlap) >= 2 or (len(overlap) == 1 and min(len(step_tokens), len(kb_tokens)) <= 4)
+    # Review F-25: single-word overlaps against longer-than-3-token
+    # text let too much noise through (e.g. step "must disable MFA"
+    # matching KB snippet "MFA" only). Require >=2 shared tokens for
+    # anything but genuinely tiny KB fragments.
+    if len(overlap) >= 2:
+        return True
+    return len(overlap) == 1 and min(len(step_tokens), len(kb_tokens)) <= 3
 
 
 def extract_step_texts(version: PlaybookVersion) -> list[str]:
@@ -345,7 +351,17 @@ async def scan_contradictions(
     contradictions_updated = 0
     budget_exhausted = False
 
+    # Review F-27: cap individual notifications so a bursty scan (e.g.
+    # first-time KB ingest flagging 100 contradictions) doesn't spam
+    # the notification channel. After the cap, we emit a single
+    # summary notification at the end of the scan instead.
+    MAX_INDIVIDUAL_NOTIFICATIONS = 10
+    notifications_sent = 0
+    deferred_contradictions: list[tuple[object, str]] = []  # (contradiction, reason)
+
     for playbook in playbooks:
+        if budget_exhausted:  # review F-26
+            break
         version = await _latest_published_version(db, playbook.id)
         if version is None:
             continue
@@ -359,6 +375,8 @@ async def scan_contradictions(
         )
 
         for step_text in step_texts:
+            if budget_exhausted:  # review F-26
+                break
             try:
                 step_embedding = await generate_embedding(
                     step_text,
@@ -411,7 +429,14 @@ async def scan_contradictions(
                     )
                     budget_skips += 1
                     budget_exhausted = True
-                    continue
+                    # Review F-26: break out of the candidate loop on
+                    # budget exhaustion. Previously the loop continued,
+                    # incrementing budget_skips for each subsequent pair
+                    # without recording a scan_state row — so queue
+                    # depth queries (COUNT WHERE result='skipped_budget')
+                    # undercounted. The outer step + playbook loops also
+                    # break once budget_exhausted is set.
+                    break
 
                 scanned_pairs += 1
                 llm_calls_used += 1
@@ -480,21 +505,50 @@ async def scan_contradictions(
                 )
                 if created:
                     contradictions_created += 1
-                    await send_notification(
-                        db,
-                        tenant_id,
-                        None,
-                        NotificationType.CONTRADICTION_ALERT,
-                        f"Contradiction detected for {playbook.title}",
-                        reason or "A contradiction was detected between a playbook step and KB evidence.",
-                        metadata={
-                            "playbook_id": str(playbook.id),
-                            "evidence_id": str(item.id),
-                            "contradiction_id": str(contradiction.id),
-                        },
-                    )
+                    # Review F-27: respect the per-scan notification
+                    # cap so a scan flagging 100 contradictions doesn't
+                    # spam 100 notifications in one shot.
+                    if notifications_sent < MAX_INDIVIDUAL_NOTIFICATIONS:
+                        await send_notification(
+                            db,
+                            tenant_id,
+                            None,
+                            NotificationType.CONTRADICTION_ALERT,
+                            f"Contradiction detected for {playbook.title}",
+                            reason or "A contradiction was detected between a playbook step and KB evidence.",
+                            metadata={
+                                "playbook_id": str(playbook.id),
+                                "evidence_id": str(item.id),
+                                "contradiction_id": str(contradiction.id),
+                            },
+                        )
+                        notifications_sent += 1
+                    else:
+                        deferred_contradictions.append((contradiction, reason))
                 else:
                     contradictions_updated += 1
+
+    # Review F-27: send a single summary notification if the per-scan
+    # cap was hit. This is cheaper than N individual pings and makes
+    # the "first-time KB ingest" burst readable.
+    if deferred_contradictions:
+        await send_notification(
+            db,
+            tenant_id,
+            None,
+            NotificationType.CONTRADICTION_ALERT,
+            f"{len(deferred_contradictions)} additional contradictions detected",
+            (
+                f"The scan reached the per-run notification cap ("
+                f"{MAX_INDIVIDUAL_NOTIFICATIONS}) and deferred "
+                f"{len(deferred_contradictions)} further contradictions. "
+                "Check the Contradictions view for the full list."
+            ),
+            metadata={
+                "deferred_count": len(deferred_contradictions),
+                "contradiction_ids": [str(c.id) for c, _ in deferred_contradictions[:50]],
+            },
+        )
 
     return {
         "playbooks_scanned": len(playbooks),

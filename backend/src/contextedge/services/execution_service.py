@@ -344,13 +344,19 @@ async def record_step_completion(
     step = await db.get(ExecutionStepRun, step_run_id)
     if step is None or step.tenant_id != tenant_id:
         return None
+    # Review F-14: mirror the `shadow: True` tag that record_tool_invocation
+    # applies to tool-level outputs, so analytics querying step_run.outputs
+    # can separate shadow runs from real execution.
+    run = await db.get(ExecutionRun, step.execution_run_id)
+    shadow = run is not None and is_shadow_mode(run.automation_mode)
     now = datetime.now(UTC)
     if error_message:
         step.status = "failed"
         step.error_message = error_message
     else:
         step.status = "completed"
-    step.outputs = outputs or {}
+    base_outputs = outputs or {}
+    step.outputs = {**base_outputs, "shadow": True} if shadow else base_outputs
     step.completed_at = now
     await db.flush()
 

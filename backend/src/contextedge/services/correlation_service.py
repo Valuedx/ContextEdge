@@ -43,22 +43,6 @@ async def create_correlation(
     return edge
 
 
-async def get_correlated_evidence(
-    db: AsyncSession,
-    tenant_id: uuid.UUID,
-    evidence_id: uuid.UUID,
-) -> list[CorrelationEdge]:
-    """Get all evidence correlated to a given evidence item."""
-    result = await db.execute(
-        select(CorrelationEdge).where(
-            CorrelationEdge.tenant_id == tenant_id,
-            (CorrelationEdge.source_evidence_id == evidence_id)
-            | (CorrelationEdge.target_evidence_id == evidence_id),
-        )
-    )
-    return list(result.scalars().all())
-
-
 def extract_case_link_candidates(
     *,
     source_type: str,

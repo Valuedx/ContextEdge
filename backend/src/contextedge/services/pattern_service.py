@@ -94,4 +94,24 @@ async def create_pattern_from_episodes(
         episode_ids=episode_ids,
     )
     await db.refresh(pattern)
+
+    # 5. Review F-08: auto-enqueue candidate playbook generation. The
+    # only prior entry points were a manual API call (POST
+    # /playbooks/generate) and the pattern-tasks Celery beat; patterns
+    # would accrue without candidates unless someone clicked. Local
+    # import avoids a circular dependency (pattern_tasks imports this
+    # module). Wrapped in try/except so a broken pattern-tasks import
+    # doesn't break pattern creation.
+    try:
+        from contextedge.workers.pattern_tasks import generate_playbook_candidate
+
+        generate_playbook_candidate.delay(str(pattern.id), str(tenant_id))
+    except Exception as exc:  # pragma: no cover — belt-and-braces
+        import structlog
+
+        structlog.get_logger().warning(
+            "pattern_service.playbook_enqueue_failed",
+            tenant_id=str(tenant_id), pattern_id=str(pattern.id), error=str(exc),
+        )
+
     return pattern
