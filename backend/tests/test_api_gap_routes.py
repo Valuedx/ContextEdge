@@ -73,7 +73,8 @@ async def test_trigger_thread_hydration_queues_task():
         )
 
     assert thread.hydration_status == "queued"
-    assert result["task_id"] == "task-1"
+    # Response is now a typed TaskDispatchResponse (review C-02).
+    assert result.task_id == "task-1"
     db.flush.assert_awaited_once()
 
 

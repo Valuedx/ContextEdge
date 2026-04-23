@@ -5,6 +5,7 @@ from sqlalchemy import or_, select
 
 from contextedge.deps import AuthUser, DbSession
 from contextedge.models.episode import CorrelationEdge
+from contextedge.schemas.common import StatusResponse
 from contextedge.schemas.review import (
     CorrelationDecisionRequest,
     CorrelationEdgeCreate,
@@ -86,7 +87,7 @@ async def update_correlation(
     return edge
 
 
-@router.post("/{correlation_id}/decision")
+@router.post("/{correlation_id}/decision", response_model=StatusResponse)
 async def decide_correlation(
     correlation_id: UUID,
     body: CorrelationDecisionRequest,
@@ -107,7 +108,10 @@ async def decide_correlation(
 
     if body.decision == "reject":
         await db.delete(edge)
-        return {"status": "rejected", "correlation_id": str(correlation_id)}
+        return StatusResponse(
+            status="rejected",
+            detail={"correlation_id": str(correlation_id)},
+        )
 
     if body.confidence is not None:
         edge.confidence = body.confidence
@@ -132,18 +136,22 @@ async def decide_correlation(
             )
             created_ids.append(str(created.id))
         if body.decision == "split":
-            return {
-                "status": "split",
-                "correlation_id": str(correlation_id),
-                "replacement_ids": created_ids,
-            }
+            return StatusResponse(
+                status="split",
+                detail={
+                    "correlation_id": str(correlation_id),
+                    "replacement_ids": created_ids,
+                },
+            )
 
     await db.flush()
-    return {
-        "status": "accepted" if body.decision == "accept" else body.decision,
-        "correlation_id": str(correlation_id),
-        "replacement_ids": created_ids,
-    }
+    return StatusResponse(
+        status="accepted" if body.decision == "accept" else body.decision,
+        detail={
+            "correlation_id": str(correlation_id),
+            "replacement_ids": created_ids,
+        },
+    )
 
 
 @router.delete("/{correlation_id}", status_code=status.HTTP_204_NO_CONTENT)

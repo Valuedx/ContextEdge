@@ -7,6 +7,7 @@ import structlog
 
 from contextedge.deps import AuthUser, DbSession
 from contextedge.models.pattern import Pattern, PatternEvidenceLink
+from contextedge.schemas.common import TaskDispatchResponse
 from contextedge.schemas.playbook import PatternResponse
 from contextedge.schemas.review import PatternEvidenceLinkCreate, PatternEvidenceLinkResponse
 from pydantic import BaseModel
@@ -259,7 +260,7 @@ async def discover_pattern(
         )
         await db.rollback()
         raise HTTPException(status_code=500, detail="Pattern synthesis failed")
-@router.post("/cluster", status_code=202)
+@router.post("/cluster", status_code=202, response_model=TaskDispatchResponse)
 async def trigger_episode_clustering(
     db: DbSession,
     user: AuthUser,
@@ -284,8 +285,8 @@ async def trigger_episode_clustering(
 
     task = cluster_episodes.delay(str(domain_id), str(user.tenant_id))
 
-    return {
-        "status": "clustering_queued",
-        "domain_id": str(domain_id),
-        "task_id": task.id
-    }
+    return TaskDispatchResponse(
+        status="clustering_queued",
+        task_id=task.id,
+        detail={"domain_id": str(domain_id)},
+    )

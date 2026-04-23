@@ -6,6 +6,7 @@ from sqlalchemy import select
 from contextedge.deps import AuthUser, DbSession
 from contextedge.middleware.audit import log_audit_event
 from contextedge.models.source import Source, SourceCredential, SourceObject, SyncRun
+from contextedge.schemas.common import TaskDispatchResponse
 from contextedge.schemas.source import (
     BackfillRequest,
     CredentialRotateRequest,
@@ -267,7 +268,11 @@ async def list_sync_runs(
     return result.scalars().all()
 
 
-@router.post("/{source_id}/backfill", status_code=status.HTTP_202_ACCEPTED)
+@router.post(
+    "/{source_id}/backfill",
+    status_code=status.HTTP_202_ACCEPTED,
+    response_model=TaskDispatchResponse,
+)
 async def trigger_backfill(source_id: UUID, body: BackfillRequest, db: DbSession, user: AuthUser):
     user.require_role("domain_admin")
 
@@ -289,7 +294,10 @@ async def trigger_backfill(source_id: UUID, body: BackfillRequest, db: DbSession
     for obj_id in body.source_object_ids:
         run_backfill.delay(str(source_id), str(obj_id), str(user.tenant_id), body.window_days)
 
-    return {"status": "backfill_queued", "object_count": len(body.source_object_ids)}
+    return TaskDispatchResponse(
+        status="backfill_queued",
+        detail={"object_count": len(body.source_object_ids)},
+    )
 
 
 @router.post("/{source_id}/credentials/rotate", response_model=SourceCredentialResponse)
@@ -330,7 +338,11 @@ async def rotate_credentials(
     return credential
 
 
-@router.post("/local-ingest", status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/local-ingest",
+    status_code=status.HTTP_201_CREATED,
+    response_model=TaskDispatchResponse,
+)
 async def local_ingest(body: LocalIngestRequest, db: DbSession, user: AuthUser):
     """Directly ingest local files from the frontend folder picker."""
     user.require_role("domain_admin")
@@ -406,7 +418,13 @@ async def local_ingest(body: LocalIngestRequest, db: DbSession, user: AuthUser):
         details={"file_count": len(body.files)},
     )
 
-    return {"status": "ingested", "count": len(created_ids), "raw_ids": [str(rid) for rid in created_ids]}
+    return TaskDispatchResponse(
+        status="ingested",
+        detail={
+            "count": len(created_ids),
+            "raw_ids": [str(rid) for rid in created_ids],
+        },
+    )
 
 
 @router.delete("/{source_id}", status_code=status.HTTP_204_NO_CONTENT)

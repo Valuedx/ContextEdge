@@ -6,6 +6,7 @@ from sqlalchemy import or_, select
 from contextedge.deps import AuthUser, DbSession
 from contextedge.middleware.audit import log_audit_event
 from contextedge.models.evidence import AttachmentArtifact, EvidenceItem, Thread
+from contextedge.schemas.common import StatusResponse
 from contextedge.schemas.evidence import (
     AttachmentArtifactResponse,
     EvidenceAccessPolicyUpdate,
@@ -143,7 +144,7 @@ async def update_access_policy(
     return item
 
 
-@router.patch("/{evidence_id}/relevance")
+@router.patch("/{evidence_id}/relevance", response_model=StatusResponse)
 async def update_relevance(
     evidence_id: UUID,
     relevance_state: str,

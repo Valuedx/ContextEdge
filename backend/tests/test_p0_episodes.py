@@ -36,13 +36,11 @@ async def test_reconstruct_dispatches_celery():
                 user=user,
             )
 
-    # Handler now also returns domain_id in the result dict.
-    assert result == {
-        "status": "reconstruction_queued",
-        "evidence_count": 1,
-        "domain_id": None,
-        "task_id": "task-123",
-    }
+    # Handler returns a typed TaskDispatchResponse now (review C-02):
+    # status + task_id top-level, evidence_count + domain_id in detail.
+    assert result.status == "reconstruction_queued"
+    assert result.task_id == "task-123"
+    assert result.detail == {"evidence_count": 1, "domain_id": None}
     audit_mock.assert_awaited_once()
     db.commit.assert_awaited_once()
     # delay now receives cluster_id (comma-joined ids) instead of the raw id,

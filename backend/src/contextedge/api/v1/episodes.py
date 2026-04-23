@@ -8,6 +8,7 @@ from sqlalchemy.orm import selectinload
 from contextedge.deps import AuthUser, DbSession
 from contextedge.middleware.audit import log_audit_event
 from contextedge.models.episode import Episode, EpisodeStep
+from contextedge.schemas.common import TaskDispatchResponse
 from contextedge.schemas.evidence import (
     EpisodeDetail,
     EpisodeResponse,
@@ -157,7 +158,11 @@ async def approve_episode(episode_id: UUID, db: DbSession, user: AuthUser):
     return episode
 
 
-@router.post("/reconstruct", status_code=status.HTTP_202_ACCEPTED)
+@router.post(
+    "/reconstruct",
+    status_code=status.HTTP_202_ACCEPTED,
+    response_model=TaskDispatchResponse,
+)
 async def trigger_manual_reconstruction(
     body: ReconstructRequest,
     db: DbSession,
@@ -210,12 +215,14 @@ async def trigger_manual_reconstruction(
 
     task = reconstruct_episode_task.delay(cluster_id, str(user.tenant_id), domain_id=str(domain_id) if domain_id else None)
 
-    return {
-        "status": "reconstruction_queued",
-        "evidence_count": len(evidence_ids),
-        "domain_id": str(domain_id) if domain_id else None,
-        "task_id": task.id,
-    }
+    return TaskDispatchResponse(
+        status="reconstruction_queued",
+        task_id=task.id,
+        detail={
+            "evidence_count": len(evidence_ids),
+            "domain_id": str(domain_id) if domain_id else None,
+        },
+    )
 
 
 @router.delete("/{episode_id}", status_code=status.HTTP_204_NO_CONTENT)

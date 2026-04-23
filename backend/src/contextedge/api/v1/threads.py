@@ -5,6 +5,7 @@ from sqlalchemy import select
 
 from contextedge.deps import AuthUser, DbSession
 from contextedge.models.evidence import EvidenceItem, Thread
+from contextedge.schemas.common import TaskDispatchResponse
 from contextedge.schemas.evidence import EvidenceItemResponse, ThreadResponse
 
 router = APIRouter()
@@ -51,7 +52,11 @@ async def get_thread_evidence(thread_id: UUID, db: DbSession, user: AuthUser):
     return result.scalars().all()
 
 
-@router.post("/{thread_id}/hydrate", status_code=status.HTTP_202_ACCEPTED)
+@router.post(
+    "/{thread_id}/hydrate",
+    status_code=status.HTTP_202_ACCEPTED,
+    response_model=TaskDispatchResponse,
+)
 async def trigger_thread_hydration(
     thread_id: UUID,
     db: DbSession,
@@ -73,8 +78,8 @@ async def trigger_thread_hydration(
         str(thread.source_id),
         str(user.tenant_id),
     )
-    return {
-        "status": "hydration_queued",
-        "thread_id": str(thread.id),
-        "task_id": task.id,
-    }
+    return TaskDispatchResponse(
+        status="hydration_queued",
+        task_id=task.id,
+        detail={"thread_id": str(thread.id)},
+    )

@@ -16,6 +16,7 @@ from contextedge.schemas.playbook import (
     RuntimeMatchResponse,
     RuntimeMatchResult,
 )
+from contextedge.schemas.common import MutationAckResponse
 from contextedge.schemas.review import RetrievalFeedbackResponse
 from contextedge.search.hybrid_ranker import rank_playbooks
 from contextedge.search.risk_policy import risk_within_cap
@@ -348,7 +349,11 @@ async def get_runtime_playbook(
     raise HTTPException(status_code=404, detail="No published version found")
 
 
-@router.post("/feedback", status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/feedback",
+    status_code=status.HTTP_201_CREATED,
+    response_model=MutationAckResponse,
+)
 async def submit_feedback(body: FeedbackSubmission, db: DbSession, user: AuthUser):
     """Submit structured feedback on a runtime match result."""
     feedback = RetrievalFeedback(
@@ -361,7 +366,7 @@ async def submit_feedback(body: FeedbackSubmission, db: DbSession, user: AuthUse
     )
     db.add(feedback)
     await db.flush()
-    return {"status": "feedback_recorded", "id": str(feedback.id)}
+    return MutationAckResponse(status="feedback_recorded", id=str(feedback.id))
 
 
 @router.get("/feedback", response_model=list[RetrievalFeedbackResponse])
