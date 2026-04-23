@@ -120,6 +120,11 @@ Revisions live in `backend/alembic/versions/`.
 | `0013_attachment_processing` | Attachment parser metadata, extraction status, and extracted-at timestamps |
 | `0014_notifications_and_playbook_approval_policy` | Notification tables and playbook approval policy |
 | `0015_graph_edges_domain_id` | `domain_id` column and composite index on `graph_edges` |
+| `0016`–`0024` | First-class decisions, rejection codes, playbook step metadata, evidence baselines, decision embeddings, HNSW vector indexes, contradiction scan state, tenant LLM budgets, evidence scale indexes. See [MIGRATIONS.md](MIGRATIONS.md). |
+| `0025_jsonb_gin_indexes` | GIN indexes on `graph_edges.metadata_extra` + `evidence_items.canonical_entity_refs`. `CREATE INDEX CONCURRENTLY`; no pre-step needed. |
+| `0026_dedup_uniqueness` | Unique indexes on `(tenant_id, content_hash)` + `(tenant_id, source_a_ref, source_b_ref)`. **Pre-migration dedupe required** on deployments that previously ran under the race window — see §5.1 below. |
+| `0027_playbook_evidence_link_fk` | FK `playbook_evidence_links.evidence_id → evidence_items(id) ON DELETE SET NULL`. **Pre-migration dedupe required** if prior hard-delete runs left dangling evidence_ids — see §5.1. |
+| `0028_orm_ddl_drift_alignment` | Adds `ON DELETE CASCADE` to three FKs that drifted ORM-only (`attachment_artifacts.evidence_id`, `correlation_edges.source_evidence_id`, `correlation_edges.target_evidence_id`). Idempotent (`DROP CONSTRAINT IF EXISTS` + re-add). |
 
 Apply all pending migrations:
 
@@ -151,6 +156,42 @@ Important notes:
 - Prefer Alembic for shared environments; do not rely on ad hoc table creation.
 - `0001_initial_schema` is not a frozen DDL snapshot. See [MIGRATIONS.md](MIGRATIONS.md).
 - If the API reports missing tables or columns, verify the current Alembic head before debugging application code.
+
+### 5.1 Pre-migration dedupe for `0026` / `0027`
+
+Deployments that ran under the old check-then-insert race (before migration `0026` shipped the unique indexes) may have accumulated duplicate rows that would cause `CREATE UNIQUE INDEX` to fail. Run this once, per tenant or across the DB, before `alembic upgrade`:
+
+```sql
+-- Evidence dedup — keep the oldest by ingested_at
+WITH dups AS (
+  SELECT id, ROW_NUMBER() OVER (
+    PARTITION BY tenant_id, content_hash ORDER BY ingested_at ASC, id ASC
+  ) AS rn
+  FROM evidence_items
+  WHERE content_hash IS NOT NULL
+)
+DELETE FROM evidence_items WHERE id IN (SELECT id FROM dups WHERE rn > 1);
+
+-- Contradictions dedup — keep oldest by created_at
+WITH dups AS (
+  SELECT id, ROW_NUMBER() OVER (
+    PARTITION BY tenant_id, source_a_ref, source_b_ref ORDER BY created_at ASC, id ASC
+  ) AS rn
+  FROM contradictions
+)
+DELETE FROM contradictions WHERE id IN (SELECT id FROM dups WHERE rn > 1);
+```
+
+For migration `0027` (FK addition to `playbook_evidence_links.evidence_id`), NULL any orphaned references first so the new FK doesn't reject them:
+
+```sql
+UPDATE playbook_evidence_links
+SET evidence_id = NULL
+WHERE evidence_id IS NOT NULL
+  AND evidence_id NOT IN (SELECT id FROM evidence_items);
+```
+
+Fresh deployments that never ran under the old model can skip this step — the indexes / FKs apply cleanly.
 
 ---
 
@@ -211,8 +252,14 @@ Celery beat scheduled tasks:
 
 | Task | Frequency | Queue |
 | --- | --- | --- |
-| `detect_drift` | Every 6 hours | evaluation |
-| `scan_contradictions_task` | Every 12 hours | evaluation |
+| `evaluation.detect_drift` | Every 6 hours | evaluation |
+| `evaluation.scan_contradictions_task` | Every 12 hours | evaluation |
+| `sync.trigger_scheduled_syncs` | Every 15 minutes | sync |
+| `evaluation.calibrate_decision_confidence` | Daily | evaluation |
+| `evaluation.mine_decision_patterns` | Daily | evaluation |
+| `evaluation.cleanup_hard_deleted_evidence` | Daily | evaluation |
+
+The `cleanup_hard_deleted_evidence` task reaps orphans left by `purge_archived_evidence(mode="hard_delete")` — MinIO raw blobs that no `EvidenceItem.raw_object_ref` points at, plus `graph_edges` rows whose source / target node was an evidence id that has been deleted. It is cheap when there is nothing to do; per-tenant exception isolation means one bad tenant doesn't block the beat. Accepts the literal `"all"` sentinel when invoked directly to sweep every tenant.
 
 ### Memory classes and retention
 

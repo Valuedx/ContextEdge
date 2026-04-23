@@ -12,12 +12,9 @@ Built-in types `teams`, `gmail`, `servicenow`, and `jira_sm` are registered in `
 
 Fix direction: include `sync` in consumed queues and verify worker routing against [`docs/RUNBOOK.md`](../docs/RUNBOOK.md).
 
-## Evidence deduplication and sync overlap
+## Sync overlap (still open)
 
-From the root [`README.md`](../README.md) known constraints:
-
-- Evidence dedupe is application-layer and hash-based; there is not yet a database uniqueness constraint that hard-prevents duplicate `EvidenceItem` rows under concurrency.
-- Sync scheduling is not single-flight per source object yet; avoid overlapping manual backfills or retries for the same object.
+Sync scheduling is not single-flight per source object yet; avoid overlapping manual backfills or retries for the same object. Evidence-dedup race was closed in migration `0026_dedup_uniqueness` — the normalize worker now catches `IntegrityError` from the partial unique index on `(tenant_id, content_hash)` and falls through to the existing-row path.
 
 ## JWT secret in non-development
 

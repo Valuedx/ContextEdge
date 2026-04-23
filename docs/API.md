@@ -721,4 +721,16 @@ Body: `{daily_token_limit: int|null, daily_cost_cap_usd: float|null, action_on_e
 
 ### `GET /admin/tenant-budget/status`
 
-Live view combining the budget config with the current UTC day's usage, computed fresh (not cached). Response includes `current_tokens`, `current_cost_usd`, `allowed`, and `reason` (`"ok"` | `"no_budget"` | `"token_limit_exceeded"` | `"cost_cap_exceeded"`). Powers the header of the `/admin/cost` dashboard page. See `services/tenant_budget_service.py` for the 60-second usage cache semantics used by the pre-call gate.
+Live view combining the budget config with the current UTC day's usage, computed fresh (not cached). Response includes `current_tokens`, `current_cost_usd`, `allowed`, and `reason` (`"ok"` | `"no_budget"` | `"token_limit_exceeded"` | `"cost_cap_exceeded"`). Powers the header of the `/admin/cost` dashboard page. See `services/tenant_budget_service.py` for the 60-second usage cache semantics used by the pre-call gate, the per-tenant `asyncio.Lock` that serialises check_budget in-process (review F-29), and the SQLAlchemy `after_delete` listener that evicts cache on tenant-delete CASCADE (review F-30).
+
+---
+
+## Shared response shapes
+
+Seven previously-raw-dict endpoints now declare `response_model=` against three shared Pydantic shapes in `contextedge.schemas.common`. Callers can rely on these for frontend type-gen instead of hand-maintaining the shape. Routes that take these are listed in the table in §"Router surface" above.
+
+- **`StatusResponse { status: str, detail?: dict }`** — minimal past-tense ack. Used by `PATCH /evidence/{id}/relevance` (`status="updated"`) and `POST /correlations/{id}/decision` (`status ∈ accepted|rejected|split|merge`, `detail` carries correlation_id + replacement_ids when relevant).
+- **`TaskDispatchResponse { status: str, task_id?: str, detail?: dict }`** — enqueue ack. Used by `POST /sources/{id}/backfill`, `POST /sources/local-ingest`, `POST /threads/{id}/hydrate`, `POST /episodes/reconstruct`, `POST /patterns/cluster`. `task_id` populated whenever the dispatch returned one; `detail` carries task-specific supplemental info (`{"object_count": 12}`, `{"evidence_count": 20, "domain_id": "…"}`).
+- **`MutationAckResponse { status: str, id: str }`** — create/update ack with the affected entity's UUID. Used by `POST /runtime/feedback` (`status="feedback_recorded"`, `id` = new `RetrievalFeedback.id`).
+
+The remaining four endpoints with raw-dict returns (`GET /patterns/{id}/graph`, `GET /decisions/effectiveness`, three `GET /graph/*`) are intentionally bespoke — they carry rich, observability-shaped payloads that deserve their own schemas rather than being squeezed into one of the three above. Frontend has matching local types in `frontend/src/lib/types/index.ts`.

@@ -197,7 +197,7 @@ Implementation lives in `services/playbook_service.py`.
 | --- | --- | --- |
 | App bootstrap | `main.py`, `config.py` | App factory, CORS, metrics, settings |
 | Persistence | `database.py`, `models/` | Engine, sessions, ORM |
-| Schemas | `schemas/` | Pydantic request/response models |
+| Schemas | `schemas/` | Pydantic request/response models, including shared response shapes in `schemas/common.py` (`StatusResponse`, `TaskDispatchResponse`, `MutationAckResponse`) |
 | Auth and request context | `deps.py`, `security_tokens.py`, `middleware/` | JWT, service tokens, request state, auditing |
 | API routers | `api/v1/` | HTTP entry points |
 | Connectors | `connectors/` | Source-specific adapters behind a shared contract |
@@ -205,9 +205,11 @@ Implementation lives in `services/playbook_service.py`.
 | Search | `search/` | FTS, vector search, risk gating, hybrid ranking |
 | Graph, patterning, decisions | `graph/`, `api/v1/graph.py`, `services/decision_service.py`, `ai/extractors/decision_extractor.py`, parts of `services/`, `workers/pattern_tasks.py` | Graph HTTP API, BFS traversal, aggregate stats, relationship, pattern, and decision signals |
 | AI integration | `ai/` | Embeddings, classification, generation helpers, decision extraction, versioned prompt registry (`ai/prompts/`), schema-validated retry wrapper (`llm_complete_json_validated`) |
-| Cost & budget | `services/admin_cost_service.py`, `services/tenant_budget_service.py`, `api/v1/admin_cost.py` | Per-tenant LLM spend aggregation, daily token/cost caps with pre-call enforcement |
+| Cost & budget | `services/admin_cost_service.py`, `services/tenant_budget_service.py`, `api/v1/admin_cost.py` | Per-tenant LLM spend aggregation, daily token/cost caps with pre-call enforcement (in-process `asyncio.Lock` + SQLAlchemy `after_delete` cache invalidation) |
 | Redaction | `services/redaction_service.py` | Regex PII/secret redaction at ingest, before any embed / LLM call |
-| Worker wrappers | `workers/` | Celery tasks, async session bridge, correlation-ID propagation via Celery signals |
+| Evidence filters | `services/evidence_filters.py` | Shared `exclude_legal_hold()` WHERE fragment — single source of truth for the "legal-hold never reaches an LLM" invariant, used by retention + contradiction scan + episode reconstruction |
+| Object store | `services/object_store.py` | MinIO/S3 client helpers: `upload_raw`, `download_raw`, `upload_artifact`, `download_artifact`, `delete_object` |
+| Worker wrappers | `workers/` | Celery tasks, async session bridge, correlation-ID propagation via Celery signals; includes `workers/cleanup_tasks.py` (daily Beat sweep for MinIO blob + graph-edge orphans left by hard-delete) |
 | Golden evals | `backend/evals/` | Per-extractor `golden.jsonl` + `run_regression.py` CLI for regression smoke tests |
 
 ---

@@ -14,7 +14,7 @@ AI reads your tickets and messages faster than any human—but everything it pro
 
 2. **Completion** — `llm_complete` sends a chat-style `acompletion`; `llm_complete_json` requests `response_format` JSON and parses with error logging on failure.
 
-3. **Embeddings** — `generate_embedding` calls `litellm.aembedding` with fixed **3072** dimensions (aligned with Vertex / model expectations). Used by `embed_evidence` in `ai/embeddings.py` (title + body, truncated body) and by search (`vector_search`, `hybrid_ranker` query embedding). `embed_evidence_batch` fills sparse texts with zero vectors to keep array shapes consistent.
+3. **Embeddings** — `generate_embedding` calls `litellm.aembedding` with fixed **3072** dimensions (aligned with Vertex / model expectations). Used by `embed_evidence` / `embed_decision` in `ai/embeddings.py` (both now thread `tenant_id` + `db` kwargs through to `generate_embedding` so embedding spend lands in `/admin/cost` and respects the pre-call budget gate — review C-04/F-03) and by search (`vector_search`, `hybrid_ranker` query embedding). `embed_evidence_batch` fills sparse texts with zero vectors to keep array shapes consistent.
 
 4. **Relevance classification** — `ai/classifiers/relevance.py` `classify_relevance` builds a short prompt and returns `classification`, `confidence`, `reasoning` via `llm_complete_json`. The Celery task `classify_relevance_task` in `extraction_tasks.py` invokes this to move evidence out of `unclassified`.
 
@@ -115,7 +115,7 @@ Every proposed step links back to the evidence that supports it, so reviewers ca
 | Episode persist | `backend/src/contextedge/services/episode_service.py` | `create_episodes_from_evidence` | API / tasks |
 | Contradictions | `backend/src/contextedge/services/contradiction_service.py` | `scan_contradictions` (HNSW top-K + cursor + budget) | Evaluation tasks |
 | Celery hooks | `backend/src/contextedge/workers/extraction_tasks.py` | `_normalize` (redacts → classifies → embeds), `classify_relevance_task`, `reconstruct_episode_task` | Queues |
-| Tenant budget | `backend/src/contextedge/services/tenant_budget_service.py` | `check_budget`, `TenantBudgetExceeded`, `get_current_day_usage` | Pre-call gate in `llm_complete` |
+| Tenant budget | `backend/src/contextedge/services/tenant_budget_service.py` | `check_budget`, `TenantBudgetExceeded`, `get_current_day_usage`, per-tenant `asyncio.Lock`, SQLAlchemy `after_delete` listener | Pre-call gate in `llm_complete` |
 | Admin cost aggregation | `backend/src/contextedge/services/admin_cost_service.py` | `get_llm_usage`, `MODEL_COST_USD_PER_M_TOKENS` | `GET /admin/llm-usage` |
 
 ## Acme VPN incident (this layer)
