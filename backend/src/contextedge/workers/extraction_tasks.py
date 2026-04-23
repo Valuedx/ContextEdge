@@ -4,6 +4,7 @@ from datetime import datetime
 
 import structlog
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from contextedge.ai.classifiers.relevance import classify_relevance as run_relevance_classifier
@@ -184,7 +185,42 @@ async def _normalize(db: AsyncSession, raw_object_id: str, tenant_id: uuid.UUID)
         created_at_source=source_ts,
     )
     db.add(ev)
-    await db.flush()
+    try:
+        await db.flush()
+    except IntegrityError:
+        # Review L-02: a concurrent normalize worker raced us on the
+        # same (tenant_id, content_hash). Migration 0026 added the
+        # unique index that made this an error instead of a silent
+        # duplicate row. Roll back the attempted insert, re-fetch the
+        # winning row, and return a minimal "raced to dedup" result.
+        # The winning worker already did the enrichment (identity /
+        # decision / embedding) — re-running it here would be wasted
+        # LLM spend. Downstream post-processing (correlate / baseline)
+        # still fires via the task wrapper.
+        await db.rollback()
+        winner = (
+            await db.execute(
+                select(EvidenceItem).where(
+                    EvidenceItem.tenant_id == tenant_id,
+                    EvidenceItem.content_hash == h,
+                )
+            )
+        ).scalar_one()
+        logger.info(
+            "normalize.dedup_race_resolved",
+            tenant_id=str(tenant_id),
+            raw_object_id=raw_object_id,
+            evidence_id=str(winner.id),
+        )
+        return {
+            "evidence_id": str(winner.id),
+            "deduped": True,
+            "raced": True,
+            "embedded": winner.embedding is not None,
+            "identity_count": None,
+            "decision_count": None,
+            "attachment_ids": [],
+        }
     await ensure_thread_for_evidence(
         db, tenant_id=tenant_id, evidence=ev, payload=payload,
     )

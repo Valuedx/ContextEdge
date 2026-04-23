@@ -34,6 +34,7 @@ from typing import Any
 
 import structlog
 from sqlalchemy import select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from contextedge.ai.provider import generate_embedding, llm_complete_json
@@ -150,15 +151,22 @@ async def _get_or_create_contradiction(
     source_b_ref: str,
     description: str | None,
 ) -> tuple[Contradiction, bool]:
-    existing = (
-        await db.execute(
-            select(Contradiction).where(
-                Contradiction.tenant_id == tenant_id,
-                Contradiction.source_a_ref == source_a_ref,
-                Contradiction.source_b_ref == source_b_ref,
-            )
-        )
-    ).scalar_one_or_none()
+    """Fetch or insert a (tenant, source_a, source_b) Contradiction.
+
+    Review F-24: migration ``0026_dedup_uniqueness`` adds a unique
+    index on ``(tenant_id, source_a_ref, source_b_ref)``; this helper
+    catches the resulting ``IntegrityError`` on a concurrent insert
+    and falls through to the existing-row path. The race window —
+    Beat scanner + manual admin invocation both creating the same
+    pair — is small but real, and without the IntegrityError handler
+    a double-insert attempt would abort the whole scan batch.
+    """
+    existing_stmt = select(Contradiction).where(
+        Contradiction.tenant_id == tenant_id,
+        Contradiction.source_a_ref == source_a_ref,
+        Contradiction.source_b_ref == source_b_ref,
+    )
+    existing = (await db.execute(existing_stmt)).scalar_one_or_none()
     if existing is not None:
         existing.description = description
         existing.resolution_status = "unresolved"
@@ -174,7 +182,18 @@ async def _get_or_create_contradiction(
         resolution_status="unresolved",
     )
     db.add(row)
-    await db.flush()
+    try:
+        await db.flush()
+    except IntegrityError:
+        # A concurrent caller beat us to the insert; re-SELECT and
+        # refresh the row's mutable fields so the final state matches
+        # the "existing" branch above.
+        await db.rollback()
+        row = (await db.execute(existing_stmt)).scalar_one()
+        row.description = description
+        row.resolution_status = "unresolved"
+        await db.flush()
+        return row, False
     return row, True
 
 

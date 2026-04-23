@@ -106,14 +106,14 @@ make test
 Notes:
 
 - `make dev` starts the full Docker development stack.
-- Current Alembic head is `0025_jsonb_gin_indexes`. Run `make migrate` after pulling to apply any new revisions.
+- Current Alembic head is `0026_dedup_uniqueness`. Run `make migrate` after pulling to apply any new revisions.
 - Frontend `npm test` is currently a placeholder script; there is no real frontend unit-test suite yet.
 - The backend enforces a non-default `JWT_SECRET_KEY` when `APP_ENV` is not `development`. Set a real secret before deploying to staging or production.
 
 ## Known Constraints
 
 - Sync scheduling is not single-flight per source object yet. Avoid overlapping manual backfills or retries for the same object.
-- Evidence dedupe is currently application-layer and hash-based; there is not yet a database uniqueness constraint that hard-prevents duplicate `EvidenceItem` rows under concurrency.
+- Evidence dedupe is enforced at both the application layer (hash-based SELECT in `_normalize`) and the database layer (partial unique index on `(tenant_id, content_hash)` — migration `0026_dedup_uniqueness`). The normalize worker catches the resulting `IntegrityError` on a concurrent insert and falls through to the existing-row path.
 - Residual operational caveats are tracked in [docs/TECHNICAL_BLUEPRINT.md](docs/TECHNICAL_BLUEPRINT.md) and [docs/RUNBOOK.md](docs/RUNBOOK.md).
 
 ## Project Structure
