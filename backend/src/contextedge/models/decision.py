@@ -100,6 +100,24 @@ class Decision(Base, TenantScopedMixin):
 
     embedding = mapped_column(Vector(3072), nullable=True)
 
+    # AE Ops Context Graph alignment. The existing fields encode the
+    # *action-oriented* decision (classify_issue, restart_workflow, …);
+    # ``decision_intent`` encodes the *governance-oriented* axis the
+    # design's policy engine queries against (diagnosis, recommendation,
+    # remediation, …). Both stay populated to avoid widening the existing
+    # ``decision_type`` enum.
+    decision_intent: Mapped[str | None] = mapped_column(
+        String(40), nullable=True, index=True
+    )
+    decision_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Trace-level risk distinct from per-option risk on DecisionOption.
+    risk_level: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    # Verdict, not pointer. The ``policy_refs JSONB[]`` above keeps the
+    # pointers; this column is the value the executor checks.
+    policy_result: Mapped[str | None] = mapped_column(
+        String(40), nullable=True, index=True
+    )
+
     options: Mapped[list["DecisionOption"]] = relationship(
         back_populates="decision",
         order_by="DecisionOption.created_at",

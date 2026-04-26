@@ -75,6 +75,35 @@ class ExecutionStepRun(Base):
         DateTime(timezone=True), server_default=func.now(), nullable=False,
     )
 
+    # AE Ops Context Graph alignment.
+    # ``action_name`` is the controlled identifier the policy engine
+    # matches against (e.g. ``rerun_workflow``, ``resend_existing_output``);
+    # ``step_title`` stays as the human-readable label.
+    action_name: Mapped[str | None] = mapped_column(String(120), nullable=True, index=True)
+    action_type: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    # Denormalised from ExecutionRun.automation_mode so each step row is
+    # self-describing without a join.
+    execution_mode: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    executed_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    # Banking-grade duplicate-prevention. Partial unique index ensures
+    # only NOT NULL keys are constrained (added in migration).
+    idempotency_key: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    duplicate_check_status: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    # Anchor to case + decision so any action row is queryable from
+    # either side of the chain.
+    case_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("resolution_sessions.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    decision_trace_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("decisions.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+
     execution_run: Mapped["ExecutionRun"] = relationship(back_populates="step_runs")
     tool_invocations: Mapped[list["ToolInvocation"]] = relationship(back_populates="step_run")
     approval_requests: Mapped[list["ApprovalRequest"]] = relationship(back_populates="step_run")
@@ -135,6 +164,36 @@ class ApprovalRequest(Base):
     modification_reason_code: Mapped[str | None] = mapped_column(String(40), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False,
+    )
+
+    # AE Ops Context Graph alignment.
+    # ``action_name`` is the controlled identifier (vs free-text
+    # ``requested_action``); ``approver_role`` is the *role consulted*
+    # not the user; ``approval_channel`` is the surface where the
+    # approval flowed (teams/email/servicenow/portal/manual).
+    action_name: Mapped[str | None] = mapped_column(String(120), nullable=True, index=True)
+    approver_role: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    approval_channel: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    approval_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Segregation of duties (Section 43.13). The agent/human that
+    # recommended is recorded separately from approval/execution so the
+    # SoD check can detect violations.
+    recommended_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    executed_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    sod_check_status: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    sod_violation_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Anchor approval to case + decision (currently only execution_run).
+    case_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("resolution_sessions.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    decision_trace_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("decisions.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
     )
 
     execution_run: Mapped["ExecutionRun"] = relationship(back_populates="approval_requests")

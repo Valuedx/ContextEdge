@@ -36,6 +36,47 @@ class ResolutionSession(Base, TenantScopedMixin):
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
+    # AE Ops Context Graph alignment — case spine columns. All nullable
+    # for back-compat; populated by AE/SN ingestion or graduated from
+    # ``entities[]`` JSONB during a case enrichment pass.
+    case_number: Mapped[str | None] = mapped_column(
+        String(60), nullable=True, unique=True, index=True
+    )
+    case_type: Mapped[str | None] = mapped_column(String(60), nullable=True)
+    issue_type: Mapped[str | None] = mapped_column(String(80), nullable=True, index=True)
+    title: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    priority: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    severity: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    environment: Mapped[str | None] = mapped_column(String(30), nullable=True, index=True)
+
+    # Structured FKs to entities for the four design-mandated dimensions.
+    # SET NULL on entity delete preserves the case audit record.
+    user_entity_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("entities.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    workflow_entity_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("entities.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    request_entity_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("entities.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    agent_entity_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("entities.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+
     trace_events: Mapped[list["DecisionTraceEvent"]] = relationship(
         back_populates="session",
         order_by="DecisionTraceEvent.created_at",
@@ -68,6 +109,19 @@ class DecisionTraceEvent(Base):
         nullable=False,
         index=True,
     )
+    # Optional decision anchor — when populated this row also serves as a
+    # cg_decision_step (per the design Section 11.11) with tool I/O
+    # references. Nullable to keep existing session-scoped trace events
+    # working unchanged.
+    decision_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("decisions.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+    )
+    tool_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    tool_input_ref: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    tool_output_ref: Mapped[str | None] = mapped_column(String(500), nullable=True)
     event_type: Mapped[str] = mapped_column(String(50), nullable=False)
     inputs: Mapped[dict] = mapped_column(JSONB, server_default="{}", nullable=False)
     outputs: Mapped[dict] = mapped_column(JSONB, server_default="{}", nullable=False)

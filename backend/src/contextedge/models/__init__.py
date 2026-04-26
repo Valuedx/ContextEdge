@@ -21,6 +21,30 @@ from contextedge.models.execution import (
 from contextedge.models.evaluation import EvaluationDataset, EvaluationRun, RetrievalFeedback
 from contextedge.models.policy import POLICY_TYPES, TenantPolicy
 
+# AE Ops Context Graph alignment (migration 0029).
+from contextedge.models.entity import ENTITY_TYPES, Entity
+from contextedge.models.claim import (
+    CLAIM_TYPES,
+    VALIDATION_STATUSES,
+    CREATED_BY_TYPES,
+    Claim,
+    ClaimEvidence,
+    DecisionEvidence,
+)
+from contextedge.models.action_policy import (
+    RISK_LEVELS,
+    POLICY_RESULTS,
+    EXECUTION_MODES,
+    ActionPolicy,
+)
+from contextedge.models.error_signature import ErrorSignature, FixPattern
+from contextedge.models.case_outcome import (
+    OUTCOME_STATUSES,
+    CASE_STATUSES,
+    CaseOutcome,
+    CaseStateTransition,
+)
+
 __all__ = [
     "Base", "TenantScopedMixin",
     "Tenant", "Workspace", "Domain", "User", "RoleBinding",
@@ -36,4 +60,11 @@ __all__ = [
     "ExecutionRun", "ExecutionStepRun", "ToolInvocation", "ApprovalRequest",
     "EvaluationDataset", "EvaluationRun", "RetrievalFeedback",
     "POLICY_TYPES", "TenantPolicy",
+    # AE Ops Context Graph alignment
+    "ENTITY_TYPES", "Entity",
+    "CLAIM_TYPES", "VALIDATION_STATUSES", "CREATED_BY_TYPES",
+    "Claim", "ClaimEvidence", "DecisionEvidence",
+    "RISK_LEVELS", "POLICY_RESULTS", "EXECUTION_MODES", "ActionPolicy",
+    "ErrorSignature", "FixPattern",
+    "OUTCOME_STATUSES", "CASE_STATUSES", "CaseOutcome", "CaseStateTransition",
 ]

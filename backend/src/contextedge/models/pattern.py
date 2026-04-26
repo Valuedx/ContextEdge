@@ -135,3 +135,18 @@ class GraphEdge(Base):
     weight: Mapped[float] = mapped_column(Float, default=1.0, nullable=False)
     metadata_extra: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    # AE Ops Context Graph alignment — temporal validity (Section 43.1).
+    # Enables "what was true at incident time?" queries instead of
+    # always-current-state. Both nullable: existing rows continue to
+    # behave as "valid since creation, no expiry".
+    valid_from: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    valid_to: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    # Semantically distinct from ``weight`` (importance for traversal):
+    # ``confidence`` is the belief in the relation. Nullable so existing
+    # rows aren't forced to commit to a confidence value.
+    confidence: Mapped[float | None] = mapped_column(Float, nullable=True)

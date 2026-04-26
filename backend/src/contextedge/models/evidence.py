@@ -54,6 +54,21 @@ class EvidenceItem(Base, TenantScopedMixin):
     content_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     embedding = mapped_column(Vector(3072), nullable=True)
 
+    # AE Ops Context Graph alignment.
+    # ``evidence_time`` is the time the *evidence subject* occurred — a
+    # log line at 10:42 vs the source object created at 10:45. Distinct
+    # from ``created_at_source`` (record creation) and ``ingested_at``.
+    evidence_time: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
+    # Agent or human that captured the evidence (for SoD / lineage).
+    collected_by: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    # Controlled vocab e.g. AE_API | AE_AGENT_LOG | SERVICENOW | TEAMS |
+    # EMAIL | SOP | MONITORING | HUMAN_NOTE — kept free text for
+    # forward-compat but indexed for filter queries.
+    source_type: Mapped[str | None] = mapped_column(String(50), nullable=True, index=True)
+    redaction_status: Mapped[str | None] = mapped_column(String(30), nullable=True)
+
     search_tsvector: Mapped[object | None] = mapped_column(
         TSVECTOR,
         server_default=func.now(),  # Placeholder to indicate server-side management

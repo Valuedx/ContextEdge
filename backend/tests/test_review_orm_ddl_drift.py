@@ -61,7 +61,7 @@ def _collect_constraint_markers() -> set[tuple[str, str]]:
 
 
 # Snapshot of every ``ondelete=`` / ``unique=True`` / ``UniqueConstraint``
-# occurrence across the models directory as of migration 0028. Each
+# occurrence across the models directory as of migration 0029. Each
 # entry is (filename, normalised line snippet) produced by
 # ``_collect_constraint_markers`` verbatim. Regenerate via:
 #
@@ -72,8 +72,33 @@ def _collect_constraint_markers() -> set[tuple[str, str]]:
 # When this test fails, the diff output tells you exactly which
 # markers are new or missing. For each new one: confirm a migration
 # ALTERs the constraint on older DBs, then paste the marker here.
+#
+# Migration 0029 (AE Ops Context Graph alignment) added several new
+# tables (``entities``, ``claims``, ``claim_evidence``,
+# ``decision_evidence``, ``action_policies``, ``error_signatures``,
+# ``fix_patterns``, ``case_outcomes``, ``case_state_transitions``)
+# and several new nullable columns / FKs on existing tables. Every new
+# constraint listed below is either part of a CREATE TABLE in 0029
+# (no ALTER needed) or covered by an explicit ALTER TABLE block with
+# IF EXISTS guards in 0029.
 _EXPECTED_MARKERS: set[tuple[str, str]] = {
+    ('action_policy.py', 'ForeignKey("entities.id", ondelete="SET NULL"),'),
+    ('case_outcome.py',
+     'ForeignKey("resolution_sessions.id", ondelete="CASCADE"),'),
+    ('claim.py', 'ForeignKey("claims.id", ondelete="CASCADE"),'),
+    ('claim.py', 'ForeignKey("decisions.id", ondelete="CASCADE"),'),
+    ('claim.py', 'ForeignKey("evidence_items.id", ondelete="CASCADE"),'),
+    ('claim.py', 'ForeignKey("resolution_sessions.id", ondelete="CASCADE"),'),
+    ('claim.py',
+     'UniqueConstraint( "decision_id", "evidence_id", '
+     'name="uq_decision_evidence_pair" ),'),
+    ('claim.py',
+     'UniqueConstraint("claim_id", "evidence_id", '
+     'name="uq_claim_evidence_pair"),'),
     ('decision.py', 'ForeignKey("decisions.id", ondelete="CASCADE"),'),
+    ('entity.py',
+     'UniqueConstraint( "entity_type", "external_system", "external_id", '
+     'name="uq_entities_type_system_external_id", ),'),
     ('episode.py', 'ForeignKey("canonical_identities.id", ondelete="CASCADE"),'),
     ('episode.py', 'ForeignKey("evidence_items.id", ondelete="CASCADE"),'),
     ('episode.py',
@@ -82,14 +107,22 @@ _EXPECTED_MARKERS: set[tuple[str, str]] = {
     ('episode.py',
      'target_evidence_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), '
      'ForeignKey("evidence_items.id", ondelete="CASCADE"), nullable=False)'),
+    ('error_signature.py', 'ForeignKey("entities.id", ondelete="SET NULL"),'),
+    ('error_signature.py',
+     'ForeignKey("error_signatures.id", ondelete="SET NULL"),'),
+    ('error_signature.py', 'ForeignKey("patterns.id", ondelete="SET NULL"),'),
+    ('error_signature.py', 'ForeignKey("playbooks.id", ondelete="SET NULL"),'),
     ('evidence.py', 'ForeignKey("tenant_policies.id", ondelete="SET NULL"),'),
     ('evidence.py',
      'evidence_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), '
      'ForeignKey("evidence_items.id", ondelete="CASCADE"), nullable=False)'),
+    ('execution.py', 'ForeignKey("decisions.id", ondelete="SET NULL"),'),
+    ('execution.py', 'ForeignKey("resolution_sessions.id", ondelete="SET NULL"),'),
     ('execution.py',
      'UUID(as_uuid=True), ForeignKey("execution_runs.id", ondelete="CASCADE"),'),
     ('execution.py',
-     'UUID(as_uuid=True), ForeignKey("execution_step_runs.id", ondelete="CASCADE"),'),
+     'UUID(as_uuid=True), ForeignKey("execution_step_runs.id", '
+     'ondelete="CASCADE"),'),
     ('pattern.py', 'ForeignKey("evidence_items.id", ondelete="CASCADE"),'),
     ('pattern.py', 'ForeignKey("playbook_versions.id", ondelete="CASCADE"),'),
     ('playbook.py', 'ForeignKey("evidence_items.id", ondelete="SET NULL"),'),
@@ -100,7 +133,10 @@ _EXPECTED_MARKERS: set[tuple[str, str]] = {
     ('playbook.py',
      'stable_key: Mapped[str] = mapped_column(String(255), nullable=False, '
      'unique=True, index=True)'),
+    ('session.py', 'ForeignKey("decisions.id", ondelete="CASCADE"),'),
+    ('session.py', 'ForeignKey("entities.id", ondelete="SET NULL"),'),
     ('session.py', 'ForeignKey("resolution_sessions.id", ondelete="CASCADE"),'),
+    ('session.py', 'String(60), nullable=True, unique=True, index=True'),
     ('source.py',
      'UUID(as_uuid=True), ForeignKey("tenant_policies.id", ondelete="SET NULL"), '
      'nullable=True'),
