@@ -262,13 +262,27 @@ Primary entity groups:
 4. **Identity and reconstruction**
    `CanonicalIdentity`, `IdentityAlias`, `CorrelationEdge`, `Episode`, `EpisodeStep`
 5. **Patterns, graph, and decisions**
-   `Pattern`, `NegativeKnowledgeItem`, `Contradiction`, `GraphEdge` (includes `domain_id` for domain-scoped graph queries). Decision edges use `GraphEdge` with edge types `executed_playbook`, `approved_by`, `denied_by`, `execution_outcome` (governed, Tier 2) and `records_decision`, `records_action_on` (AI-extracted, Tier 1). Node types include `session`, `execution_run`, `approval_request`, and `user`.
+   `Pattern`, `NegativeKnowledgeItem`, `Contradiction`, `GraphEdge` (includes `domain_id` for domain-scoped graph queries; migration `0029` adds `valid_from` / `valid_to` / `confidence` for temporal-validity queries). Decision edges use `GraphEdge` with edge types `executed_playbook`, `approved_by`, `denied_by`, `execution_outcome` (governed, Tier 2) and `records_decision`, `records_action_on` (AI-extracted, Tier 1). Node types include `session`, `execution_run`, `approval_request`, and `user`.
 6. **Playbooks**
    `Playbook`, `PlaybookVersion`, `PlaybookEvidenceLink`, `PlaybookApproval`
 7. **Evaluation and runtime feedback**
    `EvaluationDataset`, `EvaluationRun`, `RetrievalFeedback`
 8. **Policies**
    `TenantPolicy`
+9. **AE Ops Context Graph alignment** (migration `0029`)
+   - **Operational-noun entities** — `Entity` (workflow, workflow_request, agent_machine, schedule, output_location, application, database, file_share, business_service, incident, sop, …), keyed `(entity_type, external_system, external_id)` UNIQUE. Coexists with `CanonicalIdentity`, which keeps its identity-resolution role.
+   - **Claims** — `Claim`, `ClaimEvidence`, `DecisionEvidence`. First-class evidence-backed assertion with validation lifecycle (`unverified` → `machine_verified` → `human_validated` → `rejected` → `superseded`). `DecisionEvidence` is the relational complement to the existing `Decision.evidence_summary` JSONB cache.
+   - **Action policy** — `ActionPolicy`. Action-keyed verdict (`allowed_auto` / `approval_required` / `recommendation_only` / `restricted` / `manual_only`), distinct from `TenantPolicy` (which stays as the generic config bucket).
+   - **Error signature + fix pattern** — `ErrorSignature` (signature_key UNIQUE per tenant, success/failure counters), `FixPattern` (issue_type + workflow + error_signature + counters, optionally pointing at a `Playbook`). Separate from `Pattern` / `Playbook` to preserve existing semantics.
+   - **Case lifecycle** — `CaseOutcome` (case-level outcome distinct from per-decision `DecisionOutcome`), `CaseStateTransition` (append-only `resolution_sessions.status` history).
+   - **Case spine columns** — `ResolutionSession` gains nullable `case_number` (partial-unique), `case_type`, `issue_type`, `title`, `description`, `priority`, `severity`, `environment`, plus four FKs (`user_entity_id`, `workflow_entity_id`, `request_entity_id`, `agent_entity_id`) into the new `entities` table.
+   - **Evidence lineage** — `EvidenceItem` gains nullable `evidence_time`, `collected_by`, `source_type`, `redaction_status` (the design distinguishes "subject time" from `created_at_source` / `ingested_at`).
+   - **Decision verdict** — `Decision` gains nullable `decision_intent` (governance axis: diagnosis / recommendation / remediation / …), `decision_summary`, trace-level `risk_level`, and `policy_result` (the verdict the executor checks).
+   - **Decision step** — `DecisionTraceEvent` gains nullable `decision_id` FK + `tool_name` / `tool_input_ref` / `tool_output_ref` so rows can serve the cg_decision_step role.
+   - **Approval governance** — `ApprovalRequest` gains nullable `action_name`, `approver_role`, `approval_channel`, `recommended_by` / `executed_by` / `sod_check_status` SoD fields, and `case_id` / `decision_trace_id` FKs.
+   - **Action idempotency** — `ExecutionStepRun` gains nullable `action_name`, `action_type`, `execution_mode`, `executed_by`, `idempotency_key` (partial unique index, banking-grade duplicate prevention), and `case_id` / `decision_trace_id` FKs.
+
+   Every new column is nullable, every new constraint guarded by `IF NOT EXISTS` / `pg_constraint` lookup. No service code changes — population is the next wave. See [MIGRATIONS.md](MIGRATIONS.md#notable-revisions) and [codewiki/17-ae-ops-context-graph-alignment.md](../codewiki/17-ae-ops-context-graph-alignment.md).
 
 ### Important model relationships
 
@@ -277,6 +291,10 @@ Primary entity groups:
 - `Playbook -> PlaybookVersion` with `current_version_id` on the parent
 - `PlaybookVersion -> PlaybookEvidenceLink -> EvidenceItem`
 - `PlaybookApproval` records governance actions independently of current lifecycle state
+- `ResolutionSession -> Entity` (4 FKs: user / workflow / request / agent) — case spine after `0029`
+- `Claim -> ClaimEvidence -> EvidenceItem`; `Decision -> DecisionEvidence -> EvidenceItem`
+- `FixPattern -> ErrorSignature` and `FixPattern -> Playbook` (recommended_playbook_id) — recommender bridge
+- `CaseOutcome -> ResolutionSession` (case-level), distinct from `DecisionOutcome -> Decision` (per-decision)
 
 ---
 
@@ -303,4 +321,4 @@ Update this blueprint when any of the following change:
 
 Update [API.md](API.md) when changing routes, auth headers, or response semantics. Update [SETUP_GUIDE.md](SETUP_GUIDE.md) when onboarding steps change. Update [RUNBOOK.md](RUNBOOK.md) when operational commands, migrations, or deployment requirements change.
 
-**Last reviewed:** 2026-04-14. Codebase includes Alembic revisions through `0015_graph_edges_domain_id`. Decision graph edges (Tier 1 AI-extracted + Tier 2 governed execution) are implemented.
+**Last reviewed:** 2026-04-27. Codebase includes Alembic revisions through `0029_ae_ops_concept_alignment`. Decision graph edges (Tier 1 AI-extracted + Tier 2 governed execution) are implemented. AE Ops Context Graph alignment landed in `0029` as additive schema only — service code consumes the new columns lazily (nullable, no backfill).
