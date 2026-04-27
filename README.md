@@ -12,6 +12,7 @@ ContextEdge turns fragmented operational evidence from tickets, chat, email, and
 | [**Technical blueprint**](docs/TECHNICAL_BLUEPRINT.md) | Architecture, component map, design patterns, data model |
 | [**API reference**](docs/API.md) | Auth, `/api/v1` router surface, runtime semantics, observability URLs |
 | [**Runbook**](docs/RUNBOOK.md) | Operational commands, migrations, workers, troubleshooting |
+| [**Context graph walkthrough**](docs/CONTEXT_GRAPH_WALKTHROUGH.md) | Stage-by-stage visual tour from empty graph through case lifecycle, episodes, patterns, and playbooks; with retention defaults |
 | [**Implementation plan**](CONTEXTEDGE_IMPLEMENTATION_PLAN.md) | Phased checklist and repository-status planning document |
 | [**Enterprise architecture review**](ENTERPRISE_ARCHITECTURE_REVIEW.md) | Technical review with cost-optimisation + 90-day roadmap (ContextEdge-only scope) |
 | [**AIHub integration plan**](AEAIHUB_INTEGRATION_PLAN.md) | Cross-system plan for ContextEdge ↔ AEAIHubOrchestrator ↔ AutomationEdge with deep AIHub modifications |

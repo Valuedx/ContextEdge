@@ -80,4 +80,6 @@ Every article uses the same **Acme Corp VPN outage** scenario. To trace a single
 | Setup, API tables, runbooks | Why the product exists, how it fits together, and how business workflows map to code |
 | Concise architecture snapshot | Deeper mental models, design tradeoffs, and module-level code maps |
 
+For a stage-by-stage visual walkthrough that combines a case lifecycle, episode reconstruction, pattern emergence, and playbook publication into one example tour — see [docs/CONTEXT_GRAPH_WALKTHROUGH.md](../docs/CONTEXT_GRAPH_WALKTHROUGH.md).
+
 Maintain this folder as an explanation layer, not a second runbook. Link to `docs/` for setup, commands, and route tables; keep `codewiki/` focused on product understanding, design reasoning, and navigation across the repo.
