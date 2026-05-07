@@ -12,11 +12,14 @@ from contextedge.ai.embeddings import embed_evidence
 from contextedge.config import settings
 from contextedge.models.episode import EpisodeStep
 from contextedge.models.evidence import EvidenceItem, RawEvidenceObject
+from contextedge.models.source import Source
 from contextedge.models.tenant import Domain
+from contextedge.workers.chunk_tasks import chunk_evidence_task, embed_chunks_batch_task
 from contextedge.services.artifact_extraction_service import (
     load_raw_payload,
     register_attachment_artifacts,
 )
+from contextedge.services.evidence_chunk_service import write_chunks
 from contextedge.services.evidence_normalization import (
     ensure_thread_for_evidence,
     evidence_body_from_payload,
@@ -33,12 +36,75 @@ from contextedge.workers.correlation_tasks import correlate_evidence
 logger = structlog.get_logger()
 
 
+# Bodies under this threshold (post-redaction, UTF-8 bytes) are chunked
+# inline inside ``_normalize`` for predictable card-render latency.
+# Bodies above it dispatch to ``chunk_evidence_task`` so the critical
+# normalize path stays bounded for big attachments / long threads.
+# Tunable; revisit once production p50/p95 body sizes are measured.
+INLINE_CHUNK_BUDGET_BYTES = 16 * 1024
+
+# Source types whose chunkers are ready for inline dispatch. Bodies
+# from sources outside this set always go async so a slow / unfamiliar
+# parser cannot stall ingest. Add a key here once the corresponding
+# chunker has been load-tested at typical body sizes.
+INLINE_CHUNK_SOURCE_ALLOWLIST = frozenset({"jira_sm", "servicenow", "gmail", "teams"})
+
+
 async def _ensure_embedding(db: AsyncSession, evidence: EvidenceItem) -> bool:
     if evidence.embedding is not None:
         return False
     evidence.embedding = await embed_evidence(evidence.title, evidence.body_text)
     await db.flush()
     return True
+
+
+async def _dispatch_chunking(
+    db: AsyncSession,
+    *,
+    raw: RawEvidenceObject,
+    ev: EvidenceItem,
+    payload: dict,
+    tenant_id: uuid.UUID,
+) -> None:
+    """Chunk the evidence inline or hand it off to the async task.
+
+    Side-effect-only — caller wraps in try/except. Stamps
+    ``ev.source_type`` from the parent ``Source`` row when missing so
+    the chunker registry has a connector key to dispatch on (the
+    column was added by migration ``0029_ae_ops_concept_alignment``
+    but no other code path stamps it yet).
+
+    Inline path embeds chunks via the batch task (one Celery message
+    per evidence). Async path defers chunking entirely so big
+    attachments don't block the normalize transaction.
+    """
+    if not ev.source_type:
+        src = await db.get(Source, raw.source_id)
+        if src is not None:
+            ev.source_type = src.source_type
+            await db.flush()
+
+    body_size = len((ev.body_text or "").encode("utf-8"))
+    inline_eligible = (
+        body_size < INLINE_CHUNK_BUDGET_BYTES
+        and (ev.source_type or "") in INLINE_CHUNK_SOURCE_ALLOWLIST
+    )
+
+    if inline_eligible:
+        chunks = await write_chunks(
+            db,
+            tenant_id=tenant_id,
+            evidence=ev,
+            payload=payload,
+            source_type=ev.source_type,
+        )
+        if chunks:
+            embed_chunks_batch_task.delay(
+                [str(c.id) for c in chunks],
+                str(tenant_id),
+            )
+    else:
+        chunk_evidence_task.delay(str(ev.id), str(tenant_id))
 
 
 async def _normalize(db: AsyncSession, raw_object_id: str, tenant_id: uuid.UUID) -> dict:
@@ -315,6 +381,20 @@ async def _normalize(db: AsyncSession, raw_object_id: str, tenant_id: uuid.UUID)
         except Exception as embed_exc:
             logger.warning("embedding_failed", evidence_id=str(ev.id), error=str(embed_exc))
             embedded = False
+
+        # Chunking runs *after* the parent embedding so a chunker bug
+        # cannot regress today's retrieval. The whole block is wrapped
+        # in try/except for the same reason — chunk quality is a
+        # Phase-4 concern, the critical-path ingest must not depend on
+        # it.
+        try:
+            await _dispatch_chunking(db, raw=raw, ev=ev, payload=payload, tenant_id=tenant_id)
+        except Exception as chunk_exc:
+            logger.warning(
+                "chunking_failed",
+                evidence_id=str(ev.id),
+                error=str(chunk_exc),
+            )
     elif skip_extraction:
         logger.info(
             "normalize.skipped_extraction_not_relevant",

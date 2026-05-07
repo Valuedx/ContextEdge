@@ -78,6 +78,64 @@ class EvidenceItem(Base, TenantScopedMixin):
     thread: Mapped["Thread | None"] = relationship(back_populates="evidence_items")
     attachments: Mapped[list["AttachmentArtifact"]] = relationship(back_populates="evidence_item")
     identity_links: Mapped[list["EvidenceIdentityLink"]] = relationship(back_populates="evidence_item")
+    chunks: Mapped[list["EvidenceChunk"]] = relationship(
+        back_populates="evidence_item",
+        cascade="all, delete-orphan",
+    )
+
+    # Stamped by ``services.evidence_chunk_service.write_chunks`` once a
+    # chunker run lands. NULL means not-yet-chunked — used by the
+    # backfill scanner. ``chunk_count`` is observability-only.
+    chunked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    chunk_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+
+class EvidenceChunk(Base, TenantScopedMixin):
+    """High-recall sibling of ``EvidenceItem``.
+
+    One row per chunk produced by the source-specific chunker. Vector
+    search hits this table; results aggregate to ``evidence_id`` for the
+    card surface (max chunk score per evidence). The parent's own
+    ``embedding`` column is preserved unchanged so contradiction
+    scanning, similar-decision retrieval, and baseline matching keep
+    working without modification.
+
+    The ``(evidence_id, chunk_index, chunker_version)`` unique key lets
+    a re-chunk write the new version alongside the old one. Atomic swap
+    is just updating ``EvidenceItem.chunked_at`` to the new run; legacy
+    rows are GC'd by a maintenance task.
+    """
+
+    __tablename__ = "evidence_chunks"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=False, index=True)
+    evidence_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("evidence_items.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    chunk_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    # Controlled vocab: 'body' | 'comment' | 'message' | 'log_event' |
+    # 'heading_section' | 'code_block' | 'ocr_text'. Free-text for
+    # forward compat, indexed for filter queries.
+    chunk_kind: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    char_offset_start: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    char_offset_end: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Heading breadcrumb for hierarchical chunkers, e.g.
+    # "Postmortem > Timeline > 14:32".
+    parent_section: Mapped[str | None] = mapped_column(Text, nullable=True)
+    embedding = mapped_column(Vector(3072), nullable=True)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    chunk_metadata: Mapped[dict] = mapped_column("metadata", JSONB, nullable=False, default=dict)
+    chunker_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    evidence_item: Mapped["EvidenceItem"] = relationship(back_populates="chunks")
 
 
 class Thread(Base, TenantScopedMixin):
