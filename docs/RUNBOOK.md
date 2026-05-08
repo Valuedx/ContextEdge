@@ -244,7 +244,7 @@ Worker queues currently used:
 - `default`
 - `sync`
 - `hydration`
-- `extraction` (also handles artifact extraction and correlation tasks)
+- `extraction` (also handles artifact extraction, correlation tasks, **chunk_evidence_task**, and **embed_chunks_batch_task**)
 - `pattern`
 - `evaluation` (also handles contradiction scans)
 
@@ -285,6 +285,22 @@ Deterministic artifact extraction is available on the `extraction` queue through
 - Artifact binaries are stored in object storage under `artifacts/<tenant>/<evidence>/<artifact>/...`
 - Extracted text is persisted on `attachment_artifacts` and merged back into `evidence_items.body_text` with attachment provenance markers so FTS, embeddings, and episode reconstruction see it
 - OCR-heavy document/image formats are still deferred; this stage is intentionally deterministic
+
+### Evidence chunking
+
+Evidence chunking runs on the `extraction` queue alongside normalization. Two task names land here:
+
+- `extraction.chunk_evidence` — async path for large items (post-mortem attachments, long Teams threads). Idempotent on `chunker_version` — replaying the task on the same evidence is a no-op when the parent's existing chunks already match the resolved chunker's version.
+- `extraction.embed_chunks_batch` — fans out chunk embeddings in batches of 32 via `generate_embeddings_batch`. Per-tenant LLM budget enforcement (migration `0023`) fires per batch, not per chunk. Idempotent via the `embedding IS NULL` filter — replaying on the same chunk IDs only embeds what's still pending.
+
+Operational caveats:
+
+- After `chunk_evidence_task` writes rows, there is a brief window where `EvidenceChunk.embedding IS NULL` until `embed_chunks_batch_task` completes. The chunk-level vector query handles this naturally (the `<=> :q ORDER BY` skips NULL-embedding rows). If a chunk persists with `embedding IS NULL` past expected SLO, check the `extraction` worker's `llm.usage` events for `outcome = budget_exceeded` — a tripped per-tenant LLM budget cap will block embedding without a hard error.
+- Inline chunking is bounded to bodies under 16 KB on the source allowlist (`jira_sm`, `servicenow`, `gmail`, `teams`); larger or unfamiliar sources go async via `chunk_evidence_task`. Tunable via `INLINE_CHUNK_BUDGET_BYTES` and `INLINE_CHUNK_SOURCE_ALLOWLIST` in `workers/extraction_tasks.py`.
+- The HNSW index `ix_evidence_chunks_embedding_hnsw` is built `CONCURRENTLY` so the `0030_evidence_chunks` migration does not lock writers; on a backfilled deployment with millions of evidence rows the index build can take minutes.
+- A backfill task for legacy `EvidenceItem` rows with `chunked_at IS NULL` is **not yet wired** — see `codewiki/KNOWN_GAPS.md` "Resolved: Evidence chunking foundation" for the deferred follow-up list. Until that ships, only newly-normalized evidence is chunked.
+
+See [codewiki/CHUNKING_DESIGN.md](../codewiki/CHUNKING_DESIGN.md) for the full pipeline narrative.
 
 ---
 
@@ -351,6 +367,8 @@ Current state:
 | MinIO failures | Endpoint, credentials, bucket name, host vs container hostname |
 | Object-store offload not working | Verify MinIO is reachable from the worker, check `MINIO_ENDPOINT` and credentials |
 | Attachment extraction stays `pending` or `failed` | Verify the extraction worker is running, the artifact object exists in MinIO/S3, and the attachment is a supported deterministic format |
+| Evidence chunking is not running (chunks not appearing, `chunked_at IS NULL`) | Verify `extraction` queue worker is consuming `chunk_evidence_task` / `embed_chunks_batch_task`. For legacy rows ingested before `0030`, the backfill task is not yet wired — only newly normalized evidence chunks today. Check structlog `chunking_failed` lines in the normalize worker for chunker bugs. |
+| Chunks persist with `embedding IS NULL` past expected window | Likely a tripped per-tenant LLM budget cap (`tenant_llm_budgets`). Check `llm.usage` events for `outcome = budget_exceeded` and `GET /admin/tenant-budget/status`; raise the cap or wait for the daily reset. The next replay of `embed_chunks_batch_task` is idempotent and picks up `embedding IS NULL` rows automatically. |
 | Frontend cannot reach API | `NEXT_PUBLIC_API_URL`, backend port, and `APP_CORS_ORIGINS` |
 | Contradiction scan is slow or expensive | Reduce scan frequency in `celery_app.py` beat schedule, or limit to specific domains |
 

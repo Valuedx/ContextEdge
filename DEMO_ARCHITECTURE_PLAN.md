@@ -110,7 +110,7 @@ The stuff ContextEdge genuinely owns is the stuff nobody else produces: resolved
 
 ### Where ContextEdge is at risk of drifting
 
-- `EvidenceItem.body_text` + `embedding` treats all sources uniformly. Tickets (mutable, deletable) legitimately need copies. Telemetry snapshots (Intune device state) don't — but they're stored the same way today.
+- `EvidenceItem.body_text` + `embedding` treats all sources uniformly. Tickets (mutable, deletable) legitimately need copies. Telemetry snapshots (Intune device state) don't — but they're stored the same way today. **Partial mitigation 2026-05-08:** the chunking pipeline (migration `0030_evidence_chunks`) introduces per-source chunkers under `services/chunkers/` so tickets, threads, and attachments each chunk on source-appropriate boundaries with source-specific metadata (priority / author / heading breadcrumb / log event timestamp / `source_authority`). This doesn't yet solve the pointer-vs-copy policy gap — telemetry snapshots still copy — but it's the first place per-source differentiation lives in the data model. See [codewiki/CHUNKING_DESIGN.md](codewiki/CHUNKING_DESIGN.md).
 - `baseline_ref` is schema-less by design. A feature (lets connectors populate numeric deltas) and a hazard (tempting to cache "disk was 74% a week ago" as a snapshot → shadow time-series DB).
 - No "pointer vs copy" policy per source type.
 - No staleness budget (`ingested_at` exists, `cached_until` doesn't).

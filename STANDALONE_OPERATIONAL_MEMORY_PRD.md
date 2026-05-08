@@ -568,6 +568,7 @@ The product includes six major capabilities:
 - Expose low-latency APIs for downstream systems and agents.
 - Retrieval must combine keyword, semantic, graph, recency, and policy-aware ranking.
 - Retrieval must be security-trimmed using caller identity, tenant, domain, and evidence permissions.
+- Retrieval recall must cover the **full** body of every evidence item, not a fixed prefix — long Teams threads, multi-page post-mortems, and log attachments must all be searchable end-to-end. Implementation: per-source chunking writes one row per per-source-meaningful unit (Jira description, Teams message, Gmail reply, runbook heading section, log event), each with its own embedding and per-chunk metadata. Card identity stays one-row-per-upstream-record; chunks are the high-recall index. See [codewiki/CHUNKING_DESIGN.md](codewiki/CHUNKING_DESIGN.md).
 - The response must include:
   - best match and alternates
   - branch selection or decision path

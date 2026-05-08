@@ -89,6 +89,9 @@ todos:
   - id: phase4-eval-ui
     content: "Phase 4: Evaluation and drift UI -- evaluation console, drift dashboard, overview integration"
     status: completed
+  - id: phase4-chunking
+    content: "Phase 4: Evidence chunking foundation (0030) -- evidence_chunks sibling table with HNSW + GIN indexes, per-source chunkers (ticket / thread / attachment / fallback) under services/chunkers/, evidence_chunk_service.write_chunks, chunk_evidence_task + embed_chunks_batch_task on the extraction queue, _normalize wiring via _dispatch_chunking, 26 unit tests. Closes the 8 KB retrieval cliff for long bodies. Search-side rollup, backfill task, and tree-sitter code chunker deferred. See codewiki/CHUNKING_DESIGN.md."
+    status: completed
   - id: phase5-sso
     content: "Phase 5: Full SSO -- SAML/OIDC per-tenant config, SCIM provisioning, session management, token rotation"
     status: completed
@@ -485,7 +488,8 @@ Turn raw ingested data into structured evidence, threads, and episodes.
 Add models + migration:
 
 - `RawEvidenceObject` (id, tenant_id, source_id, source_object_id, external_id, raw_payload JSONB, content_hash, stored_at, object_storage_key)
-- `EvidenceItem` (all fields from PRD Section 20.3 + `embedding vector(1536)` via pgvector)
+- `EvidenceItem` (all fields from PRD Section 20.3 + `embedding vector(3072)` via pgvector — actual dim is 3072 not 1536 to align with Vertex / current embedding-model expectations; bumped in migration `0006_increase_embedding_dimension`. Also gains `chunked_at` + `chunk_count` in `0030_evidence_chunks`.)
+- `EvidenceChunk` (sibling of `EvidenceItem`, added in `0030_evidence_chunks`; FK `evidence_id ON DELETE CASCADE`; one row per per-source-meaningful unit — Jira description, Teams message, Gmail reply, runbook heading section, log event — with its own `embedding vector(3072)`, `chunk_kind`, `chunk_metadata` JSONB, `chunker_version`, `parent_section` breadcrumb, char offsets back to the parent body)
 - `Thread` (id, tenant_id, source_id, source_object_id, external_thread_id, title, participant_count, message_count, first_message_at, last_message_at, hydration_status, relevance_state)
 - `AttachmentArtifact` (id, evidence_id FK, filename, mime_type, size_bytes, object_storage_key, extracted_text, extraction_status)
 
@@ -506,10 +510,12 @@ Add models + migration:
 
 #### 2.4 -- Embedding generation
 
-- Celery task `generate_embeddings`: embed evidence body text via LiteLLM
-- Store in `EvidenceItem.embedding` (pgvector column)
-- Batch processing with rate limit awareness
-- pgvector IVFFlat index on embedding column, partitioned by tenant_id
+- Embedding is generated **inline during normalization** (`workers/extraction_tasks.py::_ensure_embedding`) via `embed_evidence(title, body)` so semantic search sees newly normalized evidence without a second broker hop. The standalone `generate_embeddings` Celery task referenced in earlier drafts of this plan was retired once inline embedding shipped.
+- Store in `EvidenceItem.embedding` (pgvector `Vector(3072)` column).
+- Per-tenant LLM budget enforcement (migration `0023_tenant_llm_budgets`) caps daily token / cost spend per tenant; `tenant_budget_service.check_budget` runs as a pre-call gate on every embedding call.
+- HNSW index on `embedding` (migration `0021_hnsw_vector_indexes`, parameters `m = 16`, `ef_construction = 64`) replaces the original IVFFlat plan — gives ~95% recall at ~100× the throughput of a sequential scan.
+- After the parent embedding lands, `_dispatch_chunking` writes one row per per-source-meaningful unit to `evidence_chunks` and queues `embed_chunks_batch_task` for batched chunk embeddings (32 chunks per LLM call). Closes the historical 8 KB cliff where `body[:8000]` truncated long-body retrieval. See `codewiki/CHUNKING_DESIGN.md`.
+- Partitioning of `evidence_items` (and `evidence_chunks`, the next partition candidate) is **deferred** with a documented runbook in `codewiki/04-evidence-normalization-and-storage.md`; index-only scale work shipped in `0024_evidence_scale_indexes` covers the 80% case until customer volume warrants conversion.
 
 #### 2.5 -- Identity resolution models and service
 

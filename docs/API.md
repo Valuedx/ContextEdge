@@ -307,6 +307,41 @@ Introduced in migration `0019_evidence_baseline`.
 
 ---
 
+## Evidence — chunking
+
+Base path: `/api/v1/evidence` (data-shape only; no chunk-specific endpoints today).
+
+Implementation: `contextedge.models.evidence.EvidenceChunk`, `contextedge.services.chunkers/`, `contextedge.services.evidence_chunk_service`, `contextedge.workers.chunk_tasks`.
+
+`EvidenceItem` carries two chunking-related fields stamped by the normalize worker after chunks land:
+
+| Field | Type | Purpose |
+| --- | --- | --- |
+| `chunked_at` | timestamptz (nullable) | Set by `services/evidence_chunk_service.write_chunks` once chunks for the parent's current `chunker_version` are persisted. `NULL` means not-yet-chunked — used by the future backfill scanner via the partial index `ix_evidence_items_chunked_at_null`. |
+| `chunk_count` | int (default 0) | Observability-only. The reviewer dashboard / `/admin/cost` surfaces use this to flag items still pending chunking and to spot anomalies (e.g. a runbook with 200 chunks vs. expected ~12). |
+
+`EvidenceChunk` (sibling table, FK `evidence_id → evidence_items(id) ON DELETE CASCADE`):
+
+| Field | Type | Purpose |
+| --- | --- | --- |
+| `chunk_index` | int | Order within the parent — chunk 0 is the title-prefixed leading chunk. |
+| `chunk_kind` | string | Controlled vocab: `body` / `comment` / `message` / `log_event` / `heading_section` / `code_block` / `ocr_text`. |
+| `text` | text | Post-redaction chunk body. Inherits the parent's redaction posture; chunks have no independent ACL column. |
+| `char_offset_start` / `char_offset_end` | int | Offsets back into `EvidenceItem.body_text` so a citation can be excerpted to the parent. |
+| `parent_section` | text (nullable) | Heading breadcrumb for hierarchical chunkers, e.g. `"Postmortem > Timeline > 14:32"`. |
+| `embedding` | `vector(3072)` (nullable) | Filled by `embed_chunks_batch_task` after `write_chunks` lands; brief `NULL` window is by design. |
+| `content_hash` | string | SHA-256 of `text`, mirrors the parent's hashing rule. Used for chunk-level dedup. |
+| `metadata` | JSONB | Per-source enrichment: `author`, `ts`, `severity`, `language`, `symbol`, `version`, `env_tags`, `source_authority` (`runbook` > `ticket` > `email` > `chat` > `gist`). |
+| `chunker_version` | int | Coarse-grained schema marker. Bumps only when boundaries change in a way that makes new rows incomparable to old ones. The unique key `(evidence_id, chunk_index, chunker_version)` lets a re-chunk write the new generation alongside the old. |
+
+### What's exposed today vs. deferred
+
+`EvidenceItemResponse` and `EvidenceItemDetail` surface `chunked_at` and `chunk_count`. The chunk rows themselves are **not** yet exposed via a dedicated endpoint — `vector_search.py` still queries `evidence_items.embedding` only, and the chunk-level retrieval rollup (top-K chunk hits + MMR + parent grouping with `chunk_id` preservation) is the next ship. The eventual API surface will likely look like `GET /api/v1/evidence/{id}/chunks` for direct chunk listing and a `chunk_id` field threaded through `evidence_search` responses; both await the search-side rollup. See [codewiki/CHUNKING_DESIGN.md](../codewiki/CHUNKING_DESIGN.md) §6 (search integration).
+
+Introduced in migration `0030_evidence_chunks`.
+
+---
+
 ## Playbooks — step schema
 
 Base path: `/api/v1/playbooks`.

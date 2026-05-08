@@ -353,6 +353,8 @@ graph LR
 
 `Episode.embedding Vector(3072)` lets the reconstructor find similar past episodes during extraction, which is how a brand-new VPN ticket can immediately surface "we've seen this shape before".
 
+The evidence inputs to this reconstruction are **chunked** as of `0030_evidence_chunks` — long Teams threads in this incident split into one chunk per message (with quoted-prior-message tails stripped), and an attached post-mortem markdown splits on heading boundaries with `parent_section` breadcrumbs. The reconstructor's `find similar past episodes` lookup (today still operating against `evidence_items.embedding`) inherits the recall benefit once the chunk-level retrieval rollup lands. See [codewiki/CHUNKING_DESIGN.md](../codewiki/CHUNKING_DESIGN.md) for the chunker strategy table; the rollup follow-up is tracked in [codewiki/KNOWN_GAPS.md](../codewiki/KNOWN_GAPS.md) "Resolved: Evidence chunking foundation".
+
 ### Episode vs case (when to use which)
 
 | Concept | Driven by | Lifetime | Outcome shape |
