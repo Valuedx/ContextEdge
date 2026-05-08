@@ -31,6 +31,14 @@ This document began as the writing backlog for `codewiki/`. The published series
 | 14 | [14-control-plane-tenants-roles-policies.md](./14-control-plane-tenants-roles-policies.md) | Tenant hierarchy, roles, policies, assignments | `models/tenant.py`, `models/policy.py`, `api/v1/tenants.py`, `api/v1/users.py`, `api/v1/policies.py`, `api/v1/policy_assignments.py`, `frontend/src/app/(dashboard)/settings/page.tsx` |
 | 15 | [15-dashboard-and-operator-workflows.md](./15-dashboard-and-operator-workflows.md) | Dashboard navigation and business workflows | `frontend/src/components/shell/sidebar-nav.tsx`, `frontend/src/components/shell/app-header.tsx`, `frontend/src/app/(dashboard)/overview/page.tsx`, `frontend/src/app/(dashboard)/sources/`, `frontend/src/app/(dashboard)/runtime/page.tsx`, `frontend/src/app/(dashboard)/graph-explorer/page.tsx`, `frontend/src/components/graph/graph-constants.ts`, `frontend/src/lib/api.ts` |
 
+## Standalone design docs (outside the numbered series)
+
+Articles that capture a single feature whose surface spans multiple numbered articles. Maintain with the same Summary / Business picture / Technical walkthrough / Design decisions / Code map / Acme VPN incident / Further reading shape, but the cross-link graph is asymmetric — numbered articles point *to* the design doc; the design doc may not need a return entry on every article.
+
+| Doc | Migration | Spans |
+| --- | --- | --- |
+| [CHUNKING_DESIGN.md](./CHUNKING_DESIGN.md) | `0030_evidence_chunks` | `01` (pipeline), `04` (normalize), `05` (search), `06` (embeddings), `08` (workers), `KNOWN_GAPS.md` |
+
 ## Per-article checklist (for future edits)
 
 ```markdown

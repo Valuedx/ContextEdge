@@ -26,21 +26,23 @@ The path below is the backbone of the product; names in parentheses are the main
 
 4. **Raw then normalized evidence** — Ingestion persists **raw** payloads (and object storage for larger blobs), then workers **normalize** into **evidence items** (title, body, hashes, provenance). A recovery-aware handoff claims backlog safely before queueing normalize work so broker hiccups do not double-process forever. **In code:** `services/ingestion_persistence.py` (`persist_ingestion_events`), `services/sync_worker_service.py` (`_claim_pending_raw_ids_for_handoff`), `workers/extraction_tasks.py` (`normalize_evidence`), `services/evidence_normalization.py`, `models/evidence.py`.
 
-5. **Search** — Analysts and services query evidence using **full-text search (FTS)** and **semantic** (embedding) signals, combined in a **hybrid** ranker; results respect **access** rules. **In code:** `search/pg_fts.py`, `search/vector_search.py`, `search/hybrid_ranker.py`, `search/access_control.py`, `api/v1/evidence.py`.
+5. **Chunking** — After the parent embedding lands, `_normalize` dispatches **per-source chunking** so long bodies become a list of `EvidenceChunk` rows (one card, many chunks). Inline for short ticket / thread bodies (under 16 KB on whitelisted source types); async via `chunk_evidence_task` for large attachments and long threads. Chunk embeddings batch via `embed_chunks_batch_task`. Closes the historical "8 KB cliff" where anything past `body[:8000]` was invisible to retrieval. **In code:** `services/chunkers/` (per-source bodies + registry), `services/evidence_chunk_service.py` (`write_chunks`), `workers/chunk_tasks.py`. Design notes in [`CHUNKING_DESIGN.md`](./CHUNKING_DESIGN.md).
 
-6. **AI-assisted extraction** — Language models and embeddings help classify relevance, extract structure, and power semantic retrieval. **In code:** `ai/provider.py`, `ai/embeddings.py`, `ai/extractors/`, `ai/classifiers/`.
+6. **Search** — Analysts and services query evidence using **full-text search (FTS)** and **semantic** (embedding) signals, combined in a **hybrid** ranker; results respect **access** rules. Vector search currently reads `evidence_items.embedding`; the chunk-level rollup (top-K chunks aggregated to parent) is the next step — see [05](./05-search-hybrid-and-access.md). **In code:** `search/pg_fts.py`, `search/vector_search.py`, `search/hybrid_ranker.py`, `search/access_control.py`, `api/v1/evidence.py`.
 
-7. **Episodes, patterns, graph, decisions** — Higher-level objects summarize incidents (**episodes**), surface recurrence (**patterns**), and link entities via a **graph** and correlation services. **Decision extraction** identifies operational actions from evidence text and links actors/targets to canonical identities as graph edges. **Governed execution** steps (approvals, denials, outcomes) also produce graph edges for full decision traceability. **In code:** `services/episode_service.py`, `services/pattern_service.py`, `graph/builder.py`, `services/correlation_service.py`, `services/contradiction_service.py`, `services/decision_service.py`, `ai/extractors/decision_extractor.py`.
+7. **AI-assisted extraction** — Language models and embeddings help classify relevance, extract structure, and power semantic retrieval. Chunk-level embeddings (step 5) reuse the same provider via `generate_embeddings_batch`. **In code:** `ai/provider.py`, `ai/embeddings.py`, `ai/extractors/`, `ai/classifiers/`.
 
-8. **Playbooks and governance** — **Playbooks** move through a lifecycle; only **published** versions are what runtime retrieval prefers to serve. **In code:** `services/playbook_service.py`, `models/playbook.py`, `api/v1/playbooks.py`.
+8. **Episodes, patterns, graph, decisions** — Higher-level objects summarize incidents (**episodes**), surface recurrence (**patterns**), and link entities via a **graph** and correlation services. **Decision extraction** identifies operational actions from evidence text and links actors/targets to canonical identities as graph edges. **Governed execution** steps (approvals, denials, outcomes) also produce graph edges for full decision traceability. **In code:** `services/episode_service.py`, `services/pattern_service.py`, `graph/builder.py`, `services/correlation_service.py`, `services/contradiction_service.py`, `services/decision_service.py`, `ai/extractors/decision_extractor.py`.
 
-9. **Runtime match and explain** — Integrations call **runtime** endpoints to match a situation to ranked playbooks; scoring reuses hybrid ideas; explanations can be cached briefly in Redis. **In code:** `api/v1/runtime.py`, `services/runtime_service.py`, `search/hybrid_ranker.py` (`rank_playbooks`).
+9. **Playbooks and governance** — **Playbooks** move through a lifecycle; only **published** versions are what runtime retrieval prefers to serve. **In code:** `services/playbook_service.py`, `models/playbook.py`, `api/v1/playbooks.py`.
 
-10. **Sessions, execution, audit trail** — **Resolution sessions** and **execution** APIs support governed operational workflows and append-style traces for review. **In code:** `api/v1/sessions.py`, `api/v1/execution.py`, `services/session_service.py`, `services/execution_service.py`, `services/audit_service.py`, `services/event_log_service.py`.
+10. **Runtime match and explain** — Integrations call **runtime** endpoints to match a situation to ranked playbooks; scoring reuses hybrid ideas; explanations can be cached briefly in Redis. **In code:** `api/v1/runtime.py`, `services/runtime_service.py`, `search/hybrid_ranker.py` (`rank_playbooks`).
 
-11. **Background work** — Celery workers drain dedicated **queues** (sync, hydration, extraction, pattern, evaluation, default) so HTTP stays responsive and failures can retry. **In code:** `workers/celery_app.py`, task modules under `workers/`.
+11. **Sessions, execution, audit trail** — **Resolution sessions** and **execution** APIs support governed operational workflows and append-style traces for review. **In code:** `api/v1/sessions.py`, `api/v1/execution.py`, `services/session_service.py`, `services/execution_service.py`, `services/audit_service.py`, `services/event_log_service.py`.
 
-12. **Retention** — Policies and services eventually remove or age data according to tenant rules. **In code:** `services/retention_service.py` (see also tenant policy schemas).
+12. **Background work** — Celery workers drain dedicated **queues** (sync, hydration, extraction, pattern, evaluation, default) so HTTP stays responsive and failures can retry. **In code:** `workers/celery_app.py`, task modules under `workers/`.
+
+13. **Retention** — Policies and services eventually remove or age data according to tenant rules. **In code:** `services/retention_service.py` (see also tenant policy schemas).
 
 The **Next.js** dashboard is a thin client over this API; most rules stay on the server (`frontend/`).
 
@@ -54,7 +56,9 @@ flowchart LR
     SRC[Sources and connectors]
     RAW[Raw evidence objects]
     NORM[Normalize to EvidenceItem]
+    CHK[Chunk per source + embed batch]
     SRC --> RAW --> NORM
+    NORM --> CHK
   end
 
   subgraph enrich[Enrichment and memory]
@@ -64,6 +68,7 @@ flowchart LR
     EP[Episodes and patterns]
     GR[Graph and correlation]
     NORM --> SRCH
+    CHK -.-> SRCH
     NORM --> AI
     NORM --> DEC
     AI --> EP
@@ -84,12 +89,13 @@ flowchart LR
     W[Celery queues]
     SRC -.-> W
     W -.-> NORM
+    W -.-> CHK
     W -.-> AI
     W -.-> EP
   end
 ```
 
-Solid arrows are the main data dependency; dashed arrows show where **workers** extend or continue the HTTP-started path.
+Solid arrows are the main data dependency; dashed arrows show where **workers** extend or continue the HTTP-started path. The dashed `CHK -.-> SRCH` arrow marks the planned chunk-level retrieval rollup — chunks are written today, but `vector_search.py` still queries `evidence_items.embedding`. See [05](./05-search-hybrid-and-access.md) and [`CHUNKING_DESIGN.md`](./CHUNKING_DESIGN.md) §6.
 
 ## Example: Acme VPN data at this stage
 
@@ -131,6 +137,8 @@ One Jira ticket travels the full pipeline. Each box below shows the data shape a
   "title": "VPN connection drops after Windows update KB5032190",
   "body_summary": "Multiple users report VPN disconnects following patch Tuesday. AUTH_CERT_EXPIRED on vpn-gw-east-01.",
   "relevance_state": "operational",
+  "chunked_at": "2026-05-08T01:13:42Z",
+  "chunk_count": 1,
   "canonical_entity_refs": {
     "identities": ["id:john-smith", "id:kb5032190", "id:vpn-gw-east-01"],
     "decisions": [
@@ -140,7 +148,31 @@ One Jira ticket travels the full pipeline. Each box below shows the data shape a
 }
 ```
 
-**4. Episode (after AI reconstruction)**
+**4. Evidence chunks (one card, one or more chunks)**
+
+```json
+[
+  {
+    "chunk_id": "chk-7a8b9c",
+    "evidence_id": "ev-a1b2c3",
+    "chunk_index": 0,
+    "chunk_kind": "body",
+    "text": "VPN connection drops after Windows update KB5032190\n\nUsers reporting VPN disconnects since patch Tuesday. Gateway: vpn-gw-east-01. Error: AUTH_CERT_EXPIRED. Reported by jsmith@acme.com.",
+    "metadata": {
+      "priority": "high",
+      "issue_type": "incident",
+      "project": "IT-OPS",
+      "author": "jsmith@acme.com",
+      "source_authority": "ticket"
+    },
+    "chunker_version": 1
+  }
+]
+```
+
+A long Teams thread or a multi-page post-mortem attachment would produce many chunks here, one per message or per heading section. The single-chunk case (above) is the common shape for short Jira tickets — chunking is still useful because the chunk metadata (`priority`, `issue_type`, `author`, `source_authority`) feeds the future re-ranker.
+
+**5. Episode (after AI reconstruction)**
 
 ```json
 {
@@ -158,7 +190,7 @@ One Jira ticket travels the full pipeline. Each box below shows the data shape a
 }
 ```
 
-**5. Approved playbook (after review)**
+**6. Approved playbook (after review)**
 
 ```json
 {
@@ -171,7 +203,7 @@ One Jira ticket travels the full pipeline. Each box below shows the data shape a
 }
 ```
 
-**6. Runtime match response**
+**7. Runtime match response**
 
 ```json
 {
@@ -198,6 +230,8 @@ One Jira ticket travels the full pipeline. Each box below shows the data shape a
 
 - **Hybrid retrieval (lexical + semantic + signals)** — *Why:* operational questions are both keyword-precise ("VPN gateway host name") and conceptually fuzzy ("similar outage last month"). *Tradeoff:* more indexes to maintain (FTS, pgvector) and tuning surface area.
 
+- **Per-source chunking as a sibling to evidence** — *Why:* a single embedding per `EvidenceItem` saw at most `body[:8000]` of any record, which made anything past 8 KB (long Teams threads, post-mortems, log files) invisible to retrieval even though the full body landed in Postgres. Chunks index the *inside* of long records; the card surface stays one-per-record. *Tradeoff:* ~5–10× more embedding rows and a re-rank / rollup step at query time. Detail in [`CHUNKING_DESIGN.md`](./CHUNKING_DESIGN.md).
+
 - **Playbook publication gate for runtime** — *Why:* customers should not get draft or unreviewed procedures in automated retrieval. *Tradeoff:* operators must complete lifecycle steps before runtime "sees" the latest version.
 
 ## Code map
@@ -209,7 +243,10 @@ One Jira ticket travels the full pipeline. Each box below shows the data shape a
 | Tenant and audit middleware | `backend/src/contextedge/middleware/request_context.py` | `TenantContextMiddleware` | Each HTTP request |
 | Ingestion persist | `backend/src/contextedge/services/ingestion_persistence.py` | `persist_ingestion_events` | After connector/sync produces events |
 | Sync handoff / recovery | `backend/src/contextedge/services/sync_worker_service.py` | `_claim_pending_raw_ids_for_handoff` | Before enqueueing normalize tasks |
-| Normalize worker | `backend/src/contextedge/workers/extraction_tasks.py` | `normalize_evidence` | Celery **extraction** queue |
+| Normalize worker | `backend/src/contextedge/workers/extraction_tasks.py` | `normalize_evidence`, `_dispatch_chunking` | Celery **extraction** queue |
+| Chunkers | `backend/src/contextedge/services/chunkers/` | `Chunker` Protocol, `get_chunker`, `TicketChunker`, `ThreadChunker`, `AttachmentChunker`, `FallbackChunker` | Inline + `chunk_evidence_task` |
+| Chunk persistence | `backend/src/contextedge/services/evidence_chunk_service.py` | `write_chunks`, `_default_authority` | Inline + async chunk task |
+| Chunk worker | `backend/src/contextedge/workers/chunk_tasks.py` | `chunk_evidence_task`, `embed_chunks_batch_task`, `EMBED_BATCH_SIZE` | Celery **extraction** queue |
 | Hybrid ranking | `backend/src/contextedge/search/hybrid_ranker.py` | `rank_playbooks` | Runtime match and evaluations |
 | Runtime orchestration | `backend/src/contextedge/services/runtime_service.py` | `match_playbooks` | Service layer for `/runtime` |
 | Celery topology | `backend/src/contextedge/workers/celery_app.py` | `celery_app`, `task_routes`, `beat_schedule` | Worker and beat processes |
@@ -217,7 +254,7 @@ One Jira ticket travels the full pipeline. Each box below shows the data shape a
 
 ## Acme VPN incident (this layer)
 
-When **Acme Corp**'s **Corporate VPN** outage spawns duplicate Jira tickets, Teams threads, and a follow-up email, **connectors and sync** land multiple **raw** payloads that **normalize** into evidence rows analysts can find with "VPN gateway." **Decision extraction** identifies that jsmith restarted the gateway and links the action to both the actor and the target system in the graph. **Extraction** proposes an **episode** spanning the noise; **patterns** may later reflect "auth certificate expiry" style repeats. A reviewed **playbook** version captures the approved fix; **runtime** ranks that playbook when an integration asks about VPN failures, and **sessions** record what was decided. When the playbook executes, **governed decision edges** capture the approval chain and outcome — so the same story threads every stage above without changing the example.
+When **Acme Corp**'s **Corporate VPN** outage spawns duplicate Jira tickets, Teams threads, and a follow-up email, **connectors and sync** land multiple **raw** payloads that **normalize** into evidence rows analysts can find with "VPN gateway." **Per-source chunking** turns long Teams replies and a 40 KB post-mortem attachment into per-message and per-section chunks so AUTH_CERT_EXPIRED is recoverable wherever it appears in the body, not just in the first 8 KB. **Decision extraction** identifies that jsmith restarted the gateway and links the action to both the actor and the target system in the graph. **Extraction** proposes an **episode** spanning the noise; **patterns** may later reflect "auth certificate expiry" style repeats. A reviewed **playbook** version captures the approved fix; **runtime** ranks that playbook when an integration asks about VPN failures, and **sessions** record what was decided. When the playbook executes, **governed decision edges** capture the approval chain and outcome — so the same story threads every stage above without changing the example.
 
 ## Further reading
 

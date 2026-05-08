@@ -150,8 +150,13 @@ flowchart TD
   D --> E[queue normalize_evidence tasks]
   E --> F[normalize raw -> EvidenceItem]
   F --> G[inline embedding repair / generation]
+  G --> CH[dispatch chunking - inline or async]
+  CH --> CHE[embed_chunks_batch_task batches of 32]
   G --> H[eligible for pgvector semantic search]
+  CHE -.-> H
 ```
+
+The dashed `CHE -.-> H` arrow marks the planned chunk-level retrieval rollup — chunks land today (migration `0030_evidence_chunks`) but `vector_search.py` still queries `evidence_items.embedding` only. See [codewiki/05-search-hybrid-and-access.md](../codewiki/05-search-hybrid-and-access.md) "Chunk-level retrieval (planned)" and [codewiki/CHUNKING_DESIGN.md](../codewiki/CHUNKING_DESIGN.md) §6.
 
 ### Sync handoff behavior
 
@@ -165,8 +170,9 @@ flowchart TD
 
 - `normalize_evidence` reads `RawEvidenceObject`, derives title/body/hash, and inserts or dedupes into `EvidenceItem`.
 - After insertion or dedup repair, the worker runs **identity linking** (`link_evidence_identities`) and **decision extraction** (`link_evidence_decisions`) inline. Decision extraction uses an LLM to identify operational actions from evidence text, resolves actors and targets against canonical identities, and creates `records_decision` / `records_action_on` graph edges.
-- Dedupe is hash-based at the application layer and is not yet backed by a database uniqueness constraint.
+- Dedupe is hash-based at the application layer and is now backed by a partial unique index `(tenant_id, content_hash) WHERE content_hash IS NOT NULL` (migration `0026_dedup_uniqueness`); concurrent inserts catch `IntegrityError` and re-fetch the winning row.
 - Embeddings are ensured inline on normalization so semantic search sees newly normalized evidence without a second broker hop.
+- After the parent embed lands, `_dispatch_chunking` writes `EvidenceChunk` rows via `services/evidence_chunk_service.write_chunks` and queues `embed_chunks_batch_task` for the chunk-level embeddings (batches of 32). Inline for ticket / thread bodies under 16 KB; async via `chunk_evidence_task` for everything else. The whole block is wrapped in `try/except` so a chunker bug cannot regress today's parent-embedding retrieval. Per-source chunkers under `services/chunkers/` (ticket / thread / attachment / fallback) are pure functions; `chunker_version` on every chunk row makes re-chunking under schema change atomic. See [codewiki/CHUNKING_DESIGN.md](../codewiki/CHUNKING_DESIGN.md).
 
 ---
 
@@ -258,7 +264,7 @@ Primary entity groups:
 2. **Source and ingestion**
    `Source`, `SourceObject`, `SourceCredential`, `SyncCheckpoint`, `SyncRun`
 3. **Evidence**
-   `RawEvidenceObject`, `EvidenceItem`, `Thread`, `AttachmentArtifact`
+   `RawEvidenceObject`, `EvidenceItem`, `EvidenceChunk` (per-chunk index added in `0030`; sibling table FK'd to `EvidenceItem` with `ON DELETE CASCADE`, carries its own 3072-dim embedding + per-source `metadata` JSONB + `chunker_version` for re-chunk safety), `Thread`, `AttachmentArtifact`
 4. **Identity and reconstruction**
    `CanonicalIdentity`, `IdentityAlias`, `CorrelationEdge`, `Episode`, `EpisodeStep`
 5. **Patterns, graph, and decisions**
@@ -288,6 +294,7 @@ Primary entity groups:
 
 - `Source -> SourceObject -> SyncCheckpoint / SyncRun`
 - `RawEvidenceObject -> EvidenceItem` through `raw_object_ref` when not deduped
+- `EvidenceItem -> EvidenceChunk` (1:N, `ON DELETE CASCADE`) — `EvidenceItem.chunked_at` stamps the latest chunker run; `chunk_count` is observability-only
 - `Playbook -> PlaybookVersion` with `current_version_id` on the parent
 - `PlaybookVersion -> PlaybookEvidenceLink -> EvidenceItem`
 - `PlaybookApproval` records governance actions independently of current lifecycle state

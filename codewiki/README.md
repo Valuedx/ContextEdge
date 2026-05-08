@@ -34,6 +34,7 @@ Start with the system architecture, then follow the numbered deep dives:
 | Doc | Description |
 | --- | --- |
 | [00-business-capability-map.md](./00-business-capability-map.md) | Business-first map of personas, outcomes, and product capabilities |
+| [CHUNKING_DESIGN.md](./CHUNKING_DESIGN.md) | Evidence chunking pipeline (`0030`): sibling-table design, per-source chunker strategy, search-rollup plan, backfill, redaction interaction |
 | [EDITORIAL-GUIDE.md](./EDITORIAL-GUIDE.md) | Voice, template, vocabulary, example format, and the Acme VPN scenario |
 | [KNOWN_GAPS.md](./KNOWN_GAPS.md) | Implementation caveats, UI gaps, and operational footnotes |
 | [PLAN.md](./PLAN.md) | Scope table, cross-links, maintenance, and article ordering |
@@ -63,6 +64,7 @@ Every article uses the same **Acme Corp VPN outage** scenario. To trace a single
 | --- | --- | --- |
 | 1. Connect sources | [03](./03-ingestion-connectors-and-sync.md) | Jira connector fetches two VPN tickets; sync run records checkpoint |
 | 2. Normalize evidence | [04](./04-evidence-normalization-and-storage.md) | Raw Jira JSON becomes a clean, searchable evidence item |
+| 2b. Chunk for retrieval | [04](./04-evidence-normalization-and-storage.md) + [CHUNKING_DESIGN.md](./CHUNKING_DESIGN.md) | Long Teams replies and a 40 KB post-mortem split into per-message and per-section chunks; AUTH_CERT_EXPIRED is recoverable wherever it appears in the body |
 | 3. Resolve identities | [12](./12-identity-resolution-and-thread-hydration.md) | "jsmith," "John Smith," and "J. Smith (IT)" resolve to one person |
 | 3b. Extract decisions | [09](./09-graph-and-correlation.md) | "Engineer restarted vpn-gw-east-01" becomes a decision graph edge linking actor to target |
 | 4. Classify and extract | [06](./06-ai-extraction-and-embeddings.md) | AI marks evidence as operational; proposes an episode with steps |

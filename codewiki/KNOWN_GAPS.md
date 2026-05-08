@@ -63,6 +63,8 @@ The Graph Explorer page (`/graph-explorer`) provides interactive visualization a
 
 AI-extracted decisions (Tier 1) rely on `decision_extractor.py` prompting an LLM to identify operational actions from evidence text. Decision types are open-ended labels, not a fixed enum, which means analytics and filtering may require normalization or fuzzy matching across label variations. The extractor truncates input to 4,000 characters; decisions mentioned later in long evidence items may be missed. Governed decision edges (Tier 2) from execution service are high-fidelity and not subject to this limitation. First-class decision traces (Tier 3) provide the richest representation — see [16-decision-traces.md](./16-decision-traces.md).
 
+**Partially mitigated by chunking (2026-05-08, migration `0030`):** the chunking pipeline now writes per-chunk rows under 1,500 chars each, so retrieval can surface specific chunks past the original 4 KB cap even though the extractor itself still operates on the parent body. The full fix is per-chunk decision extraction — running `extract_decisions` against each chunk and deduping decisions across chunks of the same evidence — which is a follow-up that lands alongside the search-side rollup. Until then, the cap remains in effect for the extraction pass, but retrieval does not lose the content.
+
 ## Resolved: Human-in-the-loop rejection now uses structured reason codes
 
 Previously, `DecisionOption.rejection_reason` was free-text only, which meant rejection signal was unaggregatable and `get_decision_effectiveness` couldn't break out failure modes. Migration `0017_rejection_modification_codes` adds:
@@ -237,6 +239,26 @@ Evidence `body_summary` is only populated when attachment artifact extraction ru
 ## Semantic search not exposed in evidence API
 
 The evidence list API supports FTS-based search but does not expose the semantic (vector) search path. Semantic search is used internally by the hybrid ranker for playbook ranking.
+
+## Resolved: Evidence chunking foundation (2026-05-08, migration `0030_evidence_chunks`)
+
+Closes the historical "8 KB cliff" where `embed_evidence(title, body[:8000])` made any body content past ~8,000 characters invisible to semantic retrieval. What landed:
+
+- New `evidence_chunks` sibling table (FK to `evidence_items`, `ON DELETE CASCADE`). HNSW index on the chunk embedding column with `m = 16, ef_construction = 64` matching `0021`. GIN `jsonb_path_ops` on `metadata` matching `0025`. Partial B-tree on `evidence_items (tenant_id, ingested_at DESC) WHERE chunked_at IS NULL` to drive the future backfill.
+- `services/chunkers/` package with a pure-function `Chunker` Protocol and lazy registry mirroring `connectors/registry.py`. Per-source bodies: `TicketChunker` (Jira / ServiceNow metadata enrichment), `ThreadChunker` (Gmail quote-stripping + author/ts metadata), `AttachmentChunker` (markdown heading split with breadcrumb, JSONL/plain-log boundaries, prose fallback), `FallbackChunker` (recursive paragraph → line → sentence → hard split with overlap).
+- `services/evidence_chunk_service.write_chunks` for persistence, with chunk-level `content_hash`, `chunker_version` for re-chunk safety, and connector-defaulted `source_authority` tagging (`runbook` > `ticket` > `email` > `chat` > `gist`).
+- Celery tasks in `workers/chunk_tasks.py`: `chunk_evidence_task` (async path for large items, idempotent on `chunker_version`) and `embed_chunks_batch_task` (32-chunk batches via `generate_embeddings_batch`, respecting the per-tenant LLM budget gate from `0023`).
+- `_normalize` wiring in `extraction_tasks.py::_dispatch_chunking`: inline chunking for small ticket / thread bodies under 16 KB on the allowlist (`jira_sm`, `servicenow`, `gmail`, `teams`); async dispatch for everything else. Wrapped in `try/except` so a chunker failure cannot regress today's parent-embedding retrieval. Also stamps `EvidenceItem.source_type` from the parent `Source` row when missing — closes the 0029 hole where the column was added but no code path filled it.
+- 26 unit tests covering offset accuracy, paragraph / sentence / hard-split fallback, overlap, Gmail quote-stripping (On…wrote, Outlook From/Sent/To, `>` quoted lines, forwarded-only bodies), markdown breadcrumb composition, JSONL log windowing, plain-log timestamp boundaries, registry resolution.
+- Detailed design doc at [`CHUNKING_DESIGN.md`](./CHUNKING_DESIGN.md) covering the sibling-table decision, per-source strategy table, `_normalize` integration sketch, search-side rollup plan, backfill, redaction interaction, partition concerns, and explicit "what's not in this PR" list.
+
+**Not yet wired (intentional follow-ups):**
+
+- **Search-side rollup.** `vector_search.py` and `hybrid_ranker.py` still query `evidence_items.embedding` only. Chunks are written but not yet read at query time. The rollup pattern (top-50 chunk hits + MMR + parent grouping with `chunk_id` preservation) is described in `CHUNKING_DESIGN.md §6`.
+- **Backfill task.** Existing `EvidenceItem` rows have `chunked_at IS NULL`. A tenant-batched, `ingested_at DESC` drainer needs to land before chunked retrieval can replace parent retrieval as the default path. The partial index `ix_evidence_items_chunked_at_null` is in place to drive it cheaply.
+- **Tree-sitter code chunker.** `AttachmentChunker` recognises markdown / JSONL / plain-log / prose; recognised-language code falls through to recursive splitting. Function / class boundary chunking via tree-sitter is a follow-up.
+- **Per-tenant authority override.** `_default_authority` maps connector key to source-authority via a fixed table. A `tenant_source_authority` settings table will be needed once a customer says "our wiki *is* authoritative" or "Teams chat for us is the canonical incident log."
+- **Per-chunk decision / identity extraction.** `decision_extractor` and `identity_extractor` still run on the parent body once. Running them per-chunk + deduping closes the 4 KB extractor cap in addition to the retrieval cliff.
 
 ## `evidence_quality` placeholder in ranker
 

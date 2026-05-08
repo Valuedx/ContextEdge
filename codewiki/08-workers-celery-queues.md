@@ -24,7 +24,7 @@ Background processing ensures that heavy work like AI extraction, pattern detect
 
 4. **Representative tasks**
    - **sync:** `run_backfill`, `run_incremental_sync` (`sync_tasks.py`) — historical backfill and incremental pull per source object.
-   - **extraction:** `normalize_evidence` (redacts PII → classifies → embeds → links identities & decisions), `classify_relevance_task`, `reconstruct_episode_task` (`extraction_tasks.py`).
+   - **extraction:** `normalize_evidence` (redacts PII → classifies → embeds → links identities & decisions → dispatches chunking), `classify_relevance_task`, `reconstruct_episode_task` (`extraction_tasks.py`); `chunk_evidence_task`, `embed_chunks_batch_task` (`chunk_tasks.py`) — async chunking for large items + batched chunk embeddings (32 chunks per LLM call).
    - **hydration:** `hydrate_thread` (`hydration_tasks.py`) for fuller thread payloads.
    - **correlation:** `correlate_evidence` (`correlation_tasks.py`).
    - **artifacts:** `extract_attachment_artifact` (`artifact_tasks.py`).
@@ -49,6 +49,10 @@ flowchart TB
   QSYNC --> BF[run_backfill]
   QEX --> NORM[normalize_evidence]
   NORM -->|inline| DEC[link_evidence_decisions]
+  NORM -->|inline small bodies| CHK[write_chunks]
+  NORM -->|large bodies| CHKA[chunk_evidence_task]
+  CHK --> EMB[embed_chunks_batch_task]
+  CHKA --> EMB
   NORM -->|may chain| CORR[correlate_evidence]
   NORM -->|may chain| CLS[classify_relevance_task]
   API --> QHYD[Queue hydration]
@@ -131,7 +135,8 @@ Each task runs independently and retries on failure, so a temporary AI provider 
 | --- | --- | --- | --- |
 | Celery config | `backend/src/contextedge/workers/celery_app.py` | `celery_app`, `task_routes`, `beat_schedule` | — |
 | Async runner | `backend/src/contextedge/workers/asyncio_runner.py` | `run_async` | All async tasks |
-| Normalize / classify / episode | `backend/src/contextedge/workers/extraction_tasks.py` | `normalize_evidence` (calls `link_evidence_identities` + `link_evidence_decisions` + embedding inline), `classify_relevance_task`, `reconstruct_episode_task` | extraction |
+| Normalize / classify / episode | `backend/src/contextedge/workers/extraction_tasks.py` | `normalize_evidence` (calls `link_evidence_identities` + `link_evidence_decisions` + embedding inline + `_dispatch_chunking`), `classify_relevance_task`, `reconstruct_episode_task` | extraction |
+| Chunk + chunk embed | `backend/src/contextedge/workers/chunk_tasks.py` | `chunk_evidence_task` (async path for large bodies; idempotent on `chunker_version`), `embed_chunks_batch_task` (batches of `EMBED_BATCH_SIZE = 32`) | extraction |
 | Decision extraction | `backend/src/contextedge/ai/extractors/decision_extractor.py` | `extract_decisions` | Called within normalize |
 | Decision linking | `backend/src/contextedge/services/decision_service.py` | `link_evidence_decisions` | Called within normalize |
 | Thread hydration | `backend/src/contextedge/workers/hydration_tasks.py` | `hydrate_thread` | hydration |
@@ -147,10 +152,11 @@ Each task runs independently and retries on failure, so a temporary AI provider 
 
 ## Acme VPN incident (this layer)
 
-After Acme's raws commit, **extraction** workers normalize and embed VPN evidence, extracting identities and decisions inline (e.g., "jsmith restarted vpn-gw-east-01" becomes a `records_decision` graph edge); **correlation** links the email RCA to tickets; **pattern** workers may later cluster episodes; **evaluation** beat jobs scan for drift between the new playbook and KB articles overnight.
+After Acme's raws commit, **extraction** workers normalize and embed VPN evidence, extracting identities and decisions inline (e.g., "jsmith restarted vpn-gw-east-01" becomes a `records_decision` graph edge). The same `normalize_evidence` task dispatches chunking — short Jira descriptions and Teams messages chunk inline; the 40 KB post-mortem markdown attached to the email RCA goes async via `chunk_evidence_task`, which writes ~12 `heading_section` chunks before queueing a single `embed_chunks_batch_task` for the whole batch. **Correlation** links the email RCA to tickets; **pattern** workers may later cluster episodes; **evaluation** beat jobs scan for drift between the new playbook and KB articles overnight.
 
 ## Further reading
 
 - [`docs/RUNBOOK.md`](../docs/RUNBOOK.md) — `make celery-dev`, worker commands  
 - [03-ingestion-connectors-and-sync.md](./03-ingestion-connectors-and-sync.md) — what enqueues normalize  
 - [09-graph-and-correlation.md](./09-graph-and-correlation.md) — what correlation does  
+- [CHUNKING_DESIGN.md](./CHUNKING_DESIGN.md) — `chunk_evidence_task` + `embed_chunks_batch_task` design context  

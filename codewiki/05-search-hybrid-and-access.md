@@ -27,6 +27,21 @@ The same ranking engine powers **playbook matching** for automation and assistan
 
 - `search_evidence_semantic` in `vector_search.py` embeds the query (or accepts a precomputed embedding), orders by **cosine distance** against `EvidenceItem.embedding`, and applies the same optional policy filter.
 
+> **Today (May 2026):** vector search reads the parent `evidence_items.embedding` only. Per-chunk embeddings exist (migration `0030_evidence_chunks`, written by `evidence_chunk_service.write_chunks` and embedded by `embed_chunks_batch_task`) but the query-side rollup is not wired yet. See "Chunk-level retrieval (planned)" below.
+
+### Chunk-level retrieval (planned)
+
+The chunking pipeline writes one `EvidenceChunk` row per per-source-meaningful unit (a Jira description, a Teams message, a runbook heading section, a log event). Each chunk has its own 3072-dim embedding, an HNSW index (`ix_evidence_chunks_embedding_hnsw`), and per-chunk metadata (`priority`, `author`, `severity`, `source_authority`, `parent_section`, …). The next change to `vector_search.py` + `hybrid_ranker.py` is the rollup pattern that exploits this:
+
+1. **Hybrid retrieval** — vector top-50 against `evidence_chunks.embedding` **+** BM25 top-50 against `evidence_items.search_tsvector`. Hybrid catches stack traces and command-name queries that pure embeddings miss.
+2. **MMR at the chunk level** — before the parent rollup, dedupe near-duplicate chunks so five hits from one long thread don't crowd out four distinct evidences.
+3. **Parent rollup** — group chunk hits by `evidence_id`, take the closest chunk per evidence as the parent score, **but keep the `chunk_id`** through the pipeline so the LLM-context path can return the specific chunk with its `parent_section` breadcrumb instead of the entire body.
+4. **Per-chunk authority + recency features** — `metadata.source_authority` (`runbook` > `ticket` > `email` > `chat` > `gist`) and parent `created_at_source` feed the re-ranker; this is the day-1 lever for the future re-rank step.
+
+The parent's `embedding` column is preserved unchanged so contradiction scanning, similar-decision retrieval, and baseline matching keep working without modification. The rollup adds a chunk-vector path; it does not replace the parent path.
+
+Detail in [`CHUNKING_DESIGN.md`](./CHUNKING_DESIGN.md) §6 (search integration).
+
 ### Playbook hybrid ranking
 
 - `rank_playbooks` in `hybrid_ranker.py` loads **approved** playbooks for the tenant, optionally filters by `domain_id`, `allowed_domain_ids` (service tokens), and `max_risk_tier` using `risk_within_cap` from `risk_policy.py`.

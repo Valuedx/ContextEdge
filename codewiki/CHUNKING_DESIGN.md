@@ -1,10 +1,16 @@
 # Evidence chunking design
 
-> Status: design + skeleton landed on `feature/evidence-chunking` (stacked
-> on `feature/ae-ops-context-graph-alignment`). Concrete chunker bodies
-> and `_normalize` wiring not yet merged — this doc is the review
-> artifact. See migration `0030_evidence_chunks` and
-> `services/chunkers/`.
+> Status: foundation merged on `feature/evidence-chunking` (commit
+> `ad8b195`, stacked on `feature/ae-ops-context-graph-alignment`).
+> Migration `0030_evidence_chunks`, ORM, per-source chunker bodies
+> (`ticket` / `thread` / `attachment` / `fallback`), persistence
+> service, async + batched-embed Celery tasks, and the `_normalize`
+> wiring all landed in that branch. The search-side rollup
+> (§6 below), the backfill task for `chunked_at IS NULL` rows, the
+> tree-sitter code chunker, and per-tenant authority overrides remain
+> follow-ups — see "What's *not* in this design" at the end and the
+> "Resolved: Evidence chunking foundation" section in
+> [`KNOWN_GAPS.md`](./KNOWN_GAPS.md).
 
 ## Summary
 

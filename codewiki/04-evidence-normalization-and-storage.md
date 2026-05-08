@@ -2,7 +2,7 @@
 
 ## Summary
 
-You will learn how **raw** connector payloads become **evidence items** queryable in the product, when payloads move to **object storage**, how **deduplication** works, and which follow-on steps (embeddings, identities, attachments) run inside the normalize worker.
+You will learn how **raw** connector payloads become **evidence items** queryable in the product, when payloads move to **object storage**, how **deduplication** works, how the body is broken into **chunks** for high-recall retrieval, and which follow-on steps (embeddings, identities, attachments, chunking) run inside the normalize worker.
 
 ## Business picture
 
@@ -26,9 +26,11 @@ The outcome: analysts can trust that search results are complete, duplicate-free
 
 5. **New evidence row** — On no match, it inserts `EvidenceItem` with `relevance_state="unclassified"`, links the thread (step 4), links identities when content allows, **extracts and links decisions** from the text, embeds via `embed_evidence`, runs attachment registration, may enqueue/classify relevance, and triggers `correlate_evidence` for cross-source linking.
 
-6. **Object store** — `object_store.py` provides `ensure_bucket`, `upload_raw`, `download_raw`, and artifact upload helpers using boto3 against the configured S3-compatible endpoint (MinIO in dev).
+6. **Chunk dispatch** — After the parent embedding lands, `_dispatch_chunking` resolves `EvidenceItem.source_type` (filling it from the parent `Source` row when missing — the column was added by `0029` but no other code path stamps it) and chooses inline vs async based on body size and source. Bodies under `INLINE_CHUNK_BUDGET_BYTES` (16 KB) on the inline allowlist (`jira_sm`, `servicenow`, `gmail`, `teams`) call `evidence_chunk_service.write_chunks` synchronously and queue `embed_chunks_batch_task` for the new chunk IDs. Larger bodies and unfamiliar sources dispatch to `chunk_evidence_task` so the normalize transaction stays bounded for big attachments and long threads. The whole block is wrapped in `try/except` so a chunker bug cannot regress today's parent-embedding retrieval. Per-source chunkers under `services/chunkers/` (ticket / thread / attachment / fallback) are pure functions; `chunker_version` on every chunk row makes re-chunking under schema change atomic. Detail in [`CHUNKING_DESIGN.md`](./CHUNKING_DESIGN.md).
 
-7. **Access policy** — Evidence rows may carry `access_policy_id`; search and GET routes filter using `resolve_excluded_access_policy_ids` (see [05-search-hybrid-and-access.md](./05-search-hybrid-and-access.md)).
+7. **Object store** — `object_store.py` provides `ensure_bucket`, `upload_raw`, `download_raw`, and artifact upload helpers using boto3 against the configured S3-compatible endpoint (MinIO in dev).
+
+8. **Access policy** — Evidence rows may carry `access_policy_id`; search and GET routes filter using `resolve_excluded_access_policy_ids` (see [05-search-hybrid-and-access.md](./05-search-hybrid-and-access.md)). Chunks inherit access posture from the parent — they have no independent ACL column.
 
 ## Example: Acme VPN data at this stage
 
@@ -90,6 +92,12 @@ Note: `canonical_entity_refs` is empty at this point. Identity resolution popula
 
 - **Post-normalize baseline fan-out** — *Why:* Zone 4 of the reviewer console wants a current value plus a baseline comparison ("was 74% a week ago", "first observation in 7d window"); computing this at read time would require a scan of prior evidence on every render. *How:* `compute_evidence_baseline_task` fires alongside `classify_relevance_task` and `correlate_evidence` post-normalize (and again after attachment extraction), matches on tenant + evidence_type + source_object_id in a 7-day window, and writes `baseline_ref` + `delta_signal` into `EvidenceItem`. *Tradeoff:* the generic worker does relationship-only baselines ("last seen N days ago"); numeric baselines ("74% → 32%") are the connector's job to populate at ingest since only the connector knows what a meaningful delta looks like — the JSONB shape is open-ended to allow both sources to coexist. Connector-stamped `delta_signal` values are not overwritten.
 
+- **Chunks as a sibling table, not a 1:N split of `EvidenceItem`** (since 2026-05-08, migration `0030_evidence_chunks`) — *Why:* every existing FK targeting `evidence_items.id` (`attachment_artifacts`, `correlation_edges`, `playbook_evidence_links`, `contradiction_scan_state`, `threads.evidence_items`, `decision_evidence`, `claim_evidence`) keeps its target. Card identity stays one-row-per-upstream-object; chunks are a high-recall index, not a replacement. The parent's `embedding` column is preserved unchanged so contradiction scanning, similar-decision retrieval, and baseline matching keep working. *Tradeoff:* search-side rollup logic is required to render parent cards from chunk hits, and chunk-row counts will run ~5–10× higher than evidence rows — `evidence_chunks` is the table that will hit the partition pain point first. Detail in [`CHUNKING_DESIGN.md`](./CHUNKING_DESIGN.md).
+
+- **`chunker_version` on every chunk row** — *Why:* chunkers will evolve (semantic splitting heuristics, redaction-rule retunes that change boundaries, per-source parser improvements). The unique key `(evidence_id, chunk_index, chunker_version)` lets a re-chunk write the new generation alongside the old; atomic swap is just updating `EvidenceItem.chunked_at` to the new run timestamp. *Tradeoff:* a maintenance task is required to GC retired versions. Acceptable cost for the operational simplicity of "old + new can coexist mid-rollout."
+
+- **Embed split from chunk write** — *Why:* writing chunks is cheap, but embedding 50 chunks per long item is expensive. `write_chunks` lands rows with `embedding = NULL`; `embed_chunks_batch_task` fans them out in batches of `EMBED_BATCH_SIZE = 32` so the per-tenant LLM budget gate fires per batch and retries are localized. *Tradeoff:* search has a brief window where chunks exist but embeddings are NULL — the chunk-vector query naturally skips those rows since `embedding <=> :q ORDER BY` returns nothing under `embedding IS NULL`.
+
 ## Code map
 
 | Concern | Module path | Key symbols | When it runs |
@@ -106,11 +114,19 @@ Note: `canonical_entity_refs` is empty at this point. Identity resolution popula
 | Decision linking | `backend/src/contextedge/services/decision_service.py` | `link_evidence_decisions` | Normalization worker |
 | Payload load | `backend/src/contextedge/services/artifact_extraction_service.py` | `load_raw_payload`, `register_attachment_artifacts` | Normalize |
 | Embeddings on item | `backend/src/contextedge/ai/embeddings.py` | `embed_evidence` | Normalize / repair |
-| ORM | `backend/src/contextedge/models/evidence.py` | `RawEvidenceObject`, `EvidenceItem` | Persistence |
+| Chunkers | `backend/src/contextedge/services/chunkers/` | `Chunker`, `ChunkSpec`, `get_chunker`, `TicketChunker`, `ThreadChunker`, `AttachmentChunker`, `FallbackChunker` | Inline + chunk worker |
+| Chunk persistence | `backend/src/contextedge/services/evidence_chunk_service.py` | `write_chunks`, `chunk_ids_pending_embedding`, `stamp_chunk_embeddings`, `_default_authority` | Inline + chunk worker |
+| Chunk + embed worker | `backend/src/contextedge/workers/chunk_tasks.py` | `chunk_evidence_task`, `embed_chunks_batch_task`, `EMBED_BATCH_SIZE` | Celery **extraction** queue |
+| Chunk dispatch | `backend/src/contextedge/workers/extraction_tasks.py` | `_dispatch_chunking`, `INLINE_CHUNK_BUDGET_BYTES`, `INLINE_CHUNK_SOURCE_ALLOWLIST` | Inline in `_normalize` |
+| ORM | `backend/src/contextedge/models/evidence.py` | `RawEvidenceObject`, `EvidenceItem`, `EvidenceChunk` | Persistence |
 
 ## Acme VPN incident (this layer)
 
-Three raws with the same VPN error text collapse to one `EvidenceItem` after normalization hash match; a long Teams export exceeds 32 KiB and stores JSON in **MinIO**, while the database row points to it—so Acme analysts still see one searchable card with correct provenance.
+Three raws with the same VPN error text collapse to one `EvidenceItem` after normalization hash match; a long Teams export exceeds 32 KiB and stores JSON in **MinIO**, while the database row points to it — so Acme analysts still see one searchable card with correct provenance. Each surviving evidence record then chunks: the Jira description becomes one `body` chunk; a 40 KB post-mortem markdown attachment splits into ~12 `heading_section` chunks (each tagged with the heading breadcrumb, e.g. `"Postmortem > Timeline > 14:32"`); long Teams replies strip their quoted-prior-message tails and emit one `message` chunk apiece. The reranker has per-chunk `priority`, `author`, and `source_authority` to score on, where before it only had a single coarse evidence vector.
+
+## Partition note (chunks too)
+
+`evidence_chunks` is the next partition-conversion candidate after `evidence_items` — chunk row counts will exceed evidence row counts by ~5–10× depending on per-source body sizes, so it will hit the maintenance pain point first. The partitioning plan below applies the same shape (`LIST (tenant_id)`, optional sub-partitioning by `RANGE (created_at)`) and the same HNSW per-partition build pattern. When customer volume warrants the conversion, partition both tables in the same maintenance window.
 
 ## Partitioning plan (deferred, index-only groundwork shipped in `0024`)
 
@@ -150,4 +166,5 @@ Three indexes that improve the hot paths *without* a table rewrite:
 - [03-ingestion-connectors-and-sync.md](./03-ingestion-connectors-and-sync.md) — where raws are created  
 - [06-ai-extraction-and-embeddings.md](./06-ai-extraction-and-embeddings.md) — models behind embed and classify  
 - [12-identity-resolution-and-thread-hydration.md](./12-identity-resolution-and-thread-hydration.md) — canonical entity extraction and alias matching that runs after normalization  
+- [CHUNKING_DESIGN.md](./CHUNKING_DESIGN.md) — sibling-table decision, per-source chunker strategy, search rollup plan, backfill, redaction interaction  
 - [`docs/TECHNICAL_BLUEPRINT.md`](../docs/TECHNICAL_BLUEPRINT.md) — ingestion diagram  
