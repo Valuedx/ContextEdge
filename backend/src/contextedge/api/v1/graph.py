@@ -1,22 +1,52 @@
+from datetime import datetime
 from uuid import UUID
 
 from fastapi import APIRouter, Query
 
 from contextedge.deps import AuthUser, DbSession
+from contextedge.graph.agent.contracts import AgentGraphRequest, AgentGraphSubset
+from contextedge.graph.agent.service import (
+    AgentGraphProjectionService,
+    build_agent_graph_scope,
+)
 from contextedge.graph.queries import get_entity_subgraph, get_graph_stats, get_neighbors
+from contextedge.graph.temporal import normalize_graph_as_of
 
 router = APIRouter()
+
+
+@router.post("/agent-subsets", response_model=AgentGraphSubset)
+async def create_agent_graph_subset(
+    body: AgentGraphRequest,
+    db: DbSession,
+    user: AuthUser,
+):
+    """Return a ranked, bounded, authorization-filtered agent graph projection."""
+    effective = body.model_copy(update={"as_of": normalize_graph_as_of(body.as_of)})
+    scope = await build_agent_graph_scope(db, user, effective.domain_id)
+    return await AgentGraphProjectionService(db).project(
+        effective,
+        scope,
+        invocation_mode="api",
+    )
 
 
 @router.get("/neighbors")
 async def graph_neighbors(
     db: DbSession,
     user: AuthUser,
-    node_type: str = Query(..., description="Type of the origin node (e.g. playbook, pattern, episode)"),
+    node_type: str = Query(
+        ...,
+        description="Type of the origin node (e.g. playbook, pattern, episode)",
+    ),
     node_id: UUID = Query(..., description="ID of the origin node"),
     edge_type: str | None = Query(None, description="Filter by edge type"),
     max_depth: int = Query(1, ge=1, le=3, description="BFS traversal depth (1-3)"),
-    domain_id: UUID | None = Query(None, description="Scope to a domain (includes domain-less edges)"),
+    domain_id: UUID | None = Query(
+        None,
+        description="Scope to a domain (includes domain-less edges)",
+    ),
+    as_of: datetime | None = Query(None, description="Point-in-time traversal timestamp"),
 ):
     """Return neighboring nodes reachable via graph edges up to *max_depth* hops."""
     return await get_neighbors(
@@ -27,6 +57,7 @@ async def graph_neighbors(
         edge_type=edge_type,
         max_depth=max_depth,
         domain_id=domain_id,
+        as_of=normalize_graph_as_of(as_of),
     )
 
 
@@ -38,6 +69,7 @@ async def graph_subgraph(
     user: AuthUser,
     max_depth: int = Query(1, ge=1, le=3),
     domain_id: UUID | None = Query(None),
+    as_of: datetime | None = Query(None),
 ):
     """Return the subgraph around any entity as nodes + edges suitable for visualization."""
     return await get_entity_subgraph(
@@ -47,6 +79,7 @@ async def graph_subgraph(
         node_id=entity_id,
         max_depth=max_depth,
         domain_id=domain_id,
+        as_of=normalize_graph_as_of(as_of),
     )
 
 
@@ -55,6 +88,12 @@ async def graph_stats(
     db: DbSession,
     user: AuthUser,
     domain_id: UUID | None = Query(None),
+    as_of: datetime | None = Query(None),
 ):
     """Return aggregate edge-type and node-type counts for the tenant."""
-    return await get_graph_stats(db, tenant_id=user.tenant_id, domain_id=domain_id)
+    return await get_graph_stats(
+        db,
+        tenant_id=user.tenant_id,
+        domain_id=domain_id,
+        as_of=normalize_graph_as_of(as_of),
+    )

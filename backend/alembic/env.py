@@ -22,6 +22,11 @@ import contextedge.models.execution  # noqa: E402, F401
 import contextedge.models.source  # noqa: E402, F401
 import contextedge.models.tenant  # noqa: E402, F401
 import contextedge.models.policy  # noqa: E402, F401
+import contextedge.models.entity  # noqa: E402, F401
+import contextedge.models.claim  # noqa: E402, F401
+import contextedge.models.action_policy  # noqa: E402, F401
+import contextedge.models.error_signature  # noqa: E402, F401
+import contextedge.models.case_outcome  # noqa: E402, F401
 
 from contextedge.config import settings  # noqa: E402
 

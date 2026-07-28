@@ -13,6 +13,8 @@ ContextEdge turns fragmented operational evidence from tickets, chat, email, and
 | [**API reference**](docs/API.md) | Auth, `/api/v1` router surface, runtime semantics, observability URLs |
 | [**Runbook**](docs/RUNBOOK.md) | Operational commands, migrations, workers, troubleshooting |
 | [**Context graph walkthrough**](docs/CONTEXT_GRAPH_WALKTHROUGH.md) | Stage-by-stage visual tour from empty graph through case lifecycle, episodes, patterns, and playbooks; with retention defaults |
+| [**MAF Context Graph integration**](docs/MAF_CONTEXT_GRAPH_INTEGRATION.md) | Microsoft Agent Framework provider/tool wiring, projection contract, security, and extension points |
+| [**MAF implementation plan**](MAF_CONTEXT_GRAPH_INTEGRATION_PLAN.md) | Schema coverage review, architecture, frontend impact, rollout, and acceptance criteria |
 | [**Implementation plan**](CONTEXTEDGE_IMPLEMENTATION_PLAN.md) | Phased checklist and repository-status planning document |
 | [**Enterprise architecture review**](ENTERPRISE_ARCHITECTURE_REVIEW.md) | Technical review with cost-optimisation + 90-day roadmap (ContextEdge-only scope) |
 | [**AIHub integration plan**](AEAIHUB_INTEGRATION_PLAN.md) | Cross-system plan for ContextEdge ↔ AEAIHubOrchestrator ↔ AutomationEdge with deep AIHub modifications |
@@ -36,7 +38,7 @@ OpenAPI for a running local API:
 - **Cost & budget:** Per-tenant daily LLM cap (`tenant_llm_budgets` table, migration `0023`) with pre-call enforcement (`block` raises / `warn` logs). Live spend + cap config at `/admin/cost` for `tenant_admin`
 - **Redaction:** Regex PII/secret redaction at ingest (`services/redaction_service.py`: EMAIL, PHONE, SSN, CREDIT_CARD, AWS_ACCESS_KEY, AWS_SECRET_KEY, PRIVATE_KEY) runs before any LLM / embed call
 - **Auth:** Bearer JWT for users and optional `X-Service-Token` for service integrations. `request_id` / `correlation_id` / `causation_id` propagate HTTP → Celery → LLM via Celery signal handlers
-- **Graph:** PostgreSQL adjacency table (`graph_edges`) for pattern, entity, contradiction, and decision relationships
+- **Graph:** tenant/domain-safe temporal PostgreSQL adjacency projection with bounded `maf.v1` agent subsets, proactive MAF context injection, and an on-demand MAF tool
 - **Decision capture:** Three-tier decision graph — first-class `Decision` nodes with typed edges (`based_on`, `considered`, `chose`, `applied_policy`, `required_approval`, `resulted_in`, `followed_by`), governed execution edges from the execution engine, and AI-extracted decision edges from ingested evidence text
 - **Human-in-the-loop feedback:** Approve / Modify / Reject flow with structured reason codes (`wrong_diagnosis`, `plan_incomplete`, `needs_human_judgment`, `user_context_missing`, `policy_violation`, `other`) that feed `get_decision_effectiveness` analytics instead of free-text
 - **Evidence baselines:** every `EvidenceItem` carries `baseline_ref` + `delta_signal` (`neutral` / `amber` / `red`) so Zone 4 reviewer cards render current value + comparison ("last seen 3 days ago") with color-coded severity; connectors can populate richer numeric deltas at ingest
@@ -108,8 +110,8 @@ make test
 Notes:
 
 - `make dev` starts the full Docker development stack.
-- Current Alembic head is `0028_orm_ddl_drift_alignment`. Run `make migrate` after pulling to apply any new revisions.
-- Frontend `npm test` is currently a placeholder script; there is no real frontend unit-test suite yet.
+- Current Alembic head is `0031_maf_context_graph_hardening`. Run `make migrate` after pulling to apply any new revisions.
+- Frontend unit tests run with Vitest via `npm test`.
 - The backend enforces a non-default `JWT_SECRET_KEY` when `APP_ENV` is not `development`. Set a real secret before deploying to staging or production.
 
 ## Known Constraints

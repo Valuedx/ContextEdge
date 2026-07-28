@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, Float, ForeignKey, String, Text, UniqueConstraint, func
+from sqlalchemy import Computed, DateTime, Float, ForeignKey, String, Text, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -46,6 +46,13 @@ def is_shadow_mode(automation_mode: str | None) -> bool:
 
 class Playbook(Base, TenantScopedMixin):
     __tablename__ = "playbooks"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "stable_key",
+            name="uq_playbooks_tenant_stable_key",
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
@@ -64,12 +71,15 @@ class Playbook(Base, TenantScopedMixin):
         ForeignKey("domains.id"),
         nullable=True,
     )
-    stable_key: Mapped[str] = mapped_column(String(255), nullable=False, unique=True, index=True)
+    stable_key: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     title: Mapped[str] = mapped_column(String(500), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     search_tsvector: Mapped[object | None] = mapped_column(
         TSVECTOR,
-        server_default=func.now(),
+        Computed(
+            "to_tsvector('english', coalesce(title, '') || ' ' || coalesce(description, ''))",
+            persisted=True,
+        ),
         deferred=True,
     )
     lifecycle_state: Mapped[str] = mapped_column(

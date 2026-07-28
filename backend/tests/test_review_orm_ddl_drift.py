@@ -73,7 +73,7 @@ def _collect_constraint_markers() -> set[tuple[str, str]]:
 # markers are new or missing. For each new one: confirm a migration
 # ALTERs the constraint on older DBs, then paste the marker here.
 #
-# Migration 0029 (AE Ops Context Graph alignment) added several new
+# Migrations 0029 and 0031 (MAF Context Graph hardening) added several new
 # tables (``entities``, ``claims``, ``claim_evidence``,
 # ``decision_evidence``, ``action_policies``, ``error_signatures``,
 # ``fix_patterns``, ``case_outcomes``, ``case_state_transitions``)
@@ -82,9 +82,19 @@ def _collect_constraint_markers() -> set[tuple[str, str]]:
 # (no ALTER needed) or covered by an explicit ALTER TABLE block with
 # IF EXISTS guards in 0029.
 _EXPECTED_MARKERS: set[tuple[str, str]] = {
+    ('action_policy.py', 'ForeignKey("action_policies.id", ondelete="CASCADE"),'),
+    ('action_policy.py', 'ForeignKey("decisions.id", ondelete="CASCADE"),'),
     ('action_policy.py', 'ForeignKey("entities.id", ondelete="SET NULL"),'),
+    ('action_policy.py',
+     'UniqueConstraint( "decision_id", "action_policy_id", '
+     'name="uq_decision_action_policies_decision_policy", ),'),
+    ('case_outcome.py', 'ForeignKey("case_outcomes.id", ondelete="CASCADE"),'),
+    ('case_outcome.py', 'ForeignKey("fix_patterns.id", ondelete="CASCADE"),'),
     ('case_outcome.py',
      'ForeignKey("resolution_sessions.id", ondelete="CASCADE"),'),
+    ('case_outcome.py',
+     'UniqueConstraint( "case_outcome_id", "fix_pattern_id", "result", '
+     'name="uq_case_outcome_fix_patterns_outcome_fix_result", ),'),
     ('claim.py', 'ForeignKey("claims.id", ondelete="CASCADE"),'),
     ('claim.py', 'ForeignKey("decisions.id", ondelete="CASCADE"),'),
     ('claim.py', 'ForeignKey("evidence_items.id", ondelete="CASCADE"),'),
@@ -93,12 +103,15 @@ _EXPECTED_MARKERS: set[tuple[str, str]] = {
      'UniqueConstraint( "decision_id", "evidence_id", '
      'name="uq_decision_evidence_pair" ),'),
     ('claim.py',
+     'UniqueConstraint( "decision_id", "claim_id", "use_type", '
+     'name="uq_decision_claims_decision_claim_use", ),'),
+    ('claim.py',
      'UniqueConstraint("claim_id", "evidence_id", '
      'name="uq_claim_evidence_pair"),'),
     ('decision.py', 'ForeignKey("decisions.id", ondelete="CASCADE"),'),
     ('entity.py',
-     'UniqueConstraint( "entity_type", "external_system", "external_id", '
-     'name="uq_entities_type_system_external_id", ),'),
+     'UniqueConstraint( "tenant_id", "entity_type", "external_system", '
+     '"external_id", name="uq_entities_tenant_type_system_external_id", ),'),
     ('episode.py', 'ForeignKey("canonical_identities.id", ondelete="CASCADE"),'),
     ('episode.py', 'ForeignKey("evidence_items.id", ondelete="CASCADE"),'),
     ('episode.py',
@@ -113,6 +126,7 @@ _EXPECTED_MARKERS: set[tuple[str, str]] = {
     ('error_signature.py', 'ForeignKey("patterns.id", ondelete="SET NULL"),'),
     ('error_signature.py', 'ForeignKey("playbooks.id", ondelete="SET NULL"),'),
     ('evidence.py', 'ForeignKey("tenant_policies.id", ondelete="SET NULL"),'),
+    ('evidence.py', 'ForeignKey("evidence_items.id", ondelete="CASCADE"),'),
     ('evidence.py',
      'evidence_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), '
      'ForeignKey("evidence_items.id", ondelete="CASCADE"), nullable=False)'),
@@ -124,19 +138,22 @@ _EXPECTED_MARKERS: set[tuple[str, str]] = {
      'UUID(as_uuid=True), ForeignKey("execution_step_runs.id", '
      'ondelete="CASCADE"),'),
     ('pattern.py', 'ForeignKey("evidence_items.id", ondelete="CASCADE"),'),
+    ('pattern.py', 'ForeignKey("domains.id", ondelete="CASCADE"),'),
     ('pattern.py', 'ForeignKey("playbook_versions.id", ondelete="CASCADE"),'),
+    ('pattern.py', 'ForeignKey("tenants.id", ondelete="CASCADE"),'),
+    ('pattern.py', 'unique=True,'),
     ('playbook.py', 'ForeignKey("evidence_items.id", ondelete="SET NULL"),'),
     ('playbook.py', 'ForeignKey("tenant_policies.id", ondelete="SET NULL"),'),
     ('playbook.py',
      'UniqueConstraint( "playbook_id", "semantic_version", '
      'name="uq_playbook_versions_playbook_semantic_version", ),'),
     ('playbook.py',
-     'stable_key: Mapped[str] = mapped_column(String(255), nullable=False, '
-     'unique=True, index=True)'),
+     'UniqueConstraint( "tenant_id", "stable_key", '
+     'name="uq_playbooks_tenant_stable_key", ),'),
     ('session.py', 'ForeignKey("decisions.id", ondelete="CASCADE"),'),
     ('session.py', 'ForeignKey("entities.id", ondelete="SET NULL"),'),
     ('session.py', 'ForeignKey("resolution_sessions.id", ondelete="CASCADE"),'),
-    ('session.py', 'String(60), nullable=True, unique=True, index=True'),
+    ('session.py', 'unique=True,'),
     ('source.py',
      'UUID(as_uuid=True), ForeignKey("tenant_policies.id", ondelete="SET NULL"), '
      'nullable=True'),

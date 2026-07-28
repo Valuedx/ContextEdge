@@ -40,29 +40,43 @@ branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
+# pgvector HNSW indexes for the vector type support at most 2000 dimensions.
+# The application stores 3072-dimensional embeddings, so exact cosine search
+# remains the compatible default until a half-precision/projection index is added.
+VECTOR_HNSW_MAX_DIMENSIONS = 2000
+EMBEDDING_DIMENSIONS = 3072
+HNSW_INDEXES = (
+    ("evidence_items", "ix_evidence_items_embedding_hnsw"),
+    ("decisions", "ix_decisions_embedding_hnsw"),
+)
+
+
+def _create_hnsw_index(table_name: str, index_name: str) -> None:
+    op.execute(
+        f"""
+        CREATE INDEX CONCURRENTLY IF NOT EXISTS {index_name}
+        ON {table_name}
+        USING hnsw (embedding vector_cosine_ops)
+        WITH (m = 16, ef_construction = 64);
+        """
+    )
+
+
+def _drop_unsupported_hnsw_index(index_name: str) -> None:
+    # A failed CREATE INDEX CONCURRENTLY can leave an invalid index behind.
+    op.execute(f"DROP INDEX CONCURRENTLY IF EXISTS {index_name};")
+
+
 def upgrade() -> None:
     # CREATE INDEX CONCURRENTLY cannot run inside a transaction. Alembic
     # runs migrations inside a transaction by default — we break out with
     # the autocommit connection block.
     with op.get_context().autocommit_block():
-        op.execute(
-            """
-            CREATE INDEX CONCURRENTLY IF NOT EXISTS
-                ix_evidence_items_embedding_hnsw
-            ON evidence_items
-            USING hnsw (embedding vector_cosine_ops)
-            WITH (m = 16, ef_construction = 64);
-            """
-        )
-        op.execute(
-            """
-            CREATE INDEX CONCURRENTLY IF NOT EXISTS
-                ix_decisions_embedding_hnsw
-            ON decisions
-            USING hnsw (embedding vector_cosine_ops)
-            WITH (m = 16, ef_construction = 64);
-            """
-        )
+        for table_name, index_name in HNSW_INDEXES:
+            if EMBEDDING_DIMENSIONS <= VECTOR_HNSW_MAX_DIMENSIONS:
+                _create_hnsw_index(table_name, index_name)
+            else:
+                _drop_unsupported_hnsw_index(index_name)
 
 
 def downgrade() -> None:

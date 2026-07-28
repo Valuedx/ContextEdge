@@ -1,7 +1,19 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, func
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    func,
+    text,
+)
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -123,10 +135,76 @@ class ContradictionScanState(Base, TenantScopedMixin):
 class GraphEdge(Base):
     """Adjacency table for the context/pattern graph."""
     __tablename__ = "graph_edges"
+    __table_args__ = (
+        CheckConstraint("weight >= 0", name="ck_graph_edges_weight_nonnegative"),
+        CheckConstraint(
+            "confidence IS NULL OR (confidence >= 0 AND confidence <= 1)",
+            name="ck_graph_edges_confidence_range",
+        ),
+        CheckConstraint(
+            "valid_to IS NULL OR valid_to > valid_from",
+            name="ck_graph_edges_valid_window",
+        ),
+        Index(
+            "uq_graph_edges_active_logical",
+            "tenant_id",
+            "domain_id",
+            "source_node_type",
+            "source_node_id",
+            "target_node_type",
+            "target_node_id",
+            "edge_type",
+            unique=True,
+            postgresql_where=text("valid_to IS NULL"),
+            postgresql_nulls_not_distinct=True,
+        ),
+        Index(
+            "ix_graph_edges_current_source",
+            "tenant_id",
+            "source_node_type",
+            "source_node_id",
+            "domain_id",
+            postgresql_where=text("valid_to IS NULL"),
+        ),
+        Index(
+            "ix_graph_edges_current_target",
+            "tenant_id",
+            "target_node_type",
+            "target_node_id",
+            "domain_id",
+            postgresql_where=text("valid_to IS NULL"),
+        ),
+        Index(
+            "ix_graph_edges_temporal_source",
+            "tenant_id",
+            "source_node_type",
+            "source_node_id",
+            "valid_from",
+            "valid_to",
+        ),
+        Index(
+            "ix_graph_edges_temporal_target",
+            "tenant_id",
+            "target_node_type",
+            "target_node_id",
+            "valid_from",
+            "valid_to",
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
-    domain_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True, index=True)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("tenants.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    domain_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("domains.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+    )
     source_node_type: Mapped[str] = mapped_column(String(50), nullable=False)
     source_node_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
     target_node_type: Mapped[str] = mapped_column(String(50), nullable=False)
@@ -140,8 +218,8 @@ class GraphEdge(Base):
     # Enables "what was true at incident time?" queries instead of
     # always-current-state. Both nullable: existing rows continue to
     # behave as "valid since creation, no expiry".
-    valid_from: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
+    valid_from: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
     )
     valid_to: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True

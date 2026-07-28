@@ -1,17 +1,12 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import { api } from "@/lib/api";
+import { graphApi } from "@/lib/graph-api";
+import type { GraphScope, GraphStatsResponse } from "@/lib/types/graph";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Layers, Network, ArrowRightLeft } from "lucide-react";
 import { nodeColors, edgeColors } from "./graph-constants";
-
-interface StatsResponse {
-  total_edges: number;
-  edge_type_counts: Record<string, number>;
-  node_type_counts: Record<string, number>;
-}
 
 function StatCard({
   label,
@@ -79,10 +74,10 @@ function DistributionBar({
   );
 }
 
-export function GraphStats() {
-  const { data, isLoading, error } = useQuery<StatsResponse>({
-    queryKey: ["graph-stats"],
-    queryFn: () => api.get("/graph/stats"),
+export function GraphStats({ scope }: { scope: GraphScope }) {
+  const { data, isLoading, error } = useQuery<GraphStatsResponse>({
+    queryKey: ["graph-stats", scope.domainId, scope.asOf],
+    queryFn: () => graphApi.stats(scope),
   });
 
   if (isLoading) {

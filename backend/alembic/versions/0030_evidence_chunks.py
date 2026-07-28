@@ -41,6 +41,28 @@ branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
+# pgvector HNSW indexes for the vector type support at most 2000 dimensions.
+VECTOR_HNSW_MAX_DIMENSIONS = 2000
+CHUNK_EMBEDDING_DIMENSIONS = 3072
+CHUNK_HNSW_INDEX = "ix_evidence_chunks_embedding_hnsw"
+
+
+def _create_chunk_hnsw_index() -> None:
+    op.execute(
+        f"""
+        CREATE INDEX CONCURRENTLY IF NOT EXISTS {CHUNK_HNSW_INDEX}
+        ON evidence_chunks
+        USING hnsw (embedding vector_cosine_ops)
+        WITH (m = 16, ef_construction = 64);
+        """
+    )
+
+
+def _drop_unsupported_chunk_hnsw_index() -> None:
+    # Clear an invalid concurrent index left by a failed earlier attempt.
+    op.execute(f"DROP INDEX CONCURRENTLY IF EXISTS {CHUNK_HNSW_INDEX};")
+
+
 def upgrade() -> None:
     # ------------------------------------------------------------------
     # 1. evidence_chunks  (per-chunk index for high-recall vector search)
@@ -103,18 +125,13 @@ def upgrade() -> None:
     )
 
     # ------------------------------------------------------------------
-    # 3. HNSW on chunk embeddings  (autocommit, like 0021)
+    # 3. HNSW on chunk embeddings when the pgvector dimension limit permits it.
     # ------------------------------------------------------------------
     with op.get_context().autocommit_block():
-        op.execute(
-            """
-            CREATE INDEX CONCURRENTLY IF NOT EXISTS
-                ix_evidence_chunks_embedding_hnsw
-            ON evidence_chunks
-            USING hnsw (embedding vector_cosine_ops)
-            WITH (m = 16, ef_construction = 64);
-            """
-        )
+        if CHUNK_EMBEDDING_DIMENSIONS <= VECTOR_HNSW_MAX_DIMENSIONS:
+            _create_chunk_hnsw_index()
+        else:
+            _drop_unsupported_chunk_hnsw_index()
 
 
 def downgrade() -> None:

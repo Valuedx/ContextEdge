@@ -2,7 +2,8 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { api } from "@/lib/api";
+import { graphApi } from "@/lib/graph-api";
+import type { GraphScope, GraphSubgraphResponse } from "@/lib/types/graph";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -20,57 +21,13 @@ import {
   Panel,
   Node,
   Edge,
-  Position,
   MarkerType,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import dagre from "dagre";
 import { getNodeClassName, edgeColors, nodeColors, NODE_TYPE_OPTIONS } from "./graph-constants";
-
-interface SubgraphNode {
-  type: string;
-  id: string;
-  title?: string | null;
-}
-
-interface SubgraphEdge {
-  source: string;
-  target: string;
-  type: string;
-  weight: number;
-}
-
-interface SubgraphResponse {
-  nodes: SubgraphNode[];
-  edges: SubgraphEdge[];
-}
+import { layoutGraph } from "./graph-layout";
 
 // Fresh dagre instance per call — avoids stale graph accumulation
-function layoutGraph(nodes: Node[], edges: Edge[], direction = "LR") {
-  const g = new dagre.graphlib.Graph();
-  g.setDefaultEdgeLabel(() => ({}));
-  g.setGraph({ rankdir: direction, nodesep: 60, ranksep: 100 });
-
-  nodes.forEach((node) => g.setNode(node.id, { width: 180, height: 50 }));
-  edges.forEach((edge) => g.setEdge(edge.source, edge.target));
-
-  dagre.layout(g);
-
-  const isHorizontal = direction === "LR";
-  return {
-    nodes: nodes.map((node) => {
-      const pos = g.node(node.id);
-      return {
-        ...node,
-        targetPosition: isHorizontal ? Position.Left : Position.Top,
-        sourcePosition: isHorizontal ? Position.Right : Position.Bottom,
-        position: { x: pos.x - 90, y: pos.y - 25 },
-      };
-    }),
-    edges,
-  };
-}
-
 // ── Inner canvas — must live inside ReactFlowProvider ────────────────────────
 
 function FlowCanvas({
@@ -157,25 +114,49 @@ function FlowCanvas({
 
 // ── Public component ─────────────────────────────────────────────────────────
 
-export function GraphSubgraph() {
-  const [entityType, setEntityType] = useState("pattern");
-  const [entityId, setEntityId] = useState("");
+export function GraphSubgraph({
+  scope,
+  initialType,
+  initialId,
+}: {
+  scope: GraphScope;
+  initialType?: string;
+  initialId?: string;
+}) {
+  const validInitialType =
+    initialType && NODE_TYPE_OPTIONS.includes(initialType as (typeof NODE_TYPE_OPTIONS)[number])
+      ? initialType
+      : "pattern";
+  const [entityType, setEntityType] = useState(validInitialType);
+  const [entityId, setEntityId] = useState(initialId ?? "");
   const [maxDepth, setMaxDepth] = useState(1);
   const [queryParams, setQueryParams] = useState<{
     type: string;
     id: string;
     depth: number;
-  } | null>(null);
+  } | null>(
+    initialId ? { type: validInitialType, id: initialId, depth: 1 } : null,
+  );
 
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
 
-  const { data, isLoading, error, isFetching } = useQuery<SubgraphResponse>({
-    queryKey: ["graph-subgraph", queryParams?.type, queryParams?.id, queryParams?.depth],
+  const { data, isLoading, error, isFetching } = useQuery<GraphSubgraphResponse>({
+    queryKey: [
+      "graph-subgraph",
+      queryParams?.type,
+      queryParams?.id,
+      queryParams?.depth,
+      scope.domainId,
+      scope.asOf,
+    ],
     queryFn: () =>
-      api.get(`/graph/subgraph/${queryParams!.type}/${queryParams!.id}`, {
-        max_depth: String(queryParams!.depth),
-      }),
+      graphApi.subgraph(
+        queryParams!.type,
+        queryParams!.id,
+        queryParams!.depth,
+        scope,
+      ),
     enabled: !!queryParams,
   });
 
@@ -208,7 +189,10 @@ export function GraphSubgraph() {
       };
     });
 
-    const { nodes: laid, edges: laidE } = layoutGraph(rawNodes, rawEdges);
+    const { nodes: laid, edges: laidE } = layoutGraph(rawNodes, rawEdges, {
+      nodeWidth: 180,
+      nodeHeight: 50,
+    });
     setNodes(laid);
     setEdges(laidE);
   }, [data, setNodes, setEdges]);

@@ -16,9 +16,40 @@ export const NODE_TYPE_OPTIONS = [
   "decision_option",
   "decision_outcome",
   "tenant_policy",
+  "action_policy",
+  "claim",
+  "error_signature",
+  "fix_pattern",
+  "case_outcome",
+  "entity_term",
 ] as const;
 
-export const nodeColors: Record<string, { bg: string; border: string; text: string; dot: string }> = {
+export const MAF_NODE_TYPE_OPTIONS = [
+  "session",
+  "decision",
+  "decision_option",
+  "decision_outcome",
+  "approval_request",
+  "execution_run",
+  "playbook",
+  "pattern",
+  "episode",
+  "evidence",
+  "identity",
+  "entity",
+  "user",
+  "tenant_policy",
+  "action_policy",
+  "claim",
+  "error_signature",
+  "fix_pattern",
+  "case_outcome",
+] as const;
+
+export const nodeColors: Record<
+  string,
+  { bg: string; border: string; text: string; dot: string }
+> = {
   pattern:    { bg: "bg-indigo-900",  border: "border-indigo-500",  text: "text-white",       dot: "bg-indigo-500" },
   episode:    { bg: "bg-purple-900",  border: "border-purple-500",  text: "text-slate-100",   dot: "bg-purple-500" },
   playbook:   { bg: "bg-sky-900",     border: "border-sky-500",     text: "text-sky-100",     dot: "bg-sky-500" },
@@ -36,6 +67,12 @@ export const nodeColors: Record<string, { bg: string; border: string; text: stri
   decision_option:   { bg: "bg-yellow-900",  border: "border-yellow-400",  text: "text-yellow-100",  dot: "bg-yellow-400" },
   decision_outcome:  { bg: "bg-orange-900",  border: "border-orange-400",  text: "text-orange-100",  dot: "bg-orange-400" },
   tenant_policy:     { bg: "bg-violet-900",  border: "border-violet-500",  text: "text-violet-100",  dot: "bg-violet-500" },
+  action_policy:     { bg: "bg-blue-900",    border: "border-blue-400",    text: "text-blue-100",    dot: "bg-blue-400" },
+  claim:             { bg: "bg-pink-900",    border: "border-pink-400",    text: "text-pink-100",    dot: "bg-pink-400" },
+  error_signature:   { bg: "bg-red-950",     border: "border-red-500",     text: "text-red-100",     dot: "bg-red-500" },
+  fix_pattern:       { bg: "bg-green-950",   border: "border-green-400",   text: "text-green-100",   dot: "bg-green-400" },
+  case_outcome:      { bg: "bg-stone-800",   border: "border-stone-400",   text: "text-stone-100",   dot: "bg-stone-400" },
+  entity_term:       { bg: "bg-zinc-800",    border: "border-zinc-500",    text: "text-zinc-100",    dot: "bg-zinc-500" },
 };
 
 export const edgeColors: Record<string, { stroke: string; dasharray?: string }> = {
@@ -62,6 +99,27 @@ export const edgeColors: Record<string, { stroke: string; dasharray?: string }> 
   required_approval:   { stroke: "#eab308", dasharray: "6 3" },
   resulted_in:         { stroke: "#f97316" },
   followed_by:         { stroke: "#d97706", dasharray: "8 4" },
+  supported_by:        { stroke: "#22c55e" },
+  contradicted_by:     { stroke: "#ef4444", dasharray: "8 4" },
+  weakened_by:         { stroke: "#f97316", dasharray: "5 4" },
+  supported_by_claim:  { stroke: "#ec4899" },
+  asserted_in:         { stroke: "#06b6d4", dasharray: "4 4" },
+  has_execution:       { stroke: "#84cc16" },
+  executes:            { stroke: "#10b981" },
+  requires_approval:   { stroke: "#eab308", dasharray: "6 3" },
+  involves_user:       { stroke: "#d946ef" },
+  targets_workflow:    { stroke: "#14b8a6" },
+  tracks_request:      { stroke: "#0ea5e9" },
+  runs_on_agent:       { stroke: "#8b5cf6" },
+  governs:             { stroke: "#3b82f6", dasharray: "5 3" },
+  applies_to:          { stroke: "#2dd4bf" },
+  aggregated_by:       { stroke: "#f43f5e" },
+  addresses:           { stroke: "#22c55e" },
+  recommends:          { stroke: "#38bdf8" },
+  validated_fix:       { stroke: "#4ade80" },
+  invalidated_fix:     { stroke: "#fb7185", dasharray: "7 3" },
+  superseded_by:       { stroke: "#a1a1aa", dasharray: "4 4" },
+  modified_by:         { stroke: "#f59e0b", dasharray: "4 3" },
 };
 
 export function getNodeClassName(nodeType: string): string {

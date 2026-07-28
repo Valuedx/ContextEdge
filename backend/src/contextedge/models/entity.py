@@ -53,10 +53,11 @@ class Entity(Base, TenantScopedMixin):
     __tablename__ = "entities"
     __table_args__ = (
         UniqueConstraint(
+            "tenant_id",
             "entity_type",
             "external_system",
             "external_id",
-            name="uq_entities_type_system_external_id",
+            name="uq_entities_tenant_type_system_external_id",
         ),
     )
 

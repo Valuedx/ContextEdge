@@ -213,6 +213,18 @@ async def start_execution(
 
     await db.refresh(run)
 
+    await ensure_edge(
+        db,
+        tenant_id,
+        "execution_run",
+        run.id,
+        "playbook",
+        playbook.id,
+        "executes",
+        domain_id=getattr(playbook, "domain_id", None),
+        metadata={"automation_mode": playbook.automation_mode},
+    )
+
     await append_operational_event(
         db,
         tenant_id=tenant_id,
@@ -256,6 +268,16 @@ async def start_execution(
                 "execution_run_id": str(run.id),
                 "automation_mode": playbook.automation_mode,
             },
+        )
+        await ensure_edge(
+            db,
+            tenant_id,
+            "session",
+            session_id,
+            "execution_run",
+            run.id,
+            "has_execution",
+            domain_id=getattr(playbook, "domain_id", None),
         )
 
     await create_decision(
@@ -469,6 +491,16 @@ async def request_approval(
 
     await db.flush()
     await db.refresh(req)
+
+    await ensure_edge(
+        db,
+        tenant_id,
+        "execution_run",
+        execution_run_id,
+        "approval_request",
+        req.id,
+        "requires_approval",
+    )
 
     await append_operational_event(
         db,

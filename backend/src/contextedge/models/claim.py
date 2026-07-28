@@ -17,6 +17,7 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import (
+    CheckConstraint,
     DateTime,
     ForeignKey,
     Numeric,
@@ -62,6 +63,9 @@ class Claim(Base, TenantScopedMixin):
     )
     tenant_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=False, index=True
+    )
+    domain_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("domains.id"), nullable=True, index=True
     )
     case_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
@@ -172,6 +176,47 @@ class DecisionEvidence(Base):
     support_type: Mapped[str] = mapped_column(
         String(30), default="supports", nullable=False
     )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class DecisionClaim(Base):
+    __tablename__ = "decision_claims"
+    __table_args__ = (
+        UniqueConstraint(
+            "decision_id",
+            "claim_id",
+            "use_type",
+            name="uq_decision_claims_decision_claim_use",
+        ),
+        CheckConstraint(
+            "use_type IN ('supports', 'contradicts', 'risk', 'precondition')",
+            name="ck_decision_claims_use_type",
+        ),
+        CheckConstraint("weight >= 0", name="ck_decision_claims_weight"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=False, index=True
+    )
+    decision_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("decisions.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    claim_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("claims.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    use_type: Mapped[str] = mapped_column(String(30), nullable=False, default="supports")
+    weight: Mapped[float] = mapped_column(Numeric(5, 4), nullable=False, default=1.0)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

@@ -246,6 +246,12 @@ These endpoints expose the context graph for interactive exploration and visuali
 | `GET` | `/neighbors` | BFS traversal returning neighboring nodes up to `max_depth` hops |
 | `GET` | `/subgraph/{entity_type}/{entity_id}` | Returns nodes and edges around any entity for visualization |
 | `GET` | `/stats` | Aggregate edge-type and node-type counts for the tenant |
+| `POST` | `/agent-subsets` | Bounded, ranked, authorization-filtered projection for agents |
+
+All three `GET` endpoints accept optional `domain_id` and timezone-aware
+`as_of` parameters. Without `as_of`, only active edges (`valid_to IS NULL`)
+are returned. Point-in-time reads apply
+`valid_from <= as_of < valid_to`; node facts remain current-state facts.
 
 ### `GET /graph/neighbors`
 
@@ -256,6 +262,7 @@ These endpoints expose the context graph for interactive exploration and visuali
 | `edge_type` | string | no | Filter to a specific edge type |
 | `max_depth` | int (1–3) | no | BFS traversal depth, default 1 |
 | `domain_id` | UUID | no | Scope to a domain (includes domain-less edges) |
+| `as_of` | ISO 8601 datetime | no | Point-in-time edge topology; timezone required |
 
 Returns an array of objects: `{node_type, node_id, edge_type, weight, direction, depth}`.
 
@@ -265,6 +272,7 @@ Returns an array of objects: `{node_type, node_id, edge_type, weight, direction,
 | --- | --- | --- | --- |
 | `max_depth` | int (1–3) | no | BFS traversal depth, default 1 |
 | `domain_id` | UUID | no | Scope to a domain |
+| `as_of` | ISO 8601 datetime | no | Point-in-time edge topology; timezone required |
 
 Returns `{nodes: [{type, id, title}], edges: [{source, target, type, weight}]}`. Node `source`/`target` strings use the composite format `type:id` suitable for React Flow rendering.
 
@@ -273,8 +281,27 @@ Returns `{nodes: [{type, id, title}], edges: [{source, target, type, weight}]}`.
 | Parameter | Type | Required | Description |
 | --- | --- | --- | --- |
 | `domain_id` | UUID | no | Scope to a domain |
+| `as_of` | ISO 8601 datetime | no | Point-in-time edge topology; timezone required |
 
 Returns `{total_edges, edge_type_counts, node_type_counts}`. Node counts are deduplicated across source and target roles using a `UNION ALL` with distinct counts.
+
+### `POST /graph/agent-subsets`
+
+The strict request accepts `query`, typed `seeds`, `session_id`, entity terms,
+`domain_id`, `as_of`, `profile`, `max_depth`, and node/relationship/character
+budgets. The only registered profile is `maf.v1`; requested budgets are clamped
+to server-controlled maxima.
+
+The response includes a versioned projection ID, safe hydrated node facts,
+allowlisted relationship metadata, relevance and provenance, effective budget
+and usage, and explicit truncation reasons. Authorization and lifecycle checks
+run before traversal expansion. Raw evidence, embeddings, credentials, user
+email, storage locations, and arbitrary JSON payloads are never projected.
+
+Service-token `allowed_domain_ids`, tenant ownership, workspace visibility,
+evidence access policies, playbook lifecycle/risk, claim validation, redaction,
+and legal-hold rules are enforced by the same projection service used by the
+MAF adapter.
 
 ---
 

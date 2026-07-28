@@ -29,6 +29,7 @@ from contextedge.models.claim import (
     CREATED_BY_TYPES,
     Claim,
     ClaimEvidence,
+    DecisionClaim,
     DecisionEvidence,
 )
 from contextedge.models.action_policy import (
@@ -36,12 +37,14 @@ from contextedge.models.action_policy import (
     POLICY_RESULTS,
     EXECUTION_MODES,
     ActionPolicy,
+    DecisionActionPolicy,
 )
 from contextedge.models.error_signature import ErrorSignature, FixPattern
 from contextedge.models.case_outcome import (
     OUTCOME_STATUSES,
     CASE_STATUSES,
     CaseOutcome,
+    CaseOutcomeFixPattern,
     CaseStateTransition,
 )
 
@@ -63,8 +66,10 @@ __all__ = [
     # AE Ops Context Graph alignment
     "ENTITY_TYPES", "Entity",
     "CLAIM_TYPES", "VALIDATION_STATUSES", "CREATED_BY_TYPES",
-    "Claim", "ClaimEvidence", "DecisionEvidence",
+    "Claim", "ClaimEvidence", "DecisionClaim", "DecisionEvidence",
     "RISK_LEVELS", "POLICY_RESULTS", "EXECUTION_MODES", "ActionPolicy",
+    "DecisionActionPolicy",
     "ErrorSignature", "FixPattern",
-    "OUTCOME_STATUSES", "CASE_STATUSES", "CaseOutcome", "CaseStateTransition",
+    "OUTCOME_STATUSES", "CASE_STATUSES", "CaseOutcome", "CaseOutcomeFixPattern",
+    "CaseStateTransition",
 ]

@@ -45,6 +45,9 @@ class ErrorSignature(Base, TenantScopedMixin):
     tenant_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=False, index=True
     )
+    domain_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("domains.id"), nullable=True, index=True
+    )
 
     # Stable normalised key like ``SMTP_TIMEOUT_AFTER_OUTPUT_GENERATED``.
     # Tenant-scoped uniqueness — different tenants may classify the same
@@ -106,6 +109,9 @@ class FixPattern(Base, TenantScopedMixin):
     )
     tenant_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=False, index=True
+    )
+    domain_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("domains.id"), nullable=True, index=True
     )
 
     pattern_name: Mapped[str] = mapped_column(String(255), nullable=False)

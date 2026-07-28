@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, Float, ForeignKey, String, Text, func
+from sqlalchemy import DateTime, Float, ForeignKey, Index, String, Text, func, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -10,6 +10,15 @@ from contextedge.models.base import Base, TenantScopedMixin
 
 class ResolutionSession(Base, TenantScopedMixin):
     __tablename__ = "resolution_sessions"
+    __table_args__ = (
+        Index(
+            "uq_resolution_sessions_tenant_case_number",
+            "tenant_id",
+            "case_number",
+            unique=True,
+            postgresql_where=text("case_number IS NOT NULL"),
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
@@ -40,7 +49,7 @@ class ResolutionSession(Base, TenantScopedMixin):
     # for back-compat; populated by AE/SN ingestion or graduated from
     # ``entities[]`` JSONB during a case enrichment pass.
     case_number: Mapped[str | None] = mapped_column(
-        String(60), nullable=True, unique=True, index=True
+        String(60), nullable=True, index=True
     )
     case_type: Mapped[str | None] = mapped_column(String(60), nullable=True)
     issue_type: Mapped[str | None] = mapped_column(String(80), nullable=True, index=True)

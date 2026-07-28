@@ -15,7 +15,17 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Numeric, String, Text, func
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Numeric,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -119,6 +129,50 @@ class CaseStateTransition(Base):
     to_status: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
     transition_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     transitioned_by: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class CaseOutcomeFixPattern(Base):
+    __tablename__ = "case_outcome_fix_patterns"
+    __table_args__ = (
+        UniqueConstraint(
+            "case_outcome_id",
+            "fix_pattern_id",
+            "result",
+            name="uq_case_outcome_fix_patterns_outcome_fix_result",
+        ),
+        CheckConstraint(
+            "result IN ('successful', 'failed', 'partial')",
+            name="ck_case_outcome_fix_patterns_result",
+        ),
+        CheckConstraint(
+            "confidence IS NULL OR (confidence >= 0 AND confidence <= 1)",
+            name="ck_case_outcome_fix_patterns_confidence",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=False, index=True
+    )
+    case_outcome_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("case_outcomes.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    fix_pattern_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("fix_patterns.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    result: Mapped[str] = mapped_column(String(20), nullable=False)
+    confidence: Mapped[float | None] = mapped_column(Numeric(5, 4), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

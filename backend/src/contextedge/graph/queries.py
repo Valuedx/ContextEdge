@@ -1,10 +1,12 @@
 """Graph query service for pattern/context graph traversal."""
 
 import uuid
+from datetime import datetime
 
-from sqlalchemy import func, select, or_
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from contextedge.graph.temporal import edge_valid_at
 from contextedge.models.pattern import GraphEdge
 
 MAX_TRAVERSAL_DEPTH = 3
@@ -18,6 +20,7 @@ async def get_neighbors(
     edge_type: str | None = None,
     max_depth: int = 1,
     domain_id: uuid.UUID | None = None,
+    as_of: datetime | None = None,
 ) -> list[dict]:
     """Get neighboring nodes in the graph using iterative BFS up to *max_depth* hops."""
     max_depth = min(max(1, max_depth), MAX_TRAVERSAL_DEPTH)
@@ -32,6 +35,7 @@ async def get_neighbors(
         for f_type, f_id in frontier:
             q = select(GraphEdge).where(
                 GraphEdge.tenant_id == tenant_id,
+                edge_valid_at(as_of),
                 or_(
                     (GraphEdge.source_node_type == f_type) & (GraphEdge.source_node_id == f_id),
                     (GraphEdge.target_node_type == f_type) & (GraphEdge.target_node_id == f_id),
@@ -77,6 +81,7 @@ async def get_pattern_subgraph(
     tenant_id: uuid.UUID,
     pattern_id: uuid.UUID,
     domain_id: uuid.UUID | None = None,
+    as_of: datetime | None = None,
 ) -> dict:
     """Get the subgraph around a pattern including episodes, entities, and playbooks."""
     from contextedge.models.pattern import Pattern
@@ -90,6 +95,7 @@ async def get_pattern_subgraph(
 
     q = select(GraphEdge).where(
         GraphEdge.tenant_id == tenant_id,
+        edge_valid_at(as_of),
         or_(
             GraphEdge.source_node_id == pattern_id,
             GraphEdge.target_node_id == pattern_id,
@@ -138,6 +144,7 @@ async def get_entity_subgraph(
     node_id: uuid.UUID,
     max_depth: int = 1,
     domain_id: uuid.UUID | None = None,
+    as_of: datetime | None = None,
 ) -> dict:
     """Get the subgraph around any entity using BFS traversal."""
     max_depth = min(max(1, max_depth), MAX_TRAVERSAL_DEPTH)
@@ -163,6 +170,7 @@ async def get_entity_subgraph(
         for f_type, f_id in frontier:
             q = select(GraphEdge).where(
                 GraphEdge.tenant_id == tenant_id,
+                edge_valid_at(as_of),
                 or_(
                     (GraphEdge.source_node_type == f_type) & (GraphEdge.source_node_id == f_id),
                     (GraphEdge.target_node_type == f_type) & (GraphEdge.target_node_id == f_id),
@@ -207,10 +215,17 @@ async def get_decision_subgraph(
     decision_id: uuid.UUID,
     max_depth: int = 2,
     domain_id: uuid.UUID | None = None,
+    as_of: datetime | None = None,
 ) -> dict:
     """Get the subgraph around a decision including evidence, options, outcomes, and policies."""
     return await get_entity_subgraph(
-        db, tenant_id, "decision", decision_id, max_depth=max_depth, domain_id=domain_id,
+        db,
+        tenant_id,
+        "decision",
+        decision_id,
+        max_depth=max_depth,
+        domain_id=domain_id,
+        as_of=as_of,
     )
 
 
@@ -239,15 +254,16 @@ async def get_graph_stats(
     db: AsyncSession,
     tenant_id: uuid.UUID,
     domain_id: uuid.UUID | None = None,
+    as_of: datetime | None = None,
 ) -> dict:
     """Return aggregate edge and node statistics for the tenant."""
-    from sqlalchemy import union_all, literal_column
+    from sqlalchemy import union_all
 
-    domain_filter = []
+    domain_filter = [edge_valid_at(as_of)]
     if domain_id is not None:
-        domain_filter = [
+        domain_filter.append(
             (GraphEdge.domain_id == domain_id) | GraphEdge.domain_id.is_(None)
-        ]
+        )
 
     base = select(
         GraphEdge.edge_type,

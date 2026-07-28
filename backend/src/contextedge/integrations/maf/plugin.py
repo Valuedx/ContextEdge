@@ -1,0 +1,23 @@
+"""Composable MAF plugin bundle for provider-only, tool-only, or combined use."""
+
+from __future__ import annotations
+
+from contextedge.integrations.maf.client import ContextGraphClient
+from contextedge.integrations.maf.provider import ContextGraphProvider
+from contextedge.integrations.maf.tools import ContextGraphTools
+
+
+class ContextGraphMAFPlugin:
+    def __init__(
+        self,
+        client: ContextGraphClient,
+        *,
+        enable_provider: bool = True,
+        enable_tool: bool = True,
+    ):
+        self.provider = ContextGraphProvider(client) if enable_provider else None
+        self.toolset = ContextGraphTools(client) if enable_tool else None
+        self.context_providers = [self.provider] if self.provider is not None else []
+        self.tools = (
+            [self.toolset.query_context_graph] if self.toolset is not None else []
+        )

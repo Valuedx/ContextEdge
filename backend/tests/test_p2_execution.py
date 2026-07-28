@@ -200,6 +200,7 @@ async def test_start_execution_creates_pending_approval_for_gated_step():
     with (
         patch("contextedge.services.execution_service.append_operational_event", AsyncMock()),
         patch("contextedge.services.execution_service.append_trace_event", AsyncMock()),
+        patch("contextedge.services.execution_service.ensure_edge", AsyncMock()),
         patch("contextedge.services.execution_service.create_decision", AsyncMock()),
     ):
         run = await start_execution(

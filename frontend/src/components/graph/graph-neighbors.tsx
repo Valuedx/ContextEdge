@@ -2,7 +2,8 @@
 
 import { useState, useCallback } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { api } from "@/lib/api";
+import { graphApi } from "@/lib/graph-api";
+import type { GraphNeighbor, GraphScope } from "@/lib/types/graph";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -18,16 +19,7 @@ import {
 } from "lucide-react";
 import { nodeColors, NODE_TYPE_OPTIONS } from "./graph-constants";
 
-interface NeighborResult {
-  node_type: string;
-  node_id: string;
-  edge_type: string;
-  weight: number;
-  direction: "outgoing" | "incoming";
-  depth: number;
-}
-
-export function GraphNeighbors() {
+export function GraphNeighbors({ scope }: { scope: GraphScope }) {
   const [nodeType, setNodeType] = useState("pattern");
   const [nodeId, setNodeId] = useState("");
   const [edgeTypeFilter, setEdgeTypeFilter] = useState("");
@@ -39,17 +31,16 @@ export function GraphNeighbors() {
     depth: number;
   } | null>(null);
 
-  const { data, isLoading, error, isFetching } = useQuery<NeighborResult[]>({
-    queryKey: ["graph-neighbors", queryParams],
-    queryFn: () => {
-      const params: Record<string, string> = {
-        node_type: queryParams!.nodeType,
-        node_id: queryParams!.nodeId,
-        max_depth: String(queryParams!.depth),
-      };
-      if (queryParams!.edgeType) params.edge_type = queryParams!.edgeType;
-      return api.get("/graph/neighbors", params);
-    },
+  const { data, isLoading, error, isFetching } = useQuery<GraphNeighbor[]>({
+    queryKey: ["graph-neighbors", queryParams, scope.domainId, scope.asOf],
+    queryFn: () =>
+      graphApi.neighbors(
+        queryParams!.nodeType,
+        queryParams!.nodeId,
+        queryParams!.edgeType,
+        queryParams!.depth,
+        scope,
+      ),
     enabled: !!queryParams,
   });
 
@@ -65,7 +56,7 @@ export function GraphNeighbors() {
   }, [nodeType, nodeId, edgeTypeFilter, maxDepth]);
 
   const handleFollowNode = useCallback(
-    (neighbor: NeighborResult) => {
+    (neighbor: GraphNeighbor) => {
       setNodeType(neighbor.node_type);
       setNodeId(neighbor.node_id);
       setQueryParams({
@@ -79,7 +70,7 @@ export function GraphNeighbors() {
   );
 
   const grouped = data
-    ? data.reduce<Record<number, NeighborResult[]>>((acc, n) => {
+    ? data.reduce<Record<number, GraphNeighbor[]>>((acc, n) => {
         (acc[n.depth] ??= []).push(n);
         return acc;
       }, {})

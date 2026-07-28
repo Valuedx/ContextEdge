@@ -1,20 +1,21 @@
+from datetime import datetime
 from uuid import UUID
 
+import structlog
 from fastapi import APIRouter, HTTPException, Query
+from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
-import structlog
 
 from contextedge.deps import AuthUser, DbSession
 from contextedge.models.pattern import Pattern, PatternEvidenceLink
 from contextedge.schemas.common import TaskDispatchResponse
 from contextedge.schemas.playbook import PatternResponse
 from contextedge.schemas.review import PatternEvidenceLinkCreate, PatternEvidenceLinkResponse
-from pydantic import BaseModel
+from contextedge.workers.pattern_tasks import cluster_episodes
 
 router = APIRouter()
 logger = structlog.get_logger()
-from contextedge.workers.pattern_tasks import cluster_episodes
 
 
 @router.get("", response_model=list[PatternResponse])
@@ -52,15 +53,26 @@ async def get_pattern_graph(
     pattern_id: UUID,
     db: DbSession,
     user: AuthUser,
-    domain_id: UUID | None = Query(None, description="Scope edges to a domain (includes domain-less edges)"),
+    domain_id: UUID | None = Query(
+        None,
+        description="Scope edges to a domain (includes domain-less edges)",
+    ),
+    as_of: datetime | None = Query(None, description="Point-in-time traversal timestamp"),
 ):
     from contextedge.graph.queries import get_pattern_subgraph
+    from contextedge.graph.temporal import normalize_graph_as_of
     result = await db.execute(
         select(Pattern).where(Pattern.id == pattern_id, Pattern.tenant_id == user.tenant_id)
     )
     if not result.scalar_one_or_none():
         raise HTTPException(status_code=404, detail="Pattern not found")
-    return await get_pattern_subgraph(db, user.tenant_id, pattern_id, domain_id=domain_id)
+    return await get_pattern_subgraph(
+        db,
+        user.tenant_id,
+        pattern_id,
+        domain_id=domain_id,
+        as_of=normalize_graph_as_of(as_of),
+    )
 
 
 @router.get("/{pattern_id}/evidence-links", response_model=list[PatternEvidenceLinkResponse])
