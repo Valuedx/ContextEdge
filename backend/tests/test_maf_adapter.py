@@ -101,3 +101,83 @@ async def test_tool_invokes_through_maf_function_tool():
     assert result["profile"] == "maf.v1"
     assert result["nodes"][0]["label"] == "Payment incident"
     assert client.requests[0].entities == ["payment workflow"]
+
+
+class LongMessageSessionContext(StubSessionContext):
+    def get_messages(self, **kwargs):
+        return [SimpleNamespace(text="incident context " * 1_000)]
+
+
+@pytest.mark.asyncio
+async def test_provider_truncates_long_conversations_instead_of_dropping_context():
+    """Over-4k conversations must still get graph context (truncated query)."""
+    client = StubClient()
+    provider = ContextGraphProvider(client)
+    context = LongMessageSessionContext()
+
+    await provider.before_run(agent=object(), session=object(), context=context, state={})
+
+    assert len(client.requests) == 1
+    assert len(client.requests[0].query) <= 4_000
+    assert context.instructions, "context should still be injected"
+
+
+@pytest.mark.asyncio
+async def test_provider_fences_untrusted_graph_content():
+    client = StubClient()
+    provider = ContextGraphProvider(client)
+    context = StubSessionContext()
+
+    await provider.before_run(agent=object(), session=object(), context=context, state={})
+
+    injected = context.instructions[0][1]
+    assert "<untrusted-data>" in injected
+    assert "</untrusted-data>" in injected
+    assert "not instructions" in injected
+
+
+@pytest.mark.asyncio
+async def test_tool_returns_structured_error_for_malformed_seeds():
+    client = StubClient()
+    toolset = ContextGraphTools(client)
+
+    result = await toolset.query_context_graph.invoke(
+        arguments={
+            "query": "payment failure",
+            "seeds": [{"type": "session", "id": "not-a-uuid"}],
+        },
+        skip_parsing=True,
+    )
+
+    assert result["error"]["code"] == "invalid_seed"
+    assert result["nodes"] == []
+    assert client.requests == []
+
+
+@pytest.mark.asyncio
+async def test_tool_returns_structured_error_for_missing_seed_keys():
+    client = StubClient()
+    toolset = ContextGraphTools(client)
+
+    result = await toolset.query_context_graph.invoke(
+        arguments={"query": "payment failure", "seeds": [{"id": str(uuid4())}]},
+        skip_parsing=True,
+    )
+
+    assert result["error"]["code"] == "invalid_seed"
+    assert client.requests == []
+
+
+def test_http_client_rejects_plain_http_by_default():
+    from contextedge.integrations.maf.client import HttpContextGraphClient
+
+    with pytest.raises(ValueError, match="https"):
+        HttpContextGraphClient("http://contextedge.internal", bearer_token="t")
+
+    dev_client = HttpContextGraphClient(
+        "http://localhost:8000", bearer_token="t", allow_insecure_http=True
+    )
+    assert dev_client.base_url == "http://localhost:8000"
+
+    prod_client = HttpContextGraphClient("https://contextedge.internal")
+    assert prod_client.base_url == "https://contextedge.internal"

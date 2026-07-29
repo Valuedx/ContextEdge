@@ -7,8 +7,9 @@ from collections.abc import Sequence
 from datetime import datetime
 from typing import Protocol
 
-from sqlalchemy import or_, select, tuple_
+from sqlalchemy import case, func, or_, select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from contextedge.graph.agent.contracts import (
     AgentGraphAccessScope,
@@ -49,6 +50,14 @@ class AgentGraphRepository(Protocol):
 
 
 class SQLAlchemyAgentGraphRepository:
+    # Per-frontier-node edge cap: a hub node (an entity referenced by tens of
+    # thousands of sessions) must not turn one traversal hop into a
+    # tens-of-thousands-row fetch. The selector re-ranks and budgets after
+    # this, so keeping the strongest edges per node is lossless in practice.
+    EDGES_PER_FRONTIER_NODE = 200
+    # Absolute backstop per load_edges call regardless of frontier size.
+    MAX_EDGES_PER_HOP = 5_000
+
     def __init__(self, db: AsyncSession):
         self.db = db
 
@@ -187,23 +196,49 @@ class SQLAlchemyAgentGraphRepository:
         if not frontier:
             return []
         pairs = [(node.type, node.id) for node in frontier]
-        query = select(GraphEdge).where(
+        source_matches = tuple_(
+            GraphEdge.source_node_type,
+            GraphEdge.source_node_id,
+        ).in_(pairs)
+        target_matches = tuple_(
+            GraphEdge.target_node_type,
+            GraphEdge.target_node_id,
+        ).in_(pairs)
+
+        # Rank edges per matched frontier endpoint and keep only the
+        # strongest EDGES_PER_FRONTIER_NODE of each, so one hub node cannot
+        # make a hop unbounded. Edges matching on both endpoints partition
+        # under their source key, which is fine — they are counted once.
+        partition_key = case(
+            (
+                source_matches,
+                func.concat(GraphEdge.source_node_type, ":", GraphEdge.source_node_id),
+            ),
+            else_=func.concat(GraphEdge.target_node_type, ":", GraphEdge.target_node_id),
+        )
+        rank = (
+            func.row_number()
+            .over(
+                partition_by=partition_key,
+                order_by=(GraphEdge.weight.desc(), GraphEdge.id),
+            )
+            .label("frontier_rank")
+        )
+        inner = select(GraphEdge, rank).where(
             GraphEdge.tenant_id == scope.tenant_id,
             edge_valid_at(as_of),
-            or_(
-                tuple_(
-                    GraphEdge.source_node_type,
-                    GraphEdge.source_node_id,
-                ).in_(pairs),
-                tuple_(
-                    GraphEdge.target_node_type,
-                    GraphEdge.target_node_id,
-                ).in_(pairs),
-            ),
+            or_(source_matches, target_matches),
         )
         domain_predicate = self._domain_predicate(GraphEdge.domain_id, scope)
         if domain_predicate is not None:
-            query = query.where(domain_predicate)
+            inner = inner.where(domain_predicate)
+        subq = inner.subquery()
+        ranked_edge = aliased(GraphEdge, subq)
+        query = (
+            select(ranked_edge)
+            .where(subq.c.frontier_rank <= self.EDGES_PER_FRONTIER_NODE)
+            .limit(self.MAX_EDGES_PER_HOP)
+        )
 
         rows = (await self.db.execute(query)).scalars().all()
         return [

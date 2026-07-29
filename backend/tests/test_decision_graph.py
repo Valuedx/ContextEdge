@@ -1,4 +1,4 @@
-"""Tests for decision capture in the context graph.
+﻿"""Tests for decision capture in the context graph.
 
 Tier 2: governed decision edges from execution_service
 Tier 1: AI decision extraction and graph linking from evidence
@@ -25,6 +25,11 @@ class _ScalarOneOrNoneResult:
     def scalar_one_or_none(self):
         return self._value
 
+    def scalar_one(self):
+        # Count-style queries (e.g. complete_execution's open-step check)
+        # expect a number; a None stub means "nothing open".
+        return self._value if self._value is not None else 0
+
 
 class _ScalarsResult:
     def __init__(self, values):
@@ -43,9 +48,25 @@ class _ScalarsProxy:
 
 
 def _make_db(side_effects=None):
+    """SELECT results come from *side_effects* in order; ensure_edge's
+    ON CONFLICT INSERT ... RETURNING is echoed back as a GraphEdge built
+    from the statement's bound values (mirrors test_graph_builder)."""
+    from sqlalchemy.dialects import postgresql
+    from sqlalchemy.dialects.postgresql.dml import Insert as _PgInsert
+
+    from contextedge.models.pattern import GraphEdge as _GraphEdge
+
     added: list = []
+    select_results = list(side_effects or [])
+
+    async def _execute(stmt):
+        if isinstance(stmt, _PgInsert):
+            params = stmt.compile(dialect=postgresql.dialect()).params
+            return _ScalarOneOrNoneResult(_GraphEdge(**dict(params)))
+        return select_results.pop(0)
+
     db = SimpleNamespace(
-        execute=AsyncMock(side_effect=side_effects or []),
+        execute=AsyncMock(side_effect=_execute),
         add=lambda obj: added.append(obj),
         flush=AsyncMock(),
         get=AsyncMock(return_value=None),
@@ -85,7 +106,8 @@ async def test_executed_playbook_edge():
     assert edge.target_node_id == playbook_id
     assert edge.edge_type == "executed_playbook"
     assert edge.metadata_extra["automation_mode"] == "human_confirmed"
-    assert len(added) == 1
+    # Miss path inserts via ON CONFLICT DO NOTHING, not session.add().
+    assert added == []
 
 
 @pytest.mark.asyncio
@@ -467,7 +489,7 @@ async def test_link_evidence_decisions_preserves_existing_identities():
 
 
 # =========================================================================
-# Tier 1: extractor edge case — LLM returns a list instead of dict
+# Tier 1: extractor edge case â€” LLM returns a list instead of dict
 # =========================================================================
 
 @pytest.mark.asyncio
@@ -490,7 +512,7 @@ async def test_extract_decisions_handles_list_response():
 
 
 # =========================================================================
-# Tier 2: integration tests — execution_service calls ensure_edge
+# Tier 2: integration tests â€” execution_service calls ensure_edge
 # =========================================================================
 
 @pytest.mark.asyncio
@@ -507,7 +529,7 @@ async def test_start_execution_creates_executed_playbook_edge():
     playbook = SimpleNamespace(
         id=playbook_id, tenant_id=tenant_id,
         lifecycle_state="approved", automation_mode="human_confirmed",
-        title="Test Playbook", expiry_at=None,
+        title="Test Playbook", expiry_at=None, approval_policy_id=None,
     )
     version = SimpleNamespace(
         id=version_id, playbook_id=playbook_id,
@@ -524,7 +546,12 @@ async def test_start_execution_creates_executed_playbook_edge():
                          target_node_type=tgt_type, target_node_id=tgt_id, edge_type=etype)
 
     db, _ = _make_db()
-    db.get = AsyncMock(side_effect=lambda cls, id: playbook if cls.__name__ == "Playbook" else version)
+    db.get = AsyncMock(
+        side_effect=lambda cls, id: {
+            "Playbook": playbook,
+            "PlaybookVersion": version,
+        }.get(cls.__name__)
+    )
 
     with (
         patch("contextedge.services.execution_service.ensure_edge", side_effect=capture_ensure_edge),
@@ -558,7 +585,7 @@ async def test_start_execution_no_edge_without_session():
     playbook = SimpleNamespace(
         id=playbook_id, tenant_id=tenant_id,
         lifecycle_state="approved", automation_mode="human_confirmed",
-        title="Test Playbook", expiry_at=None,
+        title="Test Playbook", expiry_at=None, approval_policy_id=None,
     )
     version = SimpleNamespace(
         id=version_id, playbook_id=playbook_id,
@@ -572,7 +599,12 @@ async def test_start_execution_no_edge_without_session():
         ensure_edge_calls.append(etype)
 
     db, _ = _make_db()
-    db.get = AsyncMock(side_effect=lambda cls, id: playbook if cls.__name__ == "Playbook" else version)
+    db.get = AsyncMock(
+        side_effect=lambda cls, id: {
+            "Playbook": playbook,
+            "PlaybookVersion": version,
+        }.get(cls.__name__)
+    )
 
     with (
         patch("contextedge.services.execution_service.ensure_edge", side_effect=capture_ensure_edge),
@@ -608,7 +640,7 @@ async def test_decide_approval_creates_approved_by_edge():
     )
     run = SimpleNamespace(
         id=run_id, tenant_id=tenant_id, status="awaiting_approval",
-        session_id=None,
+        session_id=None, playbook_id=None, initiated_by=uuid4(),
     )
 
     ensure_edge_calls = []
@@ -662,7 +694,7 @@ async def test_decide_approval_creates_denied_by_edge():
     run = SimpleNamespace(
         id=run_id, tenant_id=tenant_id, status="awaiting_approval",
         completed_at=None, outcome=None, outcome_summary=None,
-        session_id=None,
+        session_id=None, playbook_id=None, initiated_by=uuid4(),
     )
 
     ensure_edge_calls = []
@@ -740,3 +772,4 @@ async def test_complete_execution_creates_outcome_edge():
     assert len(matching) == 1
     assert matching[0]["src_id"] == run_id
     assert matching[0]["tgt_id"] == playbook_id
+

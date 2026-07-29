@@ -119,13 +119,18 @@ async def apply_retention_policy(
 
 async def apply_legal_hold(
     db: AsyncSession,
+    *,
+    tenant_id: uuid.UUID,
     evidence_ids: list[uuid.UUID],
 ) -> int:
-    """Mark evidence items as held, preventing deletion."""
+    """Mark evidence items as held, preventing deletion.
+
+    Tenant-scoped: an evidence id belonging to another tenant is silently
+    skipped rather than held (or leaked)."""
     count = 0
     for eid in evidence_ids:
         item = await db.get(EvidenceItem, eid)
-        if item:
+        if item is not None and item.tenant_id == tenant_id:
             item.sensitivity_label = "legal_hold"
             count += 1
     await db.flush()
@@ -201,6 +206,7 @@ async def purge_archived_evidence(
             "limit_reached": len(candidates) == limit,
         }
 
+    soft_purged_ids: list[uuid.UUID] = []
     for item in candidates:
         if mode == "hard_delete":
             await db.delete(item)
@@ -216,6 +222,25 @@ async def purge_archived_evidence(
             # from S3.
             item.canonical_entity_refs = None
             item.raw_object_ref = None
+            soft_purged_ids.append(item.id)
+
+    if soft_purged_ids:
+        # Chunk rows carry the same content and embeddings as the parent
+        # body — a "content unrecoverable" purge must remove them too.
+        # (hard_delete cascades via the evidence_chunks FK; soft_purge
+        # keeps the parent row, so the chunks need an explicit delete.)
+        from sqlalchemy import delete as sa_delete
+
+        from contextedge.models.evidence import EvidenceChunk
+
+        await db.execute(
+            sa_delete(EvidenceChunk)
+            .where(
+                EvidenceChunk.tenant_id == tenant_id,
+                EvidenceChunk.evidence_id.in_(soft_purged_ids),
+            )
+            .execution_options(synchronize_session=False)
+        )
 
     await db.flush()
     logger.info(

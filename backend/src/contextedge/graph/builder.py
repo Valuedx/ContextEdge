@@ -4,6 +4,7 @@ import uuid
 from datetime import UTC, datetime
 
 from sqlalchemy import select, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from contextedge.models.pattern import GraphEdge
@@ -72,17 +73,50 @@ async def ensure_edge(
     existing = (await db.execute(q)).scalar_one_or_none()
     if existing is not None:
         return existing
-    return await add_edge(
-        db,
-        tenant_id,
-        source_type,
-        source_id,
-        target_type,
-        target_id,
-        edge_type,
-        weight=weight,
-        metadata=metadata,
-        domain_id=domain_id,
+
+    # Insert with ON CONFLICT against uq_graph_edges_active_logical (0031) so
+    # two workers racing past the SELECT above cannot abort the enclosing
+    # transaction with an IntegrityError.
+    stmt = (
+        pg_insert(GraphEdge)
+        .values(
+            id=uuid.uuid4(),
+            tenant_id=tenant_id,
+            domain_id=domain_id,
+            source_node_type=source_type,
+            source_node_id=source_id,
+            target_node_type=target_type,
+            target_node_id=target_id,
+            edge_type=edge_type,
+            weight=weight,
+            metadata_extra=metadata,
+            valid_from=datetime.now(UTC),
+        )
+        .on_conflict_do_nothing(
+            index_elements=[
+                GraphEdge.tenant_id,
+                GraphEdge.domain_id,
+                GraphEdge.source_node_type,
+                GraphEdge.source_node_id,
+                GraphEdge.target_node_type,
+                GraphEdge.target_node_id,
+                GraphEdge.edge_type,
+            ],
+            index_where=GraphEdge.valid_to.is_(None),
+        )
+        .returning(GraphEdge)
+    )
+    inserted = (await db.execute(stmt)).scalar_one_or_none()
+    if inserted is not None:
+        return inserted
+
+    # A concurrent writer won the race between our SELECT and INSERT.
+    racing = (await db.execute(q)).scalar_one_or_none()
+    if racing is not None:
+        return racing
+    raise RuntimeError(
+        "ensure_edge: insert conflicted but no active edge matches "
+        f"({source_type}:{source_id} -[{edge_type}]-> {target_type}:{target_id})"
     )
 
 

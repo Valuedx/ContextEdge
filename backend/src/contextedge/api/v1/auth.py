@@ -30,12 +30,33 @@ def _create_token(user: User, roles: list[str]) -> str:
 
 @router.post("/login", response_model=TokenResponse)
 async def login(body: LoginRequest, db: DbSession):
-    result = await db.execute(select(User).where(User.email == body.email))
-    user = result.scalar_one_or_none()
-    if not user or not user.password_hash:
+    # User.email is not globally unique (two tenants can hold the same
+    # address), so fetch all matches instead of scalar_one_or_none() — which
+    # raises MultipleResultsFound and turns a duplicate email into a 500.
+    result = await db.execute(
+        select(User).where(User.email == body.email, User.status == "active")
+    )
+    candidates = [u for u in result.scalars().all() if u.password_hash]
+    matching = [
+        u for u in candidates if pwd_context.verify(body.password, u.password_hash)
+    ]
+    if not matching:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
-    if not pwd_context.verify(body.password, user.password_hash):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
+    if len(matching) > 1:
+        # Same email + same password across tenants: refusing is safer than
+        # guessing which tenant the caller meant.
+        import structlog
+
+        structlog.get_logger().warning(
+            "auth.ambiguous_login_rejected",
+            email=body.email,
+            tenant_ids=[str(u.tenant_id) for u in matching],
+        )
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Ambiguous account; contact your administrator",
+        )
+    user = matching[0]
 
     rb_result = await db.execute(
         select(RoleBinding.role).where(RoleBinding.user_id == user.id)

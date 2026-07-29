@@ -166,6 +166,7 @@ async def test_start_execution_creates_pending_approval_for_gated_step():
         automation_mode="full_auto",
         title="Reimage Host Playbook",
         expiry_at=None,
+        approval_policy_id=None,
     )
     version = SimpleNamespace(
         id=version_id,
@@ -599,6 +600,7 @@ async def test_shadow_mode_auto_approves_gated_steps():
         automation_mode="shadow",  # the key bit
         title="Shadow test",
         expiry_at=None,
+        approval_policy_id=None,
     )
     version = SimpleNamespace(
         id=version_id,
@@ -721,7 +723,7 @@ async def test_decide_approval_deny_skips_foreign_tenant_step_run():
     )
     run = SimpleNamespace(
         id=execution_run_id, tenant_id=tenant_id, session_id=None,
-        status="awaiting_approval",
+        status="awaiting_approval", playbook_id=None, initiated_by=uuid4(),
     )
     # The step_run belongs to a DIFFERENT tenant — simulating a bug where
     # an approval_request id was somehow associated with a foreign step.
@@ -811,3 +813,150 @@ async def test_record_tool_invocation_non_shadow_unchanged():
     assert "shadow" not in invocation.outputs
     assert captured["event"]["event_type"] == "tool.completed"
     assert captured["event"]["payload"]["shadow"] is False
+
+
+# ---- gap-fix hardening: fail-closed safety classes + completion guards ----
+
+
+def test_unknown_safety_class_fails_closed():
+    with pytest.raises(ExecutionPolicyError, match="Unknown safety class"):
+        _safety_class_rank("tpyo_destructive")
+
+
+@pytest.mark.asyncio
+async def test_complete_execution_rejects_unknown_outcome():
+    from contextedge.services.execution_service import complete_execution
+
+    db = SimpleNamespace()
+    with pytest.raises(ExecutionPolicyError, match="Unknown outcome"):
+        await complete_execution(
+            db,
+            tenant_id=uuid4(),
+            execution_run_id=uuid4(),
+            outcome="great-success",
+        )
+
+
+@pytest.mark.asyncio
+async def test_complete_execution_rejects_open_steps():
+    from contextedge.services.execution_service import complete_execution
+
+    tenant_id = uuid4()
+    run = SimpleNamespace(id=uuid4(), tenant_id=tenant_id, playbook_id=uuid4(), session_id=None)
+
+    count_result = Mock()
+    count_result.scalar_one.return_value = 2
+
+    db = SimpleNamespace(
+        get=AsyncMock(return_value=run),
+        execute=AsyncMock(return_value=count_result),
+    )
+
+    with pytest.raises(ExecutionPolicyError, match="still open"):
+        await complete_execution(
+            db,
+            tenant_id=tenant_id,
+            execution_run_id=run.id,
+            outcome="success",
+        )
+
+
+# ---- approval policy enforcement (gap fix: policy was stored, never evaluated) ----
+
+
+def _policy_row(tenant_id, config, policy_type="approval", is_active=True):
+    return SimpleNamespace(
+        id=uuid4(),
+        tenant_id=tenant_id,
+        policy_type=policy_type,
+        is_active=is_active,
+        config=config,
+    )
+
+
+@pytest.mark.asyncio
+async def test_approval_policy_caps_automation_mode():
+    from contextedge.services.approval_policy_service import (
+        ApprovalPolicyViolation,
+        check_automation_mode,
+        load_approval_policy,
+    )
+
+    tenant_id = uuid4()
+    row = _policy_row(tenant_id, {"max_automation_mode": "human_confirmed"})
+    db = SimpleNamespace(get=AsyncMock(return_value=row))
+
+    policy = await load_approval_policy(db, tenant_id, row.id)
+    check_automation_mode(policy, "human_confirmed")  # allowed
+    with pytest.raises(ApprovalPolicyViolation, match="caps automation"):
+        check_automation_mode(policy, "full_auto")
+
+
+@pytest.mark.asyncio
+async def test_approval_policy_dangling_reference_fails_closed():
+    from contextedge.services.approval_policy_service import (
+        ApprovalPolicyViolation,
+        load_approval_policy,
+    )
+
+    db = SimpleNamespace(get=AsyncMock(return_value=None))
+    with pytest.raises(ApprovalPolicyViolation, match="missing, inactive"):
+        await load_approval_policy(db, uuid4(), uuid4())
+
+
+@pytest.mark.asyncio
+async def test_approval_policy_min_safety_class_forces_step_approval():
+    from contextedge.services.approval_policy_service import (
+        load_approval_policy,
+        step_requires_policy_approval,
+    )
+
+    tenant_id = uuid4()
+    row = _policy_row(
+        tenant_id, {"require_approval_min_safety_class": "high_side_effect"}
+    )
+    db = SimpleNamespace(get=AsyncMock(return_value=row))
+
+    policy = await load_approval_policy(db, tenant_id, row.id)
+    assert step_requires_policy_approval(policy, "high_side_effect") is True
+    assert step_requires_policy_approval(policy, "destructive") is True
+    assert step_requires_policy_approval(policy, "read_only") is False
+
+
+def test_approval_policy_forbids_self_approval_and_wrong_roles():
+    from contextedge.services.approval_policy_service import (
+        ApprovalPolicy,
+        ApprovalPolicyViolation,
+        check_decider,
+    )
+
+    initiator = uuid4()
+    policy = ApprovalPolicy(
+        policy_id=uuid4(),
+        forbid_self_approval=True,
+        approver_roles=("change_manager",),
+    )
+
+    with pytest.raises(ApprovalPolicyViolation, match="self-approval|deciding their own"):
+        check_decider(
+            policy,
+            decided_by=initiator,
+            run_initiated_by=initiator,
+            decider_roles=["change_manager"],
+        )
+
+    with pytest.raises(ApprovalPolicyViolation, match="requires one of roles"):
+        check_decider(
+            policy,
+            decided_by=uuid4(),
+            run_initiated_by=initiator,
+            decider_roles=["domain_admin"],
+        )
+
+    # Distinct decider holding the required role passes.
+    check_decider(
+        policy,
+        decided_by=uuid4(),
+        run_initiated_by=initiator,
+        decider_roles=["change_manager"],
+    )

@@ -17,6 +17,7 @@ from contextedge.models.episode import Episode
 from contextedge.models.evidence import EvidenceItem
 from contextedge.models.source import Source
 from contextedge.models.tenant import Domain, Tenant, User
+from contextedge.seed_guard import require_destructive_reset_allowed
 
 DEMO_NAMESPACE = uuid.UUID("778ddaf7-0b68-4c26-a7df-3b539ba7a72c")
 
@@ -280,6 +281,7 @@ def _demo_id(kind: str, key: str) -> uuid.UUID:
     return uuid.uuid5(DEMO_NAMESPACE, f"{kind}:{key}")
 
 async def seed_maf_demo() -> None:
+    require_destructive_reset_allowed("demo_maf_seed")
     async with async_session_factory() as db:
         print("1. Truncating old unlinked data tables...")
         tables_to_wipe = [
@@ -300,8 +302,10 @@ async def seed_maf_demo() -> None:
             try:
                 await db.execute(text(f"TRUNCATE TABLE {tbl} CASCADE;"))
                 await db.commit()
+                print(f"  [OK] Truncated {tbl}")
             except Exception:
                 await db.rollback()
+                raise
 
         print("2. Fetching Tenant, Domain, and Admin User...")
         tenant = (await db.execute(select(Tenant).where(Tenant.slug == "default"))).scalar_one()
@@ -328,8 +332,10 @@ async def seed_maf_demo() -> None:
         if demo_source is None:
             demo_source = Source(
                 tenant_id=tenant.id,
-                name="SupportFlo Enterprise Connector",
+                display_name="SupportFlo Enterprise Connector",
                 source_type="servicenow",
+                owner_user_id=owner.id,
+                auth_type="basic",
                 config={},
             )
             db.add(demo_source)

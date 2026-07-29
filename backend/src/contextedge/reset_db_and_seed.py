@@ -13,6 +13,7 @@ from typing import Any
 from sqlalchemy import select, text
 from contextedge.database import async_session_factory
 from contextedge.graph.builder import ensure_edge
+from contextedge.seed_guard import require_destructive_reset_allowed
 from contextedge.models.pattern import Pattern, PatternEvidenceLink, GraphEdge
 from contextedge.models.playbook import Playbook, PlaybookVersion
 from contextedge.models.episode import Episode
@@ -216,6 +217,7 @@ def _demo_id(kind: str, key: str) -> uuid.UUID:
     return uuid.uuid5(DEMO_NAMESPACE, f"{kind}:{key}")
 
 async def reset_and_seed():
+    require_destructive_reset_allowed("reset_db_and_seed")
     async with async_session_factory() as db:
         print("1. Wiping all old pattern, playbook, episode, and evidence data...")
         tables_to_wipe = [
@@ -237,9 +239,9 @@ async def reset_and_seed():
                 await db.execute(text(f"TRUNCATE TABLE {tbl} CASCADE;"))
                 await db.commit()
                 print(f"  [OK] Truncated {tbl}")
-            except Exception as e:
+            except Exception:
                 await db.rollback()
-                print(f"  - Warning truncating {tbl}: {e}")
+                raise
 
         print("2. Fetching Tenant, Domain, and Admin User...")
         tenant = (await db.execute(select(Tenant).where(Tenant.slug == "default"))).scalar_one()
@@ -266,8 +268,10 @@ async def reset_and_seed():
         if demo_source is None:
             demo_source = Source(
                 tenant_id=tenant.id,
-                name="SupportFlo Enterprise Connector",
+                display_name="SupportFlo Enterprise Connector",
                 source_type="servicenow",
+                owner_user_id=owner.id,
+                auth_type="basic",
                 config={},
             )
             db.add(demo_source)

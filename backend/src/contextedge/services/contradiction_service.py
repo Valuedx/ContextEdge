@@ -233,10 +233,12 @@ async def _top_k_kb_candidates(
         predicates.append(
             (EvidenceItem.domain_id == domain_id) | EvidenceItem.domain_id.is_(None)
         )
+    from contextedge.search.vector_ops import halfvec_cosine_distance
+
     stmt = (
         select(EvidenceItem)
         .where(*predicates)
-        .order_by(EvidenceItem.embedding.cosine_distance(step_embedding))
+        .order_by(halfvec_cosine_distance(EvidenceItem.embedding, step_embedding))
         .limit(k)
     )
     return list((await db.execute(stmt)).scalars().all())

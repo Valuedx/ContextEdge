@@ -127,9 +127,11 @@ _EXPECTED_MARKERS: set[tuple[str, str]] = {
     ('error_signature.py', 'ForeignKey("playbooks.id", ondelete="SET NULL"),'),
     ('evidence.py', 'ForeignKey("tenant_policies.id", ondelete="SET NULL"),'),
     ('evidence.py', 'ForeignKey("evidence_items.id", ondelete="CASCADE"),'),
+    # evidence_chunks.evidence_id FK — created in 0030's CREATE TABLE; the
+    # mapped_column was reformatted (c02d164) so the marker is the wrapped line.
     ('evidence.py',
-     'evidence_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), '
-     'ForeignKey("evidence_items.id", ondelete="CASCADE"), nullable=False)'),
+     'UUID(as_uuid=True), ForeignKey("evidence_items.id", ondelete="CASCADE"), '
+     'nullable=False'),
     ('execution.py', 'ForeignKey("decisions.id", ondelete="SET NULL"),'),
     ('execution.py', 'ForeignKey("resolution_sessions.id", ondelete="SET NULL"),'),
     ('execution.py',

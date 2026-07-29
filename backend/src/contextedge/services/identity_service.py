@@ -1,18 +1,62 @@
-"""Identity resolution service for canonicalizing entities across sources."""
+"""Layered identity resolution service.
+
+Resolution order (see the identity-resolution design in the 2026-07
+review; migration ``0033`` carries the schema):
+
+1. **Strong identifiers** — email / username / hostname / fqdn / ip /
+   serial / external system id. Deterministic, confidence 1.0, no LLM.
+2. **Typed exact alias** — normalized alias text scoped to the entity
+   type, so "Phoenix" the application never matches "Phoenix" the person.
+3. **Candidate adjudication** — a small candidate list is scored by the
+   LLM, which may abstain (``needs_review``). Auto-link only above a
+   per-entity-type threshold.
+4. **Provisional creation** — an unmatched mention becomes a
+   ``provisional`` identity (not a trusted one), so identity pollution is
+   visible and reviewable instead of silent.
+"""
 
 from __future__ import annotations
 
+import json
 import uuid
+from datetime import UTC, datetime
+from typing import Literal
 
+import structlog
+from pydantic import BaseModel, Field
 from sqlalchemy import func, or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from contextedge.ai.extractors.identity_extractor import extract_identities
 from contextedge.graph.builder import link_node_to_identities
-from contextedge.models.episode import CanonicalIdentity, EvidenceIdentityLink, IdentityAlias
+from contextedge.models.episode import (
+    CanonicalIdentity,
+    EvidenceIdentityLink,
+    IdentityAlias,
+)
 from contextedge.models.evidence import EvidenceItem
 from contextedge.models.pattern import GraphEdge
 from contextedge.services.event_log_service import append_operational_event
+from contextedge.services.identity_normalizer import (
+    NormalizedEntity,
+    normalize_extracted_entity,
+)
+
+logger = structlog.get_logger()
+
+# Auto-link thresholds for adjudicated (non-deterministic) matches. People
+# are held to a stricter bar than infrastructure names.
+AUTO_LINK_THRESHOLDS = {"person": 0.95}
+DEFAULT_AUTO_LINK_THRESHOLD = 0.9
+MAX_ADJUDICATION_CANDIDATES = 5
+
+
+class AdjudicationResult(BaseModel):
+    decision: Literal["match", "new_identity", "needs_review"]
+    candidate_id: str | None = None
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    reason: str = ""
 
 
 def _normalize_term(value: str) -> str:
@@ -41,6 +85,311 @@ def identity_ids_from_refs(entity_refs: dict | None) -> list[uuid.UUID]:
     return found
 
 
+def _auto_link_threshold(entity_type: str) -> float:
+    return AUTO_LINK_THRESHOLDS.get(entity_type, DEFAULT_AUTO_LINK_THRESHOLD)
+
+
+def _touch_alias(alias: IdentityAlias) -> None:
+    alias.times_observed = int(alias.times_observed or 0) + 1
+    alias.last_seen_at = datetime.now(UTC)
+
+
+async def _find_strong_identifier_match(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    entity: NormalizedEntity,
+) -> tuple[CanonicalIdentity, IdentityAlias, str] | None:
+    for alias_type, value, _source_system in entity.strong_identifiers:
+        result = await db.execute(
+            select(IdentityAlias, CanonicalIdentity)
+            .join(
+                CanonicalIdentity,
+                CanonicalIdentity.id == IdentityAlias.canonical_identity_id,
+            )
+            .where(
+                CanonicalIdentity.tenant_id == tenant_id,
+                CanonicalIdentity.entity_type == entity.entity_type,
+                CanonicalIdentity.is_active.is_(True),
+                IdentityAlias.alias_type == alias_type,
+                IdentityAlias.normalized_alias == value,
+            )
+            .limit(1)
+        )
+        row = result.first()
+        if row is not None:
+            alias, canonical = row
+            return canonical, alias, alias_type
+    return None
+
+
+async def _find_exact_alias_match(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    entity: NormalizedEntity,
+) -> tuple[CanonicalIdentity, IdentityAlias] | None:
+    result = await db.execute(
+        select(IdentityAlias, CanonicalIdentity)
+        .join(
+            CanonicalIdentity,
+            CanonicalIdentity.id == IdentityAlias.canonical_identity_id,
+        )
+        .where(
+            CanonicalIdentity.tenant_id == tenant_id,
+            CanonicalIdentity.entity_type == entity.entity_type,
+            CanonicalIdentity.is_active.is_(True),
+            or_(
+                IdentityAlias.normalized_alias == entity.normalized_name,
+                # Pre-0033 rows may not have normalized_alias backfilled at
+                # ORM level (e.g. mid-deploy); fall back to alias_text.
+                (
+                    IdentityAlias.normalized_alias.is_(None)
+                    & (func.lower(IdentityAlias.alias_text) == entity.normalized_name)
+                ),
+            ),
+        )
+        .limit(1)
+    )
+    row = result.first()
+    if row is None:
+        return None
+    alias, canonical = row
+    return canonical, alias
+
+
+def _candidate_tokens(normalized_name: str) -> list[str]:
+    tokens = [t.strip(".,-_") for t in normalized_name.split()]
+    return sorted({t for t in tokens if len(t) >= 3}, key=len, reverse=True)[:3]
+
+
+async def _candidate_identities(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    entity: NormalizedEntity,
+) -> list[CanonicalIdentity]:
+    tokens = _candidate_tokens(entity.normalized_name)
+    if not tokens:
+        return []
+    patterns = [f"%{token}%" for token in tokens]
+    result = await db.execute(
+        select(CanonicalIdentity)
+        .where(
+            CanonicalIdentity.tenant_id == tenant_id,
+            CanonicalIdentity.entity_type == entity.entity_type,
+            CanonicalIdentity.is_active.is_(True),
+            or_(*[CanonicalIdentity.normalized_name.like(p) for p in patterns]),
+        )
+        .limit(MAX_ADJUDICATION_CANDIDATES)
+    )
+    return list(result.scalars().all())
+
+
+async def _adjudicate_candidates(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    entity: NormalizedEntity,
+    candidates: list[CanonicalIdentity],
+) -> AdjudicationResult | None:
+    """Ask the LLM to pick between candidates or abstain. Fails soft."""
+    from contextedge.ai.prompts import get_prompt
+    from contextedge.ai.provider import llm_complete_json_validated
+
+    alias_rows = await db.execute(
+        select(IdentityAlias).where(
+            IdentityAlias.canonical_identity_id.in_([c.id for c in candidates])
+        )
+    )
+    aliases_by_identity: dict[uuid.UUID, list[str]] = {}
+    for alias in alias_rows.scalars().all():
+        aliases_by_identity.setdefault(alias.canonical_identity_id, []).append(
+            alias.alias_text
+        )
+
+    incoming = {
+        "entity_type": entity.entity_type,
+        "name": entity.display_name,
+        "identifiers": {
+            alias_type: [value for value, _ in bucket]
+            for alias_type, bucket in entity.identifiers.items()
+        },
+        "context": entity.context,
+    }
+    candidate_payload = [
+        {
+            "id": str(candidate.id),
+            "name": candidate.canonical_name,
+            "aliases": aliases_by_identity.get(candidate.id, [])[:10],
+            "resolution_state": candidate.resolution_state,
+        }
+        for candidate in candidates
+    ]
+
+    prompt = get_prompt("identity_adjudication", tenant_id)
+    try:
+        result = await llm_complete_json_validated(
+            prompt.format_user(
+                incoming=json.dumps(incoming, ensure_ascii=False),
+                candidates=json.dumps(candidate_payload, ensure_ascii=False),
+            ),
+            AdjudicationResult,
+            task="classification",
+            system_prompt=prompt.system,
+            tenant_id=tenant_id,
+            db=db,
+        )
+    except Exception as exc:
+        logger.warning(
+            "identity.adjudication_failed",
+            tenant_id=str(tenant_id),
+            error=str(exc),
+        )
+        return None
+    if isinstance(result, AdjudicationResult):
+        return result
+    return None
+
+
+async def _create_identity(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    entity: NormalizedEntity,
+    *,
+    resolution_state: str,
+    confidence: float,
+    method: str,
+    source_id: uuid.UUID | None,
+) -> CanonicalIdentity:
+    canonical = CanonicalIdentity(
+        tenant_id=tenant_id,
+        entity_type=entity.entity_type,
+        canonical_name=entity.display_name,
+        normalized_name=entity.normalized_name,
+        resolution_state=resolution_state,
+        resolution_confidence=confidence,
+        resolution_method=method,
+        metadata_extra={"context": entity.context} if entity.context else None,
+    )
+    db.add(canonical)
+    await db.flush()
+
+    now = datetime.now(UTC)
+    db.add(
+        IdentityAlias(
+            canonical_identity_id=canonical.id,
+            tenant_id=tenant_id,
+            alias_text=entity.display_name,
+            normalized_alias=entity.normalized_name,
+            alias_type="display_name",
+            source_id=source_id,
+            confidence=confidence,
+            created_by="system",
+            last_seen_at=now,
+        )
+    )
+    for alias_type, value, source_system in entity.strong_identifiers:
+        db.add(
+            IdentityAlias(
+                canonical_identity_id=canonical.id,
+                tenant_id=tenant_id,
+                alias_text=value,
+                normalized_alias=value,
+                alias_type=alias_type,
+                source_system=source_system,
+                source_id=source_id,
+                confidence=confidence,
+                created_by="system",
+                last_seen_at=now,
+            )
+        )
+    await db.flush()
+    return canonical
+
+
+async def _learn_alias(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    canonical: CanonicalIdentity,
+    entity: NormalizedEntity,
+    *,
+    confidence: float,
+    created_by: str,
+    source_id: uuid.UUID | None,
+) -> None:
+    """Attach the observed display name to a matched identity so the next
+    occurrence resolves deterministically without an LLM call."""
+    existing = await db.execute(
+        select(IdentityAlias.id).where(
+            IdentityAlias.canonical_identity_id == canonical.id,
+            or_(
+                IdentityAlias.normalized_alias == entity.normalized_name,
+                func.lower(IdentityAlias.alias_text) == entity.normalized_name,
+            ),
+        )
+    )
+    if existing.first() is not None:
+        return
+    db.add(
+        IdentityAlias(
+            canonical_identity_id=canonical.id,
+            tenant_id=tenant_id,
+            alias_text=entity.display_name,
+            normalized_alias=entity.normalized_name,
+            alias_type="display_name",
+            source_id=source_id,
+            confidence=confidence,
+            created_by=created_by,
+            last_seen_at=datetime.now(UTC),
+        )
+    )
+
+
+def _resolved_entry(
+    canonical: CanonicalIdentity,
+    entity: NormalizedEntity,
+    *,
+    matched_via: str,
+    confidence: float,
+) -> dict:
+    return {
+        "canonical_id": canonical.id,
+        "canonical_name": canonical.canonical_name,
+        "entity_type": canonical.entity_type,
+        "resolution_state": canonical.resolution_state,
+        "matched_via": matched_via,
+        "alias": entity.display_name,
+        "confidence": confidence,
+        "context": entity.context,
+    }
+
+
+async def _record_resolution_decision(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    canonical: CanonicalIdentity,
+    entity: NormalizedEntity,
+    *,
+    method: str,
+    confidence: float,
+    candidate_ids: list[str] | None = None,
+    reason: str | None = None,
+) -> None:
+    await append_operational_event(
+        db,
+        tenant_id=tenant_id,
+        entity_type="canonical_identity",
+        entity_id=canonical.id,
+        event_type="identity.resolution_decision",
+        payload={
+            "incoming_name": entity.display_name,
+            "entity_type": entity.entity_type,
+            "method": method,
+            "confidence": confidence,
+            "resolution_state": canonical.resolution_state,
+            "candidate_ids": candidate_ids or [],
+            "reason": reason,
+        },
+    )
+
+
 async def resolve_extracted_entities(
     db: AsyncSession,
     tenant_id: uuid.UUID,
@@ -49,70 +398,146 @@ async def resolve_extracted_entities(
 ) -> list[dict]:
     resolved: list[dict] = []
 
-    for entity in extracted:
-        name = str(entity.get("name", "")).strip()
-        entity_type = str(entity.get("entity_type", "unknown")).strip() or "unknown"
-        context = entity.get("context")
-        if not name:
+    for raw_entity in extracted:
+        entity = normalize_extracted_entity(raw_entity)
+        if entity is None:
             continue
 
-        normalized = _normalize_term(name)
-        existing_alias = await db.execute(
-            select(IdentityAlias)
-            .join(CanonicalIdentity)
-            .where(
-                CanonicalIdentity.tenant_id == tenant_id,
-                func.lower(IdentityAlias.alias_text) == normalized,
+        # Layer 1: strong identifiers — deterministic, no LLM.
+        strong = await _find_strong_identifier_match(db, tenant_id, entity)
+        if strong is not None:
+            canonical, alias, alias_type = strong
+            _touch_alias(alias)
+            await _learn_alias(
+                db, tenant_id, canonical, entity,
+                confidence=0.95, created_by="strong_match", source_id=source_id,
             )
-        )
-        alias = existing_alias.scalar_one_or_none()
-
-        if alias:
-            canonical = await db.get(CanonicalIdentity, alias.canonical_identity_id)
-            if canonical is None:
-                continue
+            method = f"strong:{alias_type}"
             resolved.append(
-                {
-                    "canonical_id": canonical.id,
-                    "canonical_name": canonical.canonical_name,
-                    "entity_type": canonical.entity_type,
-                    "matched_via": "alias",
-                    "alias": name,
-                    "confidence": float(alias.confidence or 1.0),
-                    "context": context,
-                }
+                _resolved_entry(canonical, entity, matched_via=method, confidence=1.0)
+            )
+            await _record_resolution_decision(
+                db, tenant_id, canonical, entity, method=method, confidence=1.0
             )
             continue
 
-        canonical = CanonicalIdentity(
-            tenant_id=tenant_id,
-            entity_type=entity_type,
-            canonical_name=name,
-            metadata_extra={"context": context} if context else None,
-        )
-        db.add(canonical)
-        await db.flush()
+        # Layer 2: typed exact alias.
+        exact = await _find_exact_alias_match(db, tenant_id, entity)
+        if exact is not None:
+            canonical, alias = exact
+            _touch_alias(alias)
+            resolved.append(
+                _resolved_entry(
+                    canonical, entity, matched_via="alias_exact", confidence=0.95
+                )
+            )
+            continue
 
-        alias_record = IdentityAlias(
-            canonical_identity_id=canonical.id,
-            alias_text=name,
+        # Layer 3: candidate generation + LLM adjudication (may abstain).
+        candidates = await _candidate_identities(db, tenant_id, entity)
+        adjudication = (
+            await _adjudicate_candidates(db, tenant_id, entity, candidates)
+            if candidates
+            else None
+        )
+        candidate_ids = [str(c.id) for c in candidates]
+
+        if adjudication is not None and adjudication.decision == "match":
+            matched = next(
+                (c for c in candidates if str(c.id) == adjudication.candidate_id),
+                None,
+            )
+            threshold = _auto_link_threshold(entity.entity_type)
+            if matched is not None and adjudication.confidence >= threshold:
+                await _learn_alias(
+                    db, tenant_id, matched, entity,
+                    confidence=adjudication.confidence,
+                    created_by="adjudicator",
+                    source_id=source_id,
+                )
+                resolved.append(
+                    _resolved_entry(
+                        matched,
+                        entity,
+                        matched_via="llm_adjudicated",
+                        confidence=adjudication.confidence,
+                    )
+                )
+                await _record_resolution_decision(
+                    db, tenant_id, matched, entity,
+                    method="llm_adjudicated",
+                    confidence=adjudication.confidence,
+                    candidate_ids=candidate_ids,
+                    reason=adjudication.reason,
+                )
+                continue
+            # A plausible-but-unproven match must NOT silently link or
+            # silently fork — park it for human review.
+            canonical = await _create_identity(
+                db, tenant_id, entity,
+                resolution_state="needs_review",
+                confidence=adjudication.confidence,
+                method="adjudication_below_threshold",
+                source_id=source_id,
+            )
+            resolved.append(
+                _resolved_entry(
+                    canonical, entity,
+                    matched_via="needs_review",
+                    confidence=adjudication.confidence,
+                )
+            )
+            await _record_resolution_decision(
+                db, tenant_id, canonical, entity,
+                method="adjudication_below_threshold",
+                confidence=adjudication.confidence,
+                candidate_ids=candidate_ids,
+                reason=adjudication.reason,
+            )
+            continue
+
+        if adjudication is not None and adjudication.decision == "needs_review":
+            canonical = await _create_identity(
+                db, tenant_id, entity,
+                resolution_state="needs_review",
+                confidence=adjudication.confidence,
+                method="adjudication_abstained",
+                source_id=source_id,
+            )
+            resolved.append(
+                _resolved_entry(
+                    canonical, entity,
+                    matched_via="needs_review",
+                    confidence=adjudication.confidence,
+                )
+            )
+            await _record_resolution_decision(
+                db, tenant_id, canonical, entity,
+                method="adjudication_abstained",
+                confidence=adjudication.confidence,
+                candidate_ids=candidate_ids,
+                reason=adjudication.reason,
+            )
+            continue
+
+        # Layer 4: provisional creation — never a trusted identity on miss.
+        canonical = await _create_identity(
+            db, tenant_id, entity,
+            resolution_state="provisional",
+            confidence=0.5,
+            method="unmatched_new",
             source_id=source_id,
-            confidence=0.8,
-            created_by="system",
         )
-        db.add(alias_record)
-        await db.flush()
-
         resolved.append(
-            {
-                "canonical_id": canonical.id,
-                "canonical_name": name,
-                "entity_type": entity_type,
-                "matched_via": "new",
-                "alias": name,
-                "confidence": 0.8,
-                "context": context,
-            }
+            _resolved_entry(
+                canonical, entity, matched_via="provisional_new", confidence=0.5
+            )
+        )
+        await _record_resolution_decision(
+            db, tenant_id, canonical, entity,
+            method="unmatched_new",
+            confidence=0.5,
+            candidate_ids=candidate_ids,
         )
 
     return resolved
@@ -325,10 +750,14 @@ async def merge_canonical_identities(
         db.add(
             IdentityAlias(
                 canonical_identity_id=primary.id,
+                tenant_id=tenant_id,
                 alias_text=duplicate.canonical_name,
+                normalized_alias=duplicate_name,
+                alias_type="display_name",
                 source_id=None,
                 confidence=1.0,
                 created_by="merge",
+                last_seen_at=datetime.now(UTC),
             )
         )
 
@@ -371,6 +800,9 @@ async def merge_canonical_identities(
     merged_metadata = dict(duplicate.metadata_extra or {})
     merged_metadata["merged_into"] = str(primary.id)
     duplicate.metadata_extra = merged_metadata
+    # A human-confirmed merge upgrades the surviving identity.
+    primary.resolution_state = "verified"
+    primary.resolution_method = "human_merge"
 
     await db.flush()
     await append_operational_event(
@@ -386,4 +818,23 @@ async def merge_canonical_identities(
         },
     )
     await db.refresh(primary)
+
+    # The normalized link tables were re-pointed above, but the cached JSONB
+    # snapshots (evidence.canonical_entity_refs, episode.entity_refs) still
+    # reference the duplicate — enqueue the rebuild so they converge.
+    # Failure to enqueue must never block the merge itself.
+    try:
+        from contextedge.workers.identity_tasks import rebuild_identity_snapshots
+
+        rebuild_identity_snapshots.delay(
+            str(tenant_id), str(primary.id), str(duplicate.id)
+        )
+    except Exception as exc:
+        logger.warning(
+            "identity.snapshot_rebuild_enqueue_failed",
+            tenant_id=str(tenant_id),
+            primary_identity_id=str(primary.id),
+            duplicate_identity_id=str(duplicate.id),
+            error=str(exc),
+        )
     return primary

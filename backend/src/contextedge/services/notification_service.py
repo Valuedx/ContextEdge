@@ -15,6 +15,7 @@ import structlog
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from contextedge.config import settings
 from contextedge.models.events import Notification
 
 logger = structlog.get_logger()
@@ -54,7 +55,7 @@ async def send_notification(
         if channel == NotificationChannel.IN_APP:
             await _send_in_app(db, tenant_id, user_id, notification_type, title, body, metadata)
         elif channel == NotificationChannel.EMAIL:
-            await _send_email(tenant_id, user_id, title, body)
+            await _send_email(db, tenant_id, user_id, title, body)
         elif channel == NotificationChannel.WEBHOOK:
             await _send_webhook(tenant_id, title, body, metadata)
 
@@ -91,19 +92,78 @@ async def _send_in_app(
     )
 
 
+def _smtp_send(recipient: str, title: str, body: str) -> None:
+    """Blocking SMTP delivery — call via anyio.to_thread only."""
+    import smtplib
+    from email.message import EmailMessage
+
+    message = EmailMessage()
+    message["From"] = settings.smtp_from or settings.smtp_username
+    message["To"] = recipient
+    message["Subject"] = title
+    message.set_content(body)
+
+    with smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=10) as smtp:
+        if settings.smtp_starttls:
+            smtp.starttls()
+        if settings.smtp_username:
+            smtp.login(settings.smtp_username, settings.smtp_password)
+        smtp.send_message(message)
+
+
 async def _send_email(
+    db: AsyncSession | None,
     tenant_id: uuid.UUID,
     user_id: uuid.UUID | None,
     title: str,
     body: str,
 ):
-    """Send email notification via SMTP or provider API."""
-    logger.info(
-        "notification.email",
-        tenant_id=str(tenant_id),
-        user_id=str(user_id),
-        title=title,
-    )
+    """Send an email via configured SMTP; explicit skip when unconfigured.
+
+    Best-effort: a delivery failure is logged and never raised into the
+    caller — notification delivery must not break the triggering flow.
+    """
+    if not settings.smtp_host:
+        logger.info(
+            "notification.email_skipped_unconfigured",
+            tenant_id=str(tenant_id),
+            user_id=str(user_id),
+            title=title,
+        )
+        return
+
+    recipient = None
+    if db is not None and user_id is not None:
+        from contextedge.models.tenant import User
+
+        user = await db.get(User, user_id)
+        if user is not None and user.tenant_id == tenant_id:
+            recipient = user.email
+    if not recipient:
+        logger.warning(
+            "notification.email_no_recipient",
+            tenant_id=str(tenant_id),
+            user_id=str(user_id),
+        )
+        return
+
+    try:
+        import anyio
+
+        await anyio.to_thread.run_sync(_smtp_send, recipient, title, body)
+        logger.info(
+            "notification.email_sent",
+            tenant_id=str(tenant_id),
+            user_id=str(user_id),
+            title=title,
+        )
+    except Exception as exc:
+        logger.warning(
+            "notification.email_failed",
+            tenant_id=str(tenant_id),
+            user_id=str(user_id),
+            error=str(exc),
+        )
 
 
 async def _send_webhook(
@@ -112,11 +172,48 @@ async def _send_webhook(
     body: str,
     metadata: dict | None,
 ):
-    """Send webhook notification to configured Teams/Slack endpoints."""
-    logger.info(
-        "notification.webhook",
+    """POST to the configured Teams/Slack-compatible webhook with one retry.
+
+    Best-effort like email: failures are logged, never raised."""
+    if not settings.notification_webhook_url:
+        logger.info(
+            "notification.webhook_skipped_unconfigured",
+            tenant_id=str(tenant_id),
+            title=title,
+        )
+        return
+
+    import httpx
+
+    payload = {
+        "text": f"**{title}**\n{body}",
+        "title": title,
+        "body": body,
+        "tenant_id": str(tenant_id),
+        "metadata": metadata or {},
+    }
+    last_error: Exception | None = None
+    for attempt in (1, 2):
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                response = await client.post(
+                    settings.notification_webhook_url, json=payload
+                )
+                response.raise_for_status()
+            logger.info(
+                "notification.webhook_sent",
+                tenant_id=str(tenant_id),
+                title=title,
+                attempt=attempt,
+            )
+            return
+        except Exception as exc:
+            last_error = exc
+    logger.warning(
+        "notification.webhook_failed",
         tenant_id=str(tenant_id),
         title=title,
+        error=str(last_error),
     )
 
 

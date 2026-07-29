@@ -20,6 +20,39 @@ from contextedge.workers.celery_app import celery_app
 
 logger = structlog.get_logger()
 
+RISK_TIERS = ("low", "medium", "high")
+
+# Deterministic risk floor per step safety class. The LLM's suggested tier
+# may only raise risk above this floor, never lower it — risk assessment is
+# a policy decision, not a model output.
+_SAFETY_CLASS_RISK_FLOOR = {
+    "read_only": "low",
+    "low_side_effect": "medium",
+    "high_side_effect": "high",
+    "destructive": "high",
+}
+
+
+def _effective_risk_tier(llm_risk_tier, steps) -> str:
+    floor = "low"
+    for step in steps or []:
+        if not isinstance(step, dict):
+            continue
+        step_floor = _SAFETY_CLASS_RISK_FLOOR.get(
+            str(step.get("safety_class") or "read_only"), "high"
+        )
+        if RISK_TIERS.index(step_floor) > RISK_TIERS.index(floor):
+            floor = step_floor
+    suggested = str(llm_risk_tier or "").strip().lower()
+    if suggested not in RISK_TIERS:
+        # Unknown / missing model suggestion: fall back to the floor, but
+        # never below medium — an ungraded generated playbook should not
+        # look low-risk by default.
+        return floor if RISK_TIERS.index(floor) >= RISK_TIERS.index("medium") else "medium"
+    if RISK_TIERS.index(suggested) > RISK_TIERS.index(floor):
+        return suggested
+    return floor
+
 
 async def _linked_episode_ids(db, tenant_id: uuid.UUID) -> set[uuid.UUID]:
     r = await db.execute(
@@ -220,15 +253,18 @@ def generate_playbook_candidate(self, pattern_id: str, tenant_id: str):
             return {"status": "skipped", "reason": "playbook_already_exists"}
 
         lr = await db.execute(
-            select(PatternEvidenceLink).where(
-                PatternEvidenceLink.pattern_id == pid,
-                PatternEvidenceLink.episode_id.is_not(None),
-            )
+            select(PatternEvidenceLink).where(PatternEvidenceLink.pattern_id == pid)
         )
         links = lr.scalars().all()
         ep_ids = [ln.episode_id for ln in links if ln.episode_id]
         if not ep_ids:
             return {"status": "skipped", "reason": "no_episode_links"}
+        # Evidence provenance for the generated version: every evidence item
+        # the pattern was clustered from. Without these refs a generated
+        # playbook has no traceable grounding.
+        evidence_ref_ids = sorted(
+            {str(ln.evidence_id) for ln in links if ln.evidence_id}
+        )
 
         er = await db.execute(select(Episode).where(Episode.id.in_(ep_ids)))
         episodes = list(er.scalars().all())
@@ -267,6 +303,9 @@ def generate_playbook_candidate(self, pattern_id: str, tenant_id: str):
         if not owner:
             return {"status": "failed", "reason": "no_user_for_owner"}
 
+        steps = llm.get("steps") or []
+        risk_tier = _effective_risk_tier(llm.get("risk_tier"), steps)
+
         stable_key = f"pb-{uuid.uuid4().hex[:12]}"
         playbook = Playbook(
             tenant_id=tid,
@@ -274,7 +313,7 @@ def generate_playbook_candidate(self, pattern_id: str, tenant_id: str):
             stable_key=stable_key,
             title=str(llm.get("title") or pattern.title)[:500],
             description=(llm.get("description") or pattern.description),
-            risk_tier=str(llm.get("risk_tier") or "medium")[:20],
+            risk_tier=risk_tier,
             automation_mode="suggest_only",
             owner_user_id=owner.id,
             pattern_id=pattern.id,
@@ -289,8 +328,13 @@ def generate_playbook_candidate(self, pattern_id: str, tenant_id: str):
             "branching_logic": llm.get("branching_logic") or {},
             "inputs": llm.get("inputs") or [],
             "outputs": llm.get("outputs") or [],
-            "steps": llm.get("steps") or [],
+            "steps": steps,
             "rollback_notes": llm.get("rollback_notes"),
+            "evidence_refs": {
+                "evidence_ids": evidence_ref_ids,
+                "episode_ids": [str(eid) for eid in ep_ids],
+                "pattern_id": str(pattern.id),
+            },
             "playbook_confidence": float(llm.get("playbook_confidence") or 0.5),
             "execution_confidence_guidance": llm.get("execution_confidence_guidance"),
         }

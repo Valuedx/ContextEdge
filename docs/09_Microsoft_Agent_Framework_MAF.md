@@ -201,16 +201,16 @@ Currently, the system defines one primary profile in `profiles.py`: **`maf.v1`**
 - The MAF client hardcodes requests to use `profile="maf.v1"`.
 ## 7. Agent Profiles & Roles
 
-### 7.1 Supported MAF Agent Roles
+### 7.1 Target MAF Agent Roles
 
-ContextEdge is designed to support **4 distinct MAF Agent Roles** operating within enterprise IT environments. All 4 roles utilize the `maf.v1` graph projection profile:
+The integration itself ships **one plugin** — `ContextGraphMAFPlugin`, combining a proactive memory provider and a **read-only** graph query tool. It does not expose execution tools to agents: remediation always goes through ContextEdge's governed execution API (safety classes, approval policies, audit). On top of the plugin, the design targets four typical agent roles, all governed by the `maf.v1` projection profile:
 
-| Agent Role | Primary Function | Core Responsibilities & Flow |
+| Agent Role (design target) | Primary Function | Core Responsibilities & Flow |
 |------------|-----------------|------------------------------|
 | **1. Operational Resolution Agent** | Active Incident Triage | Wakes up when a new ticket or alert is assigned. Queries the Context Graph to fetch past episodes, identifies matching root causes, and recommends verified playbooks to human operators. |
-| **2. Playbook Execution Agent** | Automated Remediation | Follows approved Playbook steps. Executes bounded operational tools (e.g., restarting SQL services, killing runaway processes, recycling app pools) with step-by-step verification. |
-| **3. Audit & Compliance Agent** | Governance & Decision Traceability | Monitors every action taken by resolution agents. Records decision events, checks action policy rules, verifies human approval signatures, and writes audit trails to PostgreSQL. |
-| **4. Diagnostic & Analysis Agent** | Hypothesis Testing & Contradiction Check | Analyzes raw evidence from multiple sources (ServiceNow, Splunk, Slack). Formulates claims, tests hypotheses against graph nodes, and flags contradictions when a proposed action violates policy. |
+| **2. Playbook Execution Agent** | Governed Remediation | Follows approved Playbook steps by requesting runs through the governed execution service (`/api/v1/execution`), which enforces safety classes and approval policies; the MAF graph tool itself cannot mutate anything. |
+| **3. Audit & Compliance Agent** | Governance & Decision Traceability | Reviews decision events, action-policy checks, approvals, and tool invocations recorded in PostgreSQL to give compliance teams a complete audit trace. |
+| **4. Diagnostic & Analysis Agent** | Hypothesis Testing & Contradiction Check | Analyzes correlated evidence, formulates claims, tests hypotheses against graph nodes, and flags contradictions when a proposed action conflicts with policy or past outcomes. |
 
 ---
 
@@ -258,12 +258,12 @@ ContextEdge exposes **2 core integration mechanisms** to MAF agents through the 
 
 To prevent LLM context window overflow, cost spikes, and hallucinations, all MAF agent interactions are strictly governed by the **`maf.v1`** projection profile (`graph/agent/profiles.py`):
 
-| Constraint Parameter | Standard Default | Maximum Hard Cap | Purpose |
+| Constraint Parameter | Standard Default (`AgentGraphBudget`) | Maximum Hard Cap (`maf.v1`) | Purpose |
 |----------------------|------------------|------------------|---------|
-| **Max Graph Nodes** | 30 nodes | **60 nodes** | Prevents context window dilution |
-| **Max Relationships** | 60 edges | **120 edges** | Caps relationship complexity |
+| **Max Graph Nodes** | 24 nodes | **60 nodes** | Prevents context window dilution |
+| **Max Relationships** | 48 edges | **120 edges** | Caps relationship complexity |
 | **Max Relationship Depth** | 2 hops | **3 hops** | Bounds multi-hop graph traversal |
-| **Max Character Payload** | 15,000 chars | **30,000 chars** | Strictly limits prompt token consumption |
+| **Max Character Payload** | 12,000 chars | **30,000 chars** | Strictly limits prompt token consumption |
 
 ---
 

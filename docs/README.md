@@ -4,6 +4,15 @@
 >
 > This documentation is designed so that a new developer with **zero prior knowledge** can understand the entire system without asking anyone for help.
 
+> **Relationship to `codewiki/`:** the numbered articles in
+> [`codewiki/`](../codewiki/) are the **authoritative, editorially
+> maintained** architecture documentation —
+> [`codewiki/KNOWN_GAPS.md`](../codewiki/KNOWN_GAPS.md) is the single
+> source of truth for what is and isn't implemented. This `docs/` KT suite
+> is an onboarding companion; where the two disagree, the codewiki wins,
+> and `10_API_Documentation.md` is generated from the OpenAPI schema
+> (`backend/generate_docs.py`) rather than hand-maintained.
+
 ---
 
 ## 📚 Documentation Index
@@ -87,6 +96,9 @@
 |-------|----------|------|
 | `admin@contextedge.local` | `admin123` | Admin |
 | `analyst@contextedge.local` | `analyst123` | Analyst |
+
+> ⚠️ Local development seed accounts only — never reuse in shared or
+> production environments.
 
 ---
 

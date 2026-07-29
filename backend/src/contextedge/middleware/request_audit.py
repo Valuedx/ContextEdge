@@ -55,16 +55,27 @@ class RequestAuditMiddleware(BaseHTTPMiddleware):
             correlation_id=getattr(request.state, "correlation_id", None),
         )
 
-        if tenant_id and response.status_code < 400:
+        # Denied (401/403) and failed mutating calls are audit-relevant too —
+        # an attacker probing execution endpoints must appear in the trail,
+        # not only their successes. Everything with a resolved tenant is
+        # recorded; the outcome is distinguished by the `outcome` field.
+        if tenant_id:
             import anyio
             try:
                 tid = uuid.UUID(str(tenant_id))
                 aid = uuid.UUID(str(user_id)) if user_id else None
                 action = f"http.{request.method.lower()}.{request.url.path.strip('/').replace('/', '.')[:80]}"
+                if response.status_code < 400:
+                    outcome = "success"
+                elif response.status_code in (401, 403):
+                    outcome = "denied"
+                else:
+                    outcome = "failed"
                 details = json.dumps(
                     {
                         "path": request.url.path,
                         "status": response.status_code,
+                        "outcome": outcome,
                         "request_id": getattr(request.state, "request_id", None),
                         "correlation_id": getattr(request.state, "correlation_id", None),
                         "causation_id": getattr(request.state, "causation_id", None),

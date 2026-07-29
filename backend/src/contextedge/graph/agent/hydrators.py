@@ -88,13 +88,18 @@ def _float(value: Any) -> float | None:
     return float(value)
 
 
+_MISSING_TENANT = object()
+
+
 def node_is_visible(
     node_type: str,
     obj: Any,
     scope: AgentGraphAccessScope,
     excluded_evidence_policy_ids: set[UUID],
 ) -> bool:
-    if getattr(obj, "tenant_id", scope.tenant_id) != scope.tenant_id:
+    # Fail closed: a model without tenant_id is never agent-visible, rather
+    # than being assumed to belong to the caller's tenant.
+    if getattr(obj, "tenant_id", _MISSING_TENANT) != scope.tenant_id:
         return False
 
     domain_id = getattr(obj, "domain_id", None)

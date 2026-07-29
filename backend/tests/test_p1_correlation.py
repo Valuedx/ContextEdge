@@ -85,6 +85,7 @@ async def test_correlation_links_matching_external_id():
         source_id=source_id,
         raw_object_ref=raw_id,
         thread_id=None,
+        ingested_at=None,
     )
     source = SimpleNamespace(id=source_id, tenant_id=tenant_id, source_type="servicenow")
     raw = SimpleNamespace(external_id="INC-100", raw_payload={})
@@ -113,15 +114,9 @@ async def test_correlation_links_matching_external_id():
         flush=AsyncMock(),
     )
 
-    with (
-        patch(
-            "contextedge.services.correlation_service.get_identity_ids_for_evidence",
-            AsyncMock(return_value=set()),
-        ),
-        patch(
-            "contextedge.services.correlation_service.find_related_evidence_ids_by_identity_ids",
-            AsyncMock(return_value=set()),
-        ),
+    with patch(
+        "contextedge.services.correlation_service.get_identity_ids_for_evidence",
+        AsyncMock(return_value=set()),
     ):
         result = await correlate_evidence_item(db, tenant_id, evidence_id)
 

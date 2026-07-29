@@ -1,134 +1,138 @@
-import os
-import ast
-import json
+"""Generate docs/10_API_Documentation.md from the live OpenAPI schema.
 
-API_DIR = r"d:\ContextEdge\backend\src\contextedge\api\v1"
-SCHEMA_DIR = r"d:\ContextEdge\backend\src\contextedge\schemas"
-DOCS_DIR = r"d:\ContextEdge\docs"
-OUT_FILE = os.path.join(DOCS_DIR, "10_API_Documentation.md")
+Run from ``backend/``:
 
-if not os.path.exists(DOCS_DIR):
-    os.makedirs(DOCS_DIR)
+    python generate_docs.py
 
-files_to_process = [
-    "evidence.py", "episodes.py", "patterns.py", "playbooks.py",
-    "sessions.py", "decisions.py", "execution.py", "evaluations.py",
-    "sources.py", "sync.py", "runtime.py", "review_queue.py",
-    "contradictions.py", "correlations.py", "drift.py", "identities.py",
-    "negative_knowledge.py", "graph.py", "policies.py", "policy_assignments.py",
-    "audit.py", "admin_cost.py", "tenants.py", "users.py",
-    "notifications.py", "domains.py", "workspaces.py", "threads.py"
-]
-
-header = """# ContextEdge — API Documentation
-
-## 1. API Overview
-- **Base URL**: `/api/v1`
-- **Authentication**: JWT Bearer token in the `Authorization` header, or `X-Service-Token` for internal services.
-- **Common headers**:
-  - `Content-Type`: `application/json`
-  - `Accept`: `application/json`
-- **Error response format**:
-  ```json
-  {
-    "detail": "Error message",
-    "code": "ERROR_CODE",
-    "meta": {}
-  }
-  ```
-- **Pagination pattern**: Use `skip` (offset) and `limit` query parameters.
-- **OpenAPI/Swagger**: Available at `/api/v1/docs` or `/api/v1/openapi.json`.
-
-## 2. Authentication APIs
-
-### POST /auth/login
-- **HTTP Method**: POST
-- **Full URL path**: `/api/v1/auth/login`
-- **Authentication required**: No
-- **Required roles**: None
-- **Request body**: `{"username": "user", "password": "password"}`
-- **Response body**: `{"access_token": "jwt...", "token_type": "bearer"}`
-- **Importance**: 10
-
-### POST /auth/register
-- **HTTP Method**: POST
-- **Full URL path**: `/api/v1/auth/register`
-- **Authentication required**: No
-- **Importance**: 9
-
-### POST /auth/refresh
-- **HTTP Method**: POST
-- **Full URL path**: `/api/v1/auth/refresh`
-- **Authentication required**: Yes
-- **Importance**: 9
-
-### GET /auth/me
-- **HTTP Method**: GET
-- **Full URL path**: `/api/v1/auth/me`
-- **Authentication required**: Yes
-- **Importance**: 10
-
-## 3. Detailed Endpoints by Domain
-
+Every endpoint, method, path, auth requirement, and model name comes from
+``app.openapi()`` — nothing is guessed from filenames or invented. Re-run
+after adding or changing routes; the output file is fully overwritten and
+must not be hand-edited.
 """
 
-with open(OUT_FILE, "w", encoding="utf-8") as out:
-    out.write(header)
-    
-    for filename in files_to_process:
-        filepath = os.path.join(API_DIR, filename)
-        if not os.path.exists(filepath):
-            continue
-            
-        domain_name = filename.replace(".py", "").replace("_", " ").title()
-        out.write(f"### {domain_name} APIs\n\n")
-        
-        with open(filepath, "r", encoding="utf-8") as f:
-            source = f.read()
-            
-        try:
-            tree = ast.parse(source)
-            for node in ast.walk(tree):
-                if isinstance(node, ast.FunctionDef):
-                    method = ""
-                    path = ""
-                    for dec in node.decorator_list:
-                        if isinstance(dec, ast.Call) and isinstance(dec.func, ast.Attribute):
-                            if dec.func.value.id == "router":
-                                method = dec.func.attr.upper()
-                                if dec.args and isinstance(dec.args[0], ast.Constant):
-                                    path = dec.args[0].value
-                                
-                    if method:
-                        out.write(f"#### {method} {path}\n")
-                        out.write(f"- **HTTP Method**: {method}\n")
-                        out.write(f"- **Full URL path**: `/api/v1/{filename.replace('.py', '')}{path}`\n")
-                        out.write(f"- **Authentication required**: Yes\n")
-                        out.write(f"- **Required roles**: Admin, User\n")
-                        out.write(f"- **Request body**: See schemas in `schemas/`.\n")
-                        out.write(f"- **Query parameters**: Typically `skip`, `limit`.\n")
-                        out.write(f"- **Response body**: Corresponding schema model.\n")
-                        out.write(f"- **Status codes**: 200 OK, 400 Bad Request, 401 Unauthorized, 404 Not Found\n")
-                        out.write(f"- **Backend files involved**: `{filename}` -> service -> model\n")
-                        out.write(f"- **Database tables accessed**: `{domain_name.lower().replace(' ', '_')}`\n")
-                        out.write(f"- **Vector operations**: None\n")
-                        out.write(f"- **Context Graph operations**: None\n")
-                        
-                        curl = f'curl -X {method} "https://api.contextedge.com/api/v1/{filename.replace(".py", "")}{path}" -H "Authorization: Bearer <token>"'
-                        if method in ("POST", "PUT", "PATCH"):
-                            curl += ' -d "{...}"'
-                        out.write(f"- **Example request (curl)**:\n  ```bash\n  {curl}\n  ```\n")
-                        
-                        out.write(f"- **Example response (JSON)**:\n  ```json\n  {{\n    \"id\": \"uuid\",\n    \"status\": \"success\"\n  }}\n  ```\n")
-                        out.write(f"- **Error cases**: 404 Not Found if missing, 403 Forbidden if wrong role.\n")
-                        out.write(f"- **Importance**: 8\n\n")
-                        
-        except Exception as e:
-            out.write(f"Error parsing {filename}: {e}\n\n")
-            
-    # Pad out the file to reach 1000 lines if needed
-    out.write("\n## Schemas and Models\n\n")
-    for _ in range(500):
-        out.write("<!-- Padding for length requirement -->\n")
+from __future__ import annotations
 
-print(f"Generated {OUT_FILE}")
+import sys
+from collections import defaultdict
+from pathlib import Path
+
+BACKEND_DIR = Path(__file__).resolve().parent
+SRC_DIR = BACKEND_DIR / "src"
+if str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
+
+OUT_FILE = BACKEND_DIR.parent / "docs" / "10_API_Documentation.md"
+
+HEADER = """# ContextEdge — API Documentation
+
+> Generated from the FastAPI OpenAPI schema by `backend/generate_docs.py`.
+> Do not hand-edit — re-run the script after route changes.
+> The interactive reference is always available at `/docs` (Swagger UI)
+> and `/redoc` on a running backend.
+
+## API Overview
+
+- **Base URL**: `/api/v1`
+- **Authentication**: JWT Bearer token in the `Authorization` header
+  (obtained via `POST /api/v1/auth/login` with `{"email", "password"}`),
+  or `X-Service-Token` for configured service accounts.
+- **Error format**: `{"detail": "message"}` with a matching HTTP status.
+"""
+
+
+def _ref_name(schema: dict | None) -> str | None:
+    if not isinstance(schema, dict):
+        return None
+    ref = schema.get("$ref")
+    if isinstance(ref, str):
+        return ref.rsplit("/", 1)[-1]
+    items = schema.get("items")
+    if isinstance(items, dict):
+        inner = _ref_name(items)
+        if inner:
+            return f"list[{inner}]"
+    return schema.get("type")
+
+
+def _request_model(operation: dict) -> str | None:
+    body = operation.get("requestBody") or {}
+    content = body.get("content") or {}
+    json_content = content.get("application/json") or {}
+    return _ref_name(json_content.get("schema"))
+
+
+def _response_model(operation: dict) -> str | None:
+    responses = operation.get("responses") or {}
+    for status in ("200", "201", "202"):
+        content = (responses.get(status) or {}).get("content") or {}
+        json_content = content.get("application/json") or {}
+        name = _ref_name(json_content.get("schema"))
+        if name:
+            return name
+    return None
+
+
+def _group_key(path: str) -> str:
+    trimmed = path.removeprefix("/api/v1").strip("/")
+    return trimmed.split("/", 1)[0] if trimmed else "root"
+
+
+def main() -> None:
+    from contextedge.main import app
+
+    schema = app.openapi()
+    paths = schema.get("paths", {})
+
+    grouped: dict[str, list[tuple[str, str, dict]]] = defaultdict(list)
+    for path, operations in sorted(paths.items()):
+        for method, operation in operations.items():
+            if method.lower() not in ("get", "post", "put", "patch", "delete"):
+                continue
+            grouped[_group_key(path)].append((method.upper(), path, operation))
+
+    lines: list[str] = [HEADER]
+    for group in sorted(grouped):
+        lines.append(f"\n## `{group}`\n")
+        for method, path, operation in grouped[group]:
+            summary = operation.get("summary") or ""
+            lines.append(f"### `{method} {path}`\n")
+            if summary:
+                lines.append(f"{summary}\n")
+            description = (operation.get("description") or "").strip()
+            if description and description != summary:
+                lines.append(f"{description}\n")
+            secured = bool(operation.get("security", schema.get("security")))
+            details: list[str] = []
+            details.append(
+                f"- **Auth**: {'required' if secured else 'not required'}"
+            )
+            request_model = _request_model(operation)
+            if request_model:
+                details.append(f"- **Request body**: `{request_model}`")
+            response_model = _response_model(operation)
+            if response_model:
+                details.append(f"- **Response**: `{response_model}`")
+            params = [
+                p.get("name")
+                for p in operation.get("parameters") or []
+                if isinstance(p, dict) and p.get("in") == "query"
+            ]
+            if params:
+                details.append(
+                    "- **Query parameters**: " + ", ".join(f"`{p}`" for p in params)
+                )
+            lines.extend(details)
+            lines.append("")
+
+    total_endpoints = sum(len(ops) for ops in grouped.values())
+    lines.append(
+        f"\n---\n\n*{total_endpoints} endpoints across {len(grouped)} groups, "
+        "generated from the OpenAPI schema.*\n"
+    )
+
+    OUT_FILE.write_text("\n".join(lines), encoding="utf-8")
+    print(f"Generated {OUT_FILE} ({total_endpoints} endpoints)")
+
+
+if __name__ == "__main__":
+    main()

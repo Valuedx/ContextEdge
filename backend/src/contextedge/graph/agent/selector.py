@@ -20,6 +20,11 @@ from contextedge.graph.agent.repository import AgentGraphRepository
 
 
 class AgentGraphSelector:
+    # Hydrating a candidate costs a row fetch plus visibility checks; only
+    # budget.max_nodes of them can survive selection, so hydrating more than
+    # a small multiple is pure waste on hub-heavy graphs.
+    MAX_HYDRATION_FACTOR = 5
+
     async def select(
         self,
         repository: AgentGraphRepository,
@@ -62,6 +67,20 @@ class AgentGraphSelector:
                     candidate_refs[edge.target.key] = edge.target
                 if edge.target.key in frontier_keys:
                     candidate_refs[edge.source.key] = edge.source
+
+            hydration_cap = budget.max_nodes * self.MAX_HYDRATION_FACTOR
+            if len(candidate_refs) > hydration_cap:
+                best_weight: dict[str, float] = {}
+                for edge in eligible:
+                    for key in (edge.source.key, edge.target.key):
+                        if key in candidate_refs:
+                            best_weight[key] = max(best_weight.get(key, 0.0), edge.weight)
+                kept = sorted(
+                    candidate_refs,
+                    key=lambda key: (-best_weight.get(key, 0.0), key),
+                )[:hydration_cap]
+                candidate_refs = {key: candidate_refs[key] for key in kept}
+
             candidate_hydrated = await repository.hydrate_nodes(
                 list(candidate_refs.values()),
                 scope,
@@ -81,13 +100,19 @@ class AgentGraphSelector:
                 for current_key, neighbor_key, neighbor_ref in orientations:
                     if current_key not in frontier_keys or neighbor_key not in hydrated:
                         continue
-                    candidate_score = (
-                        scores.get(current_key, 0.0)
-                        * profile.hop_decay
+                    # The per-hop factor is clamped to 1.0 so relevance decays
+                    # monotonically: heavy edges (weight 1.5 enrichment) and
+                    # relationship boosts must not amplify scores above the
+                    # parent's, or multi-hop paths through boosted edges
+                    # outrank the seeds themselves.
+                    hop_factor = min(
+                        profile.hop_decay
                         * max(edge.weight, 0.0)
                         * (edge.confidence if edge.confidence is not None else 1.0)
-                        * profile.relationship_factor(edge.type)
+                        * profile.relationship_factor(edge.type),
+                        1.0,
                     )
+                    candidate_score = scores.get(current_key, 0.0) * hop_factor
                     if candidate_score > scores.get(neighbor_key, -1.0):
                         scores[neighbor_key] = candidate_score
                         parent[neighbor_key] = current_key

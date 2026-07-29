@@ -2,6 +2,29 @@
 
 Short list of implementation gaps and operational caveats called out in the codewiki and root documentation. Use this when the product surface looks more complete in the architecture than it does in the current UI or environment.
 
+## Resolved: 2026-07-29 gap-fix shipment (`feature/review-gap-fixes`)
+
+The July 2026 production-readiness review's P0/P1 code gaps were closed in one branch. Headlines (each with tests):
+
+- **Layered identity resolution (migration `0033`).** Strong identifiers (email/username/hostname/fqdn/ip/serial/external id) resolve deterministically at 1.0; typed exact alias matching is entity-type-scoped; LLM candidate adjudication may abstain (`needs_review`), auto-links only above per-type thresholds (person 0.95); unmatched mentions create `provisional` identities instead of trusted 0.8 ones. Strong aliases are unique per tenant. Merges mark the survivor `verified` and enqueue `extraction.rebuild_identity_snapshots` to repair the cached JSONB refs.
+- **Real ANN indexing (migration `0032`).** halfvec expression HNSW on all four embedding columns — see the corrected HNSW entry below.
+- **Correlation gating.** Identity co-occurrence requires resolved/verified identities + 7-day window + non-person entity (0.65–0.75) or ≥2 shared identities (0.5); person-only single-identity correlation is dropped entirely. `CaseLink.evidence_id` no longer clobbered by the newest evidence.
+- **Execution governance.** Unknown safety classes fail closed; outcome enum validated; completion refuses while steps are open; abort/complete restricted to initiator/domain-admin; approvals verified against the run in the URL; playbook approval policies (max automation mode, min-safety-class approval, approver roles, self-approval ban) are now *evaluated* at start and decide time, not just stored.
+- **Security/ops basics.** Fernet key required outside development (no more per-call transient keys); login checks `status=active` and survives duplicate emails across tenants; `/ready` actually probes DB + migration head + Redis; destructive seed scripts refuse to run outside development.
+- **Retention/audit/notifications.** Archive daily + purge weekly on Beat (`settings.retention_purge_mode`, default `soft_purge`); `apply_legal_hold` tenant-scoped; soft-purge scrubs `evidence_chunks`; audit middleware records denied/failed mutations; email/webhook notifications deliver when configured (explicit `skipped_unconfigured` otherwise).
+- **ServiceNow.** Compound `(sys_updated_on, sys_id)` checkpoint (no boundary-second loss), paged incremental sync, retry/backoff with Retry-After.
+- **Graph/MAF hardening.** `ensure_edge` is ON CONFLICT-safe; one canonical domain-derivation rule across all edge writers; `GraphRelationshipMaterializer` on Beat (6h); traversal capped per frontier node; MAF provider truncates long conversations instead of dropping context and fences injected graph data as untrusted; generated playbooks carry `evidence_refs` and a policy-derived risk tier.
+
+## Still open after the 2026-07 shipment
+
+- **LLM provider resilience** — per-call timeout, circuit breaker, and provider fallback are still absent from `ai/provider.py` (budget gates, retries, and schema validation exist).
+- **Prompt-injection fencing at ingest extractors** — the MAF provider fences untrusted graph content, but episode/decision/identity extractors still concatenate evidence text into prompts without delimiters.
+- **Ranking calibration** — `quality_score = 0.5` placeholder, no abstention threshold, N+1 per-playbook queries, and the chunk search-side rollup remain (see the chunking entry).
+- **Sync single-flight** — no advisory lock per source object for overlapping backfills/retries (evidence dedup at normalize is DB-enforced since `0026`).
+- **Identity review queue UI** — `needs_review` / `provisional` states exist and are indexed; a reviewer console for them is not built (API-led for now).
+- **Execution engine depth** — tool registry, idempotency keys, rollback execution, telemetry-based outcome verification remain future work (Release 2 scope).
+- **Telemetry/topology/alert/change-event ingestion, SLO + business impact** — Release 3 scope, unchanged.
+
 ## Adding a new connector type
 
 Built-in types `teams`, `gmail`, `servicenow`, and `jira_sm` are registered in `backend/src/contextedge/connectors/registry.py`. New vendors still need a class under `connectors/` and an entry in the registry map.
@@ -106,7 +129,7 @@ Four issues flagged in [`ENTERPRISE_ARCHITECTURE_REVIEW.md`](../ENTERPRISE_ARCHI
 1. **Prompt caching** — `ai/provider.py::llm_complete` splits messages into a stable system block (marked `cache_control: {"type": "ephemeral"}` via `ai/observability.build_messages`) and a dynamic user block. OpenAI's automatic prefix cache and Anthropic's ephemeral cache both hit once the system prompt warms per worker. Classifier prompt rewritten accordingly.
 2. **Classify-before-embed** — `workers/extraction_tasks._normalize` runs relevance classification inline before embedding + identity + decision extraction. Items scoring `not_relevant` with confidence ≥ 0.75 skip the downstream LLM fan-out entirely. `classify_relevance_task` is no longer part of the default fan-out (still available for manual re-classification from the admin UI / attachment extraction path).
 3. **Per-call token + cache logging** — new `ai/observability.py` emits Prometheus counters (`contextedge_llm_tokens_total`, `contextedge_llm_requests_total`) tagged with tenant/model/task/token-type/outcome, a structured `llm.usage` log line per call, and an `OperationalEvent(event_type="llm.usage")` for historical dashboard queries. Both `llm_complete`/`llm_complete_json` and `generate_embedding`/`generate_embeddings_batch` instrumented.
-4. **HNSW indexes on embedding columns** — migration `0021_hnsw_vector_indexes` builds cosine-ops HNSW indexes on `evidence_items.embedding` and `decisions.embedding` with `CONCURRENTLY`, resolving the full-scan problem flagged in the architecture review. Requires `pgvector>=0.5`.
+4. **HNSW indexes on embedding columns** — **corrected 2026-07-29:** migration `0021` could never build these indexes — pgvector's HNSW caps the `vector` type at 2,000 dimensions and the app stores 3,072, so every similarity query was a sequential scan despite this entry previously claiming otherwise. Real ANN indexing landed in migration `0032_halfvec_hnsw_indexes`: HNSW *expression* indexes over `(embedding::halfvec(3072))` on `evidence_items`, `evidence_chunks`, `decisions`, and `episodes` (requires pgvector server extension >= 0.7; the migration no-ops with a notice on older extensions). Query side goes through `search/vector_ops.py::halfvec_cosine_distance` — any direct `column.cosine_distance(...)` ordering will not use the index.
 
 Also shipped in the same slice: `GET /api/v1/admin/llm-usage` + `/admin/cost` reviewer UI that renders per-tenant spend, cache-hit rate, and top-N model×task breakdown. Gated to `tenant_admin` / `platform_super_admin`. Refetches every 60 seconds.
 
@@ -151,7 +174,7 @@ Two pre-existing SSR issues on `/review` and `/decisions` (both called `useSearc
 
 `Decision.embedding` (Vector(3072)) is populated inline during `create_decision` from `decision_type + compact_trace + rationale_summary`. `find_similar_decisions` and `find_similar_decisions_aggregate` accept `query_decision_id` (uses that decision's stored embedding) or `query_text` (embedded on the fly) and order results by `embedding <=> query` cosine distance. JSONB containment on `workflow` / `environment` / `impacted_dependency` remains as a structural pre-filter in both paths so structural scoping still works with semantic ordering. When no query embedding resolves (neither param passed, or provider failure), retrieval falls back to the pre-C3 `created_at DESC` ordering — no caller breakage. Embedding write failures at `create_decision` are swallowed; the decision lands with `embedding = NULL` and participates in structural retrieval until re-embedded.
 
-**Not yet done:** no HNSW / IVFFlat index on `decisions.embedding` — matches the existing `evidence_items.embedding` pattern (also unindexed) since the full-table scan is fine at current scale. Add an index when decision row counts warrant it. Similarly, no back-fill task exists to embed pre-C3 decisions; they'll stay embedding-null until re-written or a dedicated `reembed_decisions` task is built.
+**Update 2026-07-29:** `decisions.embedding` (and evidence/chunks/episodes) now has a halfvec HNSW expression index via migration `0032` — see the corrected HNSW entry above. Still open: no back-fill task exists to embed pre-C3 decisions; they'll stay embedding-null until re-written or a dedicated `reembed_decisions` task is built.
 
 ## Resolved: Cache invalidation on downstream mutations
 

@@ -230,6 +230,10 @@ After running the seed script, you can log in to the frontend (`localhost:3000`)
 - **Admin User:** `admin@contextedge.local` / `admin123`
 - **Analyst User:** `analyst@contextedge.local` / `analyst123`
 
+> ⚠️ These accounts exist only in the local development seed
+> (`backend/src/contextedge/seed.py`). Never create them, or reuse these
+> passwords, in any shared or production environment.
+
 ---
 
 ## 6. How to Add a New Feature

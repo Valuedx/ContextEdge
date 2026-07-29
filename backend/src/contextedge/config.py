@@ -67,6 +67,21 @@ class Settings(BaseSettings):
     # JSON map: token string -> { "tenant_id": "uuid", "user_id": "uuid", "email": "...", "roles": ["service_account"] }
     service_tokens_json: str = "{}"
 
+    # Scheduled retention purge behavior. "soft_purge" scrubs content in
+    # place (safe default for automation); "hard_delete" removes rows and
+    # cascades. See services/retention_service.py.
+    retention_purge_mode: str = "soft_purge"
+
+    # Outbound notification delivery. Channels stay no-ops (logged as
+    # skipped) until configured.
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_username: str = ""
+    smtp_password: str = ""
+    smtp_from: str = ""
+    smtp_starttls: bool = True
+    notification_webhook_url: str = ""
+
     # PII / secret redaction at ingest. On by default — set to False only
     # for local debugging where seeing the raw payload is useful. Runs
     # before embedding + LLM extraction so PII / secrets never leave the
@@ -88,4 +103,16 @@ if settings.app_env != "development" and settings.jwt_secret_key == "change-me-i
     raise RuntimeError(
         "JWT_SECRET_KEY must be changed from the default value in non-development environments. "
         "Set JWT_SECRET_KEY in your .env or environment variables."
+    )
+
+if settings.app_env != "development" and (
+    not settings.fernet_key or "change-me" in settings.fernet_key
+):
+    # Without a stable Fernet key, encrypted source credentials are
+    # unrecoverable garbage. Refuse to start rather than persist ciphertext
+    # that can never be decrypted (see services/source_service._get_fernet).
+    raise RuntimeError(
+        "FERNET_KEY must be set in non-development environments. Generate one "
+        "with: python -c \"from cryptography.fernet import Fernet; "
+        "print(Fernet.generate_key().decode())\""
     )
