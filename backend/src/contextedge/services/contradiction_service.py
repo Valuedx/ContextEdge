@@ -233,8 +233,9 @@ async def _top_k_kb_candidates(
         predicates.append(
             (EvidenceItem.domain_id == domain_id) | EvidenceItem.domain_id.is_(None)
         )
-    from contextedge.search.vector_ops import halfvec_cosine_distance
+    from contextedge.search.vector_ops import halfvec_cosine_distance, tune_ann_recall
 
+    await tune_ann_recall(db)
     stmt = (
         select(EvidenceItem)
         .where(*predicates)

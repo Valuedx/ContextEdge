@@ -77,7 +77,7 @@ async def test_link_evidence_identities_updates_refs_and_links():
                 ]
             ),
         ),
-        patch("contextedge.services.identity_service.link_node_to_identities", AsyncMock()) as graph_mock,
+        patch("contextedge.services.identity_service.ensure_edge", AsyncMock()) as graph_mock,
         patch("contextedge.services.identity_service.append_operational_event", AsyncMock()) as event_mock,
     ):
         refs = await link_evidence_identities(

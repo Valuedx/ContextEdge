@@ -5,11 +5,19 @@ from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
 from contextedge.deps import AuthUser, DbSession
-from contextedge.models.episode import CanonicalIdentity, IdentityAlias
+from contextedge.models.episode import (
+    RESOLUTION_STATES,
+    CanonicalIdentity,
+    IdentityAlias,
+)
 from contextedge.schemas.review import (
     IdentityMergeRequest,
     IdentityResponse,
     IdentityUpdate,
+)
+from contextedge.services.identity_normalizer import (
+    _classify_bare_name,
+    normalize_text,
 )
 from contextedge.services.identity_service import merge_canonical_identities
 
@@ -23,6 +31,7 @@ async def list_identities(
     entity_type: str | None = None,
     active_only: bool = True,
     query: str | None = None,
+    resolution_state: str | None = None,
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
 ):
@@ -41,6 +50,15 @@ async def list_identities(
         stmt = stmt.where(CanonicalIdentity.is_active.is_(True))
     if query:
         stmt = stmt.where(CanonicalIdentity.canonical_name.ilike(f"%{query}%"))
+    if resolution_state is not None:
+        # The review queue: ?resolution_state=needs_review lists the
+        # resolver's parked matches (hits ix_canonical_identities_resolution_state).
+        if resolution_state not in RESOLUTION_STATES:
+            raise HTTPException(
+                status_code=400,
+                detail=f"resolution_state must be one of {RESOLUTION_STATES}",
+            )
+        stmt = stmt.where(CanonicalIdentity.resolution_state == resolution_state)
     result = await db.execute(stmt)
     return result.scalars().all()
 
@@ -67,18 +85,38 @@ async def update_identity(
         raise HTTPException(status_code=404, detail="Identity not found")
 
     update_data = body.model_dump(exclude_unset=True, exclude={"add_aliases"})
+    if "resolution_state" in update_data:
+        new_state = update_data["resolution_state"]
+        if new_state not in RESOLUTION_STATES:
+            raise HTTPException(
+                status_code=400,
+                detail=f"resolution_state must be one of {RESOLUTION_STATES}",
+            )
+        # A human set it — record the method so the audit trail shows why.
+        identity.resolution_method = "human_review"
     for field, value in update_data.items():
         setattr(identity, field, value)
 
-    existing_aliases = {identity.canonical_name.casefold(), *(alias.alias_text.casefold() for alias in identity.aliases)}
+    existing_aliases = {
+        normalize_text(identity.canonical_name),
+        *(normalize_text(alias.alias_text) for alias in identity.aliases),
+    }
     for alias_text in body.add_aliases:
-        normalized = alias_text.strip().casefold()
+        cleaned = alias_text.strip()
+        normalized = normalize_text(cleaned)
         if not normalized or normalized in existing_aliases:
             continue
+        # Classify typed identifiers so a human-entered email/hostname
+        # participates in Layer-1 strong matching, and populate the 0033
+        # columns so the alias is visible to the typed lookup index.
+        alias_type = _classify_bare_name(cleaned) or "display_name"
         db.add(
             IdentityAlias(
                 canonical_identity_id=identity.id,
-                alias_text=alias_text.strip(),
+                tenant_id=identity.tenant_id,
+                alias_text=cleaned,
+                normalized_alias=normalized,
+                alias_type=alias_type,
                 source_id=None,
                 confidence=1.0,
                 created_by=user.email,

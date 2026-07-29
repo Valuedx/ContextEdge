@@ -71,6 +71,10 @@ class Settings(BaseSettings):
     # place (safe default for automation); "hard_delete" removes rows and
     # cascades. See services/retention_service.py.
     retention_purge_mode: str = "soft_purge"
+    # Base retention window for the scheduled archive when a tenant has no
+    # active retention policy configuring its own retention_days.
+    # Conservative default: a year of operational memory.
+    retention_default_days: int = 365
 
     # Outbound notification delivery. Channels stay no-ops (logged as
     # skipped) until configured.

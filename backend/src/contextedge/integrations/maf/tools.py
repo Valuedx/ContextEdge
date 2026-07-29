@@ -78,6 +78,9 @@ class ContextGraphTools:
                 max_depth=min(max(int(max_depth), 1), 3),
                 profile="maf.v1",
             )
+        except (TypeError, ValueError) as exc:
+            # int("unlimited") etc. — model-supplied garbage, not a crash.
+            return _tool_error("invalid_request", f"max_depth must be an integer 1-3 ({type(exc).__name__}).")
         except ValidationError as exc:
             return _tool_error("invalid_request", f"Request rejected: {exc.error_count()} invalid field(s).")
 

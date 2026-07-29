@@ -169,7 +169,11 @@ class ServiceNowConnector(BaseConnector):
                 if (ts, sys_id) > (latest_ts, latest_sys_id):
                     latest_ts, latest_sys_id = ts, sys_id
             if not latest_ts:
-                latest_ts = end_str
+                # Empty final page: clamp the seed to "now" when the window
+                # extends into the future, or records updated between this
+                # backfill and window.end would be skipped by incremental.
+                now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+                latest_ts = min(end_str, now_str)
             # Seed the compound checkpoint fetch_changes resumes from.
             new_checkpoint = Checkpoint(
                 data={"last_updated": latest_ts, "last_sys_id": latest_sys_id}
@@ -202,22 +206,26 @@ class ServiceNowConnector(BaseConnector):
         last_updated = checkpoint.data.get("last_updated", "2000-01-01 00:00:00")
         last_sys_id = str(checkpoint.data.get("last_sys_id", ""))
 
-        # `>=` instead of `>`: records sharing the checkpoint's boundary
-        # second are re-fetched and de-duplicated with the (timestamp,
-        # sys_id) tuple below — the strict `>` comparison silently skipped
-        # them forever. Stable ordering by timestamp then sys_id makes the
-        # tuple comparison a total order.
+        # Keyset pagination on the compound (sys_updated_on, sys_id) cursor.
+        # NEVER sysparm_offset: offset pages over a table that is being
+        # updated between fetches shift rows left and silently skip records
+        # — and because the checkpoint then advances past them, they were
+        # lost forever. Each page instead re-queries strictly after the last
+        # tuple seen (the ^NQ branch handles rows sharing the boundary
+        # second), so concurrent updates can only re-deliver, never skip.
+        cursor_ts = last_updated
+        cursor_sys_id = last_sys_id
         latest_ts = last_updated
         latest_sys_id = last_sys_id
-        for page in range(self.INCREMENTAL_MAX_PAGES):
+        for _page in range(self.INCREMENTAL_MAX_PAGES):
             params = {
                 "sysparm_fields": f"sys_id,{fields}",
                 "sysparm_query": (
-                    f"sys_updated_on>={last_updated}"
+                    f"sys_updated_on>{cursor_ts}"
+                    f"^NQsys_updated_on={cursor_ts}^sys_id>{cursor_sys_id}"
                     "^ORDERBYsys_updated_on^ORDERBYsys_id"
                 ),
                 "sysparm_limit": str(self.INCREMENTAL_PAGE_SIZE),
-                "sysparm_offset": str(page * self.INCREMENTAL_PAGE_SIZE),
             }
             data = await self._snow_get(f"/api/now/table/{table_name}", params)
             records = data.get("result", [])
@@ -225,8 +233,8 @@ class ServiceNowConnector(BaseConnector):
             for record in records:
                 ts = record.get("sys_updated_on", "")
                 sys_id = record.get("sys_id", "")
-                if (ts, sys_id) <= (last_updated, last_sys_id):
-                    continue  # boundary-second record already ingested
+                if (ts, sys_id) <= (cursor_ts, cursor_sys_id):
+                    continue  # server returned an already-seen row; skip
                 if (ts, sys_id) > (latest_ts, latest_sys_id):
                     latest_ts, latest_sys_id = ts, sys_id
                 events.append(
@@ -241,6 +249,9 @@ class ServiceNowConnector(BaseConnector):
                     )
                 )
 
+            if records:
+                cursor_ts = records[-1].get("sys_updated_on", cursor_ts)
+                cursor_sys_id = records[-1].get("sys_id", cursor_sys_id)
             if len(records) < self.INCREMENTAL_PAGE_SIZE:
                 break
 

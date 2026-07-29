@@ -55,10 +55,12 @@ class RequestAuditMiddleware(BaseHTTPMiddleware):
             correlation_id=getattr(request.state, "correlation_id", None),
         )
 
-        # Denied (401/403) and failed mutating calls are audit-relevant too —
-        # an attacker probing execution endpoints must appear in the trail,
-        # not only their successes. Everything with a resolved tenant is
-        # recorded; the outcome is distinguished by the `outcome` field.
+        # Denied and failed mutating calls are audit-relevant too, not only
+        # successes. Scope note: audit_logs rows require a resolved tenant,
+        # which only exists after successful token verification — so this
+        # captures authenticated 403s/failures. Unauthenticated 401 probes
+        # never reach a tenant and appear ONLY in the structlog line above;
+        # alert on `http.mutating_request` with status 401 for those.
         if tenant_id:
             import anyio
             try:

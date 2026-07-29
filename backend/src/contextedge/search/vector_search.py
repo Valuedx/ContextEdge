@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from contextedge.ai.provider import generate_embedding
 from contextedge.models.evidence import EvidenceItem
 from contextedge.models.playbook import PlaybookEvidenceLink, PlaybookVersion
-from contextedge.search.vector_ops import halfvec_cosine_distance
+from contextedge.search.vector_ops import halfvec_cosine_distance, tune_ann_recall
 
 
 async def search_evidence_semantic(
@@ -23,6 +23,7 @@ async def search_evidence_semantic(
     """Semantic search evidence items using pgvector cosine similarity."""
     emb = query_embedding if query_embedding is not None else await generate_embedding(query_text)
 
+    await tune_ann_recall(db)
     stmt = (
         select(
             EvidenceItem,
@@ -60,6 +61,7 @@ async def search_evidence_semantic_for_playbook(
     """Semantic search for evidence linked to one **published** playbook version."""
     emb = query_embedding if query_embedding is not None else await generate_embedding(query_text)
 
+    await tune_ann_recall(db)
     stmt = (
         select(
             EvidenceItem,

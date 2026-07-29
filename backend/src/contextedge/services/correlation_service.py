@@ -160,6 +160,10 @@ async def correlate_evidence_item(
         for link in existing_links
         if link.evidence_id is not None and link.evidence_id != evidence.id
     }
+    # Remember which relations are backed by a deterministic case link —
+    # when both signals exist, the 1.0 case-link tier must win over the
+    # fuzzy identity tier (edges are created once and never upgraded).
+    case_link_related_ids = set(related_evidence_ids)
 
     # Identity tier: only resolved/verified identities carry correlation
     # signal — a provisional identity is an unreviewed guess.
@@ -206,11 +210,11 @@ async def correlate_evidence_item(
     identity_correlations: dict[uuid.UUID, tuple[float, str]] = {}
     for related_id, shared in shared_by_evidence.items():
         related_time = related_times.get(related_id)
-        if (
-            evidence_time is not None
-            and related_time is not None
-            and abs(evidence_time - related_time) > IDENTITY_CORRELATION_WINDOW
-        ):
+        # Fail closed on missing timestamps: the identity tier is gated on
+        # time proximity, and an unknown time cannot prove proximity.
+        if evidence_time is None or related_time is None:
+            continue
+        if abs(evidence_time - related_time) > IDENTITY_CORRELATION_WINDOW:
             continue
         signal = _identity_correlation_signal(shared, identity_types)
         if signal is None:
@@ -280,13 +284,14 @@ async def correlate_evidence_item(
         ).scalar_one_or_none()
         if edge is not None:
             continue
-        if related_evidence_id in identity_related_evidence_ids:
-            confidence, explanation = identity_correlations[related_evidence_id]
-            correlation_type = "identity_match"
-        else:
+        if related_evidence_id in case_link_related_ids:
+            # Deterministic tier wins even when identities are also shared.
             confidence = 1.0
             explanation = f"Matched canonical case {canonical_case_id}"
             correlation_type = "case_link_match"
+        else:
+            confidence, explanation = identity_correlations[related_evidence_id]
+            correlation_type = "identity_match"
         await create_correlation(
             db,
             tenant_id,
@@ -307,7 +312,7 @@ async def correlate_evidence_item(
         entity_id=evidence.id,
         event_type="correlation.case_linked",
         payload={
-            "canonical_case_id": str(canonical_case_id),
+            "canonical_case_id": str(canonical_case_id) if canonical_case_id else None,
             "candidate_count": len(candidates),
             "case_links_created": created_links,
             "case_links_updated": updated_links,

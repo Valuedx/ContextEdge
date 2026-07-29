@@ -91,6 +91,10 @@ class IdentityResponse(BaseModel):
     tenant_id: UUID
     entity_type: str
     canonical_name: str
+    # Reviewers must be able to tell a parked guess from a trusted identity.
+    resolution_state: str = "resolved"
+    resolution_confidence: float | None = None
+    resolution_method: str | None = None
     metadata_extra: dict | None
     is_active: bool
     created_at: datetime
@@ -103,6 +107,9 @@ class IdentityResponse(BaseModel):
 class IdentityUpdate(BaseModel):
     canonical_name: str | None = None
     entity_type: str | None = None
+    # Allows a reviewer to promote needs_review/provisional to
+    # verified/resolved (validated against RESOLUTION_STATES in the route).
+    resolution_state: str | None = None
     metadata_extra: dict | None = None
     is_active: bool | None = None
     add_aliases: list[str] = Field(default_factory=list)

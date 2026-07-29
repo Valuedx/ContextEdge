@@ -17,6 +17,7 @@ import structlog
 from sqlalchemy import select
 
 from contextedge.config import settings
+from contextedge.models.policy import TenantPolicy
 from contextedge.models.tenant import Tenant
 from contextedge.services.retention_service import (
     apply_retention_policy,
@@ -34,6 +35,32 @@ async def _tenant_ids(db, tenant_id: str) -> list[uuid.UUID]:
     return [uuid.UUID(tenant_id)]
 
 
+async def _tenant_retention_days(db, tid: uuid.UUID) -> int:
+    """Resolve the tenant's base retention window: the most recent active
+    retention policy's ``config.retention_days``, else the settings
+    default."""
+    row = (
+        await db.execute(
+            select(TenantPolicy.config)
+            .where(
+                TenantPolicy.tenant_id == tid,
+                TenantPolicy.policy_type == "retention",
+                TenantPolicy.is_active.is_(True),
+            )
+            .order_by(TenantPolicy.updated_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    configured = (row or {}).get("retention_days")
+    try:
+        days = int(configured)
+        if days > 0:
+            return days
+    except (TypeError, ValueError):
+        pass
+    return settings.retention_default_days
+
+
 @celery_app.task(
     bind=True,
     max_retries=1,
@@ -47,7 +74,8 @@ def apply_retention_archive(self, tenant_id: str = "all"):
         totals = {"tenants": 0, "archived": 0}
         for tid in await _tenant_ids(db, tenant_id):
             try:
-                archived = await apply_retention_policy(db, tid)
+                retention_days = await _tenant_retention_days(db, tid)
+                archived = await apply_retention_policy(db, tid, retention_days)
                 await db.commit()
                 totals["tenants"] += 1
                 totals["archived"] += archived

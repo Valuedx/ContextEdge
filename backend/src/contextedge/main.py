@@ -89,7 +89,10 @@ async def _check_database() -> str:
 async def _check_migrations() -> str:
     expected = _expected_migration_head()
     if expected is None:
-        return "unknown"
+        # Installed layouts without the alembic directory can't resolve the
+        # expected head — be explicit that the check is disabled rather
+        # than passing, so operators notice in the checks dict.
+        return "unknown (alembic scripts not found; check disabled)"
 
     from sqlalchemy import text
 

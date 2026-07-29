@@ -402,6 +402,14 @@ async def record_step_completion(
     step = await db.get(ExecutionStepRun, step_run_id)
     if step is None or step.tenant_id != tenant_id:
         return None
+    # An approval-gated step cannot be marked done while its approval is
+    # still pending — otherwise complete_execution's open-steps check
+    # passes with an undecided approval. (No caller reaches this today;
+    # the guard is for whichever executor gets wired to it.)
+    if step.status == "awaiting_approval" and not error_message:
+        raise ExecutionPolicyError(
+            "Step is awaiting approval; decide the approval before recording completion"
+        )
     # Review F-14: mirror the `shadow: True` tag that record_tool_invocation
     # applies to tool-level outputs, so analytics querying step_run.outputs
     # can separate shadow runs from real execution.
@@ -710,6 +718,7 @@ async def modify_approval(
     modification_diff: dict,
     modification_reason_code: str,
     comment: str | None = None,
+    decider_roles: list[str] | None = None,
 ) -> ApprovalRequest | None:
     """Approve an approval request with modifications to the step's inputs.
 
@@ -744,6 +753,30 @@ async def modify_approval(
         return None
     if req.status != "pending":
         raise ExecutionPolicyError(f"Approval request is already '{req.status}'")
+
+    # Modify IS approve-with-changes — it must clear the same approval
+    # policy as decide_approval, or a self-approval ban / approver-role
+    # rule is defeated by submitting a trivial diff instead of "approve".
+    policy_run = await db.get(ExecutionRun, req.execution_run_id)
+    if policy_run is not None and policy_run.tenant_id == tenant_id:
+        policy_playbook = (
+            await db.get(Playbook, policy_run.playbook_id)
+            if policy_run.playbook_id is not None
+            else None
+        )
+        if policy_playbook is not None and policy_playbook.tenant_id == tenant_id:
+            try:
+                policy = await load_approval_policy(
+                    db, tenant_id, policy_playbook.approval_policy_id
+                )
+                check_decider(
+                    policy,
+                    decided_by=decided_by,
+                    run_initiated_by=policy_run.initiated_by,
+                    decider_roles=decider_roles,
+                )
+            except ApprovalPolicyViolation as exc:
+                raise ExecutionPolicyError(str(exc)) from exc
 
     now = datetime.now(UTC)
     req.status = "modified"

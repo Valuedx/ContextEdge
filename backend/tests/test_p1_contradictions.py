@@ -159,6 +159,7 @@ async def test_contradiction_detected_with_embedding_prefilter():
                 _ScalarsResult([playbook]),
                 _ScalarOneOrNoneResult(version),
                 _ScalarsResult([]),              # empty cursor
+                _ScalarsResult([]),              # SET LOCAL hnsw.ef_search (tune_ann_recall)
                 _ScalarsResult([evidence]),      # top-K candidates
                 _ScalarOneOrNoneResult(None),    # scan_state existing
                 _ScalarOneOrNoneResult(None),    # contradiction existing
@@ -225,6 +226,7 @@ async def test_no_contradiction_still_records_scan_state():
                 _ScalarsResult([playbook]),
                 _ScalarOneOrNoneResult(version),
                 _ScalarsResult([]),
+                _ScalarsResult([]),  # SET LOCAL hnsw.ef_search (tune_ann_recall)
                 _ScalarsResult([evidence]),
                 _ScalarOneOrNoneResult(None),   # scan_state existing lookup
             ]
@@ -279,6 +281,7 @@ async def test_token_overlap_gate_skips_llm_call():
                 _ScalarsResult([playbook]),
                 _ScalarOneOrNoneResult(version),
                 _ScalarsResult([]),
+                _ScalarsResult([]),  # SET LOCAL hnsw.ef_search (tune_ann_recall)
                 _ScalarsResult([evidence]),
                 _ScalarOneOrNoneResult(None),   # scan_state existing lookup for token-skip path
             ]
@@ -329,6 +332,7 @@ async def test_budget_cap_stops_llm_calls_and_records_skipped():
                 _ScalarsResult([playbook]),
                 _ScalarOneOrNoneResult(version),
                 _ScalarsResult([]),
+                _ScalarsResult([]),  # SET LOCAL hnsw.ef_search (tune_ann_recall)
                 _ScalarsResult([ev1, ev2]),
                 # ev1: scan_state existing (None) — will LLM-check
                 _ScalarOneOrNoneResult(None),
@@ -410,6 +414,7 @@ async def test_cursor_skips_pair_scanned_since_evidence_update():
                 _ScalarsResult([playbook]),
                 _ScalarOneOrNoneResult(version),
                 _ScalarsResult([cursor_row]),   # non-empty cursor
+                _ScalarsResult([]),  # SET LOCAL hnsw.ef_search (tune_ann_recall)
                 _ScalarsResult([evidence]),
             ]
         ),

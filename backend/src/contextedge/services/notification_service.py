@@ -100,7 +100,10 @@ def _smtp_send(recipient: str, title: str, body: str) -> None:
     message = EmailMessage()
     message["From"] = settings.smtp_from or settings.smtp_username
     message["To"] = recipient
-    message["Subject"] = title
+    # Header values must be single-line: a newline in a tenant-derived title
+    # raises in the email library and silently drops the notification.
+    single_line_title = " ".join(title.splitlines()).strip() or "(no subject)"
+    message["Subject"] = single_line_title
     message.set_content(body)
 
     with smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=10) as smtp:
