@@ -1,11 +1,18 @@
 """Add HNSW indexes to embedding columns for O(log n) similarity search.
 
-Before this revision, ``evidence_items.embedding`` and ``decisions.embedding``
-are queried with ``ORDER BY cosine_distance`` and no index — meaning every
-similarity lookup scans the full 3072-dim column linearly. At 3.65M rows
-that's ~45 GB of embedding bytes scanned per query. HNSW (Hierarchical
-Navigable Small World) gives approximate nearest-neighbour with ~95%
-recall at roughly 100× the throughput of a sequential scan.
+**Historical note (2026-07):** this migration never achieved its goal.
+pgvector's HNSW index on the ``vector`` type supports at most 2,000
+dimensions and the application stores 3,072 — the original ``CREATE INDEX``
+could not succeed, so the upgrade path below now only cleans up invalid
+leftovers. Working ANN indexing lands in ``0032_halfvec_hnsw_indexes``
+via ``halfvec(3072)`` expression indexes.
+
+Original rationale (kept for context): ``evidence_items.embedding`` and
+``decisions.embedding`` are queried with ``ORDER BY cosine_distance``; with
+no index every similarity lookup scans the full 3072-dim column linearly.
+HNSW (Hierarchical Navigable Small World) gives approximate
+nearest-neighbour with ~95% recall at roughly 100× the throughput of a
+sequential scan.
 
 Parameters chosen:
 - ``m = 16`` — number of bidirectional links per node. pgvector's default.

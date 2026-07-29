@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from contextedge.ai.provider import generate_embedding
 from contextedge.models.evidence import EvidenceItem
 from contextedge.models.playbook import PlaybookEvidenceLink, PlaybookVersion
+from contextedge.search.vector_ops import halfvec_cosine_distance
 
 
 async def search_evidence_semantic(
@@ -25,7 +26,7 @@ async def search_evidence_semantic(
     stmt = (
         select(
             EvidenceItem,
-            EvidenceItem.embedding.cosine_distance(emb).label("distance"),
+            halfvec_cosine_distance(EvidenceItem.embedding, emb).label("distance"),
         )
         .where(
             EvidenceItem.tenant_id == tenant_id,
@@ -62,7 +63,7 @@ async def search_evidence_semantic_for_playbook(
     stmt = (
         select(
             EvidenceItem,
-            EvidenceItem.embedding.cosine_distance(emb).label("distance"),
+            halfvec_cosine_distance(EvidenceItem.embedding, emb).label("distance"),
         )
         .join(
             PlaybookEvidenceLink,
