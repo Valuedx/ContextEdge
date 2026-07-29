@@ -125,7 +125,7 @@ Here is how it works, step by step:
 ### Step 1: Evidence Collection, Normalization & Storage
 
 **What happens here?**
-ContextEdge connects to your company's tools (ServiceNow, Splunk, Slack, Jira, Email) and pulls in raw data automatically. Each piece of raw data is called an **Evidence Item**.
+ContextEdge connects to your company's tools and pulls in raw data automatically. Each piece of raw data is called an **Evidence Item**. Implemented connectors today: **ServiceNow, Jira Service Management, Gmail, and MS Teams** (`connectors/registry.py`). The Splunk and Slack items in the walkthrough below are demo-seeded evidence used for illustration — those connectors are not implemented yet.
 
 **Real-world example:**
 On July 27, 2026, at 10:15 AM, the ordering system goes down. Within minutes, three things happen in three different tools:
@@ -152,10 +152,9 @@ ContextEdge pulls all three of these into the database as 3 separate **Evidence 
 Now ContextEdge has 3 separate evidence items from 3 different tools, but they are all about the **same incident**. The system needs to stitch them together into one complete story. This story is called an **Episode**.
 
 **How does it know they belong together?**
-The system looks at three clues:
-1. **Same ticket number** — All three mention `INC0010427`
-2. **Same time window** — All three happened within 30 minutes of each other
-3. **Same servers/systems** — All three mention `ORDERS_DB` or `SQLPROD01`
+The correlation service (`services/correlation_service.py`) looks at two tiers of clues:
+1. **Same case or thread reference** — all three mention `INC0010427` (deterministic, confidence 1.0)
+2. **Same servers/systems within a 7-day window** — shared *resolved, non-person* entities like `ORDERS_DB` or `SQLPROD01` (confidence 0.5–0.75; a shared person alone never links two incidents)
 
 When these clues match, the system groups the evidence items together and creates one **Episode** record.
 
@@ -184,7 +183,7 @@ Evidence collected from:
 **What happens here?**
 Over weeks and months, many different incidents happen. Some of them look very similar. The system compares all past episode stories and asks: *"Have I seen this same type of problem before?"*
 
-When 3 or more episodes have similar root causes, the system groups them into a **Pattern**.
+When episodes have closely similar summaries — embedding cosine distance under 0.20 in `pattern_tasks.py::cluster_episodes` (roughly ≥ 80% similarity) — the system groups them into a **Pattern**. (Even a single strong episode can seed a pattern; more episodes raise its confidence.)
 
 **Real-world example:**
 Look at these 6 episodes that happened over the past year:

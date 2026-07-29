@@ -9,7 +9,7 @@
 Think of it like this: Every time a server crashes or a login system breaks, engineers scramble to fix it. They search old tickets, ask senior colleagues, and dig through Slack messages. Most of this knowledge is lost after the incident is closed.
 
 ContextEdge solves this by:
-1. **Collecting** raw tickets, logs, and chat messages from ServiceNow, Splunk, Slack, and Jira
+1. **Collecting** raw tickets, emails, and chat messages via its connectors — ServiceNow, Jira Service Management, Gmail, and MS Teams today (the Splunk/Slack items in the examples below are demo-seeded evidence; those connectors are not implemented yet)
 2. **Stitching** related evidence into complete incident stories (Episodes)
 3. **Detecting** which problems keep repeating over months (Patterns)
 4. **Creating** step-by-step fix guides (Playbooks)
@@ -73,10 +73,9 @@ Each evidence item gets a unique content hash (like a digital fingerprint). If t
 An Episode is one complete incident story. It takes those 3 scattered evidence items from Step 1 and combines them into a single, clean summary that says: "Here's what happened, why it happened, and how it was fixed."
 
 **How does it know which evidence items belong together?**
-The system looks at three clues:
-1. **Same ticket number** — All three mention `INC0010427`
-2. **Same time window** — All three happened within 30 minutes of each other
-3. **Same servers/systems** — All three mention `ORDERS_DB` or `SQLPROD01`
+The correlation service looks at two tiers of clues:
+1. **Same ticket or thread reference** — all three mention `INC0010427` (deterministic, confidence 1.0)
+2. **Same servers/systems within a 7-day window** — shared *resolved, non-person* entities like `ORDERS_DB` or `SQLPROD01` (0.5–0.75; a shared person alone never links two incidents)
 
 When these clues match, the system groups them and creates one Episode.
 
@@ -102,7 +101,7 @@ A background worker sends the raw ticket text to an LLM (like GPT-4). The LLM ex
 - Why it broke (root cause)
 - How it was fixed (resolution steps)
 
-Then a second validation check ensures the extracted facts actually match the original text (no hallucinations).
+The response is schema-validated (`llm_complete_json_validated`, with one bounded repair retry) before anything is stored; extracted episodes then go through human review before they can feed patterns.
 
 **In simple words:** Episode = one complete incident story, built by combining clues from multiple tools. Like a detective writing one case report from witness statements, CCTV, and phone records.
 
@@ -119,7 +118,7 @@ Then a second validation check ensures the extracted facts actually match the or
 A Pattern is a repeating problem. When the system notices that the same type of incident keeps happening over weeks or months, it groups those incidents together and says: "This is a recurring issue."
 
 **How does it detect patterns?**
-The system compares all past episode stories using AI similarity. If 3 or more episodes have similar root causes (more than 85% match), they get grouped into one Pattern.
+The system compares approved episode summaries by embedding similarity: episodes within cosine distance 0.20 of a seed episode (roughly ≥ 80% similarity, `pattern_tasks.py::cluster_episodes`) get grouped into one Pattern. Even a single strong episode can seed a pattern; more episodes raise its confidence.
 
 **Real-world example:**
 Look at these 6 incidents that happened over the past year — all related to ORDERS_DB:
@@ -187,13 +186,13 @@ Steps:
 
 **Who uses the Playbook?**
 - **Human engineers** can look up the playbook on the dashboard during an incident
-- **AI agents** (via Microsoft Agent Framework) can read and execute the playbook steps automatically
+- **AI agents** (via Microsoft Agent Framework) retrieve the playbook as memory; the MAF graph tool is read-only — any execution goes through the governed execution service with safety classes and approval policies
 
 **In simple words:** Playbook = a verified fix manual. Like a fire department's standard operating procedure — when there's a kitchen fire, follow these exact steps in this exact order.
 
 **Where in the code:**
 - Database tables: `playbooks` (metadata), `playbook_versions` (versioned steps)
-- Graph edge: `playbook ──addresses──► pattern`
+- Graph edge: `playbook ──derived_from──► pattern`
 
 ---
 
@@ -286,15 +285,15 @@ ContextEdge acts as the **operational memory** for MAF agents. Without ContextEd
 
 ---
 
-### How Many MAF Agents Are Supported?
+### What Agent Roles Does the Integration Target?
 
-ContextEdge supports **4 distinct MAF Agent Roles** (all governed by the `maf.v1` projection profile):
+The MAF integration ships **one plugin** (`ContextGraphMAFPlugin`: a proactive memory provider + a **read-only** graph query tool). Consumers can build any number of agents on top of it; the design targets four typical roles (all governed by the `maf.v1` projection profile):
 
-| Agent Role | What it does | Real-World Example |
+| Agent Role (design target) | What it does | Real-World Example |
 |------------|-------------|-------------------|
 | **1. Operational Resolution Agent** | Diagnoses active incidents by fetching matching graph context | During an outage, reads past episodes and recommends the right playbook |
-| **2. Playbook Execution Agent** | Executes approved remediation steps safely step by step | Runs database query kill commands or restarts services per approved playbook |
-| **3. Audit & Compliance Agent** | Logs every decision, policy check, and tool call into PostgreSQL | Ensures all AI actions have a complete audit trace for compliance teams |
+| **2. Playbook Execution Agent** | Follows approved remediation steps — execution itself goes through ContextEdge's governed execution API (safety classes + approval policies), not through the MAF tool | Requests a governed run of the approved recovery playbook |
+| **3. Audit & Compliance Agent** | Reviews decision traces, policy checks, and tool invocations recorded in PostgreSQL | Ensures all AI actions have a complete audit trace for compliance teams |
 | **4. Diagnostic & Analysis Agent** | Evaluates incoming evidence, claims, and flags contradictions | Detects if a newly proposed fix contradicts an existing security policy |
 
 ---
@@ -343,7 +342,7 @@ To prevent AI agents from getting confused or exceeding token limits, ContextEdg
 
 **Summary:**
 - **Without MAF integration:** The web dashboard still works for humans, but AI agents are "blind" to company history.
-- **With MAF integration:** 4 MAF agent roles use 2 memory mechanisms (Proactive Provider + On-Demand Tool) under strict safety caps to automate IT incident resolution.
+- **With MAF integration:** agents use 2 memory mechanisms (Proactive Provider + read-only On-Demand Tool) under strict safety caps; any remediation is executed through the governed execution service, never directly through the MAF tool.
 
 ---
 
@@ -351,7 +350,7 @@ To prevent AI agents from getting confused or exceeding token limits, ContextEdg
 
 Sometimes a single ticket contains unrelated topics (e.g., a printer issue mixed into a VPN ticket). ContextEdge handles this with 4 safeguards:
 
-1. **Vector Distance Check**: If two items are less than 70% similar, they are separated
+1. **Per-Source Chunking**: Long tickets and threads are split into topic-coherent chunks (`services/chunkers/`, migration `0030`), so retrieval matches the relevant segment instead of the whole mixed-topic ticket
 2. **LLM Smart Extraction**: The AI is told to ignore off-topic comments
 3. **Contradiction Detection**: If extracted facts conflict with each other, the item goes to the Review Queue for a human to check
 4. **Negative Knowledge**: When a reviewer says "Evidence B is NOT related to Incident A", the system remembers this and won't make the same mistake again
@@ -364,7 +363,7 @@ Sometimes a single ticket contains unrelated topics (e.g., a printer issue mixed
 ContextEdge stores relationships between all its data in a graph structure:
 
 ```text
-[ PLAYBOOK ] ──(addresses)──► [ PATTERN ] ──(clusters)──► [ EPISODE ] ──(derived_from)──► [ EVIDENCE ]
+[ PLAYBOOK ] ──(derived_from)──► [ PATTERN ] ──(clusters)──► [ EPISODE ] ──(derived_from)──► [ EVIDENCE ]
 ```
 
 These relationships are stored in a PostgreSQL table called `graph_edges`:
@@ -375,13 +374,13 @@ CREATE TABLE graph_edges (
   tenant_id UUID NOT NULL,
   source_type VARCHAR(50),   -- 'evidence', 'episode', 'pattern', 'playbook'
   source_id UUID,
-  edge_type VARCHAR(50),     -- 'part_of', 'derived_from', 'clusters', 'addresses'
+  edge_type VARCHAR(50),     -- 'derived_from', 'clusters', 'belongs_to', 'executes', ...
   target_type VARCHAR(50),
   target_id UUID
 );
 ```
 
-When someone asks "How to fix Error 503?" or opens the Pattern graph view, PostgreSQL runs a multi-hop traversal query that walks through these edges to find all connected nodes in under 5 milliseconds.
+When someone asks "How to fix Error 503?" or opens the Pattern graph view, `graph/queries.py` walks these edges with a batched breadth-first search — one indexed query per hop, budget-capped — returning the connected nodes in milliseconds.
 
 ---
 
@@ -398,14 +397,14 @@ Prometheus tracks system health:
 
 | Step | What Happens | Code Location |
 |------|-------------|--------------|
-| 1. Ingestion | Pull tickets from ServiceNow, Slack, etc. | `connectors/servicenow/`, `connectors/gmail/` |
+| 1. Ingestion | Pull tickets/emails/chats from ServiceNow, Jira SM, Gmail, Teams | `connectors/servicenow/`, `connectors/jira_sm/`, `connectors/gmail/`, `connectors/teams/` |
 | 2. Redaction | Remove passwords, emails, SSNs | `services/redaction_service.py` |
 | 3. Storage | Save text + vector embeddings | `evidence_items` & `evidence_chunks` tables |
 | 4. Episode Extraction | AI converts raw tickets into structured stories | `workers/extraction_tasks.py` |
 | 5. Pattern Detection | Group similar episodes into patterns | `workers/pattern_tasks.py` |
 | 6. Graph Wiring | Create edges between nodes | `graph/builder.py` |
 | 7. Search | Vector search + full-text search combined | `search/hybrid_ranker.py` |
-| 8. Graph Traversal | Multi-hop SQL queries for graph views | `graph/queries.py` |
+| 8. Graph Traversal | Batched per-hop BFS queries for graph views | `graph/queries.py` |
 | 9. MAF Agent Memory | Feed knowledge to AI agents | `integrations/maf/provider.py` |
 | 10. Decision Logging | Record AI/human decisions for audit | `services/decision_trace_service.py` |
 
