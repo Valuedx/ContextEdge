@@ -325,16 +325,26 @@ async def get_evidence_context(evidence_id: UUID, db: DbSession, user: AuthUser)
     # 1. Resolve Source Name
     source_name = None
     if item.source_id:
-        s_res = await db.execute(select(Source).where(Source.id == item.source_id))
+        s_res = await db.execute(
+            select(Source).where(
+                Source.id == item.source_id,
+                Source.tenant_id == user.tenant_id,
+            )
+        )
         s_obj = s_res.scalar_one_or_none()
         if s_obj:
-            source_name = s_obj.name
+            source_name = s_obj.display_name
 
     # 2. Resolve Domain Name
     domain_name = None
     if item.domain_id:
         from contextedge.models.tenant import Domain
-        d_res = await db.execute(select(Domain).where(Domain.id == item.domain_id))
+        d_res = await db.execute(
+            select(Domain).where(
+                Domain.id == item.domain_id,
+                Domain.tenant_id == user.tenant_id,
+            )
+        )
         d_obj = d_res.scalar_one_or_none()
         if d_obj:
             domain_name = d_obj.name
@@ -359,7 +369,12 @@ async def get_evidence_context(evidence_id: UUID, db: DbSession, user: AuthUser)
     for link in pel_links:
         if link.episode_id and link.episode_id not in seen_episodes:
             seen_episodes.add(link.episode_id)
-            ep_res = await db.execute(select(Episode).where(Episode.id == link.episode_id))
+            ep_res = await db.execute(
+                select(Episode).where(
+                    Episode.id == link.episode_id,
+                    Episode.tenant_id == user.tenant_id,
+                )
+            )
             ep = ep_res.scalar_one_or_none()
             if ep:
                 episodes.append({
@@ -372,7 +387,12 @@ async def get_evidence_context(evidence_id: UUID, db: DbSession, user: AuthUser)
 
         if link.pattern_id and link.pattern_id not in seen_patterns:
             seen_patterns.add(link.pattern_id)
-            pat_res = await db.execute(select(Pattern).where(Pattern.id == link.pattern_id))
+            pat_res = await db.execute(
+                select(Pattern).where(
+                    Pattern.id == link.pattern_id,
+                    Pattern.tenant_id == user.tenant_id,
+                )
+            )
             pat = pat_res.scalar_one_or_none()
             if pat:
                 patterns.append({
@@ -380,16 +400,20 @@ async def get_evidence_context(evidence_id: UUID, db: DbSession, user: AuthUser)
                     "title": pat.title,
                     "confidence": pat.confidence,
                 })
-                # Playbook linked to pattern
-                pb_res = await db.execute(select(Playbook).where(Playbook.pattern_id == pat.id))
-                pb = pb_res.scalar_one_or_none()
-                if pb and pb.id not in seen_playbooks:
-                    seen_playbooks.add(pb.id)
-                    playbooks.append({
-                        "id": str(pb.id),
-                        "title": pb.title,
-                        "risk_tier": pb.risk_tier,
-                    })
+                pb_res = await db.execute(
+                    select(Playbook).where(
+                        Playbook.pattern_id == pat.id,
+                        Playbook.tenant_id == user.tenant_id,
+                    )
+                )
+                for pb in pb_res.scalars().all():
+                    if pb.id not in seen_playbooks:
+                        seen_playbooks.add(pb.id)
+                        playbooks.append({
+                            "id": str(pb.id),
+                            "title": pb.title,
+                            "risk_tier": pb.risk_tier,
+                        })
 
     # B. Check GraphEdge links
     ge_q = await db.execute(
@@ -402,7 +426,12 @@ async def get_evidence_context(evidence_id: UUID, db: DbSession, user: AuthUser)
     for ge in ge_q.scalars().all():
         if ge.source_node_type == "episode" and ge.source_node_id not in seen_episodes:
             seen_episodes.add(ge.source_node_id)
-            ep_res = await db.execute(select(Episode).where(Episode.id == ge.source_node_id))
+            ep_res = await db.execute(
+                select(Episode).where(
+                    Episode.id == ge.source_node_id,
+                    Episode.tenant_id == user.tenant_id,
+                )
+            )
             ep = ep_res.scalar_one_or_none()
             if ep:
                 episodes.append({
