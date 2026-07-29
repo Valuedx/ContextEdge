@@ -92,6 +92,18 @@ export default function EvidenceDetailPage() {
     },
   });
 
+  const { data: contextData } = useQuery<{
+    source_name?: string;
+    domain_name?: string;
+    episodes: { id: string; title: string; case_ref?: string; status: string }[];
+    patterns: { id: string; title: string; confidence: number }[];
+    playbooks: { id: string; title: string; risk_tier: string }[];
+  }>({
+    queryKey: ["evidence-context", evidenceId],
+    queryFn: () => api.get(`/evidence/${evidenceId}/context`),
+    enabled: !!evidenceId,
+  });
+
   const showAccessCard = policyListOk || !!(item?.access_policy_id);
 
   if (!evidenceId) return null;
@@ -136,6 +148,59 @@ export default function EvidenceDetailPage() {
           <span className="rounded-md border px-2 py-0.5 text-xs">{item.sensitivity_label}</span>
         )}
       </div>
+
+      {/* Linked Knowledge Graph Section */}
+      {contextData && (contextData.episodes.length > 0 || contextData.patterns.length > 0) && (
+        <Card className="border-indigo-500/20 bg-indigo-950/10">
+          <CardHeader className="pb-3">
+            <CardTitle className="text-base flex items-center gap-2 text-indigo-400">
+              <RefreshCw className="h-4 w-4" />
+              Linked Knowledge Graph Context
+            </CardTitle>
+            <p className="text-xs text-slate-400">
+              This evidence is connected to the following operational incident episodes and recurring patterns.
+            </p>
+          </CardHeader>
+          <CardContent className="grid gap-3 md:grid-cols-2">
+            {contextData.episodes.map((ep) => (
+              <Link
+                key={ep.id}
+                href={`/episodes/${ep.id}`}
+                className="p-3 border border-emerald-500/30 bg-emerald-950/20 rounded-xl hover:border-emerald-500 transition-all flex flex-col justify-between"
+              >
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-400">
+                    🟢 Linked Episode
+                  </span>
+                  <StatusBadge status={ep.status} />
+                </div>
+                <p className="text-sm font-semibold text-slate-100 line-clamp-1">{ep.title}</p>
+                {ep.case_ref && (
+                  <span className="text-xs text-slate-400 mt-1 font-mono">{ep.case_ref}</span>
+                )}
+              </Link>
+            ))}
+
+            {contextData.patterns.map((pat) => (
+              <Link
+                key={pat.id}
+                href={`/patterns/${pat.id}`}
+                className="p-3 border border-indigo-500/30 bg-indigo-950/20 rounded-xl hover:border-indigo-500 transition-all flex flex-col justify-between"
+              >
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-indigo-400">
+                    🟣 Linked Pattern
+                  </span>
+                  <span className="text-[10px] text-indigo-300 font-mono">
+                    {Math.round(pat.confidence * 100)}% Match
+                  </span>
+                </div>
+                <p className="text-sm font-semibold text-slate-100 line-clamp-1">{pat.title}</p>
+              </Link>
+            ))}
+          </CardContent>
+        </Card>
+      )}
 
       {showAccessCard && (
         <Card>
@@ -215,26 +280,28 @@ export default function EvidenceDetailPage() {
           </CardHeader>
           <CardContent className="space-y-2 text-sm">
             <div>
-              <span className="text-muted-foreground">Source</span>{" "}
-              <Link href={`/sources/${item.source_id}`} className="font-mono text-xs text-primary hover:underline">
-                {item.source_id}
+              <span className="text-muted-foreground">Source:</span>{" "}
+              <Link href={`/sources/${item.source_id}`} className="font-medium text-primary hover:underline">
+                {contextData?.source_name || item.source_id}
               </Link>
             </div>
             {item.source_object_id && (
               <div>
-                <span className="text-muted-foreground">Source object</span>{" "}
+                <span className="text-muted-foreground">Source object:</span>{" "}
                 <span className="font-mono text-xs">{item.source_object_id}</span>
               </div>
             )}
             {item.thread_id && (
               <div>
-                <span className="text-muted-foreground">Thread</span>{" "}
+                <span className="text-muted-foreground">Thread:</span>{" "}
                 <span className="font-mono text-xs">{item.thread_id}</span>
               </div>
             )}
             <div>
-              <span className="text-muted-foreground">Domain</span>{" "}
-              <span className="font-mono text-xs">{item.domain_id ?? "—"}</span>
+              <span className="text-muted-foreground">Domain:</span>{" "}
+              <span className="font-medium text-slate-200">
+                {contextData?.domain_name || item.domain_id || "General IT Operations"}
+              </span>
             </div>
           </CardContent>
         </Card>

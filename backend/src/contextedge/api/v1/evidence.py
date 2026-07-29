@@ -10,11 +10,13 @@ from contextedge.schemas.common import StatusResponse
 from contextedge.schemas.evidence import (
     AttachmentArtifactResponse,
     EvidenceAccessPolicyUpdate,
+    EvidenceContextResponse,
     EvidenceItemDetail,
     EvidenceItemResponse,
     EvidenceBulkDeleteRequest,
     ThreadResponse,
 )
+from contextedge.models.source import Source
 from contextedge.services.policy_assignment import assert_policy_assignment
 from contextedge.search.access_control import resolve_excluded_access_policy_ids
 
@@ -305,3 +307,116 @@ async def delete_evidence(evidence_id: UUID, db: DbSession, user: AuthUser):
         details={"title": item.title},
     )
     return None
+
+
+@router.get("/{evidence_id}/context", response_model=EvidenceContextResponse)
+async def get_evidence_context(evidence_id: UUID, db: DbSession, user: AuthUser):
+    """Retrieve resolved source name, domain name, and linked Episode/Pattern knowledge graph context."""
+    result = await db.execute(
+        select(EvidenceItem).where(
+            EvidenceItem.id == evidence_id,
+            EvidenceItem.tenant_id == user.tenant_id,
+        )
+    )
+    item = result.scalar_one_or_none()
+    if not item:
+        raise HTTPException(status_code=404, detail="Evidence not found")
+
+    # 1. Resolve Source Name
+    source_name = None
+    if item.source_id:
+        s_res = await db.execute(select(Source).where(Source.id == item.source_id))
+        s_obj = s_res.scalar_one_or_none()
+        if s_obj:
+            source_name = s_obj.name
+
+    # 2. Resolve Domain Name
+    domain_name = None
+    if item.domain_id:
+        from contextedge.models.tenant import Domain
+        d_res = await db.execute(select(Domain).where(Domain.id == item.domain_id))
+        d_obj = d_res.scalar_one_or_none()
+        if d_obj:
+            domain_name = d_obj.name
+
+    # 3. Resolve Linked Episode, Pattern, and Playbook records
+    from contextedge.models.pattern import PatternEvidenceLink, Pattern, GraphEdge
+    from contextedge.models.episode import Episode
+    from contextedge.models.playbook import Playbook
+
+    episodes = []
+    patterns = []
+    playbooks = []
+    seen_episodes: set[UUID] = set()
+    seen_patterns: set[UUID] = set()
+    seen_playbooks: set[UUID] = set()
+
+    # A. Check PatternEvidenceLink
+    pel_q = await db.execute(
+        select(PatternEvidenceLink).where(PatternEvidenceLink.evidence_id == evidence_id)
+    )
+    pel_links = pel_q.scalars().all()
+    for link in pel_links:
+        if link.episode_id and link.episode_id not in seen_episodes:
+            seen_episodes.add(link.episode_id)
+            ep_res = await db.execute(select(Episode).where(Episode.id == link.episode_id))
+            ep = ep_res.scalar_one_or_none()
+            if ep:
+                episodes.append({
+                    "id": str(ep.id),
+                    "title": ep.title,
+                    "case_ref": ep.primary_case_ref,
+                    "status": ep.status,
+                    "created_at": ep.created_at.isoformat() if ep.created_at else None,
+                })
+
+        if link.pattern_id and link.pattern_id not in seen_patterns:
+            seen_patterns.add(link.pattern_id)
+            pat_res = await db.execute(select(Pattern).where(Pattern.id == link.pattern_id))
+            pat = pat_res.scalar_one_or_none()
+            if pat:
+                patterns.append({
+                    "id": str(pat.id),
+                    "title": pat.title,
+                    "confidence": pat.confidence,
+                })
+                # Playbook linked to pattern
+                pb_res = await db.execute(select(Playbook).where(Playbook.pattern_id == pat.id))
+                pb = pb_res.scalar_one_or_none()
+                if pb and pb.id not in seen_playbooks:
+                    seen_playbooks.add(pb.id)
+                    playbooks.append({
+                        "id": str(pb.id),
+                        "title": pb.title,
+                        "risk_tier": pb.risk_tier,
+                    })
+
+    # B. Check GraphEdge links
+    ge_q = await db.execute(
+        select(GraphEdge).where(
+            GraphEdge.tenant_id == user.tenant_id,
+            GraphEdge.target_node_type == "evidence",
+            GraphEdge.target_node_id == evidence_id,
+        )
+    )
+    for ge in ge_q.scalars().all():
+        if ge.source_node_type == "episode" and ge.source_node_id not in seen_episodes:
+            seen_episodes.add(ge.source_node_id)
+            ep_res = await db.execute(select(Episode).where(Episode.id == ge.source_node_id))
+            ep = ep_res.scalar_one_or_none()
+            if ep:
+                episodes.append({
+                    "id": str(ep.id),
+                    "title": ep.title,
+                    "case_ref": ep.primary_case_ref,
+                    "status": ep.status,
+                    "created_at": ep.created_at.isoformat() if ep.created_at else None,
+                })
+
+    return {
+        "source_name": source_name,
+        "domain_name": domain_name,
+        "episodes": episodes,
+        "patterns": patterns,
+        "playbooks": playbooks,
+    }

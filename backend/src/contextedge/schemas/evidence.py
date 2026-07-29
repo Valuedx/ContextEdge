@@ -138,7 +138,15 @@ class ReconstructRequest(BaseModel):
 
 
 class EvidenceBulkDeleteRequest(BaseModel):
-    ids: list[UUID]
+    ids: list[UUID] = Field(..., min_items=1, description="List of evidence item IDs to delete")
+
+
+class EvidenceContextResponse(BaseModel):
+    source_name: str | None = None
+    domain_name: str | None = None
+    episodes: list[dict] = []
+    patterns: list[dict] = []
+    playbooks: list[dict] = []
 
 
 class AttachmentArtifactResponse(BaseModel):
