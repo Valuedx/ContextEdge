@@ -108,6 +108,8 @@ celery_app = Celery(
         "contextedge.workers.graph_tasks",
         # Post-merge JSONB identity snapshot repair.
         "contextedge.workers.identity_tasks",
+        # Scheduled retention archive + purge.
+        "contextedge.workers.retention_tasks",
     ],
 )
 
@@ -178,6 +180,18 @@ celery_app.conf.update(
         "reconcile-graph-relationships-every-6h": {
             "task": "evaluation.reconcile_graph_relationships",
             "schedule": 21600.0,
+            "args": ("all",),
+        },
+        # Retention: archive daily, purge weekly (mode from
+        # settings.retention_purge_mode; soft_purge by default).
+        "retention-archive-daily": {
+            "task": "evaluation.apply_retention_archive",
+            "schedule": 86400.0,
+            "args": ("all",),
+        },
+        "retention-purge-weekly": {
+            "task": "evaluation.purge_archived",
+            "schedule": 604800.0,
             "args": ("all",),
         },
     },
