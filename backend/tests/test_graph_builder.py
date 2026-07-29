@@ -16,6 +16,10 @@ from contextedge.graph.builder import (
 from contextedge.models.pattern import GraphEdge
 
 
+from sqlalchemy.dialects import postgresql
+from sqlalchemy.dialects.postgresql.dml import Insert as _PgInsert
+
+
 class _ScalarOneOrNoneResult:
     def __init__(self, value):
         self._value = value
@@ -25,9 +29,21 @@ class _ScalarOneOrNoneResult:
 
 
 def _make_db(side_effects=None):
+    """Fake AsyncSession: SELECT results come from *side_effects* in order;
+    ensure_edge's ON CONFLICT INSERT ... RETURNING is echoed back as a
+    GraphEdge built from the statement's bound values (what the DB would
+    return on a successful insert)."""
     added: list = []
+    select_results = list(side_effects or [])
+
+    async def _execute(stmt):
+        if isinstance(stmt, _PgInsert):
+            params = stmt.compile(dialect=postgresql.dialect()).params
+            return _ScalarOneOrNoneResult(GraphEdge(**dict(params)))
+        return select_results.pop(0)
+
     db = SimpleNamespace(
-        execute=AsyncMock(side_effect=side_effects or []),
+        execute=AsyncMock(side_effect=_execute),
         add=lambda obj: added.append(obj),
         flush=AsyncMock(),
     )
@@ -110,7 +126,10 @@ async def test_ensure_edge_creates_when_not_found():
 
     assert isinstance(edge, GraphEdge)
     assert edge.domain_id == domain_id
-    assert len(added) == 1
+    assert edge.edge_type == "belongs_to"
+    # Miss path inserts via ON CONFLICT DO NOTHING, not session.add().
+    assert added == []
+    assert db.execute.await_count == 2
 
 
 @pytest.mark.asyncio

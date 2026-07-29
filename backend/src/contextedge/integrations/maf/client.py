@@ -51,8 +51,19 @@ class HttpContextGraphClient:
         service_token: str | None = None,
         timeout: float = 15.0,
         client: httpx.AsyncClient | None = None,
+        allow_insecure_http: bool = False,
     ):
         self.base_url = base_url.rstrip("/")
+        scheme = self.base_url.split("://", 1)[0].lower() if "://" in self.base_url else ""
+        if scheme != "https" and not (
+            allow_insecure_http and scheme == "http"
+        ):
+            # Tokens travel in headers; refuse to send them over plain HTTP
+            # unless the caller opts in (local development).
+            raise ValueError(
+                "HttpContextGraphClient requires an https:// base_url; pass "
+                "allow_insecure_http=True to use http:// in local development."
+            )
         self.bearer_token = bearer_token
         self.service_token = service_token
         self.timeout = timeout

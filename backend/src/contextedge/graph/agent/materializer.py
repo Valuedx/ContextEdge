@@ -17,7 +17,24 @@ from contextedge.models.claim import Claim, ClaimEvidence, DecisionClaim, Decisi
 from contextedge.models.decision import Decision
 from contextedge.models.error_signature import ErrorSignature, FixPattern
 from contextedge.models.execution import ApprovalRequest, ExecutionRun
+from contextedge.models.playbook import Playbook
 from contextedge.models.session import ResolutionSession
+
+# Domain derivation follows migration 0031's backfill CTE — one owning row per
+# edge type. Every writer (this materializer, execution_service, and the
+# backfill) must agree, or uq_graph_edges_active_logical treats the same
+# logical relationship with different domain_id values as distinct edges:
+#
+#   has_execution      -> session.domain_id
+#   executes           -> playbook.domain_id
+#   requires_approval  -> playbook.domain_id (via execution_run.playbook_id)
+#   based_on           -> decision.domain_id
+#   applied_policy     -> action_policy.domain_id
+#   resulted_in        -> session.domain_id
+#   validated_fix /
+#   invalidated_fix    -> fix_pattern.domain_id
+#   (claim edges)      -> claim.domain_id; entity/signature/fix edges use
+#                         their own row's domain_id
 
 
 @dataclass(slots=True)
@@ -109,8 +126,11 @@ class GraphRelationshipMaterializer:
                     domain_id=row.domain_id,
                 )
 
-        async for row in self._scalars(
-            select(ExecutionRun).where(ExecutionRun.tenant_id == tenant_id),
+        async for row, session_domain_id, playbook_domain_id in self._rows(
+            select(ExecutionRun, ResolutionSession.domain_id, Playbook.domain_id)
+            .outerjoin(ResolutionSession, ResolutionSession.id == ExecutionRun.session_id)
+            .outerjoin(Playbook, Playbook.id == ExecutionRun.playbook_id)
+            .where(ExecutionRun.tenant_id == tenant_id),
             batch_size,
         ):
             if row.session_id is not None:
@@ -121,6 +141,7 @@ class GraphRelationshipMaterializer:
                     "execution_run",
                     row.id,
                     "has_execution",
+                    domain_id=session_domain_id,
                 )
             result.relationships_seen += await self._edge(
                 tenant_id,
@@ -129,10 +150,14 @@ class GraphRelationshipMaterializer:
                 "playbook",
                 row.playbook_id,
                 "executes",
+                domain_id=playbook_domain_id,
             )
 
-        async for row in self._scalars(
-            select(ApprovalRequest).where(ApprovalRequest.tenant_id == tenant_id),
+        async for row, playbook_domain_id in self._rows(
+            select(ApprovalRequest, Playbook.domain_id)
+            .outerjoin(ExecutionRun, ExecutionRun.id == ApprovalRequest.execution_run_id)
+            .outerjoin(Playbook, Playbook.id == ExecutionRun.playbook_id)
+            .where(ApprovalRequest.tenant_id == tenant_id),
             batch_size,
         ):
             result.relationships_seen += await self._edge(
@@ -142,6 +167,7 @@ class GraphRelationshipMaterializer:
                 "approval_request",
                 row.id,
                 "requires_approval",
+                domain_id=playbook_domain_id,
             )
 
         async for row in self._scalars(
@@ -190,8 +216,8 @@ class GraphRelationshipMaterializer:
                 weight=float(link.weight),
             )
 
-        async for link in self._scalars(
-            select(DecisionEvidence)
+        async for link, decision_domain_id in self._rows(
+            select(DecisionEvidence, Decision.domain_id)
             .join(Decision, Decision.id == DecisionEvidence.decision_id)
             .where(Decision.tenant_id == tenant_id),
             batch_size,
@@ -203,6 +229,7 @@ class GraphRelationshipMaterializer:
                 "evidence",
                 link.evidence_id,
                 "based_on",
+                domain_id=decision_domain_id,
             )
 
         async for link, domain_id in self._rows(
@@ -223,10 +250,10 @@ class GraphRelationshipMaterializer:
                 metadata={"use_type": link.use_type},
             )
 
-        async for link in self._scalars(
-            select(DecisionActionPolicy).where(
-                DecisionActionPolicy.tenant_id == tenant_id
-            ),
+        async for link, policy_domain_id in self._rows(
+            select(DecisionActionPolicy, ActionPolicy.domain_id)
+            .join(ActionPolicy, ActionPolicy.id == DecisionActionPolicy.action_policy_id)
+            .where(DecisionActionPolicy.tenant_id == tenant_id),
             batch_size,
         ):
             result.relationships_seen += await self._edge(
@@ -236,6 +263,7 @@ class GraphRelationshipMaterializer:
                 "action_policy",
                 link.action_policy_id,
                 "applied_policy",
+                domain_id=policy_domain_id,
             )
 
         async for row in self._scalars(
@@ -285,8 +313,10 @@ class GraphRelationshipMaterializer:
                     domain_id=row.domain_id,
                 )
 
-        async for row in self._scalars(
-            select(CaseOutcome).where(CaseOutcome.tenant_id == tenant_id),
+        async for row, session_domain_id in self._rows(
+            select(CaseOutcome, ResolutionSession.domain_id)
+            .outerjoin(ResolutionSession, ResolutionSession.id == CaseOutcome.case_id)
+            .where(CaseOutcome.tenant_id == tenant_id),
             batch_size,
         ):
             result.relationships_seen += await self._edge(
@@ -296,12 +326,13 @@ class GraphRelationshipMaterializer:
                 "case_outcome",
                 row.id,
                 "resulted_in",
+                domain_id=session_domain_id,
             )
 
-        async for link in self._scalars(
-            select(CaseOutcomeFixPattern).where(
-                CaseOutcomeFixPattern.tenant_id == tenant_id
-            ),
+        async for link, fix_domain_id in self._rows(
+            select(CaseOutcomeFixPattern, FixPattern.domain_id)
+            .outerjoin(FixPattern, FixPattern.id == CaseOutcomeFixPattern.fix_pattern_id)
+            .where(CaseOutcomeFixPattern.tenant_id == tenant_id),
             batch_size,
         ):
             result.relationships_seen += await self._edge(
@@ -311,6 +342,7 @@ class GraphRelationshipMaterializer:
                 "fix_pattern",
                 link.fix_pattern_id,
                 "invalidated_fix" if link.result == "failed" else "validated_fix",
+                domain_id=fix_domain_id,
                 weight=float(link.confidence or 1.0),
                 metadata={"result": link.result},
             )

@@ -5,11 +5,16 @@ from __future__ import annotations
 from typing import Annotated, Any
 from uuid import UUID
 
-from pydantic import Field
+from pydantic import Field, ValidationError
 
 from contextedge.graph.agent.contracts import AgentGraphRequest, GraphNodeRef
 from contextedge.integrations.maf._compat import FunctionInvocationContext, tool
 from contextedge.integrations.maf.client import ContextGraphClient
+
+
+def _tool_error(code: str, message: str) -> dict[str, Any]:
+    """Structured, model-actionable error result (never a raw traceback)."""
+    return {"error": {"code": code, "message": message}, "nodes": [], "relationships": []}
 
 
 class ContextGraphTools:
@@ -44,17 +49,37 @@ class ContextGraphTools:
         context: FunctionInvocationContext | None = None,
     ) -> dict[str, Any]:
         del context
-        node_refs = [
-            GraphNodeRef(type=item["type"], id=UUID(item["id"]))
-            for item in (seeds or [])
-        ]
-        subset = await self.client.get_agent_subset(
-            AgentGraphRequest(
-                query=query,
+        # Model-supplied arguments are untrusted: clamp to the contract limits
+        # and turn malformed values into structured errors the agent can fix,
+        # never raw KeyError/ValueError tracebacks.
+        node_refs: list[GraphNodeRef] = []
+        for index, item in enumerate((seeds or [])[:20]):
+            if not isinstance(item, dict) or "type" not in item or "id" not in item:
+                return _tool_error(
+                    "invalid_seed",
+                    f"Seed #{index} must be an object with 'type' and 'id' keys.",
+                )
+            try:
+                node_refs.append(
+                    GraphNodeRef(type=str(item["type"]), id=UUID(str(item["id"])))
+                )
+            except (ValueError, ValidationError):
+                return _tool_error(
+                    "invalid_seed",
+                    f"Seed #{index} has an invalid type or non-UUID id.",
+                )
+
+        clean_entities = [str(e)[:500] for e in (entities or [])[:20]]
+        try:
+            request = AgentGraphRequest(
+                query=" ".join((query or "").split())[:4_000],
                 seeds=node_refs,
-                entities=entities or [],
-                max_depth=max_depth,
+                entities=clean_entities,
+                max_depth=min(max(int(max_depth), 1), 3),
                 profile="maf.v1",
             )
-        )
+        except ValidationError as exc:
+            return _tool_error("invalid_request", f"Request rejected: {exc.error_count()} invalid field(s).")
+
+        subset = await self.client.get_agent_subset(request)
         return subset.model_dump(mode="json")

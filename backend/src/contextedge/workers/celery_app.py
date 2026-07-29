@@ -104,6 +104,8 @@ celery_app = Celery(
         "contextedge.workers.decision_tasks",
         # Post-hard-delete orphan sweeps (review F-18 / F-20).
         "contextedge.workers.cleanup_tasks",
+        # Relational-to-graph edge reconciliation for post-0031 rows.
+        "contextedge.workers.graph_tasks",
     ],
 )
 
@@ -166,6 +168,14 @@ celery_app.conf.update(
         "cleanup-hard-deleted-daily": {
             "task": "evaluation.cleanup_hard_deleted_evidence",
             "schedule": 86400.0,
+            "args": ("all",),
+        },
+        # Materialize claim / fix-pattern / case-outcome / execution
+        # relationships created since migration 0031's one-time backfill.
+        # ensure_edge is ON CONFLICT-safe, so the sweep is idempotent.
+        "reconcile-graph-relationships-every-6h": {
+            "task": "evaluation.reconcile_graph_relationships",
+            "schedule": 21600.0,
             "args": ("all",),
         },
     },

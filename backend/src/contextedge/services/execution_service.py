@@ -19,6 +19,7 @@ from contextedge.models.execution import (
 )
 from contextedge.graph.builder import ensure_edge
 from contextedge.models.playbook import Playbook, PlaybookVersion, is_shadow_mode
+from contextedge.models.session import ResolutionSession
 from contextedge.services.decision_trace_service import create_decision, record_outcome
 from contextedge.services.event_log_service import append_operational_event
 from contextedge.services.session_service import append_trace_event
@@ -269,6 +270,17 @@ async def start_execution(
                 "automation_mode": playbook.automation_mode,
             },
         )
+        # Canonical domain rule (see graph/agent/materializer.py): the
+        # has_execution edge carries the *session's* domain, matching the
+        # 0031 backfill — not the playbook's.
+        session_domain_id = (
+            await db.execute(
+                select(ResolutionSession.domain_id).where(
+                    ResolutionSession.id == session_id,
+                    ResolutionSession.tenant_id == tenant_id,
+                )
+            )
+        ).scalar_one_or_none()
         await ensure_edge(
             db,
             tenant_id,
@@ -277,7 +289,7 @@ async def start_execution(
             "execution_run",
             run.id,
             "has_execution",
-            domain_id=getattr(playbook, "domain_id", None),
+            domain_id=session_domain_id,
         )
 
     await create_decision(
@@ -492,6 +504,18 @@ async def request_approval(
     await db.flush()
     await db.refresh(req)
 
+    # Canonical domain rule: requires_approval carries the playbook's domain
+    # (via the run), matching the 0031 backfill and the materializer.
+    playbook_domain_id = None
+    if run is not None and run.playbook_id is not None:
+        playbook_domain_id = (
+            await db.execute(
+                select(Playbook.domain_id).where(
+                    Playbook.id == run.playbook_id,
+                    Playbook.tenant_id == tenant_id,
+                )
+            )
+        ).scalar_one_or_none()
     await ensure_edge(
         db,
         tenant_id,
@@ -500,6 +524,7 @@ async def request_approval(
         "approval_request",
         req.id,
         "requires_approval",
+        domain_id=playbook_domain_id,
     )
 
     await append_operational_event(
