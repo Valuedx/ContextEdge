@@ -23,7 +23,11 @@ this plan on `feature/maf-context-graph-integration`.
 
 ### Implementation verification
 
-- Backend: 497 tests pass in `backend\venv`.
+- Backend: 497 tests passed at commit `c02d164`. The follow-up commit
+  `9367f96` landed with two stale tests (the pattern-subgraph mock was not
+  updated for the new `PatternEvidenceLink` query, and the L-01 ORM-DDL
+  snapshot was not regenerated after `models/evidence.py` was reformatted);
+  both are fixed on `feature/review-gap-fixes`, where the suite is green.
 - MAF: provider and `FunctionTool.invoke` smoke tests pass against
   `agent-framework-core 1.12.1`.
 - Database: migration `0031` passes downgrade, upgrade, repeat downgrade, and

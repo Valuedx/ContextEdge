@@ -4,7 +4,12 @@ from uuid import uuid4
 
 import pytest
 
-from contextedge.graph.queries import get_entity_subgraph, get_neighbors, get_pattern_subgraph
+from contextedge.graph.queries import (
+    get_entity_subgraph,
+    get_graph_stats,
+    get_neighbors,
+    get_pattern_subgraph,
+)
 from contextedge.models.pattern import GraphEdge
 
 
@@ -125,9 +130,25 @@ async def test_get_neighbors_with_domain_filter():
 
 # ---- get_pattern_subgraph ----
 
+def _pel(pattern_id, episode_id=None, evidence_id=None, weight=1.0):
+    return SimpleNamespace(
+        id=uuid4(),
+        pattern_id=pattern_id,
+        episode_id=episode_id,
+        evidence_id=evidence_id,
+        link_type="clusters",
+        weight=weight,
+    )
+
+
 @pytest.mark.asyncio
 async def test_get_pattern_subgraph_returns_persisted_edges():
-    """After enrichment edges are persisted, subgraph should return them without virtual nodes."""
+    """After enrichment edges are persisted, subgraph should return them without virtual nodes.
+
+    Query order: pattern lookup, one batched edge query per depth (2), the
+    PatternEvidenceLink merge, then batched title decoration for any
+    episode/evidence nodes.
+    """
     tenant_id = uuid4()
     pattern_id = uuid4()
     trigger_node_id = uuid4()
@@ -145,7 +166,10 @@ async def test_get_pattern_subgraph_returns_persisted_edges():
         call_count += 1
         if call_count == 1:
             return _ScalarOneOrNoneResult(pattern)
-        return _ScalarsResult([e])
+        if call_count == 2:
+            return _ScalarsResult([e])
+        # depth-2 batch, PEL merge, decoration: nothing further
+        return _ScalarsResult([])
 
     db = SimpleNamespace(execute=_execute)
 
@@ -157,6 +181,72 @@ async def test_get_pattern_subgraph_returns_persisted_edges():
     assert "pattern" in node_types
     assert "trigger" in node_types
     assert result["edges"][0]["type"] == "trigger_of"
+    assert result["truncated"] is False
+
+
+@pytest.mark.asyncio
+async def test_get_pattern_subgraph_merges_evidence_links():
+    """Relational PatternEvidenceLink rows appear as clusters/derived_from edges."""
+    tenant_id = uuid4()
+    pattern_id = uuid4()
+    episode_id = uuid4()
+    evidence_id = uuid4()
+
+    pattern = SimpleNamespace(id=pattern_id, title="VPN issue", tenant_id=tenant_id)
+    link = _pel(pattern_id, episode_id=episode_id, evidence_id=evidence_id)
+
+    call_count = 0
+
+    async def _execute(q):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return _ScalarOneOrNoneResult(pattern)
+        if call_count == 3:  # PEL merge (call 2 is depth-1 BFS; empty ends traversal)
+            return _ScalarsResult([link])
+        return _ScalarsResult([])
+
+    db = SimpleNamespace(execute=_execute)
+
+    result = await get_pattern_subgraph(db, tenant_id, pattern_id)
+
+    edge_types = {e["type"] for e in result["edges"]}
+    assert edge_types == {"clusters", "derived_from"}
+    node_types = {n["type"] for n in result["nodes"]}
+    assert node_types == {"pattern", "episode", "evidence"}
+    # Rows missing from the tenant-filtered decoration fetch get fallback titles.
+    titles = {n["type"]: n["title"] for n in result["nodes"]}
+    assert titles["episode"].startswith("Episode ")
+    assert titles["evidence"].startswith("Evidence ")
+
+
+@pytest.mark.asyncio
+async def test_get_pattern_subgraph_as_of_skips_evidence_link_merge():
+    """PEL has no validity window, so point-in-time queries must not merge it."""
+    from datetime import UTC, datetime
+
+    tenant_id = uuid4()
+    pattern_id = uuid4()
+    pattern = SimpleNamespace(id=pattern_id, title="VPN issue", tenant_id=tenant_id)
+
+    calls = []
+
+    async def _execute(q):
+        calls.append(q)
+        if len(calls) == 1:
+            return _ScalarOneOrNoneResult(pattern)
+        return _ScalarsResult([])
+
+    db = SimpleNamespace(execute=_execute)
+
+    result = await get_pattern_subgraph(
+        db, tenant_id, pattern_id, as_of=datetime(2026, 1, 1, tzinfo=UTC)
+    )
+
+    # pattern lookup + first BFS depth only (empty frontier ends traversal);
+    # no PEL query, no decoration queries.
+    assert len(calls) == 2
+    assert result["edges"] == []
 
 
 @pytest.mark.asyncio
@@ -168,7 +258,7 @@ async def test_get_pattern_subgraph_not_found():
 
     result = await get_pattern_subgraph(db, tenant_id, uuid4())
 
-    assert result == {"nodes": [], "edges": []}
+    assert result == {"nodes": [], "edges": [], "truncated": False}
 
 
 # ---- get_entity_subgraph ----
@@ -205,3 +295,40 @@ async def test_get_entity_subgraph_empty():
 
     assert len(result["nodes"]) == 1  # just the origin node
     assert len(result["edges"]) == 0
+
+
+# ---- get_graph_stats ----
+
+class _RowsResult:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def all(self):
+        return list(self._rows)
+
+
+@pytest.mark.asyncio
+async def test_get_graph_stats_response_contract():
+    """Keys are a frontend contract: GraphStatsResponse in types/graph.ts."""
+    tenant_id = uuid4()
+
+    edge_rows = [
+        SimpleNamespace(edge_type="belongs_to", count=3),
+        SimpleNamespace(edge_type="trigger_of", count=2),
+    ]
+    node_rows = [
+        SimpleNamespace(node_type="pattern", count=2),
+        SimpleNamespace(node_type="episode", count=4),
+    ]
+    results = iter([_RowsResult(edge_rows), _RowsResult(node_rows)])
+
+    async def _execute(q):
+        return next(results)
+
+    db = SimpleNamespace(execute=_execute)
+
+    stats = await get_graph_stats(db, tenant_id)
+
+    assert stats["total_edges"] == 5
+    assert stats["edge_type_counts"] == {"belongs_to": 3, "trigger_of": 2}
+    assert stats["node_type_counts"] == {"pattern": 2, "episode": 4}
