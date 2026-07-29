@@ -237,6 +237,8 @@ class SQLAlchemyAgentGraphRepository:
         query = (
             select(ranked_edge)
             .where(subq.c.frontier_rank <= self.EDGES_PER_FRONTIER_NODE)
+            # Deterministic survivors when the absolute cap bites.
+            .order_by(subq.c.weight.desc(), subq.c.id)
             .limit(self.MAX_EDGES_PER_HOP)
         )
 

@@ -510,8 +510,9 @@ async def find_similar_decisions(
         stmt = stmt.where(Decision.embedding.is_not(None))
         if query_decision_id is not None:
             stmt = stmt.where(Decision.id != query_decision_id)
-        from contextedge.search.vector_ops import halfvec_cosine_distance
+        from contextedge.search.vector_ops import halfvec_cosine_distance, tune_ann_recall
 
+        await tune_ann_recall(db)
         stmt = stmt.order_by(halfvec_cosine_distance(Decision.embedding, query_embedding))
     else:
         stmt = stmt.order_by(Decision.created_at.desc())

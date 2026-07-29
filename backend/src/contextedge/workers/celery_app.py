@@ -1,7 +1,8 @@
 import uuid
 
+import structlog
 from celery import Celery
-from celery.signals import before_task_publish, task_postrun, task_prerun
+from celery.signals import before_task_publish, task_postrun, task_prerun, worker_ready
 
 from contextedge.config import settings
 from contextedge.middleware.request_context import (
@@ -77,6 +78,65 @@ def _release_worker_context(task_id=None, **_) -> None:
             # A different task may have already reset it (pool recycling);
             # don't let postrun crash the worker on cleanup.
             pass
+
+
+@worker_ready.connect
+def _require_migrations_at_head(sender=None, **_) -> None:
+    """Refuse to consume when the DB schema is behind the code.
+
+    The API's /ready gate holds HTTP traffic on a migration mismatch, but
+    workers would happily consume the normalize queue against a stale
+    schema — every task then fails mid-transaction (e.g. identity columns
+    from 0033 missing), corrupting ingestion until someone notices.
+    Exiting lets the supervisor restart-loop until migrations run.
+    Transient DB errors and installed layouts without the alembic
+    directory are skipped — this gate only fires on a *definite* mismatch.
+    """
+    logger = structlog.get_logger()
+    try:
+        from pathlib import Path
+
+        from alembic.script import ScriptDirectory
+        from sqlalchemy import create_engine
+        from sqlalchemy import text as sa_text
+
+        import contextedge
+
+        alembic_dir = Path(contextedge.__file__).resolve().parents[2] / "alembic"
+        if not alembic_dir.is_dir():
+            return
+        from sqlalchemy.exc import ProgrammingError
+
+        expected = ScriptDirectory(str(alembic_dir)).get_current_head()
+        engine = create_engine(settings.database_url_sync, pool_pre_ping=True)
+        try:
+            with engine.connect() as conn:
+                try:
+                    row = conn.execute(
+                        sa_text("SELECT version_num FROM alembic_version")
+                    ).first()
+                except ProgrammingError:
+                    # No alembic_version table = never-migrated database —
+                    # the MOST definite mismatch, not a transient error.
+                    row = None
+        finally:
+            engine.dispose()
+        current = row[0] if row else None
+    except SystemExit:
+        raise
+    except Exception as exc:
+        logger.warning("worker.migration_check_skipped", error=str(exc))
+        return
+    if current != expected:
+        logger.error(
+            "worker.migration_mismatch_refusing_to_start",
+            database_revision=current,
+            expected_revision=expected,
+        )
+        raise SystemExit(
+            f"Database at revision {current!r}, code expects {expected!r} — "
+            "run 'alembic upgrade head' before starting workers."
+        )
 
 
 celery_app = Celery(

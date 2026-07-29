@@ -114,6 +114,10 @@ _EXPECTED_MARKERS: set[tuple[str, str]] = {
      '"external_id", name="uq_entities_tenant_type_system_external_id", ),'),
     ('episode.py', 'ForeignKey("canonical_identities.id", ondelete="CASCADE"),'),
     ('episode.py', 'ForeignKey("evidence_items.id", ondelete="CASCADE"),'),
+    # uq_identity_aliases_tenant_strong — partial unique index created in
+    # migration 0033; mirrored into IdentityAlias.__table_args__ so
+    # metadata-built schemas enforce strong-alias tenant uniqueness too.
+    ('episode.py', 'unique=True,'),
     ('episode.py',
      'source_evidence_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), '
      'ForeignKey("evidence_items.id", ondelete="CASCADE"), nullable=False)'),

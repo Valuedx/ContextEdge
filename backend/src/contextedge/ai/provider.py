@@ -372,6 +372,8 @@ async def llm_complete_json_validated(
     tenant_id: _uuid.UUID | str | None = None,
     db: Any | None = None,
     max_retries: int = 1,
+    prompt_name: str | None = None,
+    prompt_version: str | None = None,
 ) -> T_Schema:
     """Parse LLM output against a Pydantic schema, with a bounded repair retry.
 
@@ -398,6 +400,8 @@ async def llm_complete_json_validated(
             system_prompt=system_prompt,
             tenant_id=tenant_id,
             db=db,
+            prompt_name=prompt_name,
+            prompt_version=prompt_version,
         )
         return schema.model_validate(raw)
     except ValidationError as err:
@@ -428,6 +432,8 @@ async def llm_complete_json_validated(
         system_prompt=system_prompt,
         tenant_id=tenant_id,
         db=db,
+        prompt_name=prompt_name,
+        prompt_version=prompt_version,
     )
     try:
         return schema.model_validate(second)

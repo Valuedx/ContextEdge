@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, func
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text, func, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -32,6 +32,24 @@ STRONG_ALIAS_TYPES = (
 
 class CanonicalIdentity(Base, TenantScopedMixin):
     __tablename__ = "canonical_identities"
+    # Mirrors migration 0033 so metadata-built schemas (tests, dev
+    # bootstrap) match migration-built databases.
+    __table_args__ = (
+        Index(
+            "ix_canonical_identities_tenant_type_normalized",
+            "tenant_id",
+            "entity_type",
+            "normalized_name",
+        ),
+        Index(
+            "ix_canonical_identities_resolution_state",
+            "tenant_id",
+            "resolution_state",
+            postgresql_where=text(
+                "resolution_state IN ('provisional', 'needs_review')"
+            ),
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=False, index=True)
@@ -52,12 +70,35 @@ class CanonicalIdentity(Base, TenantScopedMixin):
 
 class IdentityAlias(Base):
     __tablename__ = "identity_aliases"
+    # Mirrors migration 0033 (strong-alias tenant uniqueness + typed lookup
+    # index) so metadata-built schemas enforce the same constraints the
+    # resolver's ON CONFLICT inserts rely on.
+    __table_args__ = (
+        Index(
+            "ix_identity_aliases_tenant_type_normalized",
+            "tenant_id",
+            "alias_type",
+            "normalized_alias",
+        ),
+        Index(
+            "uq_identity_aliases_tenant_strong",
+            "tenant_id",
+            "alias_type",
+            "normalized_alias",
+            unique=True,
+            postgresql_where=text(
+                "alias_type IN ('email', 'username', 'hostname', 'fqdn', "
+                "'ip_address', 'serial_number', 'external_id')"
+            ),
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     canonical_identity_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("canonical_identities.id"), nullable=False, index=True)
     # Denormalized from the canonical row (0033) so alias uniqueness can be
-    # tenant-scoped without a join.
-    tenant_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True, index=True)
+    # tenant-scoped without a join. Not index=True: the composite lookup
+    # index above leads with tenant_id.
+    tenant_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     alias_text: Mapped[str] = mapped_column(String(500), nullable=False, index=True)
     normalized_alias: Mapped[str | None] = mapped_column(String(500), nullable=True)
     alias_type: Mapped[str] = mapped_column(

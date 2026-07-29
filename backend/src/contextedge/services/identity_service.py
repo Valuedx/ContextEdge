@@ -24,12 +24,12 @@ from typing import Literal
 
 import structlog
 from pydantic import BaseModel, Field
-from sqlalchemy import func, or_, select
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy import func, or_, select, text
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from contextedge.ai.extractors.identity_extractor import extract_identities
-from contextedge.graph.builder import link_node_to_identities
+from contextedge.graph.builder import ensure_edge
 from contextedge.models.episode import (
     CanonicalIdentity,
     EvidenceIdentityLink,
@@ -60,7 +60,11 @@ class AdjudicationResult(BaseModel):
 
 
 def _normalize_term(value: str) -> str:
-    return " ".join(value.strip().split()).casefold()
+    # .lower(), not .casefold(): the 0033 SQL backfill normalizes with
+    # PostgreSQL lower(), and both sides must produce identical strings or
+    # backfilled aliases become unmatchable (and the strong-alias unique
+    # index blocks the correctly-normalized variant).
+    return " ".join(value.strip().split()).lower()
 
 
 def identity_ids_from_refs(entity_refs: dict | None) -> list[uuid.UUID]:
@@ -100,6 +104,13 @@ async def _find_strong_identifier_match(
     entity: NormalizedEntity,
 ) -> tuple[CanonicalIdentity, IdentityAlias, str] | None:
     for alias_type, value, _source_system in entity.strong_identifiers:
+        # No entity_type and no is_active filter here: the lookup must
+        # mirror uq_identity_aliases_tenant_strong's full scope (tenant +
+        # alias_type + value, nothing else). Filtering on either dimension
+        # makes owned identifiers invisible, and Layer 4 then mints endless
+        # provisional duplicates whose strong-alias inserts conflict with
+        # the still-owned row. A deactivated owner resolving here is
+        # reviewable; a duplicate blackhole is not.
         result = await db.execute(
             select(IdentityAlias, CanonicalIdentity)
             .join(
@@ -108,8 +119,6 @@ async def _find_strong_identifier_match(
             )
             .where(
                 CanonicalIdentity.tenant_id == tenant_id,
-                CanonicalIdentity.entity_type == entity.entity_type,
-                CanonicalIdentity.is_active.is_(True),
                 IdentityAlias.alias_type == alias_type,
                 IdentityAlias.normalized_alias == value,
             )
@@ -157,7 +166,11 @@ async def _find_exact_alias_match(
 
 
 def _candidate_tokens(normalized_name: str) -> list[str]:
-    tokens = [t.strip(".,-_") for t in normalized_name.split()]
+    # Strip LIKE metacharacters entirely — evidence-derived text must never
+    # inject wildcards into the candidate pattern ("100%" would otherwise
+    # match every identity and force a pointless LLM adjudication).
+    cleaned = normalized_name.replace("%", " ").replace("_", " ")
+    tokens = [t.strip(".,-") for t in cleaned.split()]
     return sorted({t for t in tokens if len(t) >= 3}, key=len, reverse=True)[:3]
 
 
@@ -178,6 +191,9 @@ async def _candidate_identities(
             CanonicalIdentity.is_active.is_(True),
             or_(*[CanonicalIdentity.normalized_name.like(p) for p in patterns]),
         )
+        # Deterministic candidate set: without an ORDER BY, which 5 rows
+        # survive the LIMIT varies run to run and so do adjudications.
+        .order_by(CanonicalIdentity.normalized_name, CanonicalIdentity.id)
         .limit(MAX_ADJUDICATION_CANDIDATES)
     )
     return list(result.scalars().all())
@@ -235,6 +251,8 @@ async def _adjudicate_candidates(
             system_prompt=prompt.system,
             tenant_id=tenant_id,
             db=db,
+            prompt_name=prompt.name,
+            prompt_version=prompt.version,
         )
     except Exception as exc:
         logger.warning(
@@ -285,9 +303,19 @@ async def _create_identity(
             last_seen_at=now,
         )
     )
+    await db.flush()
+
+    # Strong-identifier aliases race the tenant-wide unique index
+    # (uq_identity_aliases_tenant_strong): two workers extracting the same
+    # new email must not abort a whole normalize transaction. Insert with
+    # ON CONFLICT DO NOTHING against the partial index; a conflict means a
+    # concurrent writer owns the identifier — log and move on (the next
+    # mention resolves to the winner via Layer 1).
     for alias_type, value, source_system in entity.strong_identifiers:
-        db.add(
-            IdentityAlias(
+        stmt = (
+            pg_insert(IdentityAlias)
+            .values(
+                id=uuid.uuid4(),
                 canonical_identity_id=canonical.id,
                 tenant_id=tenant_id,
                 alias_text=value,
@@ -299,8 +327,27 @@ async def _create_identity(
                 created_by="system",
                 last_seen_at=now,
             )
+            .on_conflict_do_nothing(
+                index_elements=[
+                    IdentityAlias.tenant_id,
+                    IdentityAlias.alias_type,
+                    IdentityAlias.normalized_alias,
+                ],
+                index_where=text(
+                    "alias_type IN ('email', 'username', 'hostname', 'fqdn', "
+                    "'ip_address', 'serial_number', 'external_id')"
+                ),
+            )
+            .returning(IdentityAlias.id)
         )
-    await db.flush()
+        inserted = (await db.execute(stmt)).scalar_one_or_none()
+        if inserted is None:
+            logger.warning(
+                "identity.strong_alias_conflict",
+                tenant_id=str(tenant_id),
+                alias_type=alias_type,
+                canonical_id=str(canonical.id),
+            )
     return canonical
 
 
@@ -610,6 +657,9 @@ async def link_evidence_identities(
                 "alias": item.get("alias"),
                 "matched_via": item.get("matched_via"),
                 "confidence": float(item.get("confidence") or 0.0),
+                # Downstream consumers (review UI, ranking) need the trust
+                # level, not just the confidence float.
+                "resolution_state": item.get("resolution_state", "resolved"),
             }
         )
 
@@ -618,15 +668,25 @@ async def link_evidence_identities(
     evidence.canonical_entity_refs = existing_refs
     await db.flush()
 
-    await link_node_to_identities(
-        db,
-        tenant_id,
-        "evidence",
-        evidence.id,
-        linked_identity_ids,
-        edge_type="mentions_identity",
-        domain_id=getattr(evidence, "domain_id", None),
-    )
+    # Edge weight carries the resolution confidence so graph consumers see
+    # a provisional mention (0.5) as weaker than a strong-identifier match
+    # (1.0) instead of every mention weighing the same. Explicit None check:
+    # `or 1.0` would promote a legitimate 0.0 (abstained adjudication) to
+    # full trust — the exact inversion this weight exists to prevent.
+    for ref in merged_refs:
+        confidence = ref.get("confidence")
+        await ensure_edge(
+            db,
+            tenant_id,
+            "evidence",
+            evidence.id,
+            "identity",
+            uuid.UUID(ref["canonical_id"]),
+            "mentions_identity",
+            weight=1.0 if confidence is None else float(confidence),
+            metadata={"resolution_state": ref.get("resolution_state", "resolved")},
+            domain_id=getattr(evidence, "domain_id", None),
+        )
     await append_operational_event(
         db,
         tenant_id=tenant_id,
@@ -650,17 +710,23 @@ async def resolve_identity_ids_for_terms(
     if not normalized_terms:
         return set()
 
+    # Only resolved/verified identities feed ranking signals — a provisional
+    # identity is an unreviewed guess and must not boost a playbook's score.
     alias_result = await db.execute(
         select(IdentityAlias.canonical_identity_id)
         .join(CanonicalIdentity)
         .where(
             CanonicalIdentity.tenant_id == tenant_id,
+            CanonicalIdentity.is_active.is_(True),
+            CanonicalIdentity.resolution_state.in_(("resolved", "verified")),
             func.lower(IdentityAlias.alias_text).in_(normalized_terms),
         )
     )
     canonical_result = await db.execute(
         select(CanonicalIdentity.id).where(
             CanonicalIdentity.tenant_id == tenant_id,
+            CanonicalIdentity.is_active.is_(True),
+            CanonicalIdentity.resolution_state.in_(("resolved", "verified")),
             func.lower(CanonicalIdentity.canonical_name).in_(normalized_terms),
         )
     )
@@ -727,10 +793,14 @@ async def merge_canonical_identities(
         )
     )
     aliases = list(alias_result.scalars().all())
-    existing_aliases = {
-        _normalize_term(primary.canonical_name),
+    # Dedupe key includes alias_type: a duplicate's email/username alias whose
+    # text happens to equal a primary display_name must be RE-POINTED, not
+    # deleted — deleting it would drop the strong identifier and undo the
+    # merge on the next mention.
+    existing_aliases: set[tuple[str, str]] = {
+        ("display_name", _normalize_term(primary.canonical_name)),
         *(
-            _normalize_term(alias.alias_text)
+            (alias.alias_type or "display_name", _normalize_term(alias.alias_text))
             for alias in aliases
             if alias.canonical_identity_id == primary.id
         ),
@@ -738,21 +808,21 @@ async def merge_canonical_identities(
     for alias in aliases:
         if alias.canonical_identity_id != duplicate.id:
             continue
-        normalized = _normalize_term(alias.alias_text)
-        if normalized in existing_aliases:
+        key = (alias.alias_type or "display_name", _normalize_term(alias.alias_text))
+        if key in existing_aliases:
             await db.delete(alias)
             continue
         alias.canonical_identity_id = primary.id
-        existing_aliases.add(normalized)
+        existing_aliases.add(key)
 
-    duplicate_name = _normalize_term(duplicate.canonical_name)
-    if duplicate_name not in existing_aliases:
+    duplicate_normalized = _normalize_term(duplicate.canonical_name)
+    if ("display_name", duplicate_normalized) not in existing_aliases:
         db.add(
             IdentityAlias(
                 canonical_identity_id=primary.id,
                 tenant_id=tenant_id,
                 alias_text=duplicate.canonical_name,
-                normalized_alias=duplicate_name,
+                normalized_alias=duplicate_normalized,
                 alias_type="display_name",
                 source_id=None,
                 confidence=1.0,

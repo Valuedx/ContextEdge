@@ -25,7 +25,10 @@ _IPV4_RE = re.compile(r"^(?:\d{1,3}\.){3}\d{1,3}$")
 
 
 def normalize_text(value: str) -> str:
-    return " ".join(str(value).strip().split()).casefold()
+    # .lower(), not .casefold(): must produce byte-identical output to the
+    # 0033 SQL backfill (PostgreSQL lower()), or backfilled aliases never
+    # match runtime lookups.
+    return " ".join(str(value).strip().split()).lower()
 
 
 @dataclass(slots=True)
@@ -57,7 +60,7 @@ class NormalizedEntity:
 
 def _classify_bare_name(name: str) -> str | None:
     """Detect a display name that is really a strong identifier."""
-    lowered = name.casefold().strip()
+    lowered = name.lower().strip()
     if _EMAIL_RE.match(lowered):
         return "email"
     if _IPV4_RE.match(lowered):
@@ -73,7 +76,10 @@ def normalize_extracted_entity(entity: dict) -> NormalizedEntity | None:
     ).strip()
     if not name:
         return None
-    entity_type = str(entity.get("entity_type") or "unknown").strip() or "unknown"
+    # Lowercase the type so an extractor emitting "Person" doesn't fork a
+    # parallel namespace from "person" (all match layers are type-scoped)
+    # or dodge the stricter person auto-link threshold.
+    entity_type = str(entity.get("entity_type") or "unknown").strip().lower() or "unknown"
     context = entity.get("context")
 
     normalized = NormalizedEntity(

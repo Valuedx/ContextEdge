@@ -16,15 +16,26 @@ which all call sites now route through.
 
 Safety / re-run notes:
 
-- If the installed pgvector server extension is older than 0.7, the
-  migration is a no-op (logged) rather than an error; re-run after
-  upgrading the extension to build the indexes.
-- ``CREATE INDEX CONCURRENTLY IF NOT EXISTS`` inside the autocommit block
-  per repo convention; re-running is safe.
-- Also drops the four legacy invalid-index names for environments that ran
-  the original 0021/0030 text (a failed CREATE INDEX CONCURRENTLY leaves an
-  INVALID index behind); those environments never executed the rewritten
-  cleanup because 0021/0030 were already stamped.
+- **Requires pgvector server extension >= 0.7** (the ``halfvec`` type).
+  The query side casts to halfvec unconditionally, so allowing this
+  migration to succeed on an older extension would leave every semantic
+  search 500ing at runtime — the migration fails loud instead, matching
+  the FERNET/JWT startup-guard posture. Upgrade with
+  ``ALTER EXTENSION vector UPDATE`` and re-run.
+- Each target index is dropped (CONCURRENTLY IF EXISTS) before creation:
+  a mid-build failure leaves an INVALID index that a bare
+  ``IF NOT EXISTS`` re-run would silently keep forever.
+- Also drops the three legacy invalid-index names for environments that
+  ran the original 0021/0030 text (a failed CREATE INDEX CONCURRENTLY
+  leaves an INVALID index behind); those environments never executed the
+  rewritten cleanup because 0021/0030 were already stamped.
+- Offline mode (``alembic upgrade --sql``) cannot probe the extension
+  version; the DDL is emitted unconditionally with the requirement noted.
+- Environments that already stamped an earlier revision of this file (the
+  graceful-no-op variant) on pgvector < 0.7 will NOT re-execute it —
+  their search stays broken until the extension is upgraded and the index
+  DDL below is applied manually (or via alembic downgrade/upgrade of this
+  revision).
 
 Revision ID: 0032_halfvec_hnsw_indexes
 Revises: 0031_maf_context_graph_hardening
@@ -74,21 +85,27 @@ def _halfvec_supported() -> bool:
 
 
 def upgrade() -> None:
-    supported = _halfvec_supported()
+    from alembic import context
+
+    if not context.is_offline_mode() and not _halfvec_supported():
+        raise RuntimeError(
+            "0032_halfvec_hnsw_indexes requires pgvector server extension "
+            ">= 0.7 (the halfvec type). The application's similarity "
+            "queries cast to halfvec unconditionally, so proceeding would "
+            "break every semantic search at runtime. Upgrade with "
+            "'ALTER EXTENSION vector UPDATE' and re-run the migration."
+        )
+
     with op.get_context().autocommit_block():
         for index_name in LEGACY_INVALID_INDEXES:
             op.execute(f"DROP INDEX CONCURRENTLY IF EXISTS {index_name};")
-        if not supported:
-            print(
-                "0032_halfvec_hnsw_indexes: pgvector extension < 0.7 — "
-                "halfvec indexes skipped; upgrade the extension and re-run "
-                "this migration's CREATE INDEX statements."
-            )
-            return
         for table_name, index_name in HALFVEC_INDEXES:
+            # Drop-before-create heals an INVALID leftover from a previous
+            # interrupted build; IF NOT EXISTS alone would keep it forever.
+            op.execute(f"DROP INDEX CONCURRENTLY IF EXISTS {index_name};")
             op.execute(
                 f"""
-                CREATE INDEX CONCURRENTLY IF NOT EXISTS {index_name}
+                CREATE INDEX CONCURRENTLY {index_name}
                 ON {table_name}
                 USING hnsw ((embedding::halfvec({EMBEDDING_DIMENSIONS})) halfvec_cosine_ops)
                 WITH (m = 16, ef_construction = 64);

@@ -50,7 +50,7 @@ For each entity also capture any structured identifiers that appear in the
 content. Never invent identifiers that are not present.
 
 Respond in JSON with key "entities" containing a list of objects:
-{{"entities": [{{
+{"entities": [{
   "entity_type": "...",
   "display_name": "...",
   "context": "brief context",
@@ -60,23 +60,26 @@ Respond in JSON with key "entities" containing a list of objects:
   "fqdn": null,
   "serial_number": null,
   "ip_addresses": [],
-  "source_identifiers": {{}}
-}}]}}
+  "source_identifiers": {}
+}]}
 
 Example — for "J. Smith (jsmith@acme.com) restarted vpn-gw-east-01 after
 the VPN certificate expired":
-{{"entities": [
-  {{"entity_type": "person", "display_name": "J. Smith",
+{"entities": [
+  {"entity_type": "person", "display_name": "J. Smith",
     "email": "jsmith@acme.com", "username": null, "hostname": null,
     "fqdn": null, "serial_number": null, "ip_addresses": [],
-    "source_identifiers": {{}}, "context": "Restarted the VPN gateway"}},
-  {{"entity_type": "device", "display_name": "vpn-gw-east-01",
+    "source_identifiers": {}, "context": "Restarted the VPN gateway"},
+  {"entity_type": "device", "display_name": "vpn-gw-east-01",
     "email": null, "username": null, "hostname": "vpn-gw-east-01",
     "fqdn": null, "serial_number": null, "ip_addresses": [],
-    "source_identifiers": {{}}, "context": "VPN gateway restarted"}}
-]}}
+    "source_identifiers": {}, "context": "VPN gateway restarted"}
+]}
 
 Only extract clearly identifiable entities. Do not fabricate."""
+# NOTE: ``Prompt.system`` is never .format()ed (only the user template is),
+# so system strings must use SINGLE braces — doubled braces reach the model
+# literally. v1 predates this observation and is left as released.
 
 register_prompt(
     Prompt(
@@ -104,10 +107,10 @@ Rules:
   stronger evidence than a similar display name.
 
 Respond in JSON:
-{{"decision": "match" | "new_identity" | "needs_review",
+{"decision": "match" | "new_identity" | "needs_review",
   "candidate_id": "<id of the matched candidate or null>",
   "confidence": 0.0-1.0,
-  "reason": "one sentence"}}"""
+  "reason": "one sentence"}"""
 
 _ADJUDICATION_V1_USER = """Incoming entity:
 {incoming}

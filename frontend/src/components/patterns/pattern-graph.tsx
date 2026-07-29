@@ -341,6 +341,11 @@ export function PatternGraph({ patternId }: { patternId: string }) {
 
   return (
     <div className="relative w-full h-[600px] border rounded-xl bg-[#020617] overflow-hidden">
+      {data?.truncated && (
+        <div className="absolute top-2 left-1/2 -translate-x-1/2 z-10 px-3 py-1 rounded-full bg-amber-500/15 border border-amber-500/30 text-amber-300 text-xs font-medium pointer-events-none">
+          Large graph — showing the strongest connections only
+        </div>
+      )}
       <ReactFlowProvider>
         <FlowCanvas
           nodes={nodes}

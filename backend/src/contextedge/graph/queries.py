@@ -124,7 +124,11 @@ async def get_pattern_subgraph(
     visited_refs: set[tuple[str, uuid.UUID]] = {("pattern", pattern_id)}
 
     for _depth in range(1, 3):
-        if not frontier or not _budget_left():
+        if not frontier:
+            break
+        if not _budget_left():
+            # Budget exhausted with unexplored frontier = dropped depth.
+            truncated = True
             break
         frontier_clauses = [
             ((GraphEdge.source_node_type == f_type) & (GraphEdge.source_node_id == f_id))
@@ -138,6 +142,8 @@ async def get_pattern_subgraph(
                 edge_valid_at(as_of),
                 or_(*frontier_clauses),
             )
+            # Deterministic survivors when the cap bites: strongest first.
+            .order_by(GraphEdge.weight.desc(), GraphEdge.id)
             .limit(MAX_SUBGRAPH_EDGES + 1)
         )
         if domain_id is not None:
@@ -159,9 +165,13 @@ async def get_pattern_subgraph(
 
             if edge_key not in seen_edge_keys:
                 seen_edge_keys.add(edge_key)
+                # Edge labels describe the enrichment node (the SOURCE of
+                # trigger_of/involved_in/discovered_in/causes edges) — never
+                # title the target with it, or a pattern first reached via a
+                # labeled edge inherits its trigger text as a name.
                 label = (e.metadata_extra or {}).get("label")
                 add_node(e.source_node_type, str(e.source_node_id), label)
-                add_node(e.target_node_type, str(e.target_node_id), label)
+                add_node(e.target_node_type, str(e.target_node_id), None)
                 edge_list.append({
                     "source": source_key,
                     "target": target_key,
@@ -327,9 +337,11 @@ async def get_entity_subgraph(
                 if e.id in seen_edges:
                     continue
                 seen_edges.add(e.id)
+                # Labels describe the enrichment (source) node only — see
+                # the same rule in get_pattern_subgraph.
                 label = (e.metadata_extra or {}).get("label")
                 add_node(e.source_node_type, str(e.source_node_id), label)
-                add_node(e.target_node_type, str(e.target_node_id), label)
+                add_node(e.target_node_type, str(e.target_node_id), None)
                 edge_list.append({
                     "source": f"{e.source_node_type}:{e.source_node_id}",
                     "target": f"{e.target_node_type}:{e.target_node_id}",

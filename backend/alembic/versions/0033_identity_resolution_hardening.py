@@ -55,8 +55,12 @@ def upgrade() -> None:
             ADD COLUMN IF NOT EXISTS resolution_confidence DOUBLE PRECISION,
             ADD COLUMN IF NOT EXISTS resolution_method VARCHAR(50);
 
+        -- Collapse-then-trim, matching the Python normalizer exactly
+        -- (" ".join(x.split()).lower()): collapsing first turns leading /
+        -- trailing tabs and newlines into plain spaces, which btrim then
+        -- removes. btrim-first would leave those as stray spaces.
         UPDATE canonical_identities
-        SET normalized_name = lower(regexp_replace(btrim(canonical_name), '\\s+', ' ', 'g'))
+        SET normalized_name = lower(btrim(regexp_replace(canonical_name, '\\s+', ' ', 'g')))
         WHERE normalized_name IS NULL;
 
         CREATE INDEX IF NOT EXISTS ix_canonical_identities_tenant_type_normalized
@@ -80,7 +84,7 @@ def upgrade() -> None:
         WHERE ia.canonical_identity_id = ci.id AND ia.tenant_id IS NULL;
 
         UPDATE identity_aliases
-        SET normalized_alias = lower(regexp_replace(btrim(alias_text), '\\s+', ' ', 'g'))
+        SET normalized_alias = lower(btrim(regexp_replace(alias_text, '\\s+', ' ', 'g')))
         WHERE normalized_alias IS NULL;
 
         CREATE INDEX IF NOT EXISTS ix_identity_aliases_tenant_type_normalized
@@ -91,13 +95,18 @@ def upgrade() -> None:
     # collisions first (keep the oldest row) so the index can build.
     op.execute(
         f"""
+        -- Tie-break on id: created_at is a transaction timestamp, so
+        -- duplicates inserted in one transaction (exactly what the old
+        -- resolver produced) share it — without the id tie-break neither
+        -- row is deleted and the unique index build below fails.
         DELETE FROM identity_aliases a
         USING identity_aliases b
         WHERE a.tenant_id = b.tenant_id
           AND a.alias_type = b.alias_type
           AND a.normalized_alias = b.normalized_alias
           AND a.alias_type IN {STRONG_ALIAS_TYPES_SQL}
-          AND a.created_at > b.created_at;
+          AND (a.created_at > b.created_at
+               OR (a.created_at = b.created_at AND a.id > b.id));
 
         CREATE UNIQUE INDEX IF NOT EXISTS uq_identity_aliases_tenant_strong
             ON identity_aliases (tenant_id, alias_type, normalized_alias)
