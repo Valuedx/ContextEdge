@@ -83,8 +83,10 @@ async def get_pattern_subgraph(
     domain_id: uuid.UUID | None = None,
     as_of: datetime | None = None,
 ) -> dict:
-    """Get the subgraph around a pattern including episodes, entities, and playbooks."""
-    from contextedge.models.pattern import Pattern
+    """Get the subgraph around a pattern including episodes, evidence, entities, and playbooks (up to 2 hops)."""
+    from contextedge.models.pattern import Pattern, PatternEvidenceLink, GraphEdge
+    from contextedge.models.episode import Episode
+    from contextedge.models.evidence import EvidenceItem
 
     pattern_res = await db.execute(
         select(Pattern).where(Pattern.id == pattern_id, Pattern.tenant_id == tenant_id)
@@ -93,22 +95,9 @@ async def get_pattern_subgraph(
     if not pattern:
         return {"nodes": [], "edges": []}
 
-    q = select(GraphEdge).where(
-        GraphEdge.tenant_id == tenant_id,
-        edge_valid_at(as_of),
-        or_(
-            GraphEdge.source_node_id == pattern_id,
-            GraphEdge.target_node_id == pattern_id,
-        ),
-    )
-    if domain_id is not None:
-        q = q.where(
-            (GraphEdge.domain_id == domain_id) | GraphEdge.domain_id.is_(None)
-        )
-    edges_result = await db.execute(q)
-    edges = edges_result.scalars().all()
-
     nodes: dict[str, dict] = {}
+    edge_list: list[dict] = []
+    seen_edge_keys: set[tuple[str, str, str]] = set()
 
     def add_node(ntype: str, nid: str, title: str | None = None):
         key = f"{ntype}:{nid}"
@@ -119,17 +108,132 @@ async def get_pattern_subgraph(
 
     add_node("pattern", str(pattern_id), pattern.title)
 
-    edge_list = []
-    for e in edges:
-        label = (e.metadata_extra or {}).get("label")
-        add_node(e.source_node_type, str(e.source_node_id), label)
-        add_node(e.target_node_type, str(e.target_node_id), label)
-        edge_list.append({
-            "source": f"{e.source_node_type}:{e.source_node_id}",
-            "target": f"{e.target_node_type}:{e.target_node_id}",
-            "type": e.edge_type,
-            "weight": e.weight,
-        })
+    # 1. 2-Hop BFS Traversal on GraphEdge
+    frontier: list[tuple[str, uuid.UUID]] = [("pattern", pattern_id)]
+    visited_refs: set[tuple[str, uuid.UUID]] = {("pattern", pattern_id)}
+
+    for _depth in range(1, 3):
+        if not frontier:
+            break
+        next_frontier: list[tuple[str, uuid.UUID]] = []
+        for f_type, f_id in frontier:
+            q = select(GraphEdge).where(
+                GraphEdge.tenant_id == tenant_id,
+                edge_valid_at(as_of),
+                or_(
+                    (GraphEdge.source_node_type == f_type) & (GraphEdge.source_node_id == f_id),
+                    (GraphEdge.target_node_type == f_type) & (GraphEdge.target_node_id == f_id),
+                ),
+            )
+            if domain_id is not None:
+                q = q.where(
+                    (GraphEdge.domain_id == domain_id) | GraphEdge.domain_id.is_(None)
+                )
+            edges_result = await db.execute(q)
+            edges = edges_result.scalars().all()
+
+            for e in edges:
+                source_key = f"{e.source_node_type}:{e.source_node_id}"
+                target_key = f"{e.target_node_type}:{e.target_node_id}"
+                edge_key = (source_key, target_key, e.edge_type)
+
+                if edge_key not in seen_edge_keys:
+                    seen_edge_keys.add(edge_key)
+                    label = (e.metadata_extra or {}).get("label")
+                    add_node(e.source_node_type, str(e.source_node_id), label)
+                    add_node(e.target_node_type, str(e.target_node_id), label)
+                    edge_list.append({
+                        "source": source_key,
+                        "target": target_key,
+                        "type": e.edge_type,
+                        "weight": e.weight,
+                    })
+
+                neighbor = (
+                    (e.target_node_type, e.target_node_id)
+                    if (e.source_node_id == f_id and e.source_node_type == f_type)
+                    else (e.source_node_type, e.source_node_id)
+                )
+                if neighbor not in visited_refs:
+                    visited_refs.add(neighbor)
+                    next_frontier.append(neighbor)
+
+        frontier = next_frontier
+
+    # 2. Also query relational PatternEvidenceLink to ensure linked Episodes & Evidence are included
+    pel_res = await db.execute(
+        select(PatternEvidenceLink).where(PatternEvidenceLink.pattern_id == pattern_id)
+    )
+    pel_links = pel_res.scalars().all()
+    for link in pel_links:
+        if link.episode_id:
+            ep_res = await db.execute(
+                select(Episode).where(Episode.id == link.episode_id, Episode.tenant_id == tenant_id)
+            )
+            ep = ep_res.scalar_one_or_none()
+            if ep:
+                d_str = ep.created_at.strftime("%b %d, %Y") if ep.created_at else ""
+                base_t = ep.title or ep.root_cause_summary or f"Episode {str(link.episode_id)[:8]}"
+                ep_title = f"{base_t} [{d_str}]" if d_str else base_t
+            else:
+                ep_title = f"Episode {str(link.episode_id)[:8]}"
+            add_node("episode", str(link.episode_id), ep_title)
+            edge_key = (f"pattern:{pattern_id}", f"episode:{link.episode_id}", "clusters")
+            if edge_key not in seen_edge_keys:
+                seen_edge_keys.add(edge_key)
+                edge_list.append({
+                    "source": f"pattern:{pattern_id}",
+                    "target": f"episode:{link.episode_id}",
+                    "type": "clusters",
+                    "weight": link.weight,
+                })
+
+        if link.evidence_id:
+            ev_res = await db.execute(
+                select(EvidenceItem).where(EvidenceItem.id == link.evidence_id, EvidenceItem.tenant_id == tenant_id)
+            )
+            ev = ev_res.scalar_one_or_none()
+            if ev:
+                d_str = ev.ingested_at.strftime("%b %d, %Y") if ev.ingested_at else ""
+                base_t = ev.title or f"Evidence {str(link.evidence_id)[:8]}"
+                ev_title = f"{base_t} [{d_str}]" if d_str else base_t
+            else:
+                ev_title = f"Evidence {str(link.evidence_id)[:8]}"
+            add_node("evidence", str(link.evidence_id), ev_title)
+            source_parent = f"episode:{link.episode_id}" if link.episode_id else f"pattern:{pattern_id}"
+            edge_key = (source_parent, f"evidence:{link.evidence_id}", "derived_from")
+            if edge_key not in seen_edge_keys:
+                seen_edge_keys.add(edge_key)
+                edge_list.append({
+                    "source": source_parent,
+                    "target": f"evidence:{link.evidence_id}",
+                    "type": "derived_from",
+                    "weight": link.weight,
+                })
+
+    # 3. Post-process Episode & Evidence nodes to populate exact dates in titles
+    for key, n in nodes.items():
+        ntype = n["type"]
+        nid_str = n["id"]
+        try:
+            nid_uuid = uuid.UUID(nid_str)
+        except Exception:
+            continue
+
+        if ntype == "episode":
+            ep_res = await db.execute(select(Episode).where(Episode.id == nid_uuid))
+            ep_obj = ep_res.scalar_one_or_none()
+            if ep_obj and ep_obj.created_at:
+                d_str = ep_obj.created_at.strftime("%b %d, %Y")
+                base_title = ep_obj.title or ep_obj.root_cause_summary or f"Episode {nid_str[:8]}"
+                n["title"] = f"{base_title} ({d_str})"
+        elif ntype == "evidence":
+            ev_res = await db.execute(select(EvidenceItem).where(EvidenceItem.id == nid_uuid))
+            ev_obj = ev_res.scalar_one_or_none()
+            if ev_obj and ev_obj.ingested_at:
+                d_str = ev_obj.ingested_at.strftime("%b %d, %Y")
+                base_title = ev_obj.title or f"Evidence {nid_str[:8]}"
+                n["title"] = f"{base_title} ({d_str})"
 
     return {
         "nodes": list(nodes.values()),
@@ -194,13 +298,14 @@ async def get_entity_subgraph(
                     "type": e.edge_type,
                     "weight": e.weight,
                 })
-                for neighbor in [
-                    (e.target_node_type, e.target_node_id),
-                    (e.source_node_type, e.source_node_id),
-                ]:
-                    if neighbor not in visited:
-                        visited.add(neighbor)
-                        next_frontier.append(neighbor)
+                neighbor = (
+                    (e.target_node_type, e.target_node_id)
+                    if (e.source_node_id == f_id and e.source_node_type == f_type)
+                    else (e.source_node_type, e.source_node_id)
+                )
+                if neighbor not in visited:
+                    visited.add(neighbor)
+                    next_frontier.append(neighbor)
         frontier = next_frontier
 
     return {
@@ -209,91 +314,40 @@ async def get_entity_subgraph(
     }
 
 
-async def get_decision_subgraph(
-    db: AsyncSession,
-    tenant_id: uuid.UUID,
-    decision_id: uuid.UUID,
-    max_depth: int = 2,
-    domain_id: uuid.UUID | None = None,
-    as_of: datetime | None = None,
-) -> dict:
-    """Get the subgraph around a decision including evidence, options, outcomes, and policies."""
-    return await get_entity_subgraph(
-        db,
-        tenant_id,
-        "decision",
-        decision_id,
-        max_depth=max_depth,
-        domain_id=domain_id,
-        as_of=as_of,
-    )
-
-
-async def get_decision_effectiveness(
-    db: AsyncSession,
-    tenant_id: uuid.UUID,
-    decision_type: str,
-    context_filters: dict | None = None,
-) -> dict:
-    """Aggregate outcome success/failure counts for a decision type.
-
-    Delegates to the service-layer implementation to keep query logic
-    co-located with the ORM models it depends on.
-    """
-    from contextedge.services.decision_trace_service import (
-        get_decision_effectiveness as _svc_effectiveness,
-    )
-
-    return await _svc_effectiveness(
-        db, tenant_id=tenant_id, decision_type=decision_type,
-        context_filters=context_filters,
-    )
-
-
 async def get_graph_stats(
     db: AsyncSession,
     tenant_id: uuid.UUID,
     domain_id: uuid.UUID | None = None,
     as_of: datetime | None = None,
 ) -> dict:
-    """Return aggregate edge and node statistics for the tenant."""
-    from sqlalchemy import union_all
-
-    domain_filter = [edge_valid_at(as_of)]
+    """Return aggregate edge-type and node-type counts for the tenant."""
+    q = select(GraphEdge).where(
+        GraphEdge.tenant_id == tenant_id,
+        edge_valid_at(as_of),
+    )
     if domain_id is not None:
-        domain_filter.append(
+        q = q.where(
             (GraphEdge.domain_id == domain_id) | GraphEdge.domain_id.is_(None)
         )
+    result = await db.execute(q)
+    edges = result.scalars().all()
 
-    base = select(
-        GraphEdge.edge_type,
-        func.count().label("count"),
-    ).where(GraphEdge.tenant_id == tenant_id, *domain_filter)
-    base = base.group_by(GraphEdge.edge_type)
-    result = await db.execute(base)
-    edge_type_counts = {row.edge_type: row.count for row in result.all()}
+    edge_type_counts: dict[str, int] = {}
+    node_type_counts: dict[str, set[str]] = {}
 
-    source_q = select(
-        GraphEdge.source_node_type.label("node_type"),
-        GraphEdge.source_node_id.label("node_id"),
-    ).where(GraphEdge.tenant_id == tenant_id, *domain_filter)
-    target_q = select(
-        GraphEdge.target_node_type.label("node_type"),
-        GraphEdge.target_node_id.label("node_id"),
-    ).where(GraphEdge.tenant_id == tenant_id, *domain_filter)
+    for e in edges:
+        edge_type_counts[e.edge_type] = edge_type_counts.get(e.edge_type, 0) + 1
 
-    all_nodes = union_all(source_q, target_q).subquery("all_nodes")
-    node_stats_q = select(
-        all_nodes.c.node_type,
-        func.count(func.distinct(all_nodes.c.node_id)).label("count"),
-    ).group_by(all_nodes.c.node_type)
-    node_result = await db.execute(node_stats_q)
-    node_type_counts = {row.node_type: row.count for row in node_result.all()}
+        if e.source_node_type not in node_type_counts:
+            node_type_counts[e.source_node_type] = set()
+        node_type_counts[e.source_node_type].add(str(e.source_node_id))
 
-    total_edges = sum(edge_type_counts.values())
+        if e.target_node_type not in node_type_counts:
+            node_type_counts[e.target_node_type] = set()
+        node_type_counts[e.target_node_type].add(str(e.target_node_id))
 
     return {
-        "total_edges": total_edges,
-        "edge_type_counts": edge_type_counts,
-        "node_type_counts": node_type_counts,
+        "total_edges": len(edges),
+        "edge_types": edge_type_counts,
+        "node_types": {k: len(v) for k, v in node_type_counts.items()},
     }
