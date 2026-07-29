@@ -86,7 +86,8 @@ async def test_ready_object_store_degraded_does_not_gate(app, monkeypatch):
     assert response.json()["checks"]["object_store"] == "degraded"
 
 
-def test_expected_migration_head_resolves_to_0032():
+def test_expected_migration_head_resolves():
+    """Also validates the alembic chain has exactly one head."""
     main_module._expected_migration_head.cache_clear()
     head = main_module._expected_migration_head()
-    assert head == "0032_halfvec_hnsw_indexes"
+    assert head == "0033_identity_resolution_hardening"

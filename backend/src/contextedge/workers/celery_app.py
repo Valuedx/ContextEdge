@@ -106,6 +106,8 @@ celery_app = Celery(
         "contextedge.workers.cleanup_tasks",
         # Relational-to-graph edge reconciliation for post-0031 rows.
         "contextedge.workers.graph_tasks",
+        # Post-merge JSONB identity snapshot repair.
+        "contextedge.workers.identity_tasks",
     ],
 )
 

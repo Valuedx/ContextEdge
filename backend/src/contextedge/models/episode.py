@@ -9,6 +9,27 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from contextedge.models.base import Base, TenantScopedMixin
 
 
+# Lifecycle of a canonical identity's resolution (migration 0033):
+#   resolved     — matched/created before the layered resolver, or auto-linked
+#   provisional  — created on an unmatched mention; usable but untrusted
+#   needs_review — the adjudicator abstained or scored below threshold
+#   verified     — a human confirmed the identity (review workflow)
+RESOLUTION_STATES = ("resolved", "provisional", "needs_review", "verified")
+
+# Alias types that identify uniquely per tenant (partial unique index
+# uq_identity_aliases_tenant_strong, migration 0033). Display names are
+# deliberately not in this set — two employees can share a name.
+STRONG_ALIAS_TYPES = (
+    "email",
+    "username",
+    "hostname",
+    "fqdn",
+    "ip_address",
+    "serial_number",
+    "external_id",
+)
+
+
 class CanonicalIdentity(Base, TenantScopedMixin):
     __tablename__ = "canonical_identities"
 
@@ -16,6 +37,12 @@ class CanonicalIdentity(Base, TenantScopedMixin):
     tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=False, index=True)
     entity_type: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
     canonical_name: Mapped[str] = mapped_column(String(500), nullable=False, index=True)
+    normalized_name: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    resolution_state: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="resolved", server_default="resolved"
+    )
+    resolution_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    resolution_method: Mapped[str | None] = mapped_column(String(50), nullable=True)
     metadata_extra: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     is_active: Mapped[bool] = mapped_column(default=True, nullable=False)
 
@@ -28,11 +55,21 @@ class IdentityAlias(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     canonical_identity_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("canonical_identities.id"), nullable=False, index=True)
+    # Denormalized from the canonical row (0033) so alias uniqueness can be
+    # tenant-scoped without a join.
+    tenant_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True, index=True)
     alias_text: Mapped[str] = mapped_column(String(500), nullable=False, index=True)
+    normalized_alias: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    alias_type: Mapped[str] = mapped_column(
+        String(30), nullable=False, default="display_name", server_default="display_name"
+    )
+    source_system: Mapped[str | None] = mapped_column(String(50), nullable=True)
     source_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     confidence: Mapped[float] = mapped_column(Float, default=1.0, nullable=False)
     created_by: Mapped[str | None] = mapped_column(String(50), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    times_observed: Mapped[int] = mapped_column(Integer, default=1, server_default="1", nullable=False)
 
     canonical_identity: Mapped["CanonicalIdentity"] = relationship(back_populates="aliases")
 
