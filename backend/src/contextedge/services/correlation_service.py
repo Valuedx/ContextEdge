@@ -1,21 +1,56 @@
-"""Case correlation service for linking evidence across sources."""
+"""Case correlation service for linking evidence across sources.
 
-from datetime import datetime, timezone
+Two correlation tiers:
+
+- **Case links** — deterministic external case / thread identifiers,
+  confidence 1.0.
+- **Identity co-occurrence** — gated, scored, and time-windowed. A shared
+  person alone must never correlate two incidents ("John Smith worked on
+  Incident A in January and commented on Incident B in July"); shared
+  non-person entities (devices, services) within the window carry the
+  signal, and provisional / needs-review identities carry none.
+"""
+
+from datetime import datetime, timedelta, timezone
 import uuid
 
 from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from contextedge.models.episode import CorrelationEdge
+from contextedge.models.episode import (
+    CanonicalIdentity,
+    CorrelationEdge,
+    EvidenceIdentityLink,
+)
 from contextedge.models.evidence import EvidenceItem, RawEvidenceObject, Thread
 from contextedge.models.session import CaseLink
 from contextedge.models.source import Source
 from contextedge.services.artifact_extraction_service import load_raw_payload
 from contextedge.services.event_log_service import append_operational_event
-from contextedge.services.identity_service import (
-    find_related_evidence_ids_by_identity_ids,
-    get_identity_ids_for_evidence,
-)
+from contextedge.services.identity_service import get_identity_ids_for_evidence
+
+# Identity co-occurrence only counts within this window; outside it two
+# mentions of the same entity are unrelated operational history.
+IDENTITY_CORRELATION_WINDOW = timedelta(days=7)
+
+
+def _identity_correlation_signal(
+    shared_identity_ids: set[uuid.UUID],
+    identity_types: dict[uuid.UUID, str],
+) -> tuple[float, str] | None:
+    """Score a shared-identity correlation, or None when the signal is too
+    weak to record (person-only single identity)."""
+    non_person = [
+        identity_id
+        for identity_id in shared_identity_ids
+        if identity_types.get(identity_id) not in (None, "person")
+    ]
+    if non_person:
+        confidence = 0.65 + (0.1 if len(shared_identity_ids) >= 2 else 0.0)
+        return min(confidence, 0.75), "Shared non-person entity within time window"
+    if len(shared_identity_ids) >= 2:
+        return 0.5, "Multiple shared identities within time window"
+    return None
 
 
 async def create_correlation(
@@ -125,13 +160,64 @@ async def correlate_evidence_item(
         for link in existing_links
         if link.evidence_id is not None and link.evidence_id != evidence.id
     }
+
+    # Identity tier: only resolved/verified identities carry correlation
+    # signal — a provisional identity is an unreviewed guess.
     identity_ids = await get_identity_ids_for_evidence(db, tenant_id, evidence.id)
-    identity_related_evidence_ids = await find_related_evidence_ids_by_identity_ids(
-        db,
-        tenant_id,
-        identity_ids,
-        exclude_evidence_id=evidence.id,
-    )
+    identity_types: dict[uuid.UUID, str] = {}
+    if identity_ids:
+        type_rows = await db.execute(
+            select(CanonicalIdentity.id, CanonicalIdentity.entity_type).where(
+                CanonicalIdentity.id.in_(tuple(identity_ids)),
+                CanonicalIdentity.tenant_id == tenant_id,
+                CanonicalIdentity.is_active.is_(True),
+                CanonicalIdentity.resolution_state.in_(("resolved", "verified")),
+            )
+        )
+        identity_types = {row[0]: row[1] for row in type_rows.all()}
+
+    shared_by_evidence: dict[uuid.UUID, set[uuid.UUID]] = {}
+    if identity_types:
+        link_rows = await db.execute(
+            select(
+                EvidenceIdentityLink.evidence_id,
+                EvidenceIdentityLink.identity_id,
+            ).where(
+                EvidenceIdentityLink.tenant_id == tenant_id,
+                EvidenceIdentityLink.identity_id.in_(tuple(identity_types)),
+                EvidenceIdentityLink.evidence_id != evidence.id,
+            )
+        )
+        for related_id, identity_id in link_rows.all():
+            shared_by_evidence.setdefault(related_id, set()).add(identity_id)
+
+    # Time-window gate for the identity tier.
+    related_times: dict[uuid.UUID, datetime | None] = {}
+    if shared_by_evidence:
+        time_rows = await db.execute(
+            select(EvidenceItem.id, EvidenceItem.ingested_at).where(
+                EvidenceItem.tenant_id == tenant_id,
+                EvidenceItem.id.in_(tuple(shared_by_evidence)),
+            )
+        )
+        related_times = {row[0]: row[1] for row in time_rows.all()}
+
+    evidence_time = evidence.ingested_at
+    identity_correlations: dict[uuid.UUID, tuple[float, str]] = {}
+    for related_id, shared in shared_by_evidence.items():
+        related_time = related_times.get(related_id)
+        if (
+            evidence_time is not None
+            and related_time is not None
+            and abs(evidence_time - related_time) > IDENTITY_CORRELATION_WINDOW
+        ):
+            continue
+        signal = _identity_correlation_signal(shared, identity_types)
+        if signal is None:
+            continue
+        identity_correlations[related_id] = signal
+
+    identity_related_evidence_ids = set(identity_correlations)
     related_evidence_ids.update(identity_related_evidence_ids)
     if not candidates and not identity_related_evidence_ids:
         return {"status": "skipped", "reason": "no_candidates"}
@@ -165,8 +251,10 @@ async def correlate_evidence_item(
             created_links += 1
             continue
 
+        # Keep the link's original evidence anchor: overwriting evidence_id
+        # made the row a pointer to whatever evidence arrived last instead
+        # of a stable case-membership record.
         link.canonical_case_id = canonical_case_id
-        link.evidence_id = evidence.id
         link.last_seen = now
         link.confidence = max(float(link.confidence or 0.0), 1.0)
         updated_links += 1
@@ -192,18 +280,21 @@ async def correlate_evidence_item(
         ).scalar_one_or_none()
         if edge is not None:
             continue
+        if related_evidence_id in identity_related_evidence_ids:
+            confidence, explanation = identity_correlations[related_evidence_id]
+            correlation_type = "identity_match"
+        else:
+            confidence = 1.0
+            explanation = f"Matched canonical case {canonical_case_id}"
+            correlation_type = "case_link_match"
         await create_correlation(
             db,
             tenant_id,
             evidence.id,
             related_evidence_id,
-            "case_link_match" if related_evidence_id not in identity_related_evidence_ids else "identity_match",
-            1.0 if related_evidence_id not in identity_related_evidence_ids else 0.65,
-            explanation=(
-                f"Matched canonical case {canonical_case_id}"
-                if related_evidence_id not in identity_related_evidence_ids
-                else "Matched one or more canonical identities"
-            ),
+            correlation_type,
+            confidence,
+            explanation=explanation,
             created_by="correlation_worker",
         )
         correlations_created += 1

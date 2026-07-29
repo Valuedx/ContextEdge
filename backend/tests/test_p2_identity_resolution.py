@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 from uuid import uuid4
@@ -143,49 +143,121 @@ async def test_create_episodes_from_evidence_aggregates_identity_refs():
     assert any(isinstance(obj, Episode) for obj in added)
 
 
-@pytest.mark.asyncio
-async def test_correlation_can_link_by_identity_without_case_candidates():
-    tenant_id = uuid4()
-    evidence_id = uuid4()
-    other_evidence_id = uuid4()
+def _correlation_db(evidence, source, raw, execute_results):
+    added = []
+    results = list(execute_results)
+
+    async def _execute(stmt):
+        if results:
+            return results.pop(0)
+        return _ScalarOneOrNoneResult(None)
+
+    db = SimpleNamespace(
+        get=AsyncMock(side_effect=[evidence, source, raw]),
+        execute=AsyncMock(side_effect=_execute),
+        add=lambda obj: added.append(obj),
+        flush=AsyncMock(),
+    )
+    return db, added
+
+
+def _correlation_fixtures(tenant_id):
     source_id = uuid4()
     evidence = SimpleNamespace(
-        id=evidence_id,
+        id=uuid4(),
         tenant_id=tenant_id,
         source_id=source_id,
         raw_object_ref=uuid4(),
         thread_id=None,
+        ingested_at=datetime.now(timezone.utc),
     )
     source = SimpleNamespace(id=source_id, tenant_id=tenant_id, source_type="servicenow")
     raw = SimpleNamespace(external_id=None, raw_payload={})
-    added = []
+    return evidence, source, raw
 
-    db = SimpleNamespace(
-        get=AsyncMock(side_effect=[evidence, source, raw]),
-        execute=AsyncMock(return_value=_ScalarOneOrNoneResult(None)),
-        add=lambda obj: added.append(obj),
-        flush=AsyncMock(),
+
+@pytest.mark.asyncio
+async def test_correlation_links_shared_device_identity_within_window():
+    tenant_id = uuid4()
+    identity_id = uuid4()
+    other_evidence_id = uuid4()
+    evidence, source, raw = _correlation_fixtures(tenant_id)
+
+    db, added = _correlation_db(
+        evidence, source, raw,
+        [
+            _AllResult([(identity_id, "device")]),  # trusted identity types
+            _AllResult([(other_evidence_id, identity_id)]),  # shared links
+            _AllResult([(other_evidence_id, evidence.ingested_at)]),  # times
+            _ScalarOneOrNoneResult(None),  # correlation-edge dedupe
+        ],
     )
 
-    with (
-        patch(
-            "contextedge.services.correlation_service.get_identity_ids_for_evidence",
-            AsyncMock(return_value={uuid4()}),
-        ),
-        patch(
-            "contextedge.services.correlation_service.find_related_evidence_ids_by_identity_ids",
-            AsyncMock(return_value={other_evidence_id}),
-        ),
+    with patch(
+        "contextedge.services.correlation_service.get_identity_ids_for_evidence",
+        AsyncMock(return_value={identity_id}),
     ):
-        result = await correlate_evidence_item(db, tenant_id, evidence_id)
+        result = await correlate_evidence_item(db, tenant_id, evidence.id)
 
     assert result["status"] == "ok"
-    assert result["canonical_case_id"] is None
     assert result["correlations_created"] == 1
-    assert any(
-        isinstance(obj, CorrelationEdge) and obj.correlation_type == "identity_match"
-        for obj in added
+    edges = [obj for obj in added if isinstance(obj, CorrelationEdge)]
+    assert edges[0].correlation_type == "identity_match"
+    assert edges[0].confidence == 0.65
+
+
+@pytest.mark.asyncio
+async def test_correlation_ignores_person_only_single_identity():
+    """A lone shared person must not correlate incidents (mega-cluster guard)."""
+    tenant_id = uuid4()
+    identity_id = uuid4()
+    other_evidence_id = uuid4()
+    evidence, source, raw = _correlation_fixtures(tenant_id)
+
+    db, added = _correlation_db(
+        evidence, source, raw,
+        [
+            _AllResult([(identity_id, "person")]),
+            _AllResult([(other_evidence_id, identity_id)]),
+            _AllResult([(other_evidence_id, evidence.ingested_at)]),
+        ],
     )
+
+    with patch(
+        "contextedge.services.correlation_service.get_identity_ids_for_evidence",
+        AsyncMock(return_value={identity_id}),
+    ):
+        result = await correlate_evidence_item(db, tenant_id, evidence.id)
+
+    assert result["status"] == "skipped"
+    assert not any(isinstance(obj, CorrelationEdge) for obj in added)
+
+
+@pytest.mark.asyncio
+async def test_correlation_ignores_identity_outside_time_window():
+    tenant_id = uuid4()
+    identity_id = uuid4()
+    other_evidence_id = uuid4()
+    evidence, source, raw = _correlation_fixtures(tenant_id)
+    six_months_ago = evidence.ingested_at - timedelta(days=180)
+
+    db, added = _correlation_db(
+        evidence, source, raw,
+        [
+            _AllResult([(identity_id, "device")]),
+            _AllResult([(other_evidence_id, identity_id)]),
+            _AllResult([(other_evidence_id, six_months_ago)]),
+        ],
+    )
+
+    with patch(
+        "contextedge.services.correlation_service.get_identity_ids_for_evidence",
+        AsyncMock(return_value={identity_id}),
+    ):
+        result = await correlate_evidence_item(db, tenant_id, evidence.id)
+
+    assert result["status"] == "skipped"
+    assert not any(isinstance(obj, CorrelationEdge) for obj in added)
 
 
 @pytest.mark.asyncio
