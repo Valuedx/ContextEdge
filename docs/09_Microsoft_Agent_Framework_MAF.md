@@ -199,12 +199,73 @@ Currently, the system defines one primary profile in `profiles.py`: **`maf.v1`**
 
 ### Profile Selection Logic
 - The MAF client hardcodes requests to use `profile="maf.v1"`.
-- The server receives the request and validates it in `get_projection_profile()`.
-- The profile defines strict boundaries:
-  - **Allowed Node Types:** Only specific concepts like `session`, `playbook`, `evidence`, `decision`, `error_signature`. (It explicitly excludes internal system nodes).
-  - **Allowed Relationship Types:** Only specific semantic edges like `supported_by`, `executes`, `governs`.
-  - **Budget Caps:** A maximum of 60 nodes, 120 relationships, a depth of 3, and a total payload size of 30,000 characters. No matter what the LLM requests, it cannot exceed these limits.
-  - **Relationship Weights:** Multipliers used during the ranking phase (e.g., a `validated_fix` edge boosts relevance by 1.2x, while an `invalidated_fix` edge penalizes relevance by 0.9x).
+## 7. Agent Profiles & Roles
+
+### 7.1 Supported MAF Agent Roles
+
+ContextEdge is designed to support **4 distinct MAF Agent Roles** operating within enterprise IT environments. All 4 roles utilize the `maf.v1` graph projection profile:
+
+| Agent Role | Primary Function | Core Responsibilities & Flow |
+|------------|-----------------|------------------------------|
+| **1. Operational Resolution Agent** | Active Incident Triage | Wakes up when a new ticket or alert is assigned. Queries the Context Graph to fetch past episodes, identifies matching root causes, and recommends verified playbooks to human operators. |
+| **2. Playbook Execution Agent** | Automated Remediation | Follows approved Playbook steps. Executes bounded operational tools (e.g., restarting SQL services, killing runaway processes, recycling app pools) with step-by-step verification. |
+| **3. Audit & Compliance Agent** | Governance & Decision Traceability | Monitors every action taken by resolution agents. Records decision events, checks action policy rules, verifies human approval signatures, and writes audit trails to PostgreSQL. |
+| **4. Diagnostic & Analysis Agent** | Hypothesis Testing & Contradiction Check | Analyzes raw evidence from multiple sources (ServiceNow, Splunk, Slack). Formulates claims, tests hypotheses against graph nodes, and flags contradictions when a proposed action violates policy. |
+
+---
+
+### 7.2 Exposed MAF Tools & Integration Mechanisms
+
+ContextEdge exposes **2 core integration mechanisms** to MAF agents through the `ContextGraphMAFPlugin` class (`backend/src/contextedge/integrations/maf/plugin.py`):
+
+```text
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                        ContextGraphMAFPlugin                                │
+│                                                                             │
+│  ┌─────────────────────────────────────┐   ┌─────────────────────────────┐  │
+│  │ 1. Proactive Memory Provider        │   │ 2. On-Demand Graph Tool     │  │
+│  │    (ContextProvider / before_run)   │   │    (@tool query_context)    │  │
+│  │  Injects graph memory into prompt   │   │  Agent queries graph at run │  │
+│  └─────────────────────────────────────┘   └─────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+#### 1. Proactive Memory Provider (`ContextGraphProvider`)
+- **Type**: `ContextProvider` subclass (hooks into MAF's `before_run` execution pipeline).
+- **Behavior**: Before the agent executes each turn, the provider inspects the last 4 messages in the chat history, constructs an `AgentGraphRequest`, fetches a bounded Context Graph subset, and injects it as structured JSON directly into the agent's instructions prompt.
+- **Benefit**: The agent gets relevant historical incident memory automatically without having to write explicit code or prompt for it.
+
+#### 2. On-Demand Graph Query Tool (`@tool("query_context_graph")`)
+- **Type**: `@tool` decorated function inside `ContextGraphTools` (`tools.py`).
+- **Signature**:
+  ```python
+  @tool(
+      name="query_context_graph",
+      description="Retrieve a bounded ContextEdge graph subset relevant to the current operational question."
+  )
+  async def query_context_graph(
+      query: str,
+      seeds: list[dict[str, str]] | None = None,
+      entities: list[str] | None = None,
+      max_depth: int = 2
+  ) -> dict[str, Any]
+  ```
+- **Behavior**: Enables the agent to query the Context Graph on demand during its reasoning process. The agent can specify target hostnames/entities or specific node UUIDs to inspect.
+
+---
+
+### 7.3 Memory Safety & Projection Profile (`maf.v1`)
+
+To prevent LLM context window overflow, cost spikes, and hallucinations, all MAF agent interactions are strictly governed by the **`maf.v1`** projection profile (`graph/agent/profiles.py`):
+
+| Constraint Parameter | Standard Default | Maximum Hard Cap | Purpose |
+|----------------------|------------------|------------------|---------|
+| **Max Graph Nodes** | 30 nodes | **60 nodes** | Prevents context window dilution |
+| **Max Relationships** | 60 edges | **120 edges** | Caps relationship complexity |
+| **Max Relationship Depth** | 2 hops | **3 hops** | Bounds multi-hop graph traversal |
+| **Max Character Payload** | 15,000 chars | **30,000 chars** | Strictly limits prompt token consumption |
+
+---
 
 ## 8. Graph Projection for MAF
 

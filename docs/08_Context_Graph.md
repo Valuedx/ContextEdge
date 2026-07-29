@@ -114,60 +114,165 @@ In ContextEdge, nodes represent the nouns of the system.
 
 ---
 
-## 3.1 Hierarchical Knowledge Lifecycle: How Patterns Collect Episodes and Evidence
+## 3.1 How ContextEdge Builds Knowledge (Step by Step)
 
-ContextEdge processes raw operational data through a 3-tier hierarchical graph aggregation pipeline:
+Think of ContextEdge like a detective who reads thousands of incident tickets, finds which problems keep repeating, and writes a manual so the next person can fix it faster.
 
-```text
-                               ┌───────────────────────────────────────────────┐
-                               │                 PLAYBOOK                      │
-                               │  "Recover ORDERS_DB Connection Exhaustion"    │
-                               └──────────────────────┬────────────────────────┘
-                                                      │ (addresses)
-                                                      ▼
-                               ┌───────────────────────────────────────────────┐
-                               │                  PATTERN                      │
-                               │  "Database server unresponsive on ORDERS_DB"  │
-                               └──────────┬─────────────────────────┬──────────┘
-                                          │ (clusters)              │ (clusters)
-                        ┌─────────────────┴──────────┐   ┌──────────┴─────────────────┐
-                        ▼                            │   ▼                            │
-        ┌───────────────────────────────┐            │ ┌───────────────────────────────┐
-        │      HISTORICAL EPISODE       │            │ │      HISTORICAL EPISODE       │
-        │  INC0010427 (July 27, 2026)   │            │ │  INC0009812 (June 14, 2026)   │
-        └───────┬───────────────┬───────┘            │ └───────┬───────────────┬───────┘
-                │               │                    │         │               │
-      (1:N)     ▼               ▼ (derived_from)     │ (1:N)   ▼               ▼ (derived_from)
-  ┌───────────────────┐   ┌───────────────────┐      │ ┌───────────────────┐   ┌───────────────────┐
-  │  ServiceNow Ticket│   │  Splunk Log Alert │      │ │  ServiceNow Ticket│   │  Splunk Log Alert │
-  │    INC0010427     │   │     SPL-99812     │      │ │    INC0009812     │   │     SPL-95412     │
-  └───────────────────┘   └───────────────────┘      │ └───────────────────┘   └───────────────────┘
-                                                     │
-                                                     ▼
-                                       ┌───────────────────────────────┐
-                                       │      HISTORICAL EPISODE       │
-                                       │  INC0008431 (April 02, 2026)  │
-                                       └───────────────────────────────┘
+Here is how it works, step by step:
+
+---
+
+### Step 1: Evidence Collection, Normalization & Storage
+
+**What happens here?**
+ContextEdge connects to your company's tools (ServiceNow, Splunk, Slack, Jira, Email) and pulls in raw data automatically. Each piece of raw data is called an **Evidence Item**.
+
+**Real-world example:**
+On July 27, 2026, at 10:15 AM, the ordering system goes down. Within minutes, three things happen in three different tools:
+
+| Tool | What gets created | Example |
+|------|------------------|---------|
+| ServiceNow | A support ticket is filed | `INC0010427 - "OrderApp is returning 503 errors"` |
+| Splunk | A monitoring alert fires | `SPL-99812 - "2,841 SQL connection timeout errors detected"` |
+| Slack | Engineers start chatting | `#inc-orders-db - "Hey team, ORDERS_DB seems stuck again"` |
+
+ContextEdge pulls all three of these into the database as 3 separate **Evidence Items**. Each one stores:
+- The original text (ticket description, log message, chat message)
+- When it was created (timestamp)
+- Where it came from (ServiceNow, Splunk, or Slack)
+- A numeric fingerprint (embedding vector) so the system can compare it with other tickets later
+
+**In simple words:** Evidence = the raw proof that something happened. It's like collecting witness statements at a crime scene.
+
+---
+
+### Step 2: AI Episode Reconstruction
+
+**What happens here?**
+Now ContextEdge has 3 separate evidence items from 3 different tools, but they are all about the **same incident**. The system needs to stitch them together into one complete story. This story is called an **Episode**.
+
+**How does it know they belong together?**
+The system looks at three clues:
+1. **Same ticket number** — All three mention `INC0010427`
+2. **Same time window** — All three happened within 30 minutes of each other
+3. **Same servers/systems** — All three mention `ORDERS_DB` or `SQLPROD01`
+
+When these clues match, the system groups the evidence items together and creates one **Episode** record.
+
+**Real-world example:**
+
+```
+Episode: "Incident Analysis INC0010427 - Runaway sales report connection leak"
+Created: July 27, 2026
+
+What happened (root cause):
+  Monthly sales report query held 61 SQL connections for 45 minutes,
+  starving the connection pool. OrderApp health checks started failing.
+
+Evidence collected from:
+  ├── ServiceNow Ticket INC0010427 (the official IT ticket)
+  ├── Splunk Log Alert SPL-99812 (the monitoring system alert)
+  └── Slack Thread #inc-orders-db (the engineer chat discussion)
 ```
 
-### 1. Step 1: Raw Evidence Ingestion (`evidence_items`)
-- **How Evidence is Collected:** Ingestion connectors (ServiceNow REST API, Splunk HTTP Event Collector, Slack Webhooks, MS Teams) continuously pull raw operational logs, tickets, and chat threads into `evidence_items`.
-- **Properties:** Every evidence item stores `body_text`, `ingested_at` timestamp, `source_id`, `evidence_type`, and an embedding vector generated via pgvector (`text-embedding-004`).
+**In simple words:** Episode = one complete incident story, built by combining clues from multiple tools. It's like a police detective writing one case report from witness statements, CCTV footage, and phone records.
 
-### 2. Step 2: Episode Reconstruction (`episodes` & `derived_from` Edges)
-- **How Episodes Collect Evidence:** The `episode_extractor` background task scans newly ingested evidence items and correlates them into a single incident story (**Episode**):
-  - **Correlation Strategy:** Evidence items are grouped by shared primary case reference (e.g. `INC0010427`), close temporal proximity (within a 30-minute window), and overlapping canonical entity references (e.g. `ORDERS_DB`, `SQLPROD01`).
-  - **Graph Edge Creation:** The worker creates an `Episode` record and attaches `GraphEdge` links (`episode ──derived_from──► evidence`) connecting the episode to 3–4 distinct multi-source evidence items (ServiceNow Ticket + Splunk Log + Slack Chat Thread).
+---
 
-### 3. Step 3: Pattern Aggregation (`patterns` & `clusters` Edges)
-- **How Patterns Collect Episodes:** The pattern detection worker (`pattern_tasks.py`) periodically runs vector similarity searches across all closed historical episodes:
-  - **Clustering Algorithm:** Episodes sharing >85% root-cause summary embedding similarity (e.g., connection leaks on `ORDERS_DB` occurring across Sept 2025, Nov 2025, Jan 2026, April 2026, June 2026, and July 2026) are grouped into a single **Pattern** record.
-  - **Graph Edge & Link Creation:** The worker creates `GraphEdge` entries (`pattern ──clusters──► episode`) and populates `PatternEvidenceLink` records mapping `pattern_id ──> episode_id ──> evidence_id`.
-  - **Pattern Metadata Aggregation:** The pattern aggregates metrics including `episode_count`, `confidence`, `observed_errors`, `root_causes`, and validated `resolution_steps`.
+### Step 3: Pattern Detection
 
-### 4. Step 4: Playbook Attachment (`playbooks` & `addresses` Edges)
-- Once a `Pattern` collects a cluster of verified episodes, ContextEdge connects or drafts a verified **Playbook** (`playbook ──addresses──► pattern`).
-- SREs review and approve the playbook on the web UI, enabling Microsoft Agent Framework (MAF) AI agents to execute recovery steps automatically when the pattern reoccurs!
+**What happens here?**
+Over weeks and months, many different incidents happen. Some of them look very similar. The system compares all past episode stories and asks: *"Have I seen this same type of problem before?"*
+
+When 3 or more episodes have similar root causes, the system groups them into a **Pattern**.
+
+**Real-world example:**
+Look at these 6 episodes that happened over the past year:
+
+| Date | Incident | What Went Wrong |
+|------|----------|----------------|
+| Sep 5, 2025 | INC0005230 | Connection pool max size was set too low after deployment |
+| Nov 28, 2025 | INC0006110 | Database backup job locked the connection pool during peak hours |
+| Jan 19, 2026 | INC0007204 | Flash sale traffic surge exceeded the pool limit |
+| Apr 2, 2026 | INC0008431 | OrderApp thread pool deadlock leaked SQL connections |
+| Jun 14, 2026 | INC0009812 | Unindexed batch query consumed all available connections |
+| Jul 27, 2026 | INC0010427 | Runaway sales report held 61 connections for 45 minutes |
+
+All 6 incidents have the same root cause: **ORDERS_DB runs out of SQL connections**. The triggers are different each time (backup job, flash sale, runaway query), but the core problem is always the same.
+
+ContextEdge detects this and creates one **Pattern**:
+
+```
+Pattern: "Database server unresponsive / connection pool exhaustion on ORDERS_DB"
+Confidence: 88%
+Episode Count: 6
+Date Range: September 2025 — July 2026
+
+Common triggers found:
+  • Runaway queries holding too many connections
+  • Backup jobs colliding with peak traffic
+  • Connection pool max size set too low
+
+Common fix steps found:
+  1. Check active SQL sessions and pool usage
+  2. Kill the runaway query
+  3. Restart the SQL Server service
+  4. Recycle the application pool
+```
+
+**In simple words:** Pattern = a repeating problem that keeps coming back. It's like a hospital noticing that every winter, 20 patients come in with the same flu symptoms — so they create a standard treatment plan.
+
+---
+
+### Step 4: Playbook Creation
+
+**What happens here?**
+Once the system detects a repeating pattern, it drafts a step-by-step fix guide called a **Playbook**. A senior engineer reviews and approves it. After approval, AI agents can use this playbook to fix the problem automatically next time.
+
+**Real-world example:**
+
+```
+Playbook: "Recover ORDERS_DB from connection-pool exhaustion"
+Risk Level: High (requires approval before execution)
+Linked Pattern: "Database server unresponsive on ORDERS_DB"
+
+Steps:
+  Step 1: Capture active SQL sessions and connection pool stats
+  Step 2: Identify and kill the confirmed runaway query
+  Step 3: After emergency approval, restart MSSQLSERVER on SQLPROD01
+  Step 4: Recycle the orders-prod IIS application pool on APPPROD02
+  Step 5: Verify OrderApp health checks return HTTP 200
+```
+
+**In simple words:** Playbook = a verified fix manual. It's like a fire department's standard operating procedure — when there's a kitchen fire, follow these exact steps in this exact order.
+
+---
+
+### How It All Connects (The Complete Picture)
+
+```text
+STEP 1: Raw Data Comes In
+  ServiceNow Ticket ─┐
+  Splunk Log Alert   ─┼──► These are EVIDENCE items (raw proof)
+  Slack Chat Thread  ─┘
+
+STEP 2: AI Groups Related Evidence
+  Evidence + Evidence + Evidence ──► This becomes an EPISODE (one incident story)
+
+STEP 3: System Finds Repeating Problems
+  Episode + Episode + Episode + ... ──► This becomes a PATTERN (repeating issue)
+
+STEP 4: Fix Guide is Created
+  Pattern ──► This gets a PLAYBOOK (step-by-step fix manual)
+```
+
+Or visually on the dashboard graph:
+
+```text
+[ PLAYBOOK ] ──► [ PATTERN ] ──► [ EPISODE ] ──► [ EVIDENCE ]
+   (fix guide)    (repeating     (one incident    (raw ticket,
+                   problem)       story)           log, chat)
+```
 
 ---
 
