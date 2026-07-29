@@ -114,7 +114,65 @@ In ContextEdge, nodes represent the nouns of the system.
 
 ---
 
+## 3.1 Hierarchical Knowledge Lifecycle: How Patterns Collect Episodes and Evidence
+
+ContextEdge processes raw operational data through a 3-tier hierarchical graph aggregation pipeline:
+
+```text
+                               ┌───────────────────────────────────────────────┐
+                               │                 PLAYBOOK                      │
+                               │  "Recover ORDERS_DB Connection Exhaustion"    │
+                               └──────────────────────┬────────────────────────┘
+                                                      │ (addresses)
+                                                      ▼
+                               ┌───────────────────────────────────────────────┐
+                               │                  PATTERN                      │
+                               │  "Database server unresponsive on ORDERS_DB"  │
+                               └──────────┬─────────────────────────┬──────────┘
+                                          │ (clusters)              │ (clusters)
+                        ┌─────────────────┴──────────┐   ┌──────────┴─────────────────┐
+                        ▼                            │   ▼                            │
+        ┌───────────────────────────────┐            │ ┌───────────────────────────────┐
+        │      HISTORICAL EPISODE       │            │ │      HISTORICAL EPISODE       │
+        │  INC0010427 (July 27, 2026)   │            │ │  INC0009812 (June 14, 2026)   │
+        └───────┬───────────────┬───────┘            │ └───────┬───────────────┬───────┘
+                │               │                    │         │               │
+      (1:N)     ▼               ▼ (derived_from)     │ (1:N)   ▼               ▼ (derived_from)
+  ┌───────────────────┐   ┌───────────────────┐      │ ┌───────────────────┐   ┌───────────────────┐
+  │  ServiceNow Ticket│   │  Splunk Log Alert │      │ │  ServiceNow Ticket│   │  Splunk Log Alert │
+  │    INC0010427     │   │     SPL-99812     │      │ │    INC0009812     │   │     SPL-95412     │
+  └───────────────────┘   └───────────────────┘      │ └───────────────────┘   └───────────────────┘
+                                                     │
+                                                     ▼
+                                       ┌───────────────────────────────┐
+                                       │      HISTORICAL EPISODE       │
+                                       │  INC0008431 (April 02, 2026)  │
+                                       └───────────────────────────────┘
+```
+
+### 1. Step 1: Raw Evidence Ingestion (`evidence_items`)
+- **How Evidence is Collected:** Ingestion connectors (ServiceNow REST API, Splunk HTTP Event Collector, Slack Webhooks, MS Teams) continuously pull raw operational logs, tickets, and chat threads into `evidence_items`.
+- **Properties:** Every evidence item stores `body_text`, `ingested_at` timestamp, `source_id`, `evidence_type`, and an embedding vector generated via pgvector (`text-embedding-004`).
+
+### 2. Step 2: Episode Reconstruction (`episodes` & `derived_from` Edges)
+- **How Episodes Collect Evidence:** The `episode_extractor` background task scans newly ingested evidence items and correlates them into a single incident story (**Episode**):
+  - **Correlation Strategy:** Evidence items are grouped by shared primary case reference (e.g. `INC0010427`), close temporal proximity (within a 30-minute window), and overlapping canonical entity references (e.g. `ORDERS_DB`, `SQLPROD01`).
+  - **Graph Edge Creation:** The worker creates an `Episode` record and attaches `GraphEdge` links (`episode ──derived_from──► evidence`) connecting the episode to 3–4 distinct multi-source evidence items (ServiceNow Ticket + Splunk Log + Slack Chat Thread).
+
+### 3. Step 3: Pattern Aggregation (`patterns` & `clusters` Edges)
+- **How Patterns Collect Episodes:** The pattern detection worker (`pattern_tasks.py`) periodically runs vector similarity searches across all closed historical episodes:
+  - **Clustering Algorithm:** Episodes sharing >85% root-cause summary embedding similarity (e.g., connection leaks on `ORDERS_DB` occurring across Sept 2025, Nov 2025, Jan 2026, April 2026, June 2026, and July 2026) are grouped into a single **Pattern** record.
+  - **Graph Edge & Link Creation:** The worker creates `GraphEdge` entries (`pattern ──clusters──► episode`) and populates `PatternEvidenceLink` records mapping `pattern_id ──> episode_id ──> evidence_id`.
+  - **Pattern Metadata Aggregation:** The pattern aggregates metrics including `episode_count`, `confidence`, `observed_errors`, `root_causes`, and validated `resolution_steps`.
+
+### 4. Step 4: Playbook Attachment (`playbooks` & `addresses` Edges)
+- Once a `Pattern` collects a cluster of verified episodes, ContextEdge connects or drafts a verified **Playbook** (`playbook ──addresses──► pattern`).
+- SREs review and approve the playbook on the web UI, enabling Microsoft Agent Framework (MAF) AI agents to execute recovery steps automatically when the pattern reoccurs!
+
+---
+
 ## 4. Edge Types
+
 
 Edges define how nodes relate. They are stored in `graph_edges`.
 

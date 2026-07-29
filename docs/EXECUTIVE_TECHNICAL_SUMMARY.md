@@ -263,23 +263,32 @@ CREATE TABLE graph_edges (
 );
 ```
 
-### 5-Level Operational Hierarchy
+### 5-Level Operational Hierarchy & Collection Lifecycle
 
 ```text
- Level 1 (Highest)   ──►   [ PATTERN ]          (Recurring problem pattern)
+ Level 1 (Highest)   ──►   [ PLAYBOOK ]         (Verified resolution steps)
                               │
-                              ▼ (generates)
- Level 2             ──►   [ PLAYBOOK ]         (Verified resolution steps)
+                              ▼ (addresses)
+ Level 2             ──►   [ PATTERN ]          (Recurring problem pattern)
                               │
-                              ▼ (resolves)
- Level 3             ──►   [ EPISODE ]          (Incident summary)
+                              ▼ (clusters 1:N historical episodes)
+ Level 3             ──►   [ EPISODE ]          (Single incident analysis story)
                               │
-                              ▼ (part_of)
- Level 4             ──►   [ EVIDENCE ITEM ]    (Original ticket proof)
+                              ▼ (derived_from 1:N multi-source proof)
+ Level 4             ──►   [ EVIDENCE ITEM ]    (ServiceNow Ticket + Splunk Log + Slack Thread)
                               │
                               ▼ (references)
- Level 5 (Lowest)    ──►   [ ENTITY / POLICY ]  (Hostnames, IP, Action Policy)
+ Level 5 (Lowest)    ──►   [ ENTITY / POLICY ]  (Hostnames, DB name, Action Policy)
 ```
+
+#### How a Pattern Collects Episodes:
+1. **Vector Clustering Algorithm (`pattern_tasks.py`)**: The pattern detection worker periodically generates 3072-dimensional vector embeddings for all closed incident `Episode` summaries using pgvector (`text-embedding-004`).
+2. **Similarity Grouping (>85% Match)**: Episodes sharing over 85% root-cause summary similarity (e.g. connection leaks on `ORDERS_DB` occurring in Sept 2025, Nov 2025, Jan 2026, April 2026, June 2026, and July 2026) are grouped under a single **Pattern** record.
+3. **Graph Edge Creation**: The system creates `GraphEdge` records (`pattern ──clusters──► episode`) and `PatternEvidenceLink` relational mappings.
+
+#### How an Episode Collects Evidence:
+1. **Multi-Source Correlation (`episode_extractor`)**: When raw evidence arrives from ServiceNow, Splunk, or Slack, the episode worker correlates them by shared incident case reference (e.g. `INC0010427`), timestamp proximity (within 30 mins), and matching entity targets (`ORDERS_DB`).
+2. **Multi-Evidence Stitching**: The worker links the `Episode` to 3–4 distinct Evidence Items via `GraphEdge` links (`episode ──derived_from──► evidence`).
 
 ### Visual Graph UI Breakdown (Node-by-Node Guide for New Users)
 
@@ -291,8 +300,8 @@ When viewing the Knowledge Graph visualization on the dashboard screen, read lef
 
 1. **`PLAYBOOK` (Node 1 - Verified Fix Guide)**: Step-by-step operational instructions to safely fix the issue.
 2. **`PATTERN` (Node 2 - Recurring Problem)**: Title of the systemic issue identified across repeating incidents (e.g., *"Database connection pool exhaustion on ORDERS_DB"*).
-3. **`EPISODE` (Node 3 - Incident Analysis)**: Clean AI summary of **one specific outage event** (`INC0010427`), detailing symptom, root cause, and fix steps.
-4. **`EVIDENCE ITEM` (Node 4 - Raw Proof)**: The original, raw ticket message ingested directly from ServiceNow, Jira, or email (`INC0010427`).
+3. **`EPISODE` (Node 3 - Incident Analysis)**: Clean AI summary of **one specific outage event** (`INC0010427`), detailing symptom, root cause, date, and fix steps.
+4. **`EVIDENCE ITEM` (Node 4 - Raw Proof)**: The original, raw ticket messages ingested directly from ServiceNow, Splunk, or Slack (`INC0010427`).
 When an endpoint queries `"How to fix Error 503"`, or when `get_pattern_subgraph()` in `graph/queries.py` builds a pattern view, PostgreSQL executes a multi-hop recursive traversal:
 
 ```sql
