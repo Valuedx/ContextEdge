@@ -104,11 +104,13 @@ async def _find_strong_identifier_match(
     entity: NormalizedEntity,
 ) -> tuple[CanonicalIdentity, IdentityAlias, str] | None:
     for alias_type, value, _source_system in entity.strong_identifiers:
-        # No entity_type filter here: uq_identity_aliases_tenant_strong makes
-        # a strong identifier unique per (tenant, alias_type, value) across
-        # ALL entity types, so the lookup must mirror that scope — otherwise
-        # the same email extracted under a different type misses every layer
-        # and Layer 4's insert collides with the index.
+        # No entity_type and no is_active filter here: the lookup must
+        # mirror uq_identity_aliases_tenant_strong's full scope (tenant +
+        # alias_type + value, nothing else). Filtering on either dimension
+        # makes owned identifiers invisible, and Layer 4 then mints endless
+        # provisional duplicates whose strong-alias inserts conflict with
+        # the still-owned row. A deactivated owner resolving here is
+        # reviewable; a duplicate blackhole is not.
         result = await db.execute(
             select(IdentityAlias, CanonicalIdentity)
             .join(
@@ -117,7 +119,6 @@ async def _find_strong_identifier_match(
             )
             .where(
                 CanonicalIdentity.tenant_id == tenant_id,
-                CanonicalIdentity.is_active.is_(True),
                 IdentityAlias.alias_type == alias_type,
                 IdentityAlias.normalized_alias == value,
             )
@@ -669,8 +670,11 @@ async def link_evidence_identities(
 
     # Edge weight carries the resolution confidence so graph consumers see
     # a provisional mention (0.5) as weaker than a strong-identifier match
-    # (1.0) instead of every mention weighing the same.
+    # (1.0) instead of every mention weighing the same. Explicit None check:
+    # `or 1.0` would promote a legitimate 0.0 (abstained adjudication) to
+    # full trust — the exact inversion this weight exists to prevent.
     for ref in merged_refs:
+        confidence = ref.get("confidence")
         await ensure_edge(
             db,
             tenant_id,
@@ -679,7 +683,7 @@ async def link_evidence_identities(
             "identity",
             uuid.UUID(ref["canonical_id"]),
             "mentions_identity",
-            weight=float(ref.get("confidence") or 1.0),
+            weight=1.0 if confidence is None else float(confidence),
             metadata={"resolution_state": ref.get("resolution_state", "resolved")},
             domain_id=getattr(evidence, "domain_id", None),
         )
@@ -811,14 +815,14 @@ async def merge_canonical_identities(
         alias.canonical_identity_id = primary.id
         existing_aliases.add(key)
 
-    duplicate_name = ("display_name", _normalize_term(duplicate.canonical_name))
-    if duplicate_name not in existing_aliases:
+    duplicate_normalized = _normalize_term(duplicate.canonical_name)
+    if ("display_name", duplicate_normalized) not in existing_aliases:
         db.add(
             IdentityAlias(
                 canonical_identity_id=primary.id,
                 tenant_id=tenant_id,
                 alias_text=duplicate.canonical_name,
-                normalized_alias=duplicate_name,
+                normalized_alias=duplicate_normalized,
                 alias_type="display_name",
                 source_id=None,
                 confidence=1.0,

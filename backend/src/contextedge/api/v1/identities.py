@@ -110,6 +110,27 @@ async def update_identity(
         # participates in Layer-1 strong matching, and populate the 0033
         # columns so the alias is visible to the typed lookup index.
         alias_type = _classify_bare_name(cleaned) or "display_name"
+        if alias_type != "display_name":
+            # Strong identifiers are unique per tenant
+            # (uq_identity_aliases_tenant_strong) — surface an ownership
+            # conflict as a 409 instead of a unique-violation 500.
+            owner = (
+                await db.execute(
+                    select(IdentityAlias.canonical_identity_id).where(
+                        IdentityAlias.tenant_id == identity.tenant_id,
+                        IdentityAlias.alias_type == alias_type,
+                        IdentityAlias.normalized_alias == normalized,
+                    )
+                )
+            ).scalar_one_or_none()
+            if owner is not None and owner != identity.id:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        f"{alias_type} '{cleaned}' already belongs to identity "
+                        f"{owner}; merge the identities instead"
+                    ),
+                )
         db.add(
             IdentityAlias(
                 canonical_identity_id=identity.id,

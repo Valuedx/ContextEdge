@@ -337,9 +337,11 @@ async def get_entity_subgraph(
                 if e.id in seen_edges:
                     continue
                 seen_edges.add(e.id)
+                # Labels describe the enrichment (source) node only — see
+                # the same rule in get_pattern_subgraph.
                 label = (e.metadata_extra or {}).get("label")
                 add_node(e.source_node_type, str(e.source_node_id), label)
-                add_node(e.target_node_type, str(e.target_node_id), label)
+                add_node(e.target_node_type, str(e.target_node_id), None)
                 edge_list.append({
                     "source": f"{e.source_node_type}:{e.source_node_id}",
                     "target": f"{e.target_node_type}:{e.target_node_id}",

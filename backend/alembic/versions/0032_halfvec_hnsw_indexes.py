@@ -31,6 +31,11 @@ Safety / re-run notes:
   rewritten cleanup because 0021/0030 were already stamped.
 - Offline mode (``alembic upgrade --sql``) cannot probe the extension
   version; the DDL is emitted unconditionally with the requirement noted.
+- Environments that already stamped an earlier revision of this file (the
+  graceful-no-op variant) on pgvector < 0.7 will NOT re-execute it —
+  their search stays broken until the extension is upgraded and the index
+  DDL below is applied manually (or via alembic downgrade/upgrade of this
+  revision).
 
 Revision ID: 0032_halfvec_hnsw_indexes
 Revises: 0031_maf_context_graph_hardening

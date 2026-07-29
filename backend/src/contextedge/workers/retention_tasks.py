@@ -52,6 +52,10 @@ async def _tenant_retention_days(db, tid: uuid.UUID) -> int:
         )
     ).scalar_one_or_none()
     configured = (row or {}).get("retention_days")
+    # bool is an int subclass: a config typo of `true` would silently mean
+    # a 1-day retention window — reject it.
+    if isinstance(configured, bool):
+        return settings.retention_default_days
     try:
         days = int(configured)
         if days > 0:

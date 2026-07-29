@@ -230,6 +230,24 @@ class ServiceNowConnector(BaseConnector):
             data = await self._snow_get(f"/api/now/table/{table_name}", params)
             records = data.get("result", [])
 
+            # Fail-closed ordering guard: the cursor advance is only correct
+            # if the server honored ORDERBY across the ^NQ branches. If a
+            # page arrives out of order, stop WITHOUT advancing past the
+            # previous page — refetching next tick is safe (dedup
+            # downstream); skipping unreturned rows is silent data loss.
+            page_tuples = [
+                (r.get("sys_updated_on", ""), r.get("sys_id", "")) for r in records
+            ]
+            if page_tuples != sorted(page_tuples):
+                import structlog
+
+                structlog.get_logger().error(
+                    "servicenow.page_order_violation",
+                    table=table_name,
+                    page_size=len(records),
+                )
+                break
+
             for record in records:
                 ts = record.get("sys_updated_on", "")
                 sys_id = record.get("sys_id", "")

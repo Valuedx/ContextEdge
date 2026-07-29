@@ -47,6 +47,14 @@ async def login(body: LoginRequest, db: DbSession):
         .limit(5)
     )
     candidates = [u for u in result.scalars().all() if u.password_hash]
+    if len(candidates) == 5:
+        # The DoS cap may be hiding a 6th+ same-email account that can now
+        # never log in — make that diagnosable.
+        import structlog
+
+        structlog.get_logger().warning(
+            "auth.candidate_cap_reached", email=body.email
+        )
     if not candidates:
         # Dummy verify keeps response time flat whether or not the email
         # exists (user-enumeration timing oracle).

@@ -17,6 +17,8 @@ The July 2026 production-readiness review's P0/P1 code gaps were closed in one b
 
 ## Still open after the 2026-07 shipment
 
+- **Doubled braces in pre-existing system prompts** — `Prompt.system` is never `.format()`ed, so the `{{ }}` escaping in the `decision`, `episode`, `pattern`, and `playbook` v1 system prompts reaches the model as literal double braces (malformed JSON examples). The `identity` v2 and `identity_adjudication` v1 prompts were fixed on 2026-07-29; the pre-existing families should be corrected as new prompt versions (changing a released version's text silently would invalidate any eval baselines).
+
 - **LLM provider resilience** — per-call timeout, circuit breaker, and provider fallback are still absent from `ai/provider.py` (budget gates, retries, and schema validation exist).
 - **Prompt-injection fencing at ingest extractors** — the MAF provider fences untrusted graph content, but episode/decision/identity extractors still concatenate evidence text into prompts without delimiters.
 - **Ranking calibration** — `quality_score = 0.5` placeholder, no abstention threshold, N+1 per-playbook queries, and the chunk search-side rollup remain (see the chunking entry).

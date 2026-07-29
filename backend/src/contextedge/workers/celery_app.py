@@ -105,13 +105,20 @@ def _require_migrations_at_head(sender=None, **_) -> None:
         alembic_dir = Path(contextedge.__file__).resolve().parents[2] / "alembic"
         if not alembic_dir.is_dir():
             return
+        from sqlalchemy.exc import ProgrammingError
+
         expected = ScriptDirectory(str(alembic_dir)).get_current_head()
         engine = create_engine(settings.database_url_sync, pool_pre_ping=True)
         try:
             with engine.connect() as conn:
-                row = conn.execute(
-                    sa_text("SELECT version_num FROM alembic_version")
-                ).first()
+                try:
+                    row = conn.execute(
+                        sa_text("SELECT version_num FROM alembic_version")
+                    ).first()
+                except ProgrammingError:
+                    # No alembic_version table = never-migrated database —
+                    # the MOST definite mismatch, not a transient error.
+                    row = None
         finally:
             engine.dispose()
         current = row[0] if row else None
