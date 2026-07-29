@@ -2,6 +2,29 @@
 
 Short list of implementation gaps and operational caveats called out in the codewiki and root documentation. Use this when the product surface looks more complete in the architecture than it does in the current UI or environment.
 
+## Resolved: 2026-07-29 gap-fix shipment (`feature/review-gap-fixes`)
+
+The July 2026 production-readiness review's P0/P1 code gaps were closed in one branch. Headlines (each with tests):
+
+- **Layered identity resolution (migration `0033`).** Strong identifiers (email/username/hostname/fqdn/ip/serial/external id) resolve deterministically at 1.0; typed exact alias matching is entity-type-scoped; LLM candidate adjudication may abstain (`needs_review`), auto-links only above per-type thresholds (person 0.95); unmatched mentions create `provisional` identities instead of trusted 0.8 ones. Strong aliases are unique per tenant. Merges mark the survivor `verified` and enqueue `extraction.rebuild_identity_snapshots` to repair the cached JSONB refs.
+- **Real ANN indexing (migration `0032`).** halfvec expression HNSW on all four embedding columns — see the corrected HNSW entry below.
+- **Correlation gating.** Identity co-occurrence requires resolved/verified identities + 7-day window + non-person entity (0.65–0.75) or ≥2 shared identities (0.5); person-only single-identity correlation is dropped entirely. `CaseLink.evidence_id` no longer clobbered by the newest evidence.
+- **Execution governance.** Unknown safety classes fail closed; outcome enum validated; completion refuses while steps are open; abort/complete restricted to initiator/domain-admin; approvals verified against the run in the URL; playbook approval policies (max automation mode, min-safety-class approval, approver roles, self-approval ban) are now *evaluated* at start and decide time, not just stored.
+- **Security/ops basics.** Fernet key required outside development (no more per-call transient keys); login checks `status=active` and survives duplicate emails across tenants; `/ready` actually probes DB + migration head + Redis; destructive seed scripts refuse to run outside development.
+- **Retention/audit/notifications.** Archive daily + purge weekly on Beat (`settings.retention_purge_mode`, default `soft_purge`); `apply_legal_hold` tenant-scoped; soft-purge scrubs `evidence_chunks`; audit middleware records denied/failed mutations; email/webhook notifications deliver when configured (explicit `skipped_unconfigured` otherwise).
+- **ServiceNow.** Compound `(sys_updated_on, sys_id)` checkpoint (no boundary-second loss), paged incremental sync, retry/backoff with Retry-After.
+- **Graph/MAF hardening.** `ensure_edge` is ON CONFLICT-safe; one canonical domain-derivation rule across all edge writers; `GraphRelationshipMaterializer` on Beat (6h); traversal capped per frontier node; MAF provider truncates long conversations instead of dropping context and fences injected graph data as untrusted; generated playbooks carry `evidence_refs` and a policy-derived risk tier.
+
+## Still open after the 2026-07 shipment
+
+- **LLM provider resilience** — per-call timeout, circuit breaker, and provider fallback are still absent from `ai/provider.py` (budget gates, retries, and schema validation exist).
+- **Prompt-injection fencing at ingest extractors** — the MAF provider fences untrusted graph content, but episode/decision/identity extractors still concatenate evidence text into prompts without delimiters.
+- **Ranking calibration** — `quality_score = 0.5` placeholder, no abstention threshold, N+1 per-playbook queries, and the chunk search-side rollup remain (see the chunking entry).
+- **Sync single-flight** — no advisory lock per source object for overlapping backfills/retries (evidence dedup at normalize is DB-enforced since `0026`).
+- **Identity review queue UI** — `needs_review` / `provisional` states exist and are indexed; a reviewer console for them is not built (API-led for now).
+- **Execution engine depth** — tool registry, idempotency keys, rollback execution, telemetry-based outcome verification remain future work (Release 2 scope).
+- **Telemetry/topology/alert/change-event ingestion, SLO + business impact** — Release 3 scope, unchanged.
+
 ## Adding a new connector type
 
 Built-in types `teams`, `gmail`, `servicenow`, and `jira_sm` are registered in `backend/src/contextedge/connectors/registry.py`. New vendors still need a class under `connectors/` and an entry in the registry map.
