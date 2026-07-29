@@ -28,11 +28,23 @@ import { api } from "@/lib/api";
 import type { AttachmentArtifact, EvidenceItemDetail, PoliciesOverview, ThreadSummary } from "@/lib/types";
 import { useAuthStore } from "@/lib/stores/auth-store";
 import { canListPoliciesForEvidence, canEditEvidenceAccessPolicy } from "@/lib/roles";
-import { Loader2, Paperclip, RefreshCw } from "lucide-react";
+import {
+  Loader2,
+  Paperclip,
+  RefreshCw,
+  FileText,
+  Database,
+  ExternalLink,
+  ShieldCheck,
+  Tag,
+  Calendar,
+  Layers,
+  ArrowRight,
+  Sparkles,
+} from "lucide-react";
 import { toast } from "sonner";
 
 const POLICY_NONE = "__none__";
-
 
 export default function EvidenceDetailPage() {
   const params = useParams<{ id: string }>();
@@ -44,24 +56,28 @@ export default function EvidenceDetailPage() {
 
   const [draftAccess, setDraftAccess] = useState<string | null | undefined>(undefined);
 
+  // 1. Fetch Evidence item detail
   const { data: item, isLoading, error } = useQuery({
     queryKey: ["evidence", evidenceId],
     queryFn: () => api.get<EvidenceItemDetail>(`/evidence/${evidenceId}`),
     enabled: !!evidenceId,
   });
 
+  // 2. Fetch Thread context if present
   const { data: thread } = useQuery({
     queryKey: ["thread", item?.thread_id],
     queryFn: () => api.get<ThreadSummary>(`/threads/${item!.thread_id}`),
     enabled: !!item?.thread_id,
   });
 
+  // 3. Fetch Attachments
   const { data: attachments = [] } = useQuery<AttachmentArtifact[]>({
     queryKey: ["evidence-attachments", evidenceId],
     queryFn: () => api.get(`/evidence/${evidenceId}/attachments`),
     enabled: !!evidenceId,
   });
 
+  // 4. Hydrate thread mutation
   const hydrateMut = useMutation({
     mutationFn: () => api.post(`/threads/${item!.thread_id}/hydrate`, {}),
     onSuccess: () => {
@@ -71,10 +87,24 @@ export default function EvidenceDetailPage() {
     onError: (err: Error) => toast.error(err.message || "Hydration failed"),
   });
 
+  // 5. Fetch Policies list for governance
   const { data: policiesData } = useQuery({
     queryKey: ["policies"],
     queryFn: () => api.get<PoliciesOverview>("/policies"),
     enabled: !!evidenceId && policyListOk,
+  });
+
+  // 6. Fetch resolved Source/Domain names & Linked Episodes/Patterns context
+  const { data: contextData } = useQuery<{
+    source_name?: string;
+    domain_name?: string;
+    episodes: { id: string; title: string; case_ref?: string; status: string }[];
+    patterns: { id: string; title: string; confidence: number }[];
+    playbooks: { id: string; title: string; risk_tier: string }[];
+  }>({
+    queryKey: ["evidence-context", evidenceId],
+    queryFn: () => api.get(`/evidence/${evidenceId}/context`),
+    enabled: !!evidenceId,
   });
 
   const srvAccess = item?.access_policy_id ?? null;
@@ -89,19 +119,8 @@ export default function EvidenceDetailPage() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["evidence", evidenceId] });
       setDraftAccess(undefined);
+      toast.success("Access policy updated successfully");
     },
-  });
-
-  const { data: contextData } = useQuery<{
-    source_name?: string;
-    domain_name?: string;
-    episodes: { id: string; title: string; case_ref?: string; status: string }[];
-    patterns: { id: string; title: string; confidence: number }[];
-    playbooks: { id: string; title: string; risk_tier: string }[];
-  }>({
-    queryKey: ["evidence-context", evidenceId],
-    queryFn: () => api.get(`/evidence/${evidenceId}/context`),
-    enabled: !!evidenceId,
   });
 
   const showAccessCard = policyListOk || !!(item?.access_policy_id);
@@ -121,7 +140,7 @@ export default function EvidenceDetailPage() {
   if (error || !item) {
     return (
       <div className="space-y-4">
-        <PageHeader title="Evidence" description="Not found." />
+        <PageHeader title="Evidence Item" description="Not found." />
         <p className="text-sm text-destructive">{String((error as Error)?.message || "Missing")}</p>
         <Link href="/evidence" className={cn(buttonVariants({ variant: "outline" }))}>
           Back to evidence
@@ -131,281 +150,238 @@ export default function EvidenceDetailPage() {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 max-w-6xl mx-auto pb-12">
+      {/* Top Header */}
       <PageHeader
-        title={item.title || "Untitled evidence"}
-        description={`${item.evidence_type} · ingested ${new Date(item.ingested_at).toLocaleString()}`}
+        title={item.title || "Untitled Evidence Ticket"}
+        description={`Type: ${item.evidence_type} · Ingested ${new Date(item.ingested_at).toLocaleString()}`}
         actions={
-          <Link href="/evidence" className={cn(buttonVariants({ variant: "outline" }))}>
-            All evidence
+          <Link href="/evidence" className={cn(buttonVariants({ variant: "outline", size: "sm" }))}>
+            All Evidence
           </Link>
         }
       />
 
-      <div className="flex flex-wrap gap-2">
-        <StatusBadge status={item.relevance_state} />
-        {item.sensitivity_label && (
-          <span className="rounded-md border px-2 py-0.5 text-xs">{item.sensitivity_label}</span>
-        )}
-      </div>
+      {/* Primary Grid: Ticket Provenance & Linked Knowledge Context */}
+      <div className="grid gap-6 md:grid-cols-2">
+        {/* Card 1: Ticket Details & Provenance */}
+        <Card className="bg-slate-900/80 border-slate-800 backdrop-blur-sm shadow-xl">
+          <CardHeader className="pb-3 border-b border-slate-800/80">
+            <CardTitle className="text-sm font-bold uppercase tracking-wider text-slate-300 flex items-center gap-2">
+              <FileText className="h-4 w-4 text-indigo-400" />
+              Ticket Metadata & Provenance
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="pt-4 space-y-3.5 text-sm">
+            <div className="flex items-center justify-between">
+              <span className="text-slate-400">Ingested Source:</span>
+              <Link
+                href={`/sources/${item.source_id}`}
+                className="font-medium text-indigo-400 hover:underline flex items-center gap-1"
+              >
+                <Database className="h-3.5 w-3.5" />
+                {contextData?.source_name || "SupportFlo Enterprise Connector"}
+              </Link>
+            </div>
 
-      {/* Linked Knowledge Graph Section */}
-      {contextData && (contextData.episodes.length > 0 || contextData.patterns.length > 0) && (
-        <Card className="border-indigo-500/20 bg-indigo-950/10">
-          <CardHeader className="pb-3">
-            <CardTitle className="text-base flex items-center gap-2 text-indigo-400">
-              <RefreshCw className="h-4 w-4" />
+            <div className="flex items-center justify-between">
+              <span className="text-slate-400">Target Domain:</span>
+              <span className="font-medium text-slate-200">
+                {contextData?.domain_name || "General IT Operations"}
+              </span>
+            </div>
+
+            <div className="flex items-center justify-between">
+              <span className="text-slate-400">Evidence Type:</span>
+              <span className="px-2 py-0.5 rounded text-xs font-mono bg-slate-800 text-slate-300 border border-slate-700">
+                {item.evidence_type}
+              </span>
+            </div>
+
+            <div className="flex items-center justify-between">
+              <span className="text-slate-400">Relevance State:</span>
+              <StatusBadge status={item.relevance_state} />
+            </div>
+
+            {item.sensitivity_label && (
+              <div className="flex items-center justify-between">
+                <span className="text-slate-400">Sensitivity Label:</span>
+                <span className="rounded-md border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-xs text-amber-400">
+                  {item.sensitivity_label}
+                </span>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* Card 2: Linked Knowledge Graph Context (Episode & Pattern) */}
+        <Card className="bg-indigo-950/20 border-indigo-500/30 backdrop-blur-sm shadow-xl flex flex-col justify-between">
+          <CardHeader className="pb-3 border-b border-indigo-500/20">
+            <CardTitle className="text-sm font-bold uppercase tracking-wider text-indigo-300 flex items-center gap-2">
+              <Sparkles className="h-4 w-4 text-indigo-400" />
               Linked Knowledge Graph Context
             </CardTitle>
-            <p className="text-xs text-slate-400">
-              This evidence is connected to the following operational incident episodes and recurring patterns.
-            </p>
           </CardHeader>
-          <CardContent className="grid gap-3 md:grid-cols-2">
-            {contextData.episodes.map((ep) => (
-              <Link
-                key={ep.id}
-                href={`/episodes/${ep.id}`}
-                className="p-3 border border-emerald-500/30 bg-emerald-950/20 rounded-xl hover:border-emerald-500 transition-all flex flex-col justify-between"
-              >
-                <div className="flex items-center justify-between mb-1">
-                  <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-400">
-                    🟢 Linked Episode
-                  </span>
-                  <StatusBadge status={ep.status} />
-                </div>
-                <p className="text-sm font-semibold text-slate-100 line-clamp-1">{ep.title}</p>
-                {ep.case_ref && (
-                  <span className="text-xs text-slate-400 mt-1 font-mono">{ep.case_ref}</span>
-                )}
-              </Link>
-            ))}
+          <CardContent className="pt-4 space-y-3">
+            {contextData && contextData.episodes.length > 0 ? (
+              contextData.episodes.map((ep) => (
+                <Link
+                  key={ep.id}
+                  href={`/episodes/${ep.id}`}
+                  className="p-3 rounded-xl border border-emerald-500/30 bg-emerald-950/30 hover:border-emerald-500 transition-all block group"
+                >
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-400 flex items-center gap-1">
+                      🟢 Connected Episode
+                    </span>
+                    <ArrowRight className="h-3.5 w-3.5 text-emerald-400 group-hover:translate-x-1 transition-transform" />
+                  </div>
+                  <p className="text-sm font-semibold text-slate-100 line-clamp-1">{ep.title}</p>
+                </Link>
+              ))
+            ) : (
+              <div className="p-3 rounded-xl border border-slate-800 bg-slate-900/50 text-xs text-slate-400">
+                Awaiting episode extraction cluster...
+              </div>
+            )}
 
-            {contextData.patterns.map((pat) => (
-              <Link
-                key={pat.id}
-                href={`/patterns/${pat.id}`}
-                className="p-3 border border-indigo-500/30 bg-indigo-950/20 rounded-xl hover:border-indigo-500 transition-all flex flex-col justify-between"
-              >
-                <div className="flex items-center justify-between mb-1">
-                  <span className="text-[10px] font-bold uppercase tracking-wider text-indigo-400">
-                    🟣 Linked Pattern
-                  </span>
-                  <span className="text-[10px] text-indigo-300 font-mono">
-                    {Math.round(pat.confidence * 100)}% Match
-                  </span>
-                </div>
-                <p className="text-sm font-semibold text-slate-100 line-clamp-1">{pat.title}</p>
-              </Link>
-            ))}
+            {contextData && contextData.patterns.length > 0 ? (
+              contextData.patterns.map((pat) => (
+                <Link
+                  key={pat.id}
+                  href={`/patterns/${pat.id}`}
+                  className="p-3 rounded-xl border border-indigo-500/30 bg-indigo-950/30 hover:border-indigo-500 transition-all block group"
+                >
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-indigo-400 flex items-center gap-1">
+                      🟣 Connected Pattern
+                    </span>
+                    <ArrowRight className="h-3.5 w-3.5 text-indigo-400 group-hover:translate-x-1 transition-transform" />
+                  </div>
+                  <p className="text-sm font-semibold text-slate-100 line-clamp-1">{pat.title}</p>
+                </Link>
+              ))
+            ) : (
+              <div className="p-3 rounded-xl border border-slate-800 bg-slate-900/50 text-xs text-slate-400">
+                No recurring pattern linked yet.
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Main Ticket Body / Raw Payload Container */}
+      <Card className="bg-slate-900/90 border-slate-800 shadow-2xl">
+        <CardHeader className="border-b border-slate-800/80 pb-3 flex flex-row items-center justify-between">
+          <CardTitle className="text-base font-bold text-slate-100 flex items-center gap-2">
+            <FileText className="h-4 w-4 text-indigo-400" />
+            Raw Evidence Ticket Content
+          </CardTitle>
+          <span className="text-xs text-slate-400 font-mono">ID: {item.id}</span>
+        </CardHeader>
+        <CardContent className="pt-4">
+          {item.body_summary && (
+            <div className="mb-4 p-3.5 rounded-xl border border-indigo-500/20 bg-indigo-950/20">
+              <span className="text-xs font-bold uppercase tracking-wider text-indigo-400 block mb-1">
+                Ticket Summary
+              </span>
+              <p className="text-sm text-slate-200 leading-relaxed">{item.body_summary}</p>
+            </div>
+          )}
+
+          <div className="p-4 rounded-xl border border-slate-800 bg-[#020617] font-mono text-xs text-slate-300 whitespace-pre-wrap leading-relaxed">
+            {item.body_text || "No body text stored for this evidence item."}
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Attachments Section */}
+      {attachments.length > 0 && (
+        <Card className="bg-slate-900/80 border-slate-800">
+          <CardHeader>
+            <CardTitle className="text-base flex items-center gap-2 text-slate-200">
+              <Paperclip className="h-4 w-4 text-indigo-400" />
+              Attachments ({attachments.length})
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <ul className="space-y-2">
+              {attachments.map((a) => (
+                <li key={a.id} className="flex flex-wrap items-center gap-3 rounded-lg border border-slate-800 bg-slate-900 p-3 text-sm">
+                  <span className="font-medium text-slate-200 truncate max-w-xs">{a.file_name ?? "Unnamed file"}</span>
+                  <span className="text-xs text-slate-400">{a.mime_type ?? "—"}</span>
+                  <StatusBadge status={a.extraction_status} />
+                  {a.extracted_text && (
+                    <details className="w-full mt-2">
+                      <summary className="cursor-pointer text-xs text-indigo-400 hover:underline">
+                        View extracted text
+                      </summary>
+                      <pre className="mt-2 max-h-40 overflow-auto rounded-lg bg-[#020617] p-3 text-xs text-slate-300 font-mono whitespace-pre-wrap">
+                        {a.extracted_text}
+                      </pre>
+                    </details>
+                  )}
+                </li>
+              ))}
+            </ul>
           </CardContent>
         </Card>
       )}
 
+      {/* Bottom Accordion: Access Policy Governance (Moved to Secondary Control) */}
       {showAccessCard && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Access policy</CardTitle>
-            <p className="text-sm text-muted-foreground">
-              Optional retrieval access rule for this evidence item. Manage policies under{" "}
-              <Link href="/policies" className="text-primary underline-offset-4 hover:underline">
-                Policies
-              </Link>
-              .
-            </p>
+        <Card className="bg-slate-900/50 border-slate-800">
+          <CardHeader className="pb-3">
+            <CardTitle className="text-sm font-semibold text-slate-400 flex items-center gap-2">
+              <ShieldCheck className="h-4 w-4 text-slate-400" />
+              Access Control & Retrieval Policy (Governance)
+            </CardTitle>
           </CardHeader>
-          <CardContent className="space-y-4">
+          <CardContent className="space-y-4 pt-1">
             {!policyListOk ? (
-              <div className="text-sm">
-                <span className="text-muted-foreground">Policy id</span>{" "}
-                <span className="font-mono text-xs">{item.access_policy_id ?? "—"}</span>
+              <div className="text-sm text-slate-400">
+                <span>Assigned Policy ID:</span>{" "}
+                <span className="font-mono text-xs text-slate-300">{item.access_policy_id ?? "None"}</span>
               </div>
             ) : (
-              <>
-                <div className="space-y-2">
-                  <Label htmlFor="evidence-access-policy">Access policy</Label>
+              <div className="flex flex-col sm:flex-row sm:items-center gap-4">
+                <div className="space-y-1 flex-1 max-w-md">
+                  <Label htmlFor="evidence-access-policy" className="text-xs text-slate-300">
+                    Select Access Retrieval Policy
+                  </Label>
                   <Select
                     value={accessId ?? POLICY_NONE}
-                    onValueChange={(v) =>
-                      setDraftAccess(v === POLICY_NONE ? null : (v ?? null))
-                    }
+                    onValueChange={(v) => setDraftAccess(v === POLICY_NONE ? null : (v ?? null))}
                     disabled={!canEditPolicy}
                   >
-                    <SelectTrigger id="evidence-access-policy" className="w-full max-w-md">
+                    <SelectTrigger id="evidence-access-policy" className="bg-slate-900 border-slate-700">
                       <SelectValue placeholder="None" />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value={POLICY_NONE}>None</SelectItem>
+                      <SelectItem value={POLICY_NONE}>None (Unrestricted)</SelectItem>
                       {(policiesData?.access_policies ?? []).map((p) => (
                         <SelectItem key={p.id} value={p.id}>
-                          {p.name}
-                          {!p.is_active ? " (inactive)" : ""}
+                          {p.name} {!p.is_active ? "(inactive)" : ""}
                         </SelectItem>
                       ))}
                     </SelectContent>
                   </Select>
                 </div>
-                {!canEditPolicy && (
-                  <p className="text-sm text-muted-foreground">
-                    Domain admin or knowledge manager role is required to change this assignment.
-                  </p>
-                )}
                 {canEditPolicy && (
-                  <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-                    <Button
-                      type="button"
-                      size="sm"
-                      disabled={!accessDirty || patchAccessMut.isPending}
-                      onClick={() => patchAccessMut.mutate()}
-                    >
-                      {patchAccessMut.isPending ? "Saving…" : "Save access policy"}
-                    </Button>
-                    {patchAccessMut.isError && (
-                      <p className="text-sm text-destructive">
-                        {(patchAccessMut.error as Error).message}
-                      </p>
-                    )}
-                  </div>
+                  <Button
+                    type="button"
+                    size="sm"
+                    className="sm:mt-5"
+                    disabled={!accessDirty || patchAccessMut.isPending}
+                    onClick={() => patchAccessMut.mutate()}
+                  >
+                    {patchAccessMut.isPending ? "Saving…" : "Save Policy"}
+                  </Button>
                 )}
-              </>
-            )}
-          </CardContent>
-        </Card>
-      )}
-
-      <div className="grid gap-4 md:grid-cols-2">
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Provenance</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-2 text-sm">
-            <div>
-              <span className="text-muted-foreground">Source:</span>{" "}
-              <Link href={`/sources/${item.source_id}`} className="font-medium text-primary hover:underline">
-                {contextData?.source_name || item.source_id}
-              </Link>
-            </div>
-            {item.source_object_id && (
-              <div>
-                <span className="text-muted-foreground">Source object:</span>{" "}
-                <span className="font-mono text-xs">{item.source_object_id}</span>
               </div>
             )}
-            {item.thread_id && (
-              <div>
-                <span className="text-muted-foreground">Thread:</span>{" "}
-                <span className="font-mono text-xs">{item.thread_id}</span>
-              </div>
-            )}
-            <div>
-              <span className="text-muted-foreground">Domain:</span>{" "}
-              <span className="font-medium text-slate-200">
-                {contextData?.domain_name || item.domain_id || "General IT Operations"}
-              </span>
-            </div>
           </CardContent>
         </Card>
-
-        {thread && (
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-base">Thread context</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-3 text-sm">
-              <p className="font-medium">{thread.title || thread.external_thread_id}</p>
-              <p className="text-muted-foreground">
-                {thread.message_count} messages · {thread.participant_count} participants
-              </p>
-              <StatusBadge status={thread.hydration_status} />
-              {thread.hydration_status !== "hydrated" && (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  disabled={hydrateMut.isPending}
-                  onClick={() => hydrateMut.mutate()}
-                >
-                  {hydrateMut.isPending ? (
-                    <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
-                  ) : (
-                    <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
-                  )}
-                  Hydrate thread
-                </Button>
-              )}
-            </CardContent>
-          </Card>
-        )}
-      </div>
-
-      {item.body_summary && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Summary</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="text-sm whitespace-pre-wrap">{item.body_summary}</p>
-          </CardContent>
-        </Card>
-      )}
-
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Body</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <p className="text-sm whitespace-pre-wrap text-muted-foreground">
-            {item.body_text || "No body text stored."}
-          </p>
-        </CardContent>
-      </Card>
-
-      {item.canonical_entity_refs && Object.keys(item.canonical_entity_refs).length > 0 && (
-        <>
-          <Separator />
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-base">Entity refs</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <pre className="overflow-auto rounded-md bg-muted p-3 text-xs">
-                {JSON.stringify(item.canonical_entity_refs, null, 2)}
-              </pre>
-            </CardContent>
-          </Card>
-        </>
-      )}
-
-      {attachments.length > 0 && (
-        <>
-          <Separator />
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-base flex items-center gap-2">
-                <Paperclip className="h-4 w-4" />
-                Attachments
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <ul className="space-y-2">
-                {attachments.map((a) => (
-                  <li key={a.id} className="flex flex-wrap items-center gap-3 rounded-md border px-3 py-2 text-sm">
-                    <span className="font-medium truncate max-w-xs">{a.file_name ?? "Unnamed file"}</span>
-                    <span className="text-xs text-muted-foreground">{a.mime_type ?? "—"}</span>
-                    <StatusBadge status={a.extraction_status} />
-                    {a.extracted_text && (
-                      <details className="w-full mt-1">
-                        <summary className="cursor-pointer text-xs text-primary">View extracted text</summary>
-                        <pre className="mt-1 max-h-40 overflow-auto rounded-md bg-muted p-2 text-xs whitespace-pre-wrap">
-                          {a.extracted_text}
-                        </pre>
-                      </details>
-                    )}
-                  </li>
-                ))}
-              </ul>
-            </CardContent>
-          </Card>
-        </>
       )}
     </div>
   );
