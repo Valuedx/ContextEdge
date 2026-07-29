@@ -149,21 +149,33 @@ def test_all_migrated_prompt_families_registered():
     registered at import time. Regression guard — forgetting to import
     a submodule in ``ai/prompts/__init__.py`` silently breaks the
     caller via a KeyError at first LLM call."""
-    required = ("episode", "decision", "identity", "pattern", "playbook", "contradiction")
-    for name in required:
+    # identity defaults to v2 since the layered-resolver shipment (v1 stays
+    # registered for tenants pinned to it); identity_adjudication is new.
+    expected_defaults = {
+        "episode": "v1",
+        "decision": "v1",
+        "identity": "v2",
+        "identity_adjudication": "v1",
+        "pattern": "v1",
+        "playbook": "v1",
+        "contradiction": "v1",
+    }
+    for name, default_version in expected_defaults.items():
         assert name in prompts_mod._REGISTRY, f"{name!r} not registered"
-        assert "v1" in prompts_mod._REGISTRY[name]
-        assert prompts_mod._DEFAULTS.get(name) == "v1"
+        assert default_version in prompts_mod._REGISTRY[name]
+        assert prompts_mod._DEFAULTS.get(name) == default_version
 
 
 @pytest.mark.parametrize(
-    ("module_path", "entry", "expected_name"),
+    ("module_path", "entry", "expected_name", "expected_version"),
     [
-        ("contextedge.ai.extractors.identity_extractor", "extract_identities", "identity"),
-        ("contextedge.ai.extractors.decision_extractor", "extract_decisions", "decision"),
+        ("contextedge.ai.extractors.identity_extractor", "extract_identities", "identity", "v2"),
+        ("contextedge.ai.extractors.decision_extractor", "extract_decisions", "decision", "v1"),
     ],
 )
-def test_migrated_extractors_forward_prompt_identity(module_path, entry, expected_name):
+def test_migrated_extractors_forward_prompt_identity(
+    module_path, entry, expected_name, expected_version
+):
     """Each migrated extractor must forward the resolved ``prompt_name``
     + ``prompt_version`` to ``llm_complete_json``, so the ``llm.usage``
     event can attribute cost / quality to a specific version.
@@ -187,7 +199,7 @@ def test_migrated_extractors_forward_prompt_identity(module_path, entry, expecte
         asyncio.run(getattr(module, entry)("some content for extraction here"))
 
     assert captured.get("prompt_name") == expected_name
-    assert captured.get("prompt_version") == "v1"
+    assert captured.get("prompt_version") == expected_version
 
 
 def test_episode_extractor_forwards_prompt_identity():

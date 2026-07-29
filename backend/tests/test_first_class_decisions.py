@@ -52,12 +52,27 @@ class _ScalarsProxy:
 
 
 def _make_db(side_effects=None):
+    """SELECT results come from *side_effects* in order; ensure_edge's
+    ON CONFLICT INSERT ... RETURNING is echoed back as a GraphEdge built
+    from the statement's bound values (mirrors test_graph_builder)."""
+    from sqlalchemy.dialects import postgresql
+    from sqlalchemy.dialects.postgresql.dml import Insert as _PgInsert
+
+    from contextedge.models.pattern import GraphEdge as _GraphEdge
+
     added: list = []
-    execute_kwargs = {}
-    if side_effects is not None:
-        execute_kwargs["side_effect"] = side_effects
+    select_results = list(side_effects) if side_effects is not None else None
+
+    async def _execute(stmt):
+        if isinstance(stmt, _PgInsert):
+            params = stmt.compile(dialect=postgresql.dialect()).params
+            return _ScalarOneOrNoneResult(_GraphEdge(**dict(params)))
+        if select_results is not None and select_results:
+            return select_results.pop(0)
+        return _ScalarOneOrNoneResult(None)
+
     db = SimpleNamespace(
-        execute=AsyncMock(**execute_kwargs),
+        execute=AsyncMock(side_effect=_execute),
         add=lambda obj: added.append(obj),
         flush=AsyncMock(),
         get=AsyncMock(return_value=None),
