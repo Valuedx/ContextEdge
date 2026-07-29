@@ -10,24 +10,30 @@ from contextedge.connectors.registry import get_connector
 from contextedge.models.source import Source, SourceCredential, SourceObject, SyncRun
 
 
+class CredentialEncryptionUnavailable(RuntimeError):
+    """FERNET_KEY is missing or invalid — credential storage cannot work."""
+
+
 def _get_fernet() -> Fernet:
+    # Never fall back to a transient per-call key: encrypt and decrypt would
+    # each mint a different key, so credentials written under a transient key
+    # are unrecoverable garbage even within the same process. Failing loudly
+    # is strictly safer than persisting undecryptable ciphertext.
     key = settings.fernet_key
     if not key or "change-me" in key:
-        import structlog
-        logger = structlog.get_logger()
-        logger.warning("invalid_fernet_key_using_transient", reason="placeholder_or_empty")
-        # Generate a transient key for this process session if none exists
-        # This is dangerous for persistence but prevents crashes during dev
-        key = Fernet.generate_key().decode()
-
+        raise CredentialEncryptionUnavailable(
+            "FERNET_KEY is not configured (empty or placeholder). Set a real "
+            "key (python -c \"from cryptography.fernet import Fernet; "
+            "print(Fernet.generate_key().decode())\") before storing or "
+            "reading source credentials."
+        )
     try:
         return Fernet(key.encode() if isinstance(key, str) else key)
     except Exception as exc:
-        import structlog
-        logger = structlog.get_logger()
-        logger.error("fernet_initialization_failed", error=str(exc))
-        # Fallback to a one-time key to avoid crashing the whole API
-        return Fernet(Fernet.generate_key())
+        raise CredentialEncryptionUnavailable(
+            f"FERNET_KEY is malformed ({type(exc).__name__}); it must be a "
+            "urlsafe base64-encoded 32-byte Fernet key."
+        ) from exc
 
 
 async def encrypt_credentials(creds: dict) -> bytes:

@@ -89,3 +89,15 @@ if settings.app_env != "development" and settings.jwt_secret_key == "change-me-i
         "JWT_SECRET_KEY must be changed from the default value in non-development environments. "
         "Set JWT_SECRET_KEY in your .env or environment variables."
     )
+
+if settings.app_env != "development" and (
+    not settings.fernet_key or "change-me" in settings.fernet_key
+):
+    # Without a stable Fernet key, encrypted source credentials are
+    # unrecoverable garbage. Refuse to start rather than persist ciphertext
+    # that can never be decrypted (see services/source_service._get_fernet).
+    raise RuntimeError(
+        "FERNET_KEY must be set in non-development environments. Generate one "
+        "with: python -c \"from cryptography.fernet import Fernet; "
+        "print(Fernet.generate_key().decode())\""
+    )
