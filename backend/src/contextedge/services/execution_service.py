@@ -5,12 +5,13 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import select, cast
+from sqlalchemy import cast, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 from sqlalchemy.dialects.postgresql import JSONB as JSONB_TYPE
 
 from contextedge.models.execution import (
+    OUTCOMES,
     SAFETY_CLASSES,
     ApprovalRequest,
     ExecutionRun,
@@ -20,6 +21,13 @@ from contextedge.models.execution import (
 from contextedge.graph.builder import ensure_edge
 from contextedge.models.playbook import Playbook, PlaybookVersion, is_shadow_mode
 from contextedge.models.session import ResolutionSession
+from contextedge.services.approval_policy_service import (
+    ApprovalPolicyViolation,
+    check_automation_mode,
+    check_decider,
+    load_approval_policy,
+    step_requires_policy_approval,
+)
 from contextedge.services.decision_trace_service import create_decision, record_outcome
 from contextedge.services.event_log_service import append_operational_event
 from contextedge.services.session_service import append_trace_event
@@ -30,10 +38,15 @@ class ExecutionPolicyError(Exception):
 
 
 def _safety_class_rank(cls: str) -> int:
+    # Fail closed: an unknown / typo'd safety class must never rank as
+    # read_only (rank 0) — that silently skips the approval gate for the
+    # most dangerous misconfiguration.
     try:
         return SAFETY_CLASSES.index(cls)
     except ValueError:
-        return 0
+        raise ExecutionPolicyError(
+            f"Unknown safety class {cls!r}; expected one of {SAFETY_CLASSES}"
+        ) from None
 
 
 def _caller_max_safety_class(roles: list[str], automation_mode: str) -> str:
@@ -109,6 +122,17 @@ async def start_execution(
         if version is None:
             raise ExecutionPolicyError("No published version found for this playbook")
 
+    # The playbook's approval policy (if any) is loaded and enforced here —
+    # previously the reference was validated at playbook save time but never
+    # evaluated at execution time.
+    try:
+        approval_policy = await load_approval_policy(
+            db, tenant_id, playbook.approval_policy_id
+        )
+        check_automation_mode(approval_policy, playbook.automation_mode)
+    except ApprovalPolicyViolation as exc:
+        raise ExecutionPolicyError(str(exc)) from exc
+
     caller_max = _caller_max_safety_class(roles, playbook.automation_mode)
     effective_max = min(
         _safety_class_rank(requested_max_safety_class),
@@ -146,6 +170,8 @@ async def start_execution(
             needs_approval = bool(step_data.get("requires_approval", False))
 
         if _safety_class_rank(step_safety) > _safety_class_rank(effective_safety_class):
+            needs_approval = True
+        if step_requires_policy_approval(approval_policy, step_safety):
             needs_approval = True
 
         step_run = ExecutionStepRun(
@@ -273,14 +299,12 @@ async def start_execution(
         # Canonical domain rule (see graph/agent/materializer.py): the
         # has_execution edge carries the *session's* domain, matching the
         # 0031 backfill — not the playbook's.
+        session_row = await db.get(ResolutionSession, session_id)
         session_domain_id = (
-            await db.execute(
-                select(ResolutionSession.domain_id).where(
-                    ResolutionSession.id == session_id,
-                    ResolutionSession.tenant_id == tenant_id,
-                )
-            )
-        ).scalar_one_or_none()
+            session_row.domain_id
+            if session_row is not None and session_row.tenant_id == tenant_id
+            else None
+        )
         await ensure_edge(
             db,
             tenant_id,
@@ -508,14 +532,9 @@ async def request_approval(
     # (via the run), matching the 0031 backfill and the materializer.
     playbook_domain_id = None
     if run is not None and run.playbook_id is not None:
-        playbook_domain_id = (
-            await db.execute(
-                select(Playbook.domain_id).where(
-                    Playbook.id == run.playbook_id,
-                    Playbook.tenant_id == tenant_id,
-                )
-            )
-        ).scalar_one_or_none()
+        playbook_row = await db.get(Playbook, run.playbook_id)
+        if playbook_row is not None and playbook_row.tenant_id == tenant_id:
+            playbook_domain_id = getattr(playbook_row, "domain_id", None)
     await ensure_edge(
         db,
         tenant_id,
@@ -551,6 +570,7 @@ async def decide_approval(
     decided_by: uuid.UUID,
     decision: str,
     comment: str | None = None,
+    decider_roles: list[str] | None = None,
 ) -> ApprovalRequest | None:
     # Review F-15: lock the row so two concurrent decide/modify calls
     # on the same approval can't both pass the pending check and both
@@ -568,6 +588,29 @@ async def decide_approval(
 
     if decision not in ("approved", "denied"):
         raise ExecutionPolicyError("Decision must be 'approved' or 'denied'")
+
+    # Enforce the playbook's approval policy (self-approval ban, approver
+    # roles) at decide time, not just at playbook save time.
+    policy_run = await db.get(ExecutionRun, req.execution_run_id)
+    if policy_run is not None and policy_run.tenant_id == tenant_id:
+        policy_playbook = (
+            await db.get(Playbook, policy_run.playbook_id)
+            if policy_run.playbook_id is not None
+            else None
+        )
+        if policy_playbook is not None and policy_playbook.tenant_id == tenant_id:
+            try:
+                policy = await load_approval_policy(
+                    db, tenant_id, policy_playbook.approval_policy_id
+                )
+                check_decider(
+                    policy,
+                    decided_by=decided_by,
+                    run_initiated_by=policy_run.initiated_by,
+                    decider_roles=decider_roles,
+                )
+            except ApprovalPolicyViolation as exc:
+                raise ExecutionPolicyError(str(exc)) from exc
 
     now = datetime.now(UTC)
     req.status = decision
@@ -802,9 +845,36 @@ async def complete_execution(
     outcome: str,
     outcome_summary: str | None = None,
 ) -> ExecutionRun | None:
+    if outcome not in OUTCOMES:
+        raise ExecutionPolicyError(
+            f"Unknown outcome {outcome!r}; expected one of {OUTCOMES}"
+        )
     run = await db.get(ExecutionRun, execution_run_id)
     if run is None or run.tenant_id != tenant_id:
         return None
+
+    if outcome != "aborted":
+        # Completion must reflect reality: refuse success/partial/failure
+        # while steps are still pending, running, or awaiting approval.
+        open_steps = (
+            await db.execute(
+                select(func.count())
+                .select_from(ExecutionStepRun)
+                .where(
+                    ExecutionStepRun.execution_run_id == run.id,
+                    ExecutionStepRun.tenant_id == tenant_id,
+                    ExecutionStepRun.status.in_(
+                        ("pending", "running", "awaiting_approval")
+                    ),
+                )
+            )
+        ).scalar_one()
+        if open_steps:
+            raise ExecutionPolicyError(
+                f"{open_steps} step(s) are still open; complete, skip, or "
+                "abort them before completing the run"
+            )
+
     now = datetime.now(UTC)
     run.status = "completed" if outcome != "aborted" else "aborted"
     run.completed_at = now

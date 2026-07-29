@@ -4,7 +4,7 @@ from fastapi import APIRouter, HTTPException, Query, status
 from sqlalchemy import select
 
 from contextedge.deps import AuthUser, DbSession
-from contextedge.models.execution import ApprovalRequest
+from contextedge.models.execution import ApprovalRequest, ExecutionRun
 from contextedge.schemas.execution import (
     ApprovalDecision,
     ApprovalModificationRequest,
@@ -27,6 +27,35 @@ from contextedge.services.execution_service import (
 )
 
 router = APIRouter()
+
+
+async def _require_run_control(db, user, run_id: UUID) -> ExecutionRun:
+    """Lifecycle mutations (abort/complete) are restricted to the run's
+    initiator or a domain admin — not any authenticated user."""
+    run = await db.get(ExecutionRun, run_id)
+    if run is None or run.tenant_id != user.tenant_id:
+        raise HTTPException(status_code=404, detail="Execution run not found")
+    if run.initiated_by != user.user_id and not user.has_role("domain_admin"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only the run initiator or a domain admin may change this run",
+        )
+    return run
+
+
+async def _require_approval_on_run(db, user, run_id: UUID, approval_id: UUID) -> None:
+    """The approval being decided must belong to the run in the URL —
+    otherwise any pending approval in the tenant can be decided through
+    any run's endpoint."""
+    req = await db.get(ApprovalRequest, approval_id)
+    if (
+        req is None
+        or req.tenant_id != user.tenant_id
+        or req.execution_run_id != run_id
+    ):
+        raise HTTPException(
+            status_code=404, detail="Approval request not found for this run"
+        )
 
 
 @router.post("/runs", response_model=ExecutionRunResponse, status_code=status.HTTP_201_CREATED)
@@ -93,6 +122,7 @@ async def abort_run(
     user: AuthUser,
 ):
     """Abort a running execution."""
+    await _require_run_control(db, user, run_id)
     run = await abort_execution(
         db, tenant_id=user.tenant_id, execution_run_id=run_id, reason="Aborted by user",
     )
@@ -111,13 +141,17 @@ async def complete_run(
     outcome_summary: str | None = None,
 ):
     """Mark execution as completed with an outcome."""
-    run = await complete_execution(
-        db,
-        tenant_id=user.tenant_id,
-        execution_run_id=run_id,
-        outcome=outcome,
-        outcome_summary=outcome_summary,
-    )
+    await _require_run_control(db, user, run_id)
+    try:
+        run = await complete_execution(
+            db,
+            tenant_id=user.tenant_id,
+            execution_run_id=run_id,
+            outcome=outcome,
+            outcome_summary=outcome_summary,
+        )
+    except ExecutionPolicyError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     if run is None:
         raise HTTPException(status_code=404, detail="Execution run not found")
     await db.commit()
@@ -137,6 +171,7 @@ async def decide_on_approval(
 ):
     """Approve or deny a pending approval request."""
     user.require_role("domain_admin")
+    await _require_approval_on_run(db, user, run_id, approval_id)
     try:
         req = await decide_approval(
             db,
@@ -145,6 +180,7 @@ async def decide_on_approval(
             decided_by=user.user_id,
             decision=body.decision,
             comment=body.comment,
+            decider_roles=list(user.roles or []),
         )
     except ExecutionPolicyError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
@@ -167,6 +203,7 @@ async def modify_on_approval(
 ):
     """Approve a pending approval request with modifications to the step's inputs."""
     user.require_role("domain_admin")
+    await _require_approval_on_run(db, user, run_id, approval_id)
     try:
         req = await modify_approval(
             db,
