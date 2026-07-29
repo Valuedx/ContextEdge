@@ -1,9 +1,12 @@
 """ServiceNow connector via REST Table API.
 
-Supports incident, problem, change, and KB article retrieval
-with timestamp-based checkpointing and journal/comment extraction.
+Supports incident, problem, change, and KB article retrieval with
+compound ``(sys_updated_on, sys_id)`` checkpointing (no boundary-second
+misses), paged incremental sync, retry/backoff with Retry-After
+handling, and journal/comment extraction.
 """
 
+import asyncio
 from datetime import datetime, timezone
 from typing import Any
 
@@ -40,16 +43,49 @@ class ServiceNowConnector(BaseConnector):
     def _auth(self) -> tuple[str, str]:
         return (self.credentials["username"], self.credentials["password"])
 
+    # Retry transient failures (429 / 5xx / transport errors) with capped
+    # exponential backoff, honoring Retry-After on 429.
+    MAX_ATTEMPTS = 3
+    BACKOFF_BASE_SECONDS = 1.0
+    MAX_RETRY_AFTER_SECONDS = 60.0
+
     async def _snow_get(self, path: str, params: dict | None = None) -> dict:
-        async with httpx.AsyncClient() as client:
-            resp = await client.get(
-                f"{self.instance_url}{path}",
-                auth=self._auth(),
-                headers={"Accept": "application/json"},
-                params=params,
-            )
-            resp.raise_for_status()
-            return resp.json()
+        last_exc: Exception | None = None
+        for attempt in range(1, self.MAX_ATTEMPTS + 1):
+            try:
+                async with httpx.AsyncClient(timeout=30.0) as client:
+                    resp = await client.get(
+                        f"{self.instance_url}{path}",
+                        auth=self._auth(),
+                        headers={"Accept": "application/json"},
+                        params=params,
+                    )
+                if resp.status_code == 429 or resp.status_code >= 500:
+                    retry_after = resp.headers.get("Retry-After")
+                    try:
+                        delay = min(
+                            float(retry_after) if retry_after else
+                            self.BACKOFF_BASE_SECONDS * (2 ** (attempt - 1)),
+                            self.MAX_RETRY_AFTER_SECONDS,
+                        )
+                    except ValueError:
+                        delay = self.BACKOFF_BASE_SECONDS * (2 ** (attempt - 1))
+                    if attempt < self.MAX_ATTEMPTS:
+                        await asyncio.sleep(delay)
+                        continue
+                resp.raise_for_status()
+                return resp.json()
+            except (httpx.TransportError, httpx.HTTPStatusError) as exc:
+                last_exc = exc
+                if (
+                    isinstance(exc, httpx.HTTPStatusError)
+                    and exc.response.status_code < 500
+                    and exc.response.status_code != 429
+                ):
+                    raise  # 4xx (auth, bad request) will not improve on retry
+                if attempt < self.MAX_ATTEMPTS:
+                    await asyncio.sleep(self.BACKOFF_BASE_SECONDS * (2 ** (attempt - 1)))
+        raise last_exc  # exhausted retries
 
     async def validate_credentials(self) -> CredentialStatus:
         try:
@@ -126,13 +162,18 @@ class ServiceNowConnector(BaseConnector):
             new_checkpoint = Checkpoint(data={"offset": new_offset})
         else:
             latest_ts = ""
+            latest_sys_id = ""
             for record in records:
                 ts = record.get("sys_updated_on", "")
-                if ts > latest_ts:
-                    latest_ts = ts
+                sys_id = record.get("sys_id", "")
+                if (ts, sys_id) > (latest_ts, latest_sys_id):
+                    latest_ts, latest_sys_id = ts, sys_id
             if not latest_ts:
                 latest_ts = end_str
-            new_checkpoint = Checkpoint(data={"last_updated": latest_ts})
+            # Seed the compound checkpoint fetch_changes resumes from.
+            new_checkpoint = Checkpoint(
+                data={"last_updated": latest_ts, "last_sys_id": latest_sys_id}
+            )
 
         return BackfillResult(
             events=events,
@@ -140,6 +181,12 @@ class ServiceNowConnector(BaseConnector):
             items_processed=len(events),
             has_more=has_more,
         )
+
+    # Incremental sync: page size × max pages bounds one invocation; the
+    # compound checkpoint means the next tick resumes exactly where this
+    # one stopped.
+    INCREMENTAL_PAGE_SIZE = 200
+    INCREMENTAL_MAX_PAGES = 10
 
     async def fetch_changes(
         self,
@@ -153,36 +200,55 @@ class ServiceNowConnector(BaseConnector):
         events: list[IngestionEvent] = []
 
         last_updated = checkpoint.data.get("last_updated", "2000-01-01 00:00:00")
-        params = {
-            "sysparm_fields": f"sys_id,{fields}",
-            "sysparm_query": f"sys_updated_on>{last_updated}^ORDERBYsys_updated_on",
-            "sysparm_limit": "200",
-        }
+        last_sys_id = str(checkpoint.data.get("last_sys_id", ""))
 
-        data = await self._snow_get(f"/api/now/table/{table_name}", params)
-        records = data.get("result", [])
-
+        # `>=` instead of `>`: records sharing the checkpoint's boundary
+        # second are re-fetched and de-duplicated with the (timestamp,
+        # sys_id) tuple below — the strict `>` comparison silently skipped
+        # them forever. Stable ordering by timestamp then sys_id makes the
+        # tuple comparison a total order.
         latest_ts = last_updated
-        for record in records:
-            ts = record.get("sys_updated_on", "")
-            if ts > latest_ts:
-                latest_ts = ts
-            sys_id = record.get("sys_id", "")
-            events.append(
-                IngestionEvent(
-                    external_id=sys_id,
-                    source_type="servicenow",
-                    object_type=table_name,
-                    content=record,
-                    thread_id=f"{table_name}:{sys_id}",
-                    timestamp=_parse_snow_datetime(ts),
-                    metadata={"table": table_name},
+        latest_sys_id = last_sys_id
+        for page in range(self.INCREMENTAL_MAX_PAGES):
+            params = {
+                "sysparm_fields": f"sys_id,{fields}",
+                "sysparm_query": (
+                    f"sys_updated_on>={last_updated}"
+                    "^ORDERBYsys_updated_on^ORDERBYsys_id"
+                ),
+                "sysparm_limit": str(self.INCREMENTAL_PAGE_SIZE),
+                "sysparm_offset": str(page * self.INCREMENTAL_PAGE_SIZE),
+            }
+            data = await self._snow_get(f"/api/now/table/{table_name}", params)
+            records = data.get("result", [])
+
+            for record in records:
+                ts = record.get("sys_updated_on", "")
+                sys_id = record.get("sys_id", "")
+                if (ts, sys_id) <= (last_updated, last_sys_id):
+                    continue  # boundary-second record already ingested
+                if (ts, sys_id) > (latest_ts, latest_sys_id):
+                    latest_ts, latest_sys_id = ts, sys_id
+                events.append(
+                    IngestionEvent(
+                        external_id=sys_id,
+                        source_type="servicenow",
+                        object_type=table_name,
+                        content=record,
+                        thread_id=f"{table_name}:{sys_id}",
+                        timestamp=_parse_snow_datetime(ts),
+                        metadata={"table": table_name},
+                    )
                 )
-            )
+
+            if len(records) < self.INCREMENTAL_PAGE_SIZE:
+                break
 
         return ChangeResult(
             events=events,
-            new_checkpoint=Checkpoint(data={"last_updated": latest_ts}),
+            new_checkpoint=Checkpoint(
+                data={"last_updated": latest_ts, "last_sys_id": latest_sys_id}
+            ),
             items_processed=len(events),
         )
 
