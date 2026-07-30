@@ -10,6 +10,13 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
@@ -18,6 +25,7 @@ import { usePagination } from "@/lib/hooks/use-pagination";
 import { api } from "@/lib/api";
 import type {
   RetrievalFeedback,
+  ResolutionSessionResponse,
   RuntimeExplainResponse,
   RuntimeMatchResponse,
   RuntimePlaybookVersion,
@@ -33,6 +41,18 @@ function linesToList(text: string): string[] {
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
+const NO_SESSION = "__none__";
+
+function sessionDisplayName(session: ResolutionSessionResponse): string {
+  const caseId = session.external_case_ids[0];
+  const symptom = session.symptoms[0] ?? "No symptoms";
+  return caseId ? `${caseId} - ${symptom}` : symptom;
+}
+
+function sessionMeta(session: ResolutionSessionResponse): string {
+  return `${session.status} - ${new Date(session.created_at).toLocaleString()}`;
+}
+
 function FeedbackTab() {
   const pg = usePagination(50);
 
@@ -44,7 +64,7 @@ function FeedbackTab() {
   return (
     <div className="space-y-4">
       {isLoading ? (
-        <p className="text-sm text-muted-foreground">Loading feedback…</p>
+        <p className="text-sm text-muted-foreground">Loading feedback...</p>
       ) : feedbacks.length === 0 ? (
         <div className="rounded-md border p-10 text-center text-sm text-muted-foreground">
           No feedback submitted yet.
@@ -104,6 +124,15 @@ export default function RuntimePage() {
   const [pbDomainId, setPbDomainId] = useState("");
   const [pbError, setPbError] = useState<string | null>(null);
   const [playbookVersion, setPlaybookVersion] = useState<RuntimePlaybookVersion | null>(null);
+
+  const { data: sessions = [], isLoading: sessionsLoading } = useQuery<
+    ResolutionSessionResponse[]
+  >({
+    queryKey: ["sessions", "runtime-selector"],
+    queryFn: () => api.get("/sessions", { limit: "50" }),
+  });
+
+  const selectedSession = sessions.find((session) => session.id === sessionId);
 
   const matchMut = useMutation({
     mutationFn: async () => {
@@ -245,14 +274,46 @@ export default function RuntimePage() {
               />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="session">Resolution session id (optional)</Label>
-              <Input
-                id="session"
-                className="font-mono text-xs"
-                placeholder="From POST /api/v1/sessions — enables decision traces"
-                value={sessionId}
-                onChange={(e) => setSessionId(e.target.value)}
-              />
+              <Label htmlFor="session">Resolution session (optional)</Label>
+              <Select
+                value={sessionId || NO_SESSION}
+                onValueChange={(value) => {
+                  const nextSessionId = value === NO_SESSION ? "" : value;
+                  setSessionId(nextSessionId);
+                  const session = sessions.find((s) => s.id === nextSessionId);
+                  if (session) {
+                    setSymptomsText(session.symptoms.join("\n"));
+                    setEntitiesText(session.entities.join("\n"));
+                    setContext(session.notes ?? "");
+                  }
+                }}
+              >
+                <SelectTrigger id="session" className="w-full">
+                  <SelectValue
+                    placeholder={
+                      sessionsLoading ? "Loading sessions..." : "Select session by issue"
+                    }
+                  />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={NO_SESSION}>No session</SelectItem>
+                  {sessions.map((session) => (
+                    <SelectItem key={session.id} value={session.id}>
+                      <div className="flex min-w-0 flex-col">
+                        <span className="truncate">{sessionDisplayName(session)}</span>
+                        <span className="text-xs text-muted-foreground">
+                          {sessionMeta(session)}
+                        </span>
+                      </div>
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {selectedSession && (
+                <p className="text-xs text-muted-foreground">
+                  Linked to selected session. Runtime will store trace events on this case.
+                </p>
+              )}
             </div>
             <div className="space-y-2">
               <Label htmlFor="topk">top_k</Label>
@@ -277,7 +338,7 @@ export default function RuntimePage() {
           </div>
           {formError && <p className="text-sm text-destructive">{formError}</p>}
           <Button type="button" disabled={matchMut.isPending} onClick={() => matchMut.mutate()}>
-            {matchMut.isPending ? "Running…" : "Run match"}
+            {matchMut.isPending ? "Running..." : "Run match"}
           </Button>
         </CardContent>
       </Card>
@@ -308,7 +369,7 @@ export default function RuntimePage() {
                 disabled={explainMut.isPending}
                 onClick={() => explainMut.mutate(match.match_id)}
               >
-                {explainMut.isPending ? "Loading explain…" : "Load explain"}
+                {explainMut.isPending ? "Loading explain..." : "Load explain"}
               </Button>
             </div>
           </CardHeader>
@@ -423,7 +484,7 @@ export default function RuntimePage() {
             <Input
               id="pb-domain"
               className="font-mono text-xs"
-              placeholder="Same as match domain filter — omit for tenant-wide fetch only"
+              placeholder="Same as match domain filter - omit for tenant-wide fetch only"
               value={pbDomainId}
               onChange={(e) => setPbDomainId(e.target.value)}
             />
@@ -436,7 +497,7 @@ export default function RuntimePage() {
               disabled={fetchPlaybookMut.isPending}
               onClick={() => fetchPlaybookMut.mutate()}
             >
-              {fetchPlaybookMut.isPending ? "Loading…" : "Fetch playbook"}
+              {fetchPlaybookMut.isPending ? "Loading..." : "Fetch playbook"}
             </Button>
           </div>
           {playbookVersion && (
@@ -449,7 +510,7 @@ export default function RuntimePage() {
                 >
                   {playbookVersion.playbook_id}
                 </Link>
-                <span className="text-muted-foreground">·</span>
+                <span className="text-muted-foreground">-</span>
                 <span>v{playbookVersion.semantic_version}</span>
               </div>
               <pre className="max-h-[28rem] overflow-auto rounded-md bg-muted p-3 text-xs">
