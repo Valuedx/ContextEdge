@@ -12,6 +12,38 @@ Service file = business logic behind the API.
 
 Model file = database tables used by that feature.
 
+## Quick Line Map
+
+Use this table when someone asks: "Where is this tab code?"
+
+`file:line` means the code starts around that line.
+
+| Tab | Frontend page code | Backend API code | Main database/model code |
+| --- | --- | --- | --- |
+| Overview | `frontend/src/app/(dashboard)/overview/page.tsx:1` | `backend/src/contextedge/api/v1/sources.py:35`, `backend/src/contextedge/api/v1/evidence.py:26`, `backend/src/contextedge/api/v1/episodes.py:24`, `backend/src/contextedge/api/v1/playbooks.py:72`, `backend/src/contextedge/api/v1/runtime.py:89` | `backend/src/contextedge/models/source.py:11`, `backend/src/contextedge/models/evidence.py:47`, `backend/src/contextedge/models/episode.py:166`, `backend/src/contextedge/models/playbook.py:47` |
+| Sources | `frontend/src/app/(dashboard)/sources/page.tsx:1` | `backend/src/contextedge/api/v1/sources.py:35` | `backend/src/contextedge/models/source.py:11` |
+| Sync Operations | `frontend/src/app/(dashboard)/sync/page.tsx:1` | `backend/src/contextedge/api/v1/sync.py:13`, `backend/src/contextedge/api/v1/sources.py:253` | `backend/src/contextedge/models/source.py:128` |
+| Evidence | `frontend/src/app/(dashboard)/evidence/page.tsx:1` | `backend/src/contextedge/api/v1/evidence.py:26`, `backend/src/contextedge/api/v1/threads.py:14` | `backend/src/contextedge/models/evidence.py:47` |
+| Sessions | `frontend/src/app/(dashboard)/sessions/page.tsx:1` | `backend/src/contextedge/api/v1/sessions.py:23` | `backend/src/contextedge/models/session.py:11`, `backend/src/contextedge/models/session.py:101` |
+| Runtime | `frontend/src/app/(dashboard)/runtime/page.tsx:1` | `backend/src/contextedge/api/v1/runtime.py:89` | `backend/src/contextedge/models/playbook.py:117`, `backend/src/contextedge/models/session.py:11` |
+| Review Queue | `frontend/src/app/(dashboard)/review/page.tsx:1` | `backend/src/contextedge/api/v1/review_queue.py:30`, `backend/src/contextedge/api/v1/execution.py:226` | `backend/src/contextedge/models/execution.py:140`, `backend/src/contextedge/models/decision.py:43` |
+| Execution | `frontend/src/app/(dashboard)/execution/page.tsx:1` | `backend/src/contextedge/api/v1/execution.py:61` | `backend/src/contextedge/models/execution.py:17`, `backend/src/contextedge/models/execution.py:140` |
+| Decisions | `frontend/src/app/(dashboard)/decisions/page.tsx:1` | `backend/src/contextedge/api/v1/decisions.py:134` | `backend/src/contextedge/models/decision.py:43`, `backend/src/contextedge/models/decision.py:176` |
+| Episodes | `frontend/src/app/(dashboard)/episodes/page.tsx:1` | `backend/src/contextedge/api/v1/episodes.py:24` | `backend/src/contextedge/models/episode.py:166`, `backend/src/contextedge/models/episode.py:188` |
+| Patterns | `frontend/src/app/(dashboard)/patterns/page.tsx:1` | `backend/src/contextedge/api/v1/patterns.py:21` | `backend/src/contextedge/models/pattern.py:23` |
+| Playbooks | `frontend/src/app/(dashboard)/playbooks/page.tsx:1` | `backend/src/contextedge/api/v1/playbooks.py:72` | `backend/src/contextedge/models/playbook.py:47`, `backend/src/contextedge/models/playbook.py:117` |
+| Negative Knowledge | `frontend/src/app/(dashboard)/negative-knowledge/page.tsx:1` | `backend/src/contextedge/api/v1/negative_knowledge.py:17` | `backend/src/contextedge/models/pattern.py:63` |
+| Identities | `frontend/src/app/(dashboard)/identities/page.tsx:1` | `backend/src/contextedge/api/v1/identities.py:27` | `backend/src/contextedge/models/episode.py:33`, `backend/src/contextedge/models/episode.py:71` |
+| Correlations | `frontend/src/app/(dashboard)/correlations/page.tsx:1` | `backend/src/contextedge/api/v1/correlations.py:20` | `backend/src/contextedge/models/episode.py:153` |
+| Graph Explorer | `frontend/src/app/(dashboard)/graph-explorer/page.tsx:1` | `backend/src/contextedge/api/v1/graph.py:18` | `backend/src/contextedge/models/pattern.py:135` |
+| Contradictions | `frontend/src/app/(dashboard)/contradictions/page.tsx:1` | `backend/src/contextedge/api/v1/contradictions.py:17` | `backend/src/contextedge/models/pattern.py:76` |
+| Drift | `frontend/src/app/(dashboard)/drift/page.tsx:1` | `backend/src/contextedge/api/v1/drift.py:19` | `backend/src/contextedge/models/playbook.py:47`, `backend/src/contextedge/models/pattern.py:23`, `backend/src/contextedge/models/decision.py:43` |
+| Evaluations | `frontend/src/app/(dashboard)/evaluations/page.tsx:1` | `backend/src/contextedge/api/v1/evaluations.py:50` | `backend/src/contextedge/models/evaluation.py:11`, `backend/src/contextedge/models/evaluation.py:25` |
+| Policies | `frontend/src/app/(dashboard)/policies/page.tsx:1` | `backend/src/contextedge/api/v1/policies.py:57`, `backend/src/contextedge/api/v1/policy_assignments.py:64` | `backend/src/contextedge/models/policy.py:15` |
+| Audit Log | `frontend/src/app/(dashboard)/audit/page.tsx:1` | `backend/src/contextedge/api/v1/audit.py:14` | `backend/src/contextedge/models/audit.py:11` |
+| LLM Cost | `frontend/src/app/(dashboard)/admin/cost/page.tsx:1` | `backend/src/contextedge/api/v1/admin_cost.py:31` | `backend/src/contextedge/models/events.py:13`, `backend/src/contextedge/models/tenant.py:116` |
+| Settings | `frontend/src/app/(dashboard)/settings/page.tsx:1` | `backend/src/contextedge/api/v1/tenants.py:14`, `backend/src/contextedge/api/v1/workspaces.py:14`, `backend/src/contextedge/api/v1/domains.py:14`, `backend/src/contextedge/api/v1/users.py:22` | `backend/src/contextedge/models/tenant.py:12`, `backend/src/contextedge/models/tenant.py:30`, `backend/src/contextedge/models/tenant.py:48`, `backend/src/contextedge/models/tenant.py:68` |
+
 ## 1. Overview
 
 **Frontend page:**
