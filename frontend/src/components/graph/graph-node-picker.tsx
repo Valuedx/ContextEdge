@@ -2,13 +2,7 @@
 
 import { useQuery } from "@tanstack/react-query";
 
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+import { SearchableSelect } from "@/components/common/searchable-select";
 import { api } from "@/lib/api";
 import type {
   CanonicalIdentity,
@@ -182,6 +176,17 @@ export function GraphNodePicker({
     queryFn: () => loadGraphNodeOptions(nodeType),
   });
   const selectedOption = options.find((option) => option.id === nodeId);
+  const selectOptions = [
+    { value: NO_NODE, label: "No node selected" },
+    ...(nodeId && !selectedOption
+      ? [{ value: nodeId, label: `Selected node ${compactId(nodeId)}` }]
+      : []),
+    ...options.map((option) => ({
+      value: option.id,
+      label: option.label,
+      meta: option.meta,
+    })),
+  ];
 
   return (
     <div className={className ?? "flex flex-wrap items-end gap-3"}>
@@ -207,33 +212,16 @@ export function GraphNodePicker({
 
       <div className="min-w-[280px] flex-1 space-y-1">
         <label className="text-xs text-muted-foreground">Node name</label>
-        <Select
+        <SearchableSelect
           value={nodeId || NO_NODE}
-          onValueChange={(value) => onNodeIdChange(value === NO_NODE ? "" : value)}
+          options={selectOptions}
+          loading={isLoading}
+          placeholder="Select by name"
+          searchPlaceholder={`Search ${nodeType.replace(/_/g, " ")}...`}
+          emptyText={`No ${nodeType.replace(/_/g, " ")} records found.`}
           disabled={isLoading}
-        >
-          <SelectTrigger className="w-full">
-            <SelectValue
-              placeholder={isLoading ? "Loading records..." : "Select by name"}
-            />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value={NO_NODE}>No node selected</SelectItem>
-            {nodeId && !selectedOption && (
-              <SelectItem value={nodeId}>Selected node {compactId(nodeId)}</SelectItem>
-            )}
-            {options.map((option) => (
-              <SelectItem key={option.id} value={option.id}>
-                <div className="flex min-w-0 flex-col">
-                  <span className="truncate">{option.label}</span>
-                  {option.meta && (
-                    <span className="text-xs text-muted-foreground">{option.meta}</span>
-                  )}
-                </div>
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+          onValueChange={(value) => onNodeIdChange(value === NO_NODE ? "" : value)}
+        />
         {error ? (
           <p className="text-xs text-destructive">{error.message}</p>
         ) : !isLoading && options.length === 0 ? (

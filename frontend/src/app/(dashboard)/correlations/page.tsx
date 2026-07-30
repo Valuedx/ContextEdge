@@ -23,13 +23,7 @@ import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+import { SearchableSelect } from "@/components/common/searchable-select";
 import { api } from "@/lib/api";
 import type { CorrelationEdge, EvidenceItem } from "@/lib/types";
 
@@ -76,25 +70,22 @@ function EvidenceSelect({
   return (
     <div>
       <Label>{label}</Label>
-      <Select
+      <SearchableSelect
         value={value}
         onValueChange={onValueChange}
         disabled={isLoading || evidence.length === 0}
-      >
-        <SelectTrigger className="mt-1 w-full">
-          <SelectValue placeholder={isLoading ? "Loading evidence..." : placeholder} />
-        </SelectTrigger>
-        <SelectContent>
-          {evidence.map((item) => (
-            <SelectItem key={item.id} value={item.id} disabled={item.id === disabledId}>
-              <div className="flex min-w-0 flex-col">
-                <span className="truncate">{evidenceTitle(item, item.id)}</span>
-                <span className="text-xs text-muted-foreground">{evidenceMeta(item)}</span>
-              </div>
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
+        loading={isLoading}
+        placeholder={placeholder}
+        searchPlaceholder="Search evidence..."
+        emptyText="No evidence found."
+        className="mt-1"
+        options={evidence.map((item) => ({
+          value: item.id,
+          label: evidenceTitle(item, item.id),
+          meta: evidenceMeta(item),
+          disabled: item.id === disabledId,
+        }))}
+      />
     </div>
   );
 }

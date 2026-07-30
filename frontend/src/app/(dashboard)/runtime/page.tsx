@@ -10,17 +10,11 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { PaginationControls } from "@/components/common/pagination-controls";
+import { SearchableSelect } from "@/components/common/searchable-select";
 import { usePagination } from "@/lib/hooks/use-pagination";
 import { api } from "@/lib/api";
 import type {
@@ -147,6 +141,22 @@ export default function RuntimePage() {
   const activeDomains = domains.filter((domain) => domain.is_active);
   const selectedDomain = domains.find((domain) => domain.id === domainId);
   const selectedPlaybookDomain = domains.find((domain) => domain.id === pbDomainId);
+  const domainOptions = [
+    { value: NO_DOMAIN, label: "All domains", meta: "Search broadly" },
+    ...activeDomains.map((domain) => ({
+      value: domain.id,
+      label: domain.name,
+      meta: domainMeta(domain),
+    })),
+  ];
+  const sessionOptions = [
+    { value: NO_SESSION, label: "No session" },
+    ...sessions.map((session) => ({
+      value: session.id,
+      label: sessionDisplayName(session),
+      meta: sessionMeta(session),
+    })),
+  ];
 
   const matchMut = useMutation({
     mutationFn: async () => {
@@ -279,32 +289,17 @@ export default function RuntimePage() {
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             <div className="space-y-2">
               <Label htmlFor="domain">Domain / area (optional)</Label>
-              <Select
+              <SearchableSelect
+                triggerId="domain"
                 value={domainId || NO_DOMAIN}
                 onValueChange={(value) => setDomainId(value === NO_DOMAIN ? "" : value)}
                 disabled={domainsLoading}
-              >
-                <SelectTrigger id="domain" className="w-full">
-                  <SelectValue
-                    placeholder={
-                      domainsLoading ? "Loading domains..." : "Select business area"
-                    }
-                  />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value={NO_DOMAIN}>All domains</SelectItem>
-                  {activeDomains.map((domain) => (
-                    <SelectItem key={domain.id} value={domain.id}>
-                      <div className="flex min-w-0 flex-col">
-                        <span className="truncate">{domain.name}</span>
-                        <span className="text-xs text-muted-foreground">
-                          {domainMeta(domain)}
-                        </span>
-                      </div>
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+                loading={domainsLoading}
+                placeholder="Select business area"
+                searchPlaceholder="Search domain or area..."
+                emptyText="No domains found."
+                options={domainOptions}
+              />
               <p className="text-xs text-muted-foreground">
                 {selectedDomain
                   ? `Runtime searches inside ${selectedDomain.name}.`
@@ -313,7 +308,8 @@ export default function RuntimePage() {
             </div>
             <div className="space-y-2">
               <Label htmlFor="session">Resolution session (optional)</Label>
-              <Select
+              <SearchableSelect
+                triggerId="session"
                 value={sessionId || NO_SESSION}
                 onValueChange={(value) => {
                   const nextSessionId = value === NO_SESSION ? "" : value;
@@ -326,28 +322,12 @@ export default function RuntimePage() {
                     setDomainId(session.domain_id ?? "");
                   }
                 }}
-              >
-                <SelectTrigger id="session" className="w-full">
-                  <SelectValue
-                    placeholder={
-                      sessionsLoading ? "Loading sessions..." : "Select session by issue"
-                    }
-                  />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value={NO_SESSION}>No session</SelectItem>
-                  {sessions.map((session) => (
-                    <SelectItem key={session.id} value={session.id}>
-                      <div className="flex min-w-0 flex-col">
-                        <span className="truncate">{sessionDisplayName(session)}</span>
-                        <span className="text-xs text-muted-foreground">
-                          {sessionMeta(session)}
-                        </span>
-                      </div>
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+                loading={sessionsLoading}
+                placeholder="Select session by issue"
+                searchPlaceholder="Search session issue..."
+                emptyText="No sessions found."
+                options={sessionOptions}
+              />
               {selectedSession && (
                 <p className="text-xs text-muted-foreground">
                   Linked to selected session. Runtime will store trace events on this case.
@@ -520,32 +500,17 @@ export default function RuntimePage() {
           </div>
           <div className="space-y-2">
             <Label htmlFor="pb-domain">Domain / area for scope check (optional)</Label>
-            <Select
+            <SearchableSelect
+              triggerId="pb-domain"
               value={pbDomainId || NO_DOMAIN}
               onValueChange={(value) => setPbDomainId(value === NO_DOMAIN ? "" : value)}
               disabled={domainsLoading}
-            >
-              <SelectTrigger id="pb-domain" className="w-full">
-                <SelectValue
-                  placeholder={
-                    domainsLoading ? "Loading domains..." : "Select business area"
-                  }
-                />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value={NO_DOMAIN}>All domains</SelectItem>
-                {activeDomains.map((domain) => (
-                  <SelectItem key={domain.id} value={domain.id}>
-                    <div className="flex min-w-0 flex-col">
-                      <span className="truncate">{domain.name}</span>
-                      <span className="text-xs text-muted-foreground">
-                        {domainMeta(domain)}
-                      </span>
-                    </div>
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+              loading={domainsLoading}
+              placeholder="Select business area"
+              searchPlaceholder="Search domain or area..."
+              emptyText="No domains found."
+              options={domainOptions}
+            />
             <p className="text-xs text-muted-foreground">
               {selectedPlaybookDomain
                 ? `Playbook lookup is checked against ${selectedPlaybookDomain.name}.`
