@@ -4,7 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ColumnDef } from "@tanstack/react-table";
 import { useState } from "react";
 import { toast } from "sonner";
-import { Plus, Trash2, CheckCircle2 } from "lucide-react";
+import { CheckCircle2, Plus, Trash2 } from "lucide-react";
 
 import { PageHeader } from "@/components/common/page-header";
 import { DataTable } from "@/components/common/data-table";
@@ -13,21 +13,101 @@ import { PaginationControls } from "@/components/common/pagination-controls";
 import { usePagination } from "@/lib/hooks/use-pagination";
 import { Button } from "@/components/ui/button";
 import {
-  Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle,
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { api } from "@/lib/api";
-import type { CorrelationEdge } from "@/lib/types";
+import type { CorrelationEdge, EvidenceItem } from "@/lib/types";
 
-const CORRELATION_TYPES = ["causal", "temporal", "semantic", "duplicate", "contradicts", "supports"];
+const CORRELATION_TYPES = [
+  "causal",
+  "temporal",
+  "semantic",
+  "duplicate",
+  "contradicts",
+  "supports",
+];
 const DECISIONS = ["accept", "reject", "merge", "split"] as const;
 
-// ── Create Dialog ────────────────────────────────────────────────────────────
+function shortId(id: string): string {
+  return id.length > 8 ? id.slice(0, 8) : id;
+}
 
-function CreateDialog({ onClose }: { onClose: () => void }) {
+function evidenceTitle(item: EvidenceItem | undefined, fallbackId: string): string {
+  if (!item) return `Evidence ${shortId(fallbackId)}`;
+  return item.title || item.body_summary || "Untitled evidence";
+}
+
+function evidenceMeta(item: EvidenceItem): string {
+  return `${item.evidence_type} - ${new Date(item.ingested_at).toLocaleString()}`;
+}
+
+function EvidenceSelect({
+  disabledId,
+  evidence,
+  isLoading,
+  label,
+  onValueChange,
+  placeholder,
+  value,
+}: {
+  disabledId?: string;
+  evidence: EvidenceItem[];
+  isLoading: boolean;
+  label: string;
+  onValueChange: (value: string) => void;
+  placeholder: string;
+  value: string;
+}) {
+  return (
+    <div>
+      <Label>{label}</Label>
+      <Select
+        value={value}
+        onValueChange={onValueChange}
+        disabled={isLoading || evidence.length === 0}
+      >
+        <SelectTrigger className="mt-1 w-full">
+          <SelectValue placeholder={isLoading ? "Loading evidence..." : placeholder} />
+        </SelectTrigger>
+        <SelectContent>
+          {evidence.map((item) => (
+            <SelectItem key={item.id} value={item.id} disabled={item.id === disabledId}>
+              <div className="flex min-w-0 flex-col">
+                <span className="truncate">{evidenceTitle(item, item.id)}</span>
+                <span className="text-xs text-muted-foreground">{evidenceMeta(item)}</span>
+              </div>
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    </div>
+  );
+}
+
+function CreateDialog({
+  evidence,
+  evidenceLoading,
+  onClose,
+}: {
+  evidence: EvidenceItem[];
+  evidenceLoading: boolean;
+  onClose: () => void;
+}) {
   const qc = useQueryClient();
   const [sourceId, setSourceId] = useState("");
   const [targetId, setTargetId] = useState("");
@@ -52,34 +132,37 @@ function CreateDialog({ onClose }: { onClose: () => void }) {
     onError: (err: Error) => toast.error(err.message || "Create failed"),
   });
 
-  const valid = sourceId.trim() && targetId.trim();
+  const valid = sourceId.trim() && targetId.trim() && sourceId !== targetId;
 
   return (
-    <DialogContent>
+    <DialogContent className="max-w-2xl">
       <DialogHeader>
         <DialogTitle>Create correlation</DialogTitle>
       </DialogHeader>
       <div className="space-y-4 text-sm">
-        <div>
-          <Label htmlFor="cor-src">Source evidence ID</Label>
-          <Input
-            id="cor-src"
-            className="mt-1 font-mono text-xs"
-            value={sourceId}
-            onChange={(e) => setSourceId(e.target.value)}
-            placeholder="UUID"
-          />
-        </div>
-        <div>
-          <Label htmlFor="cor-tgt">Target evidence ID</Label>
-          <Input
-            id="cor-tgt"
-            className="mt-1 font-mono text-xs"
-            value={targetId}
-            onChange={(e) => setTargetId(e.target.value)}
-            placeholder="UUID"
-          />
-        </div>
+        <EvidenceSelect
+          evidence={evidence}
+          isLoading={evidenceLoading}
+          label="Source evidence"
+          placeholder="Select source evidence"
+          value={sourceId}
+          disabledId={targetId}
+          onValueChange={setSourceId}
+        />
+        <EvidenceSelect
+          evidence={evidence}
+          isLoading={evidenceLoading}
+          label="Target evidence"
+          placeholder="Select target evidence"
+          value={targetId}
+          disabledId={sourceId}
+          onValueChange={setTargetId}
+        />
+        {evidence.length === 0 && !evidenceLoading ? (
+          <p className="text-xs text-muted-foreground">
+            No evidence found yet. Create or sync evidence before adding a correlation.
+          </p>
+        ) : null}
         <div>
           <Label>Type</Label>
           <select
@@ -87,13 +170,15 @@ function CreateDialog({ onClose }: { onClose: () => void }) {
             value={corrType}
             onChange={(e) => setCorrType(e.target.value)}
           >
-            {CORRELATION_TYPES.map((t) => (
-              <option key={t} value={t}>{t}</option>
+            {CORRELATION_TYPES.map((type) => (
+              <option key={type} value={type}>
+                {type}
+              </option>
             ))}
           </select>
         </div>
         <div>
-          <Label htmlFor="cor-conf">Confidence (0–1)</Label>
+          <Label htmlFor="cor-conf">Confidence (0-1)</Label>
           <Input
             id="cor-conf"
             type="number"
@@ -117,26 +202,28 @@ function CreateDialog({ onClose }: { onClose: () => void }) {
         </div>
       </div>
       <DialogFooter>
-        <Button variant="outline" onClick={onClose}>Cancel</Button>
+        <Button variant="outline" onClick={onClose}>
+          Cancel
+        </Button>
         <Button disabled={mut.isPending || !valid} onClick={() => mut.mutate()}>
-          {mut.isPending ? "Creating…" : "Create"}
+          {mut.isPending ? "Creating..." : "Create"}
         </Button>
       </DialogFooter>
     </DialogContent>
   );
 }
 
-// ── Review Dialog ────────────────────────────────────────────────────────────
-
 function ReviewDialog({
+  evidenceById,
   item,
   onClose,
 }: {
+  evidenceById: Map<string, EvidenceItem>;
   item: CorrelationEdge;
   onClose: () => void;
 }) {
   const qc = useQueryClient();
-  const [decision, setDecision] = useState<typeof DECISIONS[number]>("accept");
+  const [decision, setDecision] = useState<(typeof DECISIONS)[number]>("accept");
   const [confidence, setConfidence] = useState(item.confidence);
   const [explanation, setExplanation] = useState(item.explanation ?? "");
 
@@ -161,36 +248,38 @@ function ReviewDialog({
         <DialogTitle>Review correlation</DialogTitle>
       </DialogHeader>
       <div className="space-y-4 text-sm">
-        <div className="rounded-md bg-muted px-3 py-2 space-y-1">
-          <p className="text-xs text-muted-foreground">Source → Target</p>
-          <p className="font-mono text-xs break-all">{item.source_evidence_id}</p>
-          <p className="text-xs text-muted-foreground">→</p>
-          <p className="font-mono text-xs break-all">{item.target_evidence_id}</p>
-        </div>
-        <div>
-          <p className="text-xs text-muted-foreground mb-1">
-            Type: <Badge variant="outline" className="text-xs">{item.correlation_type}</Badge>
+        <div className="space-y-1 rounded-md bg-muted px-3 py-2">
+          <p className="text-xs text-muted-foreground">Source to target</p>
+          <p className="font-medium">
+            {evidenceTitle(evidenceById.get(item.source_evidence_id), item.source_evidence_id)}
+          </p>
+          <p className="text-xs text-muted-foreground">to</p>
+          <p className="font-medium">
+            {evidenceTitle(evidenceById.get(item.target_evidence_id), item.target_evidence_id)}
           </p>
         </div>
+        <p className="text-xs text-muted-foreground">
+          Type: <Badge variant="outline" className="text-xs">{item.correlation_type}</Badge>
+        </p>
         <div>
           <Label>Decision</Label>
           <div className="mt-1 flex flex-wrap gap-2">
-            {DECISIONS.map((d) => (
+            {DECISIONS.map((itemDecision) => (
               <Button
-                key={d}
+                key={itemDecision}
                 size="sm"
-                variant={decision === d ? "default" : "outline"}
-                onClick={() => setDecision(d)}
+                variant={decision === itemDecision ? "default" : "outline"}
+                onClick={() => setDecision(itemDecision)}
               >
-                {d}
+                {itemDecision}
               </Button>
             ))}
           </div>
         </div>
         <div>
-          <Label htmlFor="cor-conf">Confidence (0–1)</Label>
+          <Label htmlFor="rev-conf">Confidence (0-1)</Label>
           <Input
-            id="cor-conf"
+            id="rev-conf"
             type="number"
             min="0"
             max="1"
@@ -212,16 +301,16 @@ function ReviewDialog({
         </div>
       </div>
       <DialogFooter>
-        <Button variant="outline" onClick={onClose}>Cancel</Button>
+        <Button variant="outline" onClick={onClose}>
+          Cancel
+        </Button>
         <Button disabled={mut.isPending} onClick={() => mut.mutate()}>
-          {mut.isPending ? "Submitting…" : "Submit decision"}
+          {mut.isPending ? "Submitting..." : "Submit decision"}
         </Button>
       </DialogFooter>
     </DialogContent>
   );
 }
-
-// ── Page ────────────────────────────────────────────────────────────────────
 
 export default function CorrelationsPage() {
   const pg = usePagination(50);
@@ -233,6 +322,13 @@ export default function CorrelationsPage() {
     queryKey: ["correlations", pg.page],
     queryFn: () => api.get("/correlations", pg.params),
   });
+
+  const { data: evidence = [], isLoading: evidenceLoading } = useQuery<EvidenceItem[]>({
+    queryKey: ["evidence", "correlations-selector"],
+    queryFn: () => api.get("/evidence", { limit: "200" }),
+  });
+
+  const evidenceById = new Map(evidence.map((item) => [item.id, item]));
 
   const del = useMutation({
     mutationFn: (id: string) => api.delete(`/correlations/${id}`),
@@ -254,30 +350,54 @@ export default function CorrelationsPage() {
     {
       accessorKey: "source_evidence_id",
       header: "Source",
-      cell: ({ row }) => (
-        <span className="font-mono text-xs truncate max-w-[140px] block">{row.getValue("source_evidence_id")}</span>
-      ),
+      cell: ({ row }) => {
+        const id = row.getValue("source_evidence_id") as string;
+        const item = evidenceById.get(id);
+        return (
+          <div className="max-w-[280px]">
+            <span className="block truncate text-sm font-medium">
+              {evidenceTitle(item, id)}
+            </span>
+            {item ? (
+              <span className="text-xs text-muted-foreground">{item.evidence_type}</span>
+            ) : null}
+          </div>
+        );
+      },
     },
     {
       accessorKey: "target_evidence_id",
       header: "Target",
-      cell: ({ row }) => (
-        <span className="font-mono text-xs truncate max-w-[140px] block">{row.getValue("target_evidence_id")}</span>
-      ),
+      cell: ({ row }) => {
+        const id = row.getValue("target_evidence_id") as string;
+        const item = evidenceById.get(id);
+        return (
+          <div className="max-w-[280px]">
+            <span className="block truncate text-sm font-medium">
+              {evidenceTitle(item, id)}
+            </span>
+            {item ? (
+              <span className="text-xs text-muted-foreground">{item.evidence_type}</span>
+            ) : null}
+          </div>
+        );
+      },
     },
     {
       accessorKey: "confidence",
       header: "Confidence",
       cell: ({ row }) => (
-        <span className="text-sm">{((row.getValue("confidence") as number) * 100).toFixed(0)}%</span>
+        <span className="text-sm">
+          {((row.getValue("confidence") as number) * 100).toFixed(0)}%
+        </span>
       ),
     },
     {
       accessorKey: "explanation",
       header: "Explanation",
       cell: ({ row }) => (
-        <span className="text-xs text-muted-foreground line-clamp-1 max-w-[180px]">
-          {row.getValue("explanation") ?? "—"}
+        <span className="line-clamp-1 max-w-[240px] text-xs text-muted-foreground">
+          {row.getValue("explanation") ?? "-"}
         </span>
       ),
     },
@@ -306,7 +426,7 @@ export default function CorrelationsPage() {
     <div className="space-y-6">
       <PageHeader
         title="Correlations"
-        description="Evidence correlation edges — causal, temporal, semantic, and structural links between evidence items."
+        description="Evidence links that show related issues, matching symptoms, or supporting facts."
         actions={
           <Button size="sm" onClick={() => setCreating(true)}>
             <Plus className="mr-1.5 h-4 w-4" />
@@ -315,7 +435,7 @@ export default function CorrelationsPage() {
         }
       />
 
-      {isLoading ? (
+      {isLoading || evidenceLoading ? (
         <DataTableSkeleton columns={6} />
       ) : data.length === 0 ? (
         <div className="rounded-md border p-10 text-center text-sm text-muted-foreground">
@@ -334,12 +454,24 @@ export default function CorrelationsPage() {
         </>
       )}
 
-      <Dialog open={creating} onOpenChange={(o) => { if (!o) setCreating(false); }}>
-        {creating && <CreateDialog onClose={() => setCreating(false)} />}
+      <Dialog open={creating} onOpenChange={(open) => { if (!open) setCreating(false); }}>
+        {creating && (
+          <CreateDialog
+            evidence={evidence}
+            evidenceLoading={evidenceLoading}
+            onClose={() => setCreating(false)}
+          />
+        )}
       </Dialog>
 
-      <Dialog open={!!reviewing} onOpenChange={(o) => { if (!o) setReviewing(null); }}>
-        {reviewing && <ReviewDialog item={reviewing} onClose={() => setReviewing(null)} />}
+      <Dialog open={!!reviewing} onOpenChange={(open) => { if (!open) setReviewing(null); }}>
+        {reviewing && (
+          <ReviewDialog
+            evidenceById={evidenceById}
+            item={reviewing}
+            onClose={() => setReviewing(null)}
+          />
+        )}
       </Dialog>
     </div>
   );
