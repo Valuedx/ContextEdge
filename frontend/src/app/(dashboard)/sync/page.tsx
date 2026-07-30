@@ -1,6 +1,6 @@
 "use client";
 
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ColumnDef } from "@tanstack/react-table";
 import { Trash2 } from "lucide-react";
 import { toast } from "sonner";
@@ -10,10 +10,29 @@ import { DataTable } from "@/components/common/data-table";
 import { DataTableSkeleton } from "@/components/common/data-table-skeleton";
 import { StatusBadge } from "@/components/common/status-badge";
 import { api } from "@/lib/api";
-import type { SyncRun } from "@/lib/types";
+import type { Source, SyncRun } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 
-const columns: ColumnDef<SyncRun>[] = [
+type SyncRunRow = SyncRun & {
+  source_name: string;
+  source_type: string | null;
+};
+
+const columns: ColumnDef<SyncRunRow>[] = [
+  {
+    accessorKey: "source_name",
+    header: "Source",
+    cell: ({ row }) => (
+      <div>
+        <div className="font-medium">{row.original.source_name}</div>
+        {row.original.source_type && (
+          <div className="text-xs text-muted-foreground">
+            {row.original.source_type}
+          </div>
+        )}
+      </div>
+    ),
+  },
   { accessorKey: "run_type", header: "Type" },
   {
     accessorKey: "status",
@@ -70,10 +89,25 @@ function SyncAction({ runId }: { runId: string }) {
 
 export default function SyncPage() {
   const queryClient = useQueryClient();
-  const { data = [], isLoading } = useQuery<SyncRun[]>({
+  const { data: syncRuns = [], isLoading: runsLoading } = useQuery<SyncRun[]>({
     queryKey: ["sync-runs"],
     queryFn: () => api.get("/sync-runs"),
   });
+  const { data: sources = [], isLoading: sourcesLoading } = useQuery<Source[]>({
+    queryKey: ["sources", "sync-page"],
+    queryFn: () => api.get("/sources", { limit: "200" }),
+  });
+
+  const sourceById = new Map(sources.map((source) => [source.id, source]));
+  const rows: SyncRunRow[] = syncRuns.map((run) => {
+    const source = sourceById.get(run.source_id);
+    return {
+      ...run,
+      source_name: source?.display_name ?? run.source_id.slice(0, 8) + "...",
+      source_type: source?.source_type ?? null,
+    };
+  });
+  const isLoading = runsLoading || sourcesLoading;
 
   return (
     <div className="space-y-6">
@@ -97,9 +131,9 @@ export default function SyncPage() {
           }
       />
       {isLoading ? (
-        <DataTableSkeleton columns={5} />
+        <DataTableSkeleton columns={6} />
       ) : (
-        <DataTable columns={columns} data={data} />
+        <DataTable columns={columns} data={rows} />
       )}
     </div>
   );
