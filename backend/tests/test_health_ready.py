@@ -91,3 +91,27 @@ def test_expected_migration_head_resolves():
     main_module._expected_migration_head.cache_clear()
     head = main_module._expected_migration_head()
     assert head == "0033_identity_resolution_hardening"
+
+
+@pytest.mark.asyncio
+async def test_unhandled_exceptions_do_not_leak_details(app):
+    """The global handler must return a generic message — raw exception
+    text leaks SQL fragments, paths, and provider internals."""
+
+    @app.get("/boom")
+    async def boom():
+        raise RuntimeError("secret: postgresql://user:hunter2@db/prod at /etc/app.py")
+
+    # Starlette's ServerErrorMiddleware re-raises after sending the handler's
+    # response; keep the transport from surfacing that re-raise so we can
+    # assert on what the CLIENT actually received.
+    transport = ASGITransport(app=app, raise_app_exceptions=False)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/boom")
+
+    assert response.status_code == 500
+    body = response.json()
+    assert body["detail"] == "Internal server error"
+    assert "hunter2" not in response.text
+    assert "postgresql" not in response.text
+    assert "request_id" in body
