@@ -50,13 +50,11 @@ import {
   MAF_NODE_TYPE_OPTIONS,
 } from "./graph-constants";
 import { layoutGraph } from "./graph-layout";
+import { GraphNodePicker } from "./graph-node-picker";
 
 type Selection =
   | { kind: "node"; value: AgentGraphNode }
   | { kind: "relationship"; value: AgentGraphRelationship };
-
-const UUID_PATTERN =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 function clamp(value: string, minimum: number, maximum: number, fallback: number) {
   const parsed = Number(value);
@@ -231,12 +229,10 @@ export function AgentContextPreview({ scope }: { scope: GraphScope }) {
     setEdges(arranged.edges);
   }, [mutation.data, setEdges, setNodes]);
 
-  const seedValid = !seedId.trim() || UUID_PATTERN.test(seedId.trim());
-  const sessionValid = !sessionId.trim() || UUID_PATTERN.test(sessionId.trim());
   const hasInput = Boolean(
     query.trim() || seedId.trim() || sessionId.trim() || entities.trim(),
   );
-  const canRun = hasInput && seedValid && sessionValid;
+  const canRun = hasInput;
   const request = useMemo<AgentGraphRequest>(
     () => ({
       query: query.trim(),
@@ -307,37 +303,23 @@ export function AgentContextPreview({ scope }: { scope: GraphScope }) {
               className="min-h-20"
             />
           </div>
-          <div className="grid grid-cols-2 gap-2">
-            <label className="space-y-1 text-xs text-muted-foreground">
-              Seed type
-              <select
-                value={seedType}
-                onChange={(event) => setSeedType(event.target.value)}
-                className="h-8 w-full rounded-lg border border-white/15 bg-white/[0.06] px-2 text-sm text-foreground"
-              >
-                {MAF_NODE_TYPE_OPTIONS.map((type) => (
-                    <option key={type} value={type}>
-                      {type.replaceAll("_", " ")}
-                    </option>
-                  ))}
-              </select>
-            </label>
-            <label className="space-y-1 text-xs text-muted-foreground">
-              Seed UUID
-              <Input
-                value={seedId}
-                aria-invalid={!seedValid}
-                onChange={(event) => setSeedId(event.target.value)}
-              />
-            </label>
-            <label className="space-y-1 text-xs text-muted-foreground">
-              Session UUID
-              <Input
-                value={sessionId}
-                aria-invalid={!sessionValid}
-                onChange={(event) => setSessionId(event.target.value)}
-              />
-            </label>
+          <div className="grid gap-2">
+            <GraphNodePicker
+              className="grid gap-2"
+              nodeType={seedType}
+              nodeId={seedId}
+              nodeTypes={MAF_NODE_TYPE_OPTIONS}
+              onNodeTypeChange={setSeedType}
+              onNodeIdChange={setSeedId}
+            />
+            <GraphNodePicker
+              className="grid gap-2"
+              nodeType="session"
+              nodeId={sessionId}
+              nodeTypes={["session"]}
+              onNodeIdChange={setSessionId}
+              showType={false}
+            />
             <label className="space-y-1 text-xs text-muted-foreground">
               Entity terms
               <Input

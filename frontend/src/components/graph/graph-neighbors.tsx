@@ -18,6 +18,15 @@ import {
   ExternalLink,
 } from "lucide-react";
 import { nodeColors, NODE_TYPE_OPTIONS } from "./graph-constants";
+import {
+  GraphNodePicker,
+  loadGraphNodeOptions,
+  type GraphNodeOption,
+} from "./graph-node-picker";
+
+function fallbackNodeLabel(nodeType: string, nodeId: string): string {
+  return `${nodeType.replace(/_/g, " ")} ${nodeId.slice(0, 8)}`;
+}
 
 export function GraphNeighbors({ scope }: { scope: GraphScope }) {
   const [nodeType, setNodeType] = useState("pattern");
@@ -42,6 +51,30 @@ export function GraphNeighbors({ scope }: { scope: GraphScope }) {
         scope,
       ),
     enabled: !!queryParams,
+  });
+
+  const neighborTypes = Array.from(new Set((data || []).map((item) => item.node_type))).sort();
+  const { data: labelMap = new Map<string, GraphNodeOption>() } = useQuery<
+    Map<string, GraphNodeOption>
+  >({
+    queryKey: ["graph-neighbor-labels", neighborTypes.join("|")],
+    queryFn: async () => {
+      const loaded = await Promise.allSettled(
+        neighborTypes.map(async (type) => ({
+          type,
+          options: await loadGraphNodeOptions(type),
+        })),
+      );
+      const next = new Map<string, GraphNodeOption>();
+      for (const result of loaded) {
+        if (result.status !== "fulfilled") continue;
+        for (const option of result.value.options) {
+          next.set(`${result.value.type}:${option.id}`, option);
+        }
+      }
+      return next;
+    },
+    enabled: neighborTypes.length > 0,
   });
 
   const handleSearch = useCallback(() => {
@@ -86,30 +119,13 @@ export function GraphNeighbors({ scope }: { scope: GraphScope }) {
         </CardHeader>
         <CardContent>
           <div className="flex flex-wrap items-end gap-3">
-            <div className="space-y-1">
-              <label className="text-xs text-muted-foreground">Node Type</label>
-              <select
-                value={nodeType}
-                onChange={(e) => setNodeType(e.target.value)}
-                className="h-8 rounded-lg border border-white/15 bg-white/[0.06] px-2.5 text-sm outline-none backdrop-blur-md"
-              >
-                {NODE_TYPE_OPTIONS.map((t) => (
-                  <option key={t} value={t}>
-                    {t.replace(/_/g, " ")}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div className="flex-1 min-w-[280px] space-y-1">
-              <label className="text-xs text-muted-foreground">Node ID (UUID)</label>
-              <Input
-                placeholder="e.g. a1b2c3d4-e5f6-7890-abcd-ef1234567890"
-                value={nodeId}
-                onChange={(e) => setNodeId(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && handleSearch()}
-              />
-            </div>
+            <GraphNodePicker
+              nodeType={nodeType}
+              nodeId={nodeId}
+              nodeTypes={NODE_TYPE_OPTIONS}
+              onNodeTypeChange={setNodeType}
+              onNodeIdChange={setNodeId}
+            />
 
             <div className="space-y-1">
               <label className="text-xs text-muted-foreground">Edge Type (optional)</label>
@@ -191,6 +207,7 @@ export function GraphNeighbors({ scope }: { scope: GraphScope }) {
                   <div className="divide-y divide-white/5">
                     {neighbors.map((n, i) => {
                       const c = nodeColors[n.node_type];
+                      const option = labelMap.get(`${n.node_type}:${n.node_id}`);
                       return (
                         <div
                           key={`${n.node_type}:${n.node_id}:${i}`}
@@ -212,10 +229,10 @@ export function GraphNeighbors({ scope }: { scope: GraphScope }) {
                           <div className="flex items-center gap-2 flex-1 min-w-0">
                             <div className={`h-2.5 w-2.5 rounded-sm shrink-0 ${c?.dot ?? "bg-slate-500"}`} />
                             <span className="text-sm font-medium truncate">
-                              {n.node_type}
+                              {option?.label || fallbackNodeLabel(n.node_type, n.node_id)}
                             </span>
-                            <span className="text-xs text-muted-foreground font-mono truncate">
-                              {n.node_id}
+                            <span className="text-xs text-muted-foreground truncate">
+                              {option?.meta || n.node_type.replace(/_/g, " ")}
                             </span>
                           </div>
 

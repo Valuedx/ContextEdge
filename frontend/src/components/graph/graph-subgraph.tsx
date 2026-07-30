@@ -5,7 +5,6 @@ import { useQuery } from "@tanstack/react-query";
 import { graphApi } from "@/lib/graph-api";
 import type { GraphScope, GraphSubgraphResponse } from "@/lib/types/graph";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
@@ -26,6 +25,7 @@ import {
 import "@xyflow/react/dist/style.css";
 import { getNodeClassName, edgeColors, nodeColors, NODE_TYPE_OPTIONS } from "./graph-constants";
 import { layoutGraph } from "./graph-layout";
+import { GraphNodePicker } from "./graph-node-picker";
 
 // Fresh dagre instance per call — avoids stale graph accumulation
 // ── Inner canvas — must live inside ReactFlowProvider ────────────────────────
@@ -224,30 +224,13 @@ export function GraphSubgraph({
         </CardHeader>
         <CardContent>
           <div className="flex flex-wrap items-end gap-3">
-            <div className="space-y-1">
-              <label className="text-xs text-muted-foreground">Entity Type</label>
-              <select
-                value={entityType}
-                onChange={(e) => setEntityType(e.target.value)}
-                className="h-8 rounded-lg border border-white/15 bg-white/[0.06] px-2.5 text-sm outline-none backdrop-blur-md"
-              >
-                {NODE_TYPE_OPTIONS.map((t) => (
-                  <option key={t} value={t}>
-                    {t.replace(/_/g, " ")}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div className="flex-1 min-w-[280px] space-y-1">
-              <label className="text-xs text-muted-foreground">Entity ID (UUID)</label>
-              <Input
-                placeholder="e.g. a1b2c3d4-e5f6-7890-abcd-ef1234567890"
-                value={entityId}
-                onChange={(e) => setEntityId(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && handleExplore()}
-              />
-            </div>
+            <GraphNodePicker
+              nodeType={entityType}
+              nodeId={entityId}
+              nodeTypes={NODE_TYPE_OPTIONS}
+              onNodeTypeChange={setEntityType}
+              onNodeIdChange={setEntityId}
+            />
 
             <div className="space-y-1">
               <label className="text-xs text-muted-foreground">Depth</label>
