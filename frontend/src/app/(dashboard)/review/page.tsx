@@ -702,17 +702,24 @@ function DecisionBar({ ctx }: { ctx: ReviewQueueContext }) {
 
   return (
     <Card className="sticky bottom-0 bg-background/95 backdrop-blur border-t">
-      <CardContent className="pt-4 pb-4 flex items-center justify-between gap-3">
-        <div className="text-xs text-muted-foreground">
-          {topDecision
-            ? `Deciding on: ${topDecision.decision_type.replace(/_/g, " ")}`
-            : "No active decision"}
+      <CardContent className="pt-4 pb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="space-y-1 text-xs">
+          <div className="text-muted-foreground">
+            {topDecision
+              ? `Deciding on: ${topDecision.decision_type.replace(/_/g, " ")}`
+              : "No active decision"}
+          </div>
+          {topDecision && !pendingApproval && (
+            <div className="text-amber-600 dark:text-amber-300">
+              Approve and Modify need a pending execution approval. This item can be rejected.
+            </div>
+          )}
         </div>
         <div className="flex items-center gap-2">
           <Button
             disabled={!pendingApproval || approveMutation.isPending}
             onClick={() => approveMutation.mutate()}
-            className="bg-emerald-600 hover:bg-emerald-700"
+            className="border border-emerald-700 bg-emerald-600 text-white hover:bg-emerald-700 disabled:border-border disabled:bg-muted disabled:text-muted-foreground disabled:opacity-100"
             title={
               !pendingApproval
                 ? "No pending approval request in execution runs"
@@ -730,14 +737,14 @@ function DecisionBar({ ctx }: { ctx: ReviewQueueContext }) {
                 ? "No pending approval request to modify"
                 : undefined
             }
-            className="bg-amber-500/15 hover:bg-amber-500/25 text-amber-200 border-amber-500/30"
+            className="border border-amber-500 bg-amber-500 text-white hover:bg-amber-600 disabled:border-border disabled:bg-muted disabled:text-muted-foreground disabled:opacity-100"
           >
             Modify
           </Button>
           <Button
-            variant="destructive"
             disabled={!topDecision}
             onClick={() => setRejectOpen(true)}
+            className="border border-rose-700 bg-rose-600 text-white hover:bg-rose-700 disabled:border-border disabled:bg-muted disabled:text-muted-foreground disabled:opacity-100"
           >
             Reject
           </Button>

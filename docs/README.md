@@ -30,6 +30,7 @@
 | 09 | [Microsoft Agent Framework (MAF)](09_Microsoft_Agent_Framework_MAF.md) | MAF integration, agent execution, tools, context projection, decision traces | Developers & AI Engineers |
 | 10 | [API Documentation](10_API_Documentation.md) | Every API endpoint with request/response examples, auth, and backend flow | All Developers |
 | 11 | [UI Tabs Explanation](11_UI_Tabs_Explanation.md) | Every dashboard tab with business purpose, workflow, APIs, and data flow | Frontend Developers & PMs |
+| 11A | [UI Tabs Plain English Guide](UI_TABS_FUNCTIONALITY_PLAIN_ENGLISH.md) | Plain-English explanation of each UI tab, why it is needed, main functionality, and examples | Business Users, PMs & Freshers |
 | 12 | [File Dependency Map](12_File_Dependency_Map.md) | Import relationships, data flow, control flow with Mermaid dependency diagrams | Developers |
 | 13 | [Developer Guide](13_Developer_Guide.md) | Setup, running, testing, adding features, migrations, deployment | New Developers |
 | 14 | [Debugging Guide](14_Debugging_Guide.md) | Common errors, debugging steps, logging, observability, troubleshooting | All Developers |

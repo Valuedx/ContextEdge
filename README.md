@@ -13,6 +13,7 @@ ContextEdge turns fragmented operational evidence from tickets, chat, email, and
 | [**API reference**](docs/API.md) | Auth, `/api/v1` router surface, runtime semantics, observability URLs |
 | [**Runbook**](docs/RUNBOOK.md) | Operational commands, migrations, workers, troubleshooting |
 | [**Context graph walkthrough**](docs/CONTEXT_GRAPH_WALKTHROUGH.md) | Stage-by-stage visual tour from empty graph through case lifecycle, episodes, patterns, and playbooks; with retention defaults |
+| [**UI tabs plain-English guide**](docs/UI_TABS_FUNCTIONALITY_PLAIN_ENGLISH.md) | Business-friendly explanation of every dashboard tab, why it is needed, main functionality, and examples |
 | [**MAF Context Graph integration**](docs/MAF_CONTEXT_GRAPH_INTEGRATION.md) | Microsoft Agent Framework provider/tool wiring, projection contract, security, and extension points |
 | [**MAF implementation plan**](MAF_CONTEXT_GRAPH_INTEGRATION_PLAN.md) | Schema coverage review, architecture, frontend impact, rollout, and acceptance criteria |
 | [**Implementation plan**](CONTEXTEDGE_IMPLEMENTATION_PLAN.md) | Phased checklist and repository-status planning document |
