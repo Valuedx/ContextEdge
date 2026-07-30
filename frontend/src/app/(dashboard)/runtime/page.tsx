@@ -24,6 +24,7 @@ import { PaginationControls } from "@/components/common/pagination-controls";
 import { usePagination } from "@/lib/hooks/use-pagination";
 import { api } from "@/lib/api";
 import type {
+  Domain,
   RetrievalFeedback,
   ResolutionSessionResponse,
   RuntimeExplainResponse,
@@ -42,6 +43,11 @@ const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 const NO_SESSION = "__none__";
+const NO_DOMAIN = "__all_domains__";
+
+function domainMeta(domain: Domain): string {
+  return domain.description || (domain.is_active ? "Active domain" : "Inactive domain");
+}
 
 function sessionDisplayName(session: ResolutionSessionResponse): string {
   const caseId = session.external_case_ids[0];
@@ -132,7 +138,15 @@ export default function RuntimePage() {
     queryFn: () => api.get("/sessions", { limit: "50" }),
   });
 
+  const { data: domains = [], isLoading: domainsLoading } = useQuery<Domain[]>({
+    queryKey: ["domains", "runtime-selector"],
+    queryFn: () => api.get("/domains"),
+  });
+
   const selectedSession = sessions.find((session) => session.id === sessionId);
+  const activeDomains = domains.filter((domain) => domain.is_active);
+  const selectedDomain = domains.find((domain) => domain.id === domainId);
+  const selectedPlaybookDomain = domains.find((domain) => domain.id === pbDomainId);
 
   const matchMut = useMutation({
     mutationFn: async () => {
@@ -264,14 +278,38 @@ export default function RuntimePage() {
           </div>
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             <div className="space-y-2">
-              <Label htmlFor="domain">Domain id (optional)</Label>
-              <Input
-                id="domain"
-                className="font-mono text-xs"
-                placeholder="00000000-0000-0000-0000-000000000000"
-                value={domainId}
-                onChange={(e) => setDomainId(e.target.value)}
-              />
+              <Label htmlFor="domain">Domain / area (optional)</Label>
+              <Select
+                value={domainId || NO_DOMAIN}
+                onValueChange={(value) => setDomainId(value === NO_DOMAIN ? "" : value)}
+                disabled={domainsLoading}
+              >
+                <SelectTrigger id="domain" className="w-full">
+                  <SelectValue
+                    placeholder={
+                      domainsLoading ? "Loading domains..." : "Select business area"
+                    }
+                  />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={NO_DOMAIN}>All domains</SelectItem>
+                  {activeDomains.map((domain) => (
+                    <SelectItem key={domain.id} value={domain.id}>
+                      <div className="flex min-w-0 flex-col">
+                        <span className="truncate">{domain.name}</span>
+                        <span className="text-xs text-muted-foreground">
+                          {domainMeta(domain)}
+                        </span>
+                      </div>
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                {selectedDomain
+                  ? `Runtime searches inside ${selectedDomain.name}.`
+                  : "All domains means Runtime searches broadly."}
+              </p>
             </div>
             <div className="space-y-2">
               <Label htmlFor="session">Resolution session (optional)</Label>
@@ -285,6 +323,7 @@ export default function RuntimePage() {
                     setSymptomsText(session.symptoms.join("\n"));
                     setEntitiesText(session.entities.join("\n"));
                     setContext(session.notes ?? "");
+                    setDomainId(session.domain_id ?? "");
                   }
                 }}
               >
@@ -480,14 +519,38 @@ export default function RuntimePage() {
             />
           </div>
           <div className="space-y-2">
-            <Label htmlFor="pb-domain">Domain id for scope check (optional)</Label>
-            <Input
-              id="pb-domain"
-              className="font-mono text-xs"
-              placeholder="Same as match domain filter - omit for tenant-wide fetch only"
-              value={pbDomainId}
-              onChange={(e) => setPbDomainId(e.target.value)}
-            />
+            <Label htmlFor="pb-domain">Domain / area for scope check (optional)</Label>
+            <Select
+              value={pbDomainId || NO_DOMAIN}
+              onValueChange={(value) => setPbDomainId(value === NO_DOMAIN ? "" : value)}
+              disabled={domainsLoading}
+            >
+              <SelectTrigger id="pb-domain" className="w-full">
+                <SelectValue
+                  placeholder={
+                    domainsLoading ? "Loading domains..." : "Select business area"
+                  }
+                />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={NO_DOMAIN}>All domains</SelectItem>
+                {activeDomains.map((domain) => (
+                  <SelectItem key={domain.id} value={domain.id}>
+                    <div className="flex min-w-0 flex-col">
+                      <span className="truncate">{domain.name}</span>
+                      <span className="text-xs text-muted-foreground">
+                        {domainMeta(domain)}
+                      </span>
+                    </div>
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-muted-foreground">
+              {selectedPlaybookDomain
+                ? `Playbook lookup is checked against ${selectedPlaybookDomain.name}.`
+                : "All domains means tenant-wide playbook lookup."}
+            </p>
           </div>
           {pbError && <p className="text-sm text-destructive">{pbError}</p>}
           <div className="flex flex-wrap gap-2">
