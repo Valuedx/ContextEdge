@@ -139,6 +139,15 @@ MAF_V1 = AgentGraphProjectionProfile(
         "validated_fix": 1.2,
         "contradicted_by": 0.95,
         "invalidated_fix": 0.9,
+        # Semantic episode seeds are only useful if the proven playbook two
+        # hops behind them (episode -belongs_to-> pattern -derived_from->
+        # playbook) survives the budget. At the default hop_decay 0.72 an
+        # unboosted 2-hop playbook lands at ~0.39-0.47 relevance — last in
+        # the projection and first to be truncated. 1.2 lifts the chain to
+        # ~0.56-0.67 (hop factor is clamped at 1.0 in the selector, so
+        # relevance still decays monotonically).
+        "belongs_to": 1.2,
+        "derived_from": 1.2,
     },
     relationship_metadata={
         "approved_by": frozenset({"status"}),

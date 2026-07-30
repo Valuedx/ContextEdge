@@ -456,8 +456,35 @@ async def generate_embedding(
     tenant_id: _uuid.UUID | str | None = None,
     db: Any | None = None,
 ) -> list[float]:
-    """Generate embedding vector for text. Returns a 3072-dimensional vector."""
+    """Generate embedding vector for text. Returns a 3072-dimensional vector.
+
+    Enforces the per-tenant budget gate like ``llm_complete`` — embeddings
+    are real spend, and the agent seed resolver triggers one per turn (also
+    reachable in a loop via the model-invokable graph tool), so a blocked
+    tenant must block here too.
+    """
     model = model or get_model_for_task("embedding")
+
+    if tenant_id is not None and db is not None:
+        try:
+            tid = tenant_id if isinstance(tenant_id, _uuid.UUID) else _uuid.UUID(str(tenant_id))
+            from contextedge.services.tenant_budget_service import (
+                TenantBudgetExceeded,
+                check_budget,
+            )
+
+            check = await check_budget(db, tid)
+            if not check.allowed and check.action == "block":
+                raise TenantBudgetExceeded(check)
+            if not check.allowed:
+                logger.warning(
+                    "llm.budget_warning",
+                    tenant_id=str(tid),
+                    reason=check.reason,
+                    task="embedding",
+                )
+        except ImportError:
+            pass  # mirrors llm_complete's broken-test-mock tolerance
     # LiteLLM maps 'dimensions' -> outputDimensionality for Vertex AI
     # gemini-embedding-001 supports up to 3072
     kwargs = {"model": model, "input": [text]}
