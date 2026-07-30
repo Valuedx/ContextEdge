@@ -108,7 +108,7 @@ function EditDialog({
       <DialogFooter>
         <Button variant="outline" onClick={onClose}>Cancel</Button>
         <Button disabled={mut.isPending} onClick={() => mut.mutate()}>
-          {mut.isPending ? "Saving…" : "Save"}
+          {mut.isPending ? "Saving..." : "Save"}
         </Button>
       </DialogFooter>
     </DialogContent>
@@ -163,7 +163,7 @@ function MergeDialog({
             value={duplicateId}
             onChange={(e) => setDuplicateId(e.target.value)}
           >
-            <option value="">Select identity…</option>
+            <option value="">Select identity...</option>
             {candidates.map((c) => (
               <option key={c.id} value={c.id}>
                 {c.canonical_name} ({c.entity_type})
@@ -175,7 +175,7 @@ function MergeDialog({
       <DialogFooter>
         <Button variant="outline" onClick={onClose}>Cancel</Button>
         <Button disabled={mut.isPending || !duplicateId} onClick={() => mut.mutate()}>
-          {mut.isPending ? "Merging…" : "Merge"}
+          {mut.isPending ? "Merging..." : "Merge"}
         </Button>
       </DialogFooter>
     </DialogContent>
@@ -191,7 +191,7 @@ export default function IdentitiesPage() {
   const [editing, setEditing] = useState<CanonicalIdentity | null>(null);
   const [merging, setMerging] = useState<CanonicalIdentity | null>(null);
 
-  const { data = [], isLoading } = useQuery<CanonicalIdentity[]>({
+  const { data = [], error, isLoading } = useQuery<CanonicalIdentity[], Error>({
     queryKey: ["identities", submittedQuery, pg.page],
     queryFn: () => {
       const params: Record<string, string> = { ...pg.params };
@@ -220,7 +220,7 @@ export default function IdentitiesPage() {
       header: "Aliases",
       cell: ({ row }) => {
         const aliases = row.original.aliases;
-        if (!aliases.length) return <span className="text-muted-foreground text-xs">—</span>;
+        if (!aliases.length) return <span className="text-muted-foreground text-xs">-</span>;
         return (
           <div className="flex flex-wrap gap-1">
             {aliases.slice(0, 3).map((a) => (
@@ -262,12 +262,12 @@ export default function IdentitiesPage() {
     <div className="space-y-6">
       <PageHeader
         title="Identities"
-        description="Canonical entities resolved across evidence sources. Merge duplicates and manage aliases."
+        description="Names found in evidence are resolved into one trusted entity. Use this page to edit aliases and merge duplicates."
       />
 
       <div className="flex items-center gap-3">
         <Input
-          placeholder="Search by name…"
+          placeholder="Search by name..."
           className="max-w-xs"
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
@@ -298,9 +298,21 @@ export default function IdentitiesPage() {
 
       {isLoading ? (
         <DataTableSkeleton columns={5} />
+      ) : error ? (
+        <div className="rounded-md border border-destructive/30 bg-destructive/5 p-6 text-sm">
+          <p className="font-medium text-destructive">Identities could not be loaded.</p>
+          <p className="mt-2 text-muted-foreground">
+            {error.message || "Check that your user has the knowledge manager role."}
+          </p>
+        </div>
       ) : data.length === 0 ? (
-        <div className="rounded-md border p-10 text-center text-sm text-muted-foreground">
-          No identities found.
+        <div className="rounded-md border p-10 text-center text-sm">
+          <p className="font-medium">No identities found yet.</p>
+          <p className="mx-auto mt-2 max-w-2xl text-muted-foreground">
+            Identities are created automatically after evidence is synced and processed.
+            This page is for editing aliases and merging duplicates, so there is no manual
+            create button here.
+          </p>
         </div>
       ) : (
         <>
