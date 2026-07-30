@@ -31,31 +31,40 @@ from contextedge.search.access_control import resolve_excluded_access_policy_ids
 
 logger = structlog.get_logger()
 
-# Identifier-shaped tokens in free text: anything with a digit, or joined by
-# ./-/_ (MG22, INC0010427, vpn-gw-east-01, ORDERS_DB), or short ALL-CAPS
-# names. These are the operational nouns worth exact-matching against
-# entities and identity aliases.
+# Identifier-shaped tokens in free text: emails (the canonical identity
+# alias form), anything with a digit, tokens joined by ./-/_ (MG22,
+# INC0010427, vpn-gw-east-01, ORDERS_DB), or short ALL-CAPS names. These
+# are the operational nouns worth exact-matching against entities and
+# identity aliases.
 _IDENTIFIER_TOKEN_RE = re.compile(
     r"\b(?:"
-    r"[A-Za-z]*\d[A-Za-z0-9._-]*"          # contains a digit
+    r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}"  # email
+    r"|[A-Za-z]*\d[A-Za-z0-9._-]*"          # contains a digit
     r"|[A-Za-z0-9]+(?:[._-][A-Za-z0-9]+)+"  # dotted/dashed/underscored
-    r"|[A-Z]{2,12}"                          # short ALL-CAPS name
+    r"|[A-Z]{3,12}"                          # short ALL-CAPS name
     r")\b"
 )
 _IDENTIFIER_STOPWORDS = frozenset(
-    {"OK", "IT", "AM", "PM", "ID", "AND", "THE", "NOT", "FYI", "ASAP", "EOD"}
+    {
+        "AND", "THE", "NOT", "FOR", "ALL", "ARE", "WAS", "CAN", "HAS",
+        "BUT", "YOU", "OUR", "WHY", "NOW", "GET", "DID", "FYI", "EOD",
+        "ASAP",
+    }
 )
 MAX_QUERY_IDENTIFIER_TOKENS = 8
 
 
 def extract_identifier_tokens(query: str) -> list[str]:
     """Deterministic operational-identifier extraction from free text —
-    no LLM call on the agent hot path."""
+    no LLM call on the agent hot path. Tokens must contain a letter
+    (a bare year or ticket count is noise, not an identifier)."""
     tokens: list[str] = []
     seen: set[str] = set()
     for match in _IDENTIFIER_TOKEN_RE.finditer(query):
         token = match.group(0).strip("._-")
-        if len(token) < 2 or token.upper() in _IDENTIFIER_STOPWORDS:
+        if len(token) < 3 or token.upper() in _IDENTIFIER_STOPWORDS:
+            continue
+        if not any(c.isalpha() for c in token):
             continue
         key = token.lower()
         if key in seen:
@@ -65,6 +74,13 @@ def extract_identifier_tokens(query: str) -> list[str]:
         if len(tokens) >= MAX_QUERY_IDENTIFIER_TOKENS:
             break
     return tokens
+
+
+def _is_caps_word_token(token: str) -> bool:
+    """A plain ALL-CAPS word ("VPN", "HELP") is only trustworthy as an
+    EXACT match — substring fallback on shouted conversation words seeds
+    arbitrary entities."""
+    return token.isalpha() and token.isupper()
 
 
 class AgentGraphRepository(Protocol):
@@ -126,12 +142,27 @@ class SQLAlchemyAgentGraphRepository:
             )
 
         query = request.query.strip()
+        identifier_tokens = extract_identifier_tokens(query) if query else []
         if query:
             # Layer A — FTS over playbooks (search_tsvector, migration 0007)
-            # and patterns (small table; on-the-fly tsvector). plainto_tsquery
-            # matches normal sentences on their meaningful words, which the
-            # old whole-sentence icontains never could.
-            tsquery = func.plainto_tsquery("english", query)
+            # and patterns (small table; on-the-fly tsvector). The tsquery is
+            # OR-composed from identifier tokens plus recent meaningful
+            # words, ranked by ts_rank: plainto_tsquery over the raw window
+            # would AND every lexeme of a multi-message conversation, which
+            # no playbook can ever satisfy.
+            fts_terms = [t.lower() for t in identifier_tokens]
+            fts_seen = set(fts_terms)
+            for word in re.findall(r"[A-Za-z]{4,}", query[-400:])[-16:]:
+                lowered = word.lower()
+                if lowered not in fts_seen:
+                    fts_seen.add(lowered)
+                    fts_terms.append(lowered)
+            tsquery = (
+                func.websearch_to_tsquery("english", " OR ".join(fts_terms[:24]))
+                if fts_terms
+                else None
+            )
+        if query and tsquery is not None:
             playbook_q = (
                 select(Playbook.id, func.ts_rank(Playbook.search_tsvector, tsquery))
                 .where(
@@ -178,11 +209,14 @@ class SQLAlchemyAgentGraphRepository:
                     )
                 )
 
-            # Layer B — semantic: similar past episodes by embedding (halfvec
-            # HNSW, migration 0032). Traversal then pulls in their patterns,
-            # playbooks, and evidence through belongs_to/derived_from edges.
-            # Fail-soft: proactive enrichment must never die on a provider
-            # or budget error.
+            # Layer B — semantic: similar approved past episodes by embedding
+            # (halfvec HNSW, migration 0032). Traversal then pulls in their
+            # patterns, playbooks, and evidence through belongs_to/
+            # derived_from edges. Fail-soft AND transaction-safe: the SQL
+            # runs inside a SAVEPOINT, because a swallowed database error
+            # would otherwise leave the whole session aborted and every
+            # later query in this projection raising InFailedSQLTransaction.
+            episode_rows: list = []
             try:
                 from contextedge.ai.provider import generate_embedding
                 from contextedge.search.vector_ops import (
@@ -190,53 +224,68 @@ class SQLAlchemyAgentGraphRepository:
                     tune_ann_recall,
                 )
 
+                # Embed the TAIL of the window — the newest messages hold
+                # the actual question; the provider already trimmed to the
+                # last 4,000 chars, and [:2000] would keep the oldest half.
                 query_embedding = await generate_embedding(
-                    query[:2_000], tenant_id=scope.tenant_id, db=self.db
+                    query[-2_000:], tenant_id=scope.tenant_id, db=self.db
                 )
-                await tune_ann_recall(self.db)
-                distance = halfvec_cosine_distance(
-                    Episode.embedding, query_embedding
-                ).label("distance")
-                episode_q = (
-                    select(Episode.id, distance)
-                    .where(
-                        Episode.tenant_id == scope.tenant_id,
-                        Episode.embedding.is_not(None),
-                    )
-                    .order_by(distance)
-                    .limit(3)
-                )
-                episode_domain = self._domain_predicate(Episode.domain_id, scope)
-                if episode_domain is not None:
-                    episode_q = episode_q.where(episode_domain)
-                for episode_id, episode_distance in (
-                    await self.db.execute(episode_q)
-                ).all():
-                    similarity = 1.0 - min(max(float(episode_distance), 0.0), 1.0)
-                    if similarity < 0.5:
-                        continue  # unrelated history is noise, not context
-                    seeds.append(
-                        RankedGraphSeed(
-                            ref=GraphNodeRef(type="episode", id=episode_id),
-                            relevance=round(0.6 + 0.3 * similarity, 4),
-                            reason="query_semantic",
+                async with self.db.begin_nested():
+                    await tune_ann_recall(self.db)
+                    distance = halfvec_cosine_distance(
+                        Episode.embedding, query_embedding
+                    ).label("distance")
+                    episode_q = (
+                        select(Episode.id, distance)
+                        .where(
+                            Episode.tenant_id == scope.tenant_id,
+                            Episode.embedding.is_not(None),
+                            # Mirrors the playbook layer's approved filter:
+                            # embeddings are written pre-review, so without
+                            # this the 3 ANN slots go to pending episodes
+                            # that hydration then (correctly) drops.
+                            Episode.reviewer_state == "approved",
                         )
+                        .order_by(distance)
+                        .limit(3)
                     )
+                    episode_domain = self._domain_predicate(Episode.domain_id, scope)
+                    if episode_domain is not None:
+                        episode_q = episode_q.where(episode_domain)
+                    episode_rows = list((await self.db.execute(episode_q)).all())
             except Exception as exc:
                 logger.warning(
                     "agent_graph.semantic_seed_unavailable",
                     tenant_id=str(scope.tenant_id),
                     error_type=type(exc).__name__,
+                    error=str(exc),
+                )
+            for episode_id, episode_distance in episode_rows:
+                similarity = 1.0 - min(max(float(episode_distance), 0.0), 1.0)
+                if similarity < 0.5:
+                    continue  # unrelated history is noise, not context
+                seeds.append(
+                    RankedGraphSeed(
+                        ref=GraphNodeRef(type="episode", id=episode_id),
+                        relevance=round(0.6 + 0.3 * similarity, 4),
+                        reason="query_semantic",
+                    )
                 )
 
             # Layer C — operational identifiers extracted from the query
-            # (MG22, INC0010427, vpn-gw-east-01) matched exactly against
-            # entities and identity aliases; icontains only as fallback.
-            for token in extract_identifier_tokens(query):
-                if token.lower() in {t.lower() for t in request.entities}:
+            # (MG22, INC0010427, jsmith@acme.com, vpn-gw-east-01) matched
+            # exactly against entities and identity aliases. Plain ALL-CAPS
+            # words get exact matching only — no substring fallback.
+            explicit_lowered = {t.lower() for t in request.entities}
+            for token in identifier_tokens:
+                if token.lower() in explicit_lowered:
                     continue  # explicit entities are handled below
                 await self._seed_entity_term(
-                    seeds, scope, token, reason="query_identifier"
+                    seeds,
+                    scope,
+                    token,
+                    reason="query_identifier",
+                    allow_fallback=not _is_caps_word_token(token),
                 )
 
         for term in request.entities[:10]:
@@ -259,13 +308,17 @@ class SQLAlchemyAgentGraphRepository:
         term: str,
         *,
         reason: str,
+        allow_fallback: bool = True,
     ) -> None:
         """Seed entities/identities for one operational term.
 
         Exact matches first: entity external ids and names, then identity
-        aliases through the 0033 typed lookup index — an exact identifier
-        hit (``vpn-gw-east-01``) is a far stronger signal than a substring.
-        icontains only runs as a fallback when nothing matched exactly.
+        aliases through the 0033 lookup index (tenant_id + normalized_alias
+        — the predicate must include tenant_id or the index's leading
+        column is unbound and every lookup is a scan). An exact identifier
+        hit (``vpn-gw-east-01``) is a far stronger signal than a substring;
+        icontains runs only as a fallback, and only when *allow_fallback*
+        (plain conversation words get exact matching only).
         """
         normalized = " ".join(term.strip().split()).lower()
         if not normalized:
@@ -303,6 +356,7 @@ class SQLAlchemyAgentGraphRepository:
                 CanonicalIdentity.id == IdentityAlias.canonical_identity_id,
             )
             .where(
+                IdentityAlias.tenant_id == scope.tenant_id,
                 CanonicalIdentity.tenant_id == scope.tenant_id,
                 CanonicalIdentity.is_active.is_(True),
                 CanonicalIdentity.resolution_state.in_(("resolved", "verified")),
@@ -322,7 +376,7 @@ class SQLAlchemyAgentGraphRepository:
                 )
             )
 
-        if exact_entities or exact_identities:
+        if exact_entities or exact_identities or not allow_fallback:
             return
 
         entity_q = (

@@ -143,12 +143,26 @@ def create_app() -> FastAPI:
             request_id=str(request_id) if request_id else None,
         )
         from fastapi.responses import JSONResponse
+
+        # This handler runs in Starlette's outermost ServerErrorMiddleware —
+        # OUTSIDE CORSMiddleware — so without explicit CORS headers a
+        # cross-origin browser blocks the body and the frontend can never
+        # read the request_id it exists to provide.
+        headers = {}
+        origin = request.headers.get("origin")
+        if origin and origin in _cors_origins():
+            headers = {
+                "Access-Control-Allow-Origin": origin,
+                "Access-Control-Allow-Credentials": "true",
+                "Vary": "Origin",
+            }
         return JSONResponse(
             status_code=500,
             content={
                 "detail": "Internal server error",
                 "request_id": str(request_id) if request_id else None,
             },
+            headers=headers,
         )
 
     Instrumentator().instrument(app).expose(app)
