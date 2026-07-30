@@ -131,11 +131,24 @@ def create_app() -> FastAPI:
 
     @app.exception_handler(Exception)
     async def global_exception_handler(request, exc):
-        logger.error("unhandled_exception", error=str(exc), path=request.url.path)
+        # Full detail goes to the server log only — raw exception text leaks
+        # SQL fragments, file paths, and provider internals to callers. The
+        # request_id lets a caller quote something supportable back at us.
+        request_id = getattr(request.state, "request_id", None)
+        logger.error(
+            "unhandled_exception",
+            error=str(exc),
+            error_type=type(exc).__name__,
+            path=request.url.path,
+            request_id=str(request_id) if request_id else None,
+        )
         from fastapi.responses import JSONResponse
         return JSONResponse(
             status_code=500,
-            content={"detail": str(exc)},
+            content={
+                "detail": "Internal server error",
+                "request_id": str(request_id) if request_id else None,
+            },
         )
 
     Instrumentator().instrument(app).expose(app)
