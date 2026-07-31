@@ -150,6 +150,15 @@ export interface EpisodeDetail extends Episode {
   primary_case_ref: string | null;
   reviewer_user_id: string | null;
   evidence_ids: string[] | null;
+  evidence_count: number;
+  evidence_items: Array<{
+    id: string;
+    title: string | null;
+    evidence_type: string;
+    body_summary: string | null;
+    relevance_state: string;
+    ingested_at: string;
+  }>;
   entity_refs: Record<string, unknown> | null;
   steps: EpisodeStep[];
 }

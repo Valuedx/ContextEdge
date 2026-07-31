@@ -76,13 +76,26 @@ class EpisodeResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class EpisodeEvidenceItem(BaseModel):
+    id: UUID
+    title: str | None
+    evidence_type: str
+    body_summary: str | None
+    relevance_state: str
+    ingested_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
 class EpisodeDetail(EpisodeResponse):
     workspace_id: UUID | None
     primary_case_ref: str | None
     reviewer_user_id: UUID | None
     evidence_ids: list | None
+    evidence_count: int = 0
+    evidence_items: list[EpisodeEvidenceItem] = Field(default_factory=list)
     entity_refs: dict | None
-    steps: list["EpisodeStepResponse"] = []
+    steps: list["EpisodeStepResponse"] = Field(default_factory=list)
 
 
 class EpisodeStepResponse(BaseModel):

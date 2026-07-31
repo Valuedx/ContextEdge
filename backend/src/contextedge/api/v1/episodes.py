@@ -8,6 +8,8 @@ from sqlalchemy.orm import selectinload
 from contextedge.deps import AuthUser, DbSession
 from contextedge.middleware.audit import log_audit_event
 from contextedge.models.episode import Episode, EpisodeStep
+from contextedge.models.evidence import EvidenceItem
+from contextedge.models.pattern import Pattern, PatternEvidenceLink
 from contextedge.schemas.common import TaskDispatchResponse
 from contextedge.schemas.evidence import (
     EpisodeDetail,
@@ -53,7 +55,58 @@ async def get_episode(episode_id: UUID, db: DbSession, user: AuthUser):
     episode = result.scalar_one_or_none()
     if not episode:
         raise HTTPException(status_code=404, detail="Episode not found")
-    return episode
+
+    evidence_ids: set[UUID] = set()
+    for raw_id in episode.evidence_ids or []:
+        try:
+            evidence_ids.add(UUID(str(raw_id)))
+        except ValueError:
+            continue
+
+    link_result = await db.execute(
+        select(PatternEvidenceLink.evidence_id)
+        .join(Pattern, Pattern.id == PatternEvidenceLink.pattern_id)
+        .where(
+            PatternEvidenceLink.episode_id == episode.id,
+            PatternEvidenceLink.evidence_id.is_not(None),
+            Pattern.tenant_id == user.tenant_id,
+        )
+    )
+    evidence_ids.update(row[0] for row in link_result.all() if row[0])
+
+    evidence_items = []
+    if evidence_ids:
+        evidence_result = await db.execute(
+            select(EvidenceItem)
+            .where(
+                EvidenceItem.tenant_id == user.tenant_id,
+                EvidenceItem.id.in_(tuple(evidence_ids)),
+            )
+            .order_by(EvidenceItem.ingested_at.desc())
+        )
+        evidence_items = list(evidence_result.scalars().all())
+
+    return {
+        "id": episode.id,
+        "tenant_id": episode.tenant_id,
+        "workspace_id": episode.workspace_id,
+        "domain_id": episode.domain_id,
+        "primary_case_ref": episode.primary_case_ref,
+        "title": episode.title,
+        "status": episode.status,
+        "extraction_confidence": episode.extraction_confidence,
+        "root_cause_summary": episode.root_cause_summary,
+        "final_outcome": episode.final_outcome,
+        "reviewer_state": episode.reviewer_state,
+        "reviewer_user_id": episode.reviewer_user_id,
+        "evidence_ids": [str(evidence_id) for evidence_id in evidence_ids],
+        "evidence_count": len(evidence_items),
+        "evidence_items": evidence_items,
+        "entity_refs": episode.entity_refs,
+        "steps": episode.steps,
+        "created_at": episode.created_at,
+        "updated_at": episode.updated_at,
+    }
 
 
 @router.patch("/{episode_id}", response_model=EpisodeResponse)

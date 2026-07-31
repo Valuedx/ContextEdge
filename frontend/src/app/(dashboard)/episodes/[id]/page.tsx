@@ -171,6 +171,12 @@ export default function EpisodeDetailPage() {
   }
 
   const steps = [...(episode.steps || [])].sort((a, b) => a.step_order - b.step_order);
+  const evidenceItems = episode.evidence_items ?? [];
+  const fallbackEvidenceIds = (episode.evidence_ids ?? []).filter(
+    (eid) => !evidenceItems.some((item) => item.id === eid),
+  );
+  const evidenceCount =
+    episode.evidence_count ?? evidenceItems.length + fallbackEvidenceIds.length;
 
   return (
     <div className="space-y-6">
@@ -246,11 +252,26 @@ export default function EpisodeDetailPage() {
                 <p className="font-mono text-xs mt-1">{episode.primary_case_ref}</p>
               </div>
             )}
-            {episode.evidence_ids && episode.evidence_ids.length > 0 && (
-              <div>
-                <p className="text-muted-foreground text-xs mb-1">Evidence</p>
-                <ul className="space-y-1 max-h-32 overflow-auto">
-                  {episode.evidence_ids.map((eid) => (
+            <div>
+              <p className="text-muted-foreground text-xs mb-1">
+                Evidence ({evidenceCount})
+              </p>
+              {evidenceItems.length > 0 || fallbackEvidenceIds.length > 0 ? (
+                <ul className="space-y-1 max-h-40 overflow-auto">
+                  {evidenceItems.map((item) => (
+                    <li key={item.id}>
+                      <Link
+                        href={`/evidence/${item.id}`}
+                        className="text-xs text-primary hover:underline"
+                      >
+                        {item.title || item.id}
+                      </Link>
+                      <p className="text-[11px] text-muted-foreground">
+                        {item.evidence_type} - {item.relevance_state}
+                      </p>
+                    </li>
+                  ))}
+                  {fallbackEvidenceIds.map((eid) => (
                     <li key={eid}>
                       <Link
                         href={`/evidence/${eid}`}
@@ -261,8 +282,12 @@ export default function EpisodeDetailPage() {
                     </li>
                   ))}
                 </ul>
-              </div>
-            )}
+              ) : (
+                <p className="text-xs text-muted-foreground">
+                  No evidence linked to this episode.
+                </p>
+              )}
+            </div>
           </CardContent>
         </Card>
       </div>
