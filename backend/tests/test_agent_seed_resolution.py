@@ -329,3 +329,43 @@ async def test_seeds_are_deduplicated_capped_and_sorted():
     assert seeds == sorted(
         seeds, key=lambda s: (-s.relevance, s.ref.type, str(s.ref.id))
     )
+
+
+@pytest.mark.asyncio
+async def test_semantic_layer_seeds_playbooks_directly():
+    """0035: an embedded, approved playbook is seeded by meaning even when
+    no episode history exists and its title shares no words with the query."""
+    tenant_id = uuid4()
+    playbook_near = uuid4()
+    playbook_far = uuid4()
+
+    db, executed_sql, state = _dispatching_db(
+        [
+            # Episode ANN → nothing (cold-start tenant)
+            ("episodes", _RowsResult([])),
+            # FTS finds nothing (title shares no words with the query) —
+            # matched first because the FTS SQL contains search_tsvector.
+            ("search_tsvector", _RowsResult([])),
+            # Playbook ANN → one near hit, one unrelated
+            ("playbooks", _RowsResult([(playbook_near, 0.25), (playbook_far, 0.8)])),
+        ]
+    )
+    repo = SQLAlchemyAgentGraphRepository(db)
+
+    with patch(
+        "contextedge.ai.provider.generate_embedding",
+        AsyncMock(return_value=[0.1] * 3072),
+    ):
+        seeds = await repo.resolve_seeds(
+            AgentGraphRequest(query="users cannot log in anywhere this morning"),
+            _scope(tenant_id),
+        )
+
+    semantic = [s for s in seeds if s.reason == "query_semantic"]
+    seeded = {s.ref.id for s in semantic}
+    assert playbook_near in seeded
+    assert playbook_far not in seeded  # similarity 0.2 < 0.5 floor
+    # The playbook ANN SQL is approved-only and embedding-not-null.
+    pb_sql = next(s for s in executed_sql if "playbooks" in s and "HALFVEC" in s)
+    assert "lifecycle_state" in pb_sql
+    assert "embedding IS NOT NULL" in pb_sql

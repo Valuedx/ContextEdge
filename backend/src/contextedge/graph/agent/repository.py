@@ -217,6 +217,7 @@ class SQLAlchemyAgentGraphRepository:
             # would otherwise leave the whole session aborted and every
             # later query in this projection raising InFailedSQLTransaction.
             episode_rows: list = []
+            playbook_rows: list = []
             try:
                 from contextedge.ai.provider import generate_embedding
                 from contextedge.search.vector_ops import (
@@ -253,6 +254,29 @@ class SQLAlchemyAgentGraphRepository:
                     if episode_domain is not None:
                         episode_q = episode_q.where(episode_domain)
                     episode_rows = list((await self.db.execute(episode_q)).all())
+
+                    # Direct semantic playbook match (0035): the embedding
+                    # text includes trigger conditions and step titles, so
+                    # symptom-level queries ("users can't log in") can reach
+                    # a playbook whose title never says those words — and it
+                    # works on cold-start tenants with no episode history.
+                    pb_distance = halfvec_cosine_distance(
+                        Playbook.embedding, query_embedding
+                    ).label("distance")
+                    playbook_sem_q = (
+                        select(Playbook.id, pb_distance)
+                        .where(
+                            Playbook.tenant_id == scope.tenant_id,
+                            Playbook.lifecycle_state == "approved",
+                            Playbook.embedding.is_not(None),
+                        )
+                        .order_by(pb_distance)
+                        .limit(3)
+                    )
+                    pb_domain = self._domain_predicate(Playbook.domain_id, scope)
+                    if pb_domain is not None:
+                        playbook_sem_q = playbook_sem_q.where(pb_domain)
+                    playbook_rows = list((await self.db.execute(playbook_sem_q)).all())
             except Exception as exc:
                 logger.warning(
                     "agent_graph.semantic_seed_unavailable",
@@ -267,6 +291,17 @@ class SQLAlchemyAgentGraphRepository:
                 seeds.append(
                     RankedGraphSeed(
                         ref=GraphNodeRef(type="episode", id=episode_id),
+                        relevance=round(0.6 + 0.3 * similarity, 4),
+                        reason="query_semantic",
+                    )
+                )
+            for playbook_id, playbook_distance in playbook_rows:
+                similarity = 1.0 - min(max(float(playbook_distance), 0.0), 1.0)
+                if similarity < 0.5:
+                    continue
+                seeds.append(
+                    RankedGraphSeed(
+                        ref=GraphNodeRef(type="playbook", id=playbook_id),
                         relevance=round(0.6 + 0.3 * similarity, 4),
                         reason="query_semantic",
                     )

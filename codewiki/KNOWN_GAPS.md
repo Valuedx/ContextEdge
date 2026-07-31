@@ -15,6 +15,10 @@ The July 2026 production-readiness review's P0/P1 code gaps were closed in one b
 - **ServiceNow.** Compound `(sys_updated_on, sys_id)` checkpoint (no boundary-second loss), paged incremental sync, retry/backoff with Retry-After.
 - **Graph/MAF hardening.** `ensure_edge` is ON CONFLICT-safe; one canonical domain-derivation rule across all edge writers; `GraphRelationshipMaterializer` on Beat (6h); traversal capped per frontier node; MAF provider truncates long conversations instead of dropping context and fences injected graph data as untrusted; generated playbooks carry `evidence_refs` and a policy-derived risk tier.
 
+## Resolved: playbook semantic seeds (2026-07-31, migration `0035`)
+
+Playbooks previously had no embedding, so the agent seed resolver could only reach one directly via title/description FTS — weak for symptom-level language and empty on cold-start tenants. `playbooks.embedding` (Vector(3072), halfvec HNSW expression index) is now written best-effort on candidate generation, version creation, and title/description updates (`services/playbook_embedding.py`; text = title + description + published version's trigger conditions + step titles), and the seed resolver's semantic layer matches playbooks directly alongside episodes (same query embedding, approved-only, 0.5 similarity floor). Pre-0035 playbooks stay NULL until the ad-hoc `evaluation.backfill_playbook_embeddings` task runs — invoke once per environment after upgrading.
+
 ## Still open after the 2026-07 shipment
 
 - **Doubled braces in pre-existing system prompts** — `Prompt.system` is never `.format()`ed, so the `{{ }}` escaping in the `decision`, `episode`, `pattern`, and `playbook` v1 system prompts reaches the model as literal double braces (malformed JSON examples). The `identity` v2 and `identity_adjudication` v1 prompts were fixed on 2026-07-29; the pre-existing families should be corrected as new prompt versions (changing a released version's text silently would invalidate any eval baselines).
