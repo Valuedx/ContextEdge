@@ -4,7 +4,9 @@ A playbook's title/description rarely contains the symptom vocabulary an
 engineer (or agent) actually types — "users can't log in" lives in trigger
 conditions and step text, not in "Renew VPN certificate and restart
 RADIUS". The embedding text therefore combines the playbook row with its
-richest version: title + description + trigger conditions + step titles.
+current version (the latest-created one — ``create_playbook_version``
+repoints ``current_version_id`` immediately, before review):
+title + description + trigger conditions + step titles.
 
 Best-effort by design: an embedding failure leaves the column NULL and
 the playbook keeps working through FTS — mirroring the decision-embedding

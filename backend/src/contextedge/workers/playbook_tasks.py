@@ -6,6 +6,11 @@ seed layer and only reachable via FTS). Ad-hoc, not on Beat — run it once
 per tenant after upgrading, or "all":
 
     celery call evaluation.backfill_playbook_embeddings --args '["all"]'
+
+Only NULL embeddings are (re)tried. The task does not detect *stale*
+fingerprints — a playbook whose re-embed failed after a version/title
+change keeps its previous embedding until the next successful write or
+approval-time repair in ``transition_playbook``.
 """
 
 from __future__ import annotations
@@ -24,6 +29,44 @@ from contextedge.workers.celery_app import celery_app
 logger = structlog.get_logger()
 
 
+async def _backfill(db, tenant_id: str, limit: int) -> dict:
+    """Embed up to *limit* un-embedded playbooks per tenant. Idempotent —
+    already-embedded rows are skipped; failed embeds stay NULL and are
+    retried on the next invocation."""
+    if tenant_id == "all":
+        tids = [row[0] for row in (await db.execute(select(Tenant.id))).all()]
+    else:
+        tids = [uuid.UUID(tenant_id)]
+
+    totals = {"tenants": len(tids), "embedded": 0, "failed": 0}
+    for tid in tids:
+        rows = (
+            (
+                await db.execute(
+                    select(Playbook)
+                    .where(
+                        Playbook.tenant_id == tid,
+                        Playbook.embedding.is_(None),
+                        # retired is terminal and deprecated can only
+                        # retire — neither can reach "approved" again, so
+                        # embedding them is pure provider spend.
+                        Playbook.lifecycle_state.notin_(("retired", "deprecated")),
+                    )
+                    .order_by(Playbook.created_at.desc())
+                    .limit(limit)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        for playbook in rows:
+            ok = await embed_playbook(db, playbook)
+            totals["embedded" if ok else "failed"] += 1
+        await db.commit()
+    logger.info("playbook.embedding_backfill_done", **totals)
+    return totals
+
+
 @celery_app.task(
     bind=True,
     max_retries=1,
@@ -31,38 +74,8 @@ logger = structlog.get_logger()
     name="evaluation.backfill_playbook_embeddings",
 )
 def backfill_playbook_embeddings(self, tenant_id: str = "all", limit: int = 200):
-    """Embed up to *limit* un-embedded playbooks per tenant. Idempotent —
-    already-embedded rows are skipped; failed embeds stay NULL and are
-    retried on the next invocation."""
-
-    async def work(db):
-        if tenant_id == "all":
-            tids = [row[0] for row in (await db.execute(select(Tenant.id))).all()]
-        else:
-            tids = [uuid.UUID(tenant_id)]
-
-        totals = {"tenants": len(tids), "embedded": 0, "failed": 0}
-        for tid in tids:
-            rows = (
-                await db.execute(
-                    select(Playbook)
-                    .where(
-                        Playbook.tenant_id == tid,
-                        Playbook.embedding.is_(None),
-                    )
-                    .order_by(Playbook.created_at.desc())
-                    .limit(limit)
-                )
-            ).scalars().all()
-            for playbook in rows:
-                ok = await embed_playbook(db, playbook)
-                totals["embedded" if ok else "failed"] += 1
-            await db.commit()
-        logger.info("playbook.embedding_backfill_done", **totals)
-        return totals
-
     try:
-        return run_async(work)
+        return run_async(lambda db: _backfill(db, tenant_id, limit))
     except Exception as exc:
         logger.exception("playbook.embedding_backfill_failed", error=str(exc))
         raise self.retry(exc=exc) from exc

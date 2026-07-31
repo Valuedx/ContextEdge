@@ -108,3 +108,37 @@ def test_migration_0035_declares_index_and_chain():
 
     assert module.INDEX_NAME == "ix_playbooks_embedding_halfvec_hnsw"
     assert module.down_revision == "0034_execution_run_updated_at"
+
+
+@pytest.mark.asyncio
+async def test_backfill_targets_only_null_nonterminal_rows():
+    """The backfill must skip already-embedded rows and terminal states
+    (retired / deprecated can never reach "approved" again)."""
+    from unittest.mock import Mock
+
+    from contextedge.workers.playbook_tasks import _backfill
+
+    playbook_ok = _playbook()
+    playbook_fail = _playbook()
+    captured_sql = []
+
+    async def execute(stmt):
+        captured_sql.append(str(stmt))
+        result = Mock()
+        result.scalars.return_value.all.return_value = [playbook_ok, playbook_fail]
+        return result
+
+    db = SimpleNamespace(execute=execute, commit=AsyncMock())
+
+    with patch(
+        "contextedge.workers.playbook_tasks.embed_playbook",
+        AsyncMock(side_effect=[True, False]),
+    ):
+        totals = await _backfill(db, str(uuid4()), limit=200)
+
+    assert totals == {"tenants": 1, "embedded": 1, "failed": 1}
+    db.commit.assert_awaited_once()  # per-tenant commit even with failures
+    sql = captured_sql[0]
+    assert "embedding IS NULL" in sql
+    assert "lifecycle_state" in sql
+    assert "NOT IN" in sql

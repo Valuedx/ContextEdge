@@ -12,7 +12,7 @@ tenants) or indirectly through similar episodes. This adds:
   0032 already enforces fail-loud — every environment past 0032 has it.
 
 The embedding text is composed in ``services/playbook_embedding.py`` from
-title + description + the published version's trigger conditions and step
+title + description + the current version's trigger conditions and step
 titles. (Trigger conditions could not be added to the FTS generated
 column instead: generated columns cannot reference other tables, and
 trigger conditions live on ``playbook_versions``.)

@@ -83,8 +83,10 @@ class Playbook(Base, TenantScopedMixin):
         ),
         deferred=True,
     )
-    # Semantic fingerprint of title + description + the published version's
-    # trigger conditions and step titles (migration 0035). Nullable: a
+    # Semantic fingerprint of title + description + the current version's
+    # trigger conditions and step titles (migration 0035). "Current" is the
+    # latest-created version — create_playbook_version repoints
+    # current_version_id immediately, before review. Nullable: a
     # playbook with no embedding simply doesn't appear in semantic seeds
     # and falls back to FTS. Written by services/playbook_embedding.py.
     embedding = mapped_column(Vector(3072), nullable=True)
