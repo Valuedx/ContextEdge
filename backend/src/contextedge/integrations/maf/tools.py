@@ -9,7 +9,7 @@ from pydantic import Field, ValidationError
 
 from contextedge.graph.agent.contracts import AgentGraphRequest, GraphNodeRef
 from contextedge.integrations.maf._compat import FunctionInvocationContext, tool
-from contextedge.integrations.maf.client import ContextGraphClient
+from contextedge.integrations.maf.client import CmdbTopologyClient, ContextGraphClient
 
 
 def _tool_error(code: str, message: str) -> dict[str, Any]:
@@ -88,3 +88,44 @@ class ContextGraphTools:
 
         subset = await self.client.get_agent_subset(request)
         return subset.model_dump(mode="json")
+
+
+class CmdbTopologyTools:
+    def __init__(self, client: CmdbTopologyClient):
+        self.client = client
+
+    @tool(
+        name="cmdb_topology",
+        description=(
+            "Look up a configuration item's direct CMDB neighborhood from "
+            "ServiceNow (a lookup made within the last few minutes serves "
+            "the identical cached view; if ServiceNow is unreachable the "
+            "last cached view is returned marked stale with its as_of "
+            "time). Accepts a CI display name (e.g. 'vpn-gw-east-01') or a "
+            "32-hex sys_id. Each neighbor's center_role says which side "
+            "the queried CI is on: center_role 'parent' with relationship "
+            "'depends_on' means the queried CI depends on that neighbor."
+        ),
+    )
+    async def cmdb_topology(
+        self,
+        ci: Annotated[
+            str,
+            Field(description="CI display name or ServiceNow sys_id (32 hex chars)."),
+        ],
+        context: FunctionInvocationContext | None = None,
+    ) -> dict[str, Any]:
+        del context
+        term = " ".join(str(ci or "").split())[:500]
+        if not term:
+            return {"error": {"code": "invalid_ci", "message": "Provide a CI name or sys_id."}}
+        try:
+            return await self.client.lookup(term)
+        except Exception as exc:
+            # Structured, model-actionable — never a raw traceback.
+            return {
+                "error": {
+                    "code": "topology_unavailable",
+                    "message": f"Topology lookup failed ({type(exc).__name__}).",
+                }
+            }

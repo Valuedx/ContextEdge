@@ -143,7 +143,9 @@ async def test_process_creates_typed_edges_and_entities():
     async def resolve(db, tid, sys_id):
         return problem_evidence_id if sys_id == PROBLEM_SYS_ID else None
 
-    entity = SimpleNamespace(id=uuid4())
+    from datetime import UTC, datetime
+
+    entity = SimpleNamespace(id=uuid4(), last_synced_at=datetime.now(UTC))
     with (
         patch(
             "contextedge.services.servicenow_reference_service._resolve_evidence_for_sys_id",

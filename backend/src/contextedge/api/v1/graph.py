@@ -31,6 +31,25 @@ async def create_agent_graph_subset(
     )
 
 
+@router.get("/cmdb-topology")
+async def cmdb_topology(
+    db: DbSession,
+    user: AuthUser,
+    ci: str = Query(
+        ...,
+        min_length=1,
+        max_length=500,
+        description="CI display name (e.g. vpn-gw-east-01) or 32-hex sys_id.",
+    ),
+):
+    """Live ±1-hop CMDB neighborhood for a CI, write-through cached into
+    entities / graph_edges; falls back to the cached view (marked stale)
+    when ServiceNow is unreachable."""
+    from contextedge.services.cmdb_topology_service import lookup_topology
+
+    return await lookup_topology(db, user.tenant_id, ci)
+
+
 @router.get("/neighbors")
 async def graph_neighbors(
     db: DbSession,

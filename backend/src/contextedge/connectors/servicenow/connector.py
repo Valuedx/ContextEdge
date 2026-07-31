@@ -324,6 +324,41 @@ class ServiceNowConnector(BaseConnector):
             metadata={"record": record_data},
         )
 
+    # CMDB topology (services/cmdb_topology_service.py): live ±1-hop
+    # lookups, NOT bulk sync — the CMDB stays in ServiceNow; ContextEdge
+    # caches only the neighborhoods that operational reality touches.
+
+    CMDB_REL_PAGE_SIZE = 200
+
+    async def fetch_ci_relationships(self, sys_id: str) -> list[dict]:
+        """cmdb_rel_ci rows where the CI is parent or child, bounded at
+        CMDB_REL_PAGE_SIZE — a hub CI's neighborhood is truncated, not
+        paged (±1-hop context, not a replica). type.name is dot-walked so
+        the relationship label arrives without a second call."""
+        data = await self._snow_get(
+            "/api/now/table/cmdb_rel_ci",
+            {
+                "sysparm_query": f"parent={sys_id}^ORchild={sys_id}",
+                "sysparm_fields": "sys_id,parent,child,type.name",
+                "sysparm_limit": str(self.CMDB_REL_PAGE_SIZE),
+            },
+        )
+        return data.get("result", [])
+
+    async def fetch_ci_details(self, sys_ids: list[str]) -> list[dict]:
+        """Name / class / status for a bounded set of CIs in one call."""
+        if not sys_ids:
+            return []
+        data = await self._snow_get(
+            "/api/now/table/cmdb_ci",
+            {
+                "sysparm_query": "sys_idIN" + ",".join(sys_ids[:200]),
+                "sysparm_fields": "sys_id,name,sys_class_name,operational_status",
+                "sysparm_limit": "200",
+            },
+        )
+        return data.get("result", [])
+
     def rate_limit_config(self) -> RateLimitConfig:
         return RateLimitConfig(requests_per_second=10.0, burst_size=20)
 

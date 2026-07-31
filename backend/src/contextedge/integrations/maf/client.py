@@ -19,6 +19,34 @@ class ContextGraphClient(Protocol):
     async def get_agent_subset(self, request: AgentGraphRequest) -> AgentGraphSubset: ...
 
 
+class CmdbTopologyClient(Protocol):
+    """Port for the cmdb_topology tool — live CI neighborhood lookups
+    (ServiceNow as source of truth, ContextEdge as write-through cache)."""
+
+    async def lookup(self, term: str) -> dict: ...
+
+
+class InProcessCmdbTopologyClient:
+    """Server-side implementation: opens its own session per lookup so the
+    tool call commits (or discards) independently of any request session."""
+
+    def __init__(self, session_factory, tenant_id):
+        self.session_factory = session_factory
+        self.tenant_id = tenant_id
+
+    async def lookup(self, term: str) -> dict:
+        from contextedge.services.cmdb_topology_service import lookup_topology
+
+        async with self.session_factory() as db:
+            try:
+                result = await lookup_topology(db, self.tenant_id, term)
+                await db.commit()
+                return result
+            except Exception:
+                await db.rollback()
+                raise
+
+
 class InProcessContextGraphClient:
     def __init__(
         self,
