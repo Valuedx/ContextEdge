@@ -44,6 +44,16 @@ def correlate_evidence(self, evidence_id: str, tenant_id: str):
                 evidence_id=evidence_id,
                 correlations_created=result["correlations_created"],
             )
+        # Stale-CI topology warming, dispatched only after run_async has
+        # committed so the warm task sees the entity row.
+        snow_refs = (result or {}).get("servicenow_references") or {}
+        if snow_refs.get("warm_candidates"):
+            from contextedge.workers.cmdb_tasks import warm_cmdb_topology
+
+            for candidate in snow_refs["warm_candidates"]:
+                warm_cmdb_topology.delay(
+                    tenant_id, candidate["source_id"], candidate["sys_id"]
+                )
         return result
     except Exception as exc:
         logger.exception("correlation.failed", evidence_id=evidence_id, error=str(exc))

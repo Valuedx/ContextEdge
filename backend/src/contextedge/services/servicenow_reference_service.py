@@ -346,7 +346,16 @@ async def process_servicenow_references(
     """Materialize typed edges and entities for one ServiceNow evidence
     item. Idempotent (ensure_edge / natural-key upsert); safe to re-run on
     every re-delivery of the record."""
-    counts = {"task_edges": 0, "entity_edges": 0, "unresolved_refs": 0, "healed_edges": 0}
+    counts: dict = {
+        "task_edges": 0,
+        "entity_edges": 0,
+        "unresolved_refs": 0,
+        "healed_edges": 0,
+        # CIs whose cached topology is stale — the correlate task wrapper
+        # dispatches evaluation.warm_cmdb_topology for each AFTER commit
+        # (dispatching here would race the transaction).
+        "warm_candidates": [],
+    }
 
     for edge_type, sys_id in extract_task_references(payload):
         target_id = await _resolve_evidence_for_sys_id(db, tenant_id, sys_id)
@@ -385,6 +394,13 @@ async def process_servicenow_references(
             domain_id=evidence.domain_id,
         )
         counts["entity_edges"] += 1
+        if ref.edge_type == "affects_ci":
+            from contextedge.services.cmdb_topology_service import entity_is_stale
+
+            if entity_is_stale(entity):
+                counts["warm_candidates"].append(
+                    {"sys_id": ref.sys_id, "source_id": str(evidence.source_id)}
+                )
 
     if own_sys_id is not None:
         counts["healed_edges"] = await heal_reverse_references(

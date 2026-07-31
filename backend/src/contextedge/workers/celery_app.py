@@ -172,6 +172,8 @@ celery_app = Celery(
         "contextedge.workers.retention_tasks",
         # Ad-hoc playbook embedding backfill (0035).
         "contextedge.workers.playbook_tasks",
+        # Demand-driven CMDB topology cache warming.
+        "contextedge.workers.cmdb_tasks",
     ],
 )
 
