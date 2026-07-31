@@ -36,6 +36,7 @@
 | 14 | [Debugging Guide](14_Debugging_Guide.md) | Common errors, debugging steps, logging, observability, troubleshooting | All Developers |
 | 15 | [Project Flow Diagrams](15_Project_Flow_Diagrams.md) | 25+ Mermaid diagrams covering every major system flow | Everyone |
 | 16 | [Glossary](16_Glossary.md) | Every technical term used in the project, explained in simple English | Everyone |
+| — | [ContextEdge, Explained (HTML)](CONTEXTEDGE_EXPLAINED.html) | Fresher-friendly visual tour: with/without ContextEdge, value added, MAF pluggability, high-level + granular architecture, and a 7-stage walkthrough of how the context graph grows — with Mermaid diagrams and cited code references. Open in a browser. | Freshers & Everyone |
 
 ---
 
