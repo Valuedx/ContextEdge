@@ -31,6 +31,15 @@ async def _warm(db, tenant_id: uuid.UUID, source_id: uuid.UUID, sys_id: str) -> 
         fetch_ci_neighborhood,
         load_servicenow_connector,
     )
+    from contextedge.services.servicenow_reference_service import _ref_sys_id
+
+    # Task args are an external boundary (the task is ad-hoc invocable):
+    # a raw string here would be interpolated into a sysparm_query. Only
+    # a validated 32-hex sys_id may pass.
+    validated = _ref_sys_id(sys_id)
+    if validated is None:
+        return {"status": "invalid_sys_id"}
+    sys_id = validated
 
     entity = (
         await db.execute(
