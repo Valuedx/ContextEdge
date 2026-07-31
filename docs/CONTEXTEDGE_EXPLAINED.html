@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ContextEdge, Explained — from raw tickets to an operational memory graph</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🕸️</text></svg>">
 <!-- Mermaid renders the diagrams. Needs internet once; without it, each
      diagram degrades to its readable text definition. -->
 <script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
@@ -109,9 +110,22 @@
 
   pre.mermaid {
     background: var(--code-bg); border: 1px solid var(--line); border-radius: 8px;
-    padding: 14px; overflow-x: auto; font-size: 0.8rem; line-height: 1.45;
-    margin: 16px 0;
+    padding: 14px; overflow: auto; font-size: 0.8rem; line-height: 1.45;
+    margin: 16px 0; position: relative;
   }
+  .zoombar {
+    position: absolute; top: 8px; right: 8px; display: flex; gap: 4px;
+    opacity: 0.35; transition: opacity 0.15s ease;
+  }
+  pre.mermaid:hover .zoombar, .zoombar:focus-within { opacity: 1; }
+  .zoombar button {
+    appearance: none; border: 1px solid var(--line); background: var(--surface);
+    color: var(--ink); border-radius: 6px; width: 28px; height: 28px;
+    font: 700 15px/1 "Segoe UI", system-ui, sans-serif; cursor: pointer;
+    display: inline-flex; align-items: center; justify-content: center;
+  }
+  .zoombar button:hover { border-color: var(--accent); color: var(--accent); }
+  .zoombar button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
   blockquote {
     margin: 18px 0; padding: 12px 18px; border-left: 3px solid var(--pain);
     background: var(--pain-soft); border-radius: 0 6px 6px 0; font-size: 0.97rem;
@@ -978,7 +992,7 @@ population paths await the AutomationEdge connector (see KNOWN_GAPS).</p>
 <script>
   const dark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
   mermaid.initialize({
-    startOnLoad: true,
+    startOnLoad: false,
     theme: dark ? "dark" : "neutral",
     themeVariables: dark
       ? { primaryColor: "#14332d", primaryBorderColor: "#3ecfae", primaryTextColor: "#e4edea", lineColor: "#93a5a1" }
@@ -986,8 +1000,62 @@ population paths await the AutomationEdge connector (see KNOWN_GAPS).</p>
     flowchart: { curve: "basis" }
   });
 
+  // Zoom controls: layout-based zoom (svg width in px) rather than CSS
+  // transforms, so the container's height grows naturally and the pre's
+  // scrollbars double as panning — nothing ever overlaps the text below.
+  function attachZoom(pre) {
+    const svg = pre.querySelector("svg");
+    if (!svg || pre.dataset.zoomReady) return;
+    pre.dataset.zoomReady = "1";
+    const base = svg.getBoundingClientRect().width || 600;
+    const originalMaxWidth = svg.style.maxWidth;
+    let scale = 1;
+    const apply = () => {
+      if (scale === 1) {
+        svg.style.width = "";
+        svg.style.height = "";
+        svg.style.maxWidth = originalMaxWidth;
+      } else {
+        svg.style.maxWidth = "none";
+        svg.style.width = Math.round(base * scale) + "px";
+        svg.style.height = "auto";
+      }
+    };
+    const bar = document.createElement("div");
+    bar.className = "zoombar";
+    const mk = (label, title, fn) => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.textContent = label;
+      b.title = title;
+      b.setAttribute("aria-label", title);
+      b.addEventListener("click", fn);
+      bar.appendChild(b);
+    };
+    mk("−", "Zoom out", () => { scale = Math.max(0.5, scale / 1.25); apply(); });
+    mk("+", "Zoom in (or Ctrl+scroll)", () => { scale = Math.min(4, scale * 1.25); apply(); });
+    mk("⟲", "Reset zoom", () => { scale = 1; apply(); });
+    pre.appendChild(bar);
+    pre.addEventListener("wheel", (e) => {
+      if (!e.ctrlKey) return;
+      e.preventDefault();
+      scale = Math.min(4, Math.max(0.5, scale * (e.deltaY < 0 ? 1.15 : 1 / 1.15)));
+      apply();
+    }, { passive: false });
+  }
+
+  async function renderDiagrams(nodes) {
+    if (!nodes.length) return;
+    try {
+      await mermaid.run({ nodes });
+    } catch (err) {
+      console.error("mermaid render error", err);
+    }
+    nodes.forEach(attachZoom);
+  }
+
   // Tab switching. Schema-tab diagrams use class "mermaid-lazy" so the
-  // startOnLoad pass skips them — rendering inside a display:none panel
+  // initial pass skips them — rendering inside a display:none panel
   // would produce zero-width SVGs. They render on first activation.
   function activateTab(tab) {
     document.querySelectorAll(".tabbtn").forEach((b) => {
@@ -1002,7 +1070,7 @@ population paths await the AutomationEdge connector (see KNOWN_GAPS).</p>
       const lazy = [...document.querySelectorAll("#tab-schema pre.mermaid-lazy")];
       if (lazy.length) {
         lazy.forEach((p) => { p.classList.remove("mermaid-lazy"); p.classList.add("mermaid"); });
-        mermaid.run({ nodes: lazy });
+        renderDiagrams(lazy);
       }
     }
     if (history.replaceState) history.replaceState(null, "", "#" + tab);
@@ -1010,6 +1078,8 @@ population paths await the AutomationEdge connector (see KNOWN_GAPS).</p>
   document.querySelectorAll(".tabbtn").forEach((b) =>
     b.addEventListener("click", () => activateTab(b.dataset.tab))
   );
+
+  renderDiagrams([...document.querySelectorAll("#tab-tour pre.mermaid")]);
   if (location.hash === "#schema") activateTab("schema");
 </script>
 </body>
