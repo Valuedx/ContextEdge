@@ -76,6 +76,13 @@ TASK_REFERENCE_EDGE_TYPES = {
     "parent_incident": "child_of_incident",
 }
 
+# Alert-rollup → promoted-incident references (Phase 3). Typed edges
+# ONLY, never case-link keys: one rollup can reference several unrelated
+# incidents on a busy CI, and 1.0 case links would merge their canonical
+# cases. Direction: rollup evidence → incident evidence.
+ALERT_INCIDENT_EDGE_TYPE = "preceded_incident"
+MAX_ALERT_INCIDENT_REFS = 20
+
 # cmdb_ci sys_class_name → entities.entity_type. Anything unmapped is a
 # generic configuration_item; the class is preserved in attributes so a
 # later, richer mapping loses nothing.
@@ -119,6 +126,26 @@ def _display(raw: object) -> str | None:
     if isinstance(raw, str) and raw.strip():
         return raw.strip()
     return None
+
+
+def extract_alert_incident_references(payload: dict | None) -> list[str]:
+    """Validated sys_ids of incidents an alert rollup's alerts were
+    promoted to (``alert_incidents`` list written by alert_rollup.py).
+    Deliberately NOT part of extract_task_references — these must never
+    become case-link keys (see ALERT_INCIDENT_EDGE_TYPE note)."""
+    raw = (payload or {}).get("alert_incidents")
+    if not isinstance(raw, list):
+        return []
+    out: list[str] = []
+    # Validate before capping — junk entries must not mask valid refs
+    # sitting beyond the cap boundary.
+    for item in raw:
+        sys_id = _ref_sys_id(item)
+        if sys_id is not None and sys_id not in out:
+            out.append(sys_id)
+            if len(out) >= MAX_ALERT_INCIDENT_REFS:
+                break
+    return out
 
 
 def extract_task_references(payload: dict | None) -> list[tuple[str, str]]:
@@ -278,6 +305,13 @@ async def heal_reverse_references(
     """
     from contextedge.services.artifact_extraction_service import load_raw_payload
 
+    # Only real record sys_ids participate in reverse healing. Synthetic
+    # external_ids (alert rollups: "em_alert_rollup:<ci>:<day>") can't be
+    # referenced by anyone's task fields — scanning their case-link
+    # siblings would just load payloads for nothing.
+    if _ref_sys_id(own_sys_id) is None:
+        return 0
+
     sibling_rows = (
         await db.execute(
             select(CaseLink.evidence_id)
@@ -349,6 +383,7 @@ async def process_servicenow_references(
     counts: dict = {
         "task_edges": 0,
         "entity_edges": 0,
+        "alert_incident_edges": 0,
         "unresolved_refs": 0,
         "healed_edges": 0,
         # CIs whose cached topology is stale — the correlate task wrapper
@@ -379,6 +414,28 @@ async def process_servicenow_references(
             domain_id=evidence.domain_id,
         )
         counts["task_edges"] += 1
+
+    for sys_id in extract_alert_incident_references(payload):
+        target_id = await _resolve_evidence_for_sys_id(db, tenant_id, sys_id)
+        if target_id is None:
+            # Alerts re-deliver on every state change, so the rollup
+            # re-processes and the edge lands once the incident ingests.
+            counts["unresolved_refs"] += 1
+            continue
+        if target_id == evidence.id:
+            continue
+        await ensure_edge(
+            db,
+            tenant_id,
+            "evidence",
+            evidence.id,
+            "evidence",
+            target_id,
+            ALERT_INCIDENT_EDGE_TYPE,
+            metadata={"origin": "servicenow_reference"},
+            domain_id=evidence.domain_id,
+        )
+        counts["alert_incident_edges"] += 1
 
     for ref in extract_entity_references(payload):
         entity = await _ensure_entity(db, tenant_id, ref)
