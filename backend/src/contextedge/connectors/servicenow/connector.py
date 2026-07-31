@@ -38,7 +38,17 @@ TABLES = {
     "problem": {"label": "Problems", "fields": "number,short_description,description,state,priority,assigned_to,opened_at,resolved_at,sys_updated_on,rfc,cmdb_ci,cmdb_ci.name,cmdb_ci.sys_class_name,assignment_group,assignment_group.name"},
     "change_request": {"label": "Change Requests", "fields": "number,short_description,description,state,type,assigned_to,start_date,end_date,close_code,category,sys_updated_on,cmdb_ci,cmdb_ci.name,cmdb_ci.sys_class_name,assignment_group,assignment_group.name"},
     "kb_knowledge": {"label": "KB Articles", "fields": "number,short_description,text,workflow_state,author,sys_updated_on"},
+    # em_alert never produces per-record events — each sync invocation
+    # rolls fetched alerts up per (CI, day) in alert_rollup.py. Severity
+    # is filtered server-side (see _table_extra_query); the checkpoint
+    # cursor still advances on the RAW alert rows, so rollup batching
+    # cannot skip records.
+    "em_alert": {"label": "EM Alerts (rolled up)", "fields": "number,severity,state,short_description,description,source,cmdb_ci,cmdb_ci.name,incident,initial_event_time,last_event_time,sys_updated_on"},
 }
+
+# Alerts at or below this severity number are ingested (1=critical …
+# 5=info). Overridable per source via source_config["alert_severity_max"].
+DEFAULT_ALERT_SEVERITY_MAX = 3
 
 
 class ServiceNowConnector(BaseConnector):
@@ -50,6 +60,24 @@ class ServiceNowConnector(BaseConnector):
 
     def _auth(self) -> tuple[str, str]:
         return (self.credentials["username"], self.credentials["password"])
+
+    def _table_extra_query(self, table_name: str) -> str:
+        """Per-table server-side filter, appended to EVERY branch of a
+        sysparm_query (a ^NQ branch is a fresh query — a filter appended
+        to only one branch silently leaks through the other)."""
+        if table_name != "em_alert":
+            return ""
+        try:
+            max_severity = int(
+                (self.source_config or {}).get(
+                    "alert_severity_max", DEFAULT_ALERT_SEVERITY_MAX
+                )
+            )
+        except (TypeError, ValueError):
+            max_severity = DEFAULT_ALERT_SEVERITY_MAX
+        if not 1 <= max_severity <= 5:
+            max_severity = DEFAULT_ALERT_SEVERITY_MAX
+        return f"^severity<={max_severity}"
 
     # Retry transient failures (429 / 5xx / transport errors) with capped
     # exponential backoff, honoring Retry-After on 429.
@@ -141,7 +169,11 @@ class ServiceNowConnector(BaseConnector):
 
         params = {
             "sysparm_fields": f"sys_id,{fields}",
-            "sysparm_query": f"sys_updated_onBETWEEN{start_str}@{end_str}^ORDERBYsys_updated_on",
+            "sysparm_query": (
+                f"sys_updated_onBETWEEN{start_str}@{end_str}"
+                f"{self._table_extra_query(table_name)}"
+                "^ORDERBYsys_updated_on"
+            ),
             "sysparm_limit": "100",
             "sysparm_offset": str(offset),
         }
@@ -149,19 +181,26 @@ class ServiceNowConnector(BaseConnector):
         data = await self._snow_get(f"/api/now/table/{table_name}", params)
         records = data.get("result", [])
 
-        for record in records:
-            sys_id = record.get("sys_id", "")
-            events.append(
-                IngestionEvent(
-                    external_id=sys_id,
-                    source_type="servicenow",
-                    object_type=table_name,
-                    content=record,
-                    thread_id=f"{table_name}:{sys_id}",
-                    timestamp=_parse_snow_datetime(record.get("sys_updated_on")),
-                    metadata={"table": table_name},
-                )
+        if table_name == "em_alert":
+            from contextedge.connectors.servicenow.alert_rollup import (
+                rollup_alert_events,
             )
+
+            events.extend(rollup_alert_events(records))
+        else:
+            for record in records:
+                sys_id = record.get("sys_id", "")
+                events.append(
+                    IngestionEvent(
+                        external_id=sys_id,
+                        source_type="servicenow",
+                        object_type=table_name,
+                        content=record,
+                        thread_id=f"{table_name}:{sys_id}",
+                        timestamp=_parse_snow_datetime(record.get("sys_updated_on")),
+                        metadata={"table": table_name},
+                    )
+                )
 
         has_more = len(records) == 100
         new_offset = offset + len(records)
@@ -225,12 +264,14 @@ class ServiceNowConnector(BaseConnector):
         cursor_sys_id = last_sys_id
         latest_ts = last_updated
         latest_sys_id = last_sys_id
+        extra = self._table_extra_query(table_name)
+        alert_records: list[dict] = []
         for _page in range(self.INCREMENTAL_MAX_PAGES):
             params = {
                 "sysparm_fields": f"sys_id,{fields}",
                 "sysparm_query": (
-                    f"sys_updated_on>{cursor_ts}"
-                    f"^NQsys_updated_on={cursor_ts}^sys_id>{cursor_sys_id}"
+                    f"sys_updated_on>{cursor_ts}{extra}"
+                    f"^NQsys_updated_on={cursor_ts}^sys_id>{cursor_sys_id}{extra}"
                     "^ORDERBYsys_updated_on^ORDERBYsys_id"
                 ),
                 "sysparm_limit": str(self.INCREMENTAL_PAGE_SIZE),
@@ -263,6 +304,11 @@ class ServiceNowConnector(BaseConnector):
                     continue  # server returned an already-seen row; skip
                 if (ts, sys_id) > (latest_ts, latest_sys_id):
                     latest_ts, latest_sys_id = ts, sys_id
+                if table_name == "em_alert":
+                    # Alerts roll up after pagination — one event per
+                    # (CI, day) group, never per record.
+                    alert_records.append(record)
+                    continue
                 events.append(
                     IngestionEvent(
                         external_id=sys_id,
@@ -281,6 +327,13 @@ class ServiceNowConnector(BaseConnector):
             if len(records) < self.INCREMENTAL_PAGE_SIZE:
                 break
 
+        if alert_records:
+            from contextedge.connectors.servicenow.alert_rollup import (
+                rollup_alert_events,
+            )
+
+            events.extend(rollup_alert_events(alert_records))
+
         return ChangeResult(
             events=events,
             new_checkpoint=Checkpoint(
@@ -291,6 +344,16 @@ class ServiceNowConnector(BaseConnector):
 
     async def hydrate_thread(self, thread_ref: str) -> HydratedThread:
         """Fetch record with journal entries (comments/work notes)."""
+        if thread_ref.startswith("em_alert_rollup:"):
+            # Rollup threads aggregate many alerts; there is no single
+            # record or journal to fetch — the rollup evidence bodies ARE
+            # the thread content.
+            return HydratedThread(
+                thread_id=thread_ref,
+                messages=[],
+                participant_count=0,
+                metadata={"rollup": True},
+            )
         parts = thread_ref.split(":")
         table_name, sys_id = parts[0], parts[1]
 
