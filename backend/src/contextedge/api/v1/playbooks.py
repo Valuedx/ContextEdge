@@ -152,6 +152,11 @@ async def update_playbook(playbook_id: UUID, body: PlaybookUpdate, db: DbSession
         )
     for field, value in update_data.items():
         setattr(playbook, field, value)
+    if "title" in update_data or "description" in update_data:
+        # The semantic fingerprint tracks the text it was built from.
+        from contextedge.services.playbook_embedding import embed_playbook
+
+        await embed_playbook(db, playbook)
     await db.flush()
     await db.refresh(playbook)
     return playbook
@@ -230,6 +235,9 @@ async def create_version(
         version = await create_playbook_version(db, playbook, body.model_dump())
     except DuplicateVersionError as e:
         raise HTTPException(status_code=409, detail=str(e)) from e
+    from contextedge.services.playbook_embedding import embed_playbook
+
+    await embed_playbook(db, playbook, version)
     return version
 
 

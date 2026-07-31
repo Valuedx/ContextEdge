@@ -338,7 +338,12 @@ def generate_playbook_candidate(self, pattern_id: str, tenant_id: str):
             "playbook_confidence": float(llm.get("playbook_confidence") or 0.5),
             "execution_confidence_guidance": llm.get("execution_confidence_guidance"),
         }
-        await create_playbook_version(db, playbook, version_data)
+        version = await create_playbook_version(db, playbook, version_data)
+        # Semantic fingerprint so the agent seed resolver can match this
+        # playbook by meaning, not just title words. Best-effort.
+        from contextedge.services.playbook_embedding import embed_playbook
+
+        await embed_playbook(db, playbook, version)
         identity_ids = []
         for episode in episodes:
             identity_ids.extend(identity_ids_from_refs(episode.entity_refs))

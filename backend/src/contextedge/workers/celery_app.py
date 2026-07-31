@@ -170,6 +170,8 @@ celery_app = Celery(
         "contextedge.workers.identity_tasks",
         # Scheduled retention archive + purge.
         "contextedge.workers.retention_tasks",
+        # Ad-hoc playbook embedding backfill (0035).
+        "contextedge.workers.playbook_tasks",
     ],
 )
 
