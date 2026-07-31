@@ -125,6 +125,28 @@
     border-radius: 10px; padding: 16px 22px; margin: 28px 0; font-size: 0.95rem; }
   nav.toc ol { margin: 6px 0 0; padding-left: 20px; }
   nav.toc li { margin: 4px 0; }
+
+  .tabbar { display: flex; gap: 8px; margin: 28px 0 0; border-bottom: 2px solid var(--line); }
+  .tabbtn {
+    appearance: none; background: none; border: none; cursor: pointer;
+    font: inherit; font-weight: 700; font-size: 1rem; color: var(--muted);
+    padding: 10px 18px 12px; border-bottom: 3px solid transparent;
+    margin-bottom: -2px;
+  }
+  .tabbtn:hover { color: var(--ink); }
+  .tabbtn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+  .tabbtn.active { color: var(--accent); border-bottom-color: var(--accent); }
+  .tabpanel { display: none; }
+  .tabpanel.active { display: block; }
+  pre.mermaid-lazy {
+    background: var(--code-bg); border: 1px solid var(--line); border-radius: 8px;
+    padding: 14px; overflow-x: auto; font-size: 0.8rem; line-height: 1.45;
+    margin: 16px 0;
+  }
+  .schema-group { margin-top: 44px; }
+  .schema-group > p { color: var(--muted); }
+  td.tname { font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+    font-size: 0.82rem; font-weight: 600; white-space: nowrap; }
 </style>
 </head>
 <body>
@@ -140,6 +162,13 @@
     agents. This page explains how, using one real incident followed end to end.
   </p>
 </header>
+
+<div class="tabbar" role="tablist">
+  <button class="tabbtn active" data-tab="tour" role="tab" aria-selected="true">The tour</button>
+  <button class="tabbtn" data-tab="schema" role="tab" aria-selected="false">The schema, in plain English</button>
+</div>
+
+<div id="tab-tour" class="tabpanel active" role="tabpanel">
 
 <nav class="toc">
   <b>On this page</b>
@@ -709,6 +738,234 @@ agent = Agent(
   <dt>Safety class</dt><dd>Per-step danger rating: read_only → low_side_effect → high_side_effect → destructive.</dd>
 </dl>
 
+</div><!-- /tab-tour -->
+
+<div id="tab-schema" class="tabpanel" role="tabpanel">
+
+<h2 style="margin-top: 40px;">The entire schema, in plain English</h2>
+<p class="lede" style="font-size: 1.05rem;">
+  ContextEdge stores everything in one PostgreSQL database — 61 tables, defined
+  in <span class="file">models/</span> and evolved through numbered migrations
+  in <span class="file">alembic/versions/</span> (currently 0001–0034). Below is
+  every table, grouped by what it's <em>for</em>, described the way you'd
+  explain it to a new teammate. Column names in <code>code</code> are the ones
+  worth remembering.
+</p>
+
+<div class="schema-group">
+<h3>Group 1 · Who is allowed to do what — tenancy &amp; access</h3>
+<p>ContextEdge is multi-tenant: several organizations share one deployment,
+and every data table carries a <code>tenant_id</code> so queries can never
+cross the fence.</p>
+<div class="tablewrap"><table>
+  <tr><th>Table</th><th>Plain English</th></tr>
+  <tr><td class="tname">tenants</td><td>One row per customer organization. Everything else hangs off its id.</td></tr>
+  <tr><td class="tname">workspaces</td><td>A sub-division inside a tenant (e.g. "EMEA IT") for scoping visibility.</td></tr>
+  <tr><td class="tname">domains</td><td>An operational area like "Network" or "Identity &amp; Access". Patterns, playbooks, and sessions belong to a domain.</td></tr>
+  <tr><td class="tname">users</td><td>People who log in. <code>status</code> must be <code>active</code> to log in; emails are unique only <em>within</em> a tenant.</td></tr>
+  <tr><td class="tname">role_bindings</td><td>Which roles a user holds (analyst, knowledge_manager, domain_admin, tenant_admin…) and at what scope.</td></tr>
+  <tr><td class="tname">tenant_llm_budgets</td><td>The daily AI spend cap per tenant. When it's hit with action "block", LLM and embedding calls refuse before spending.</td></tr>
+</table></div>
+</div>
+
+<div class="schema-group">
+<h3>Group 2 · Where data comes from — sources &amp; sync</h3>
+<p>These tables track the external tools ContextEdge pulls from, and every
+pull it has ever made.</p>
+<div class="tablewrap"><table>
+  <tr><th>Table</th><th>Plain English</th></tr>
+  <tr><td class="tname">sources</td><td>One configured connection: "our ServiceNow", "the support Gmail inbox". Carries <code>source_type</code> and per-source policy assignments.</td></tr>
+  <tr><td class="tname">source_credentials</td><td>The connection secrets, encrypted with the Fernet key (which is why startup refuses to run without one).</td></tr>
+  <tr><td class="tname">source_objects</td><td>The things inside a source worth syncing — a ServiceNow table, a Teams channel, a mailbox.</td></tr>
+  <tr><td class="tname">sync_checkpoints</td><td>The bookmark: "we've ingested up to <em>here</em>". For ServiceNow that's the compound <code>(sys_updated_on, sys_id)</code> cursor, so records sharing a timestamp are never lost.</td></tr>
+  <tr><td class="tname">sync_runs</td><td>A log of every backfill and incremental sync — status, counts, errors — so failed runs can be retried.</td></tr>
+</table></div>
+</div>
+
+<div class="schema-group">
+<h3>Group 3 · The raw material — evidence</h3>
+<p>Evidence is the atom of ContextEdge. It arrives raw, gets cleaned, and
+everything downstream is built from it.</p>
+<pre class="mermaid-lazy">
+erDiagram
+  RAW_EVIDENCE_OBJECTS ||--o| EVIDENCE_ITEMS : "normalizes into"
+  EVIDENCE_ITEMS ||--o{ EVIDENCE_CHUNKS : "split into"
+  EVIDENCE_ITEMS }o--|| THREADS : "belongs to"
+  EVIDENCE_ITEMS ||--o{ ATTACHMENT_ARTIFACTS : "attachments"
+</pre>
+<div class="tablewrap"><table>
+  <tr><th>Table</th><th>Plain English</th></tr>
+  <tr><td class="tname">raw_evidence_objects</td><td>The untouched original payload exactly as the connector fetched it (big ones live in object storage). Kept so nothing is ever lost in translation.</td></tr>
+  <tr><td class="tname">evidence_items</td><td>The cleaned, working copy: redacted text, a 3,072-dim <code>embedding</code> for similarity search, a <code>content_hash</code> for dedup (computed <em>before</em> redaction, on purpose), relevance classification, and lifecycle fields for retention (<code>relevance_state</code>, legal hold).</td></tr>
+  <tr><td class="tname">evidence_chunks</td><td>Long bodies split into small, individually-embedded pieces so search can find the relevant paragraph of a 20-page ticket, not just its title.</td></tr>
+  <tr><td class="tname">threads</td><td>Conversation containers (a Teams thread, an email chain) so replies stay grouped with their root message.</td></tr>
+  <tr><td class="tname">attachment_artifacts</td><td>Text extracted from attachments (PDFs, logs), linked back to their evidence item.</td></tr>
+</table></div>
+</div>
+
+<div class="schema-group">
+<h3>Group 4 · Who and what is being talked about — identity</h3>
+<p>"jsmith", "John Smith", and "jsmith@acme.com" are one person. These three
+tables are how ContextEdge knows that.</p>
+<pre class="mermaid-lazy">
+erDiagram
+  CANONICAL_IDENTITIES ||--o{ IDENTITY_ALIASES : "known as"
+  CANONICAL_IDENTITIES ||--o{ EVIDENCE_IDENTITY_LINKS : "mentioned in"
+  EVIDENCE_ITEMS ||--o{ EVIDENCE_IDENTITY_LINKS : "mentions"
+</pre>
+<div class="tablewrap"><table>
+  <tr><th>Table</th><th>Plain English</th></tr>
+  <tr><td class="tname">canonical_identities</td><td>One row per real person, device, service, or application. <code>resolution_state</code> tells you how much to trust it: <code>resolved</code>/<code>verified</code> (trusted), <code>provisional</code> (an unmatched mention, confidence 0.5), or <code>needs_review</code> (the AI wasn't sure and parked it for a human).</td></tr>
+  <tr><td class="tname">identity_aliases</td><td>Every name an identity goes by, with an <code>alias_type</code>. Strong types (email, username, hostname, fqdn, ip, serial, external id) are <em>unique per tenant</em> at the database level — one email can only ever belong to one identity. Display names are deliberately not unique: two employees can share a name.</td></tr>
+  <tr><td class="tname">evidence_identity_links</td><td>"This evidence item mentions this identity", with how the match was made and its confidence.</td></tr>
+</table></div>
+</div>
+
+<div class="schema-group">
+<h3>Group 5 · What belongs together — correlation</h3>
+<div class="tablewrap"><table>
+  <tr><th>Table</th><th>Plain English</th></tr>
+  <tr><td class="tname">case_links</td><td>Maps external case identifiers (ticket number <code>INC0007421</code>, a thread id) to one internal <code>canonical_case_id</code>, so evidence from different tools about the same incident meets in the middle.</td></tr>
+  <tr><td class="tname">correlation_edges</td><td>"Evidence A and evidence B concern the same incident" — with a <code>correlation_type</code> and confidence: 1.0 for a shared case number, 0.5–0.75 for shared systems inside a 7-day window. A shared person alone never creates one.</td></tr>
+</table></div>
+</div>
+
+<div class="schema-group">
+<h3>Group 6 · The story of one incident — episodes</h3>
+<div class="tablewrap"><table>
+  <tr><th>Table</th><th>Plain English</th></tr>
+  <tr><td class="tname">episodes</td><td>One complete incident story reconstructed from correlated evidence: title, <code>root_cause_summary</code>, <code>final_outcome</code>, its own embedding for similarity, and <code>reviewer_state</code> — an episode teaches nothing downstream until a human approves it.</td></tr>
+  <tr><td class="tname">episode_steps</td><td>The ordered timeline inside the story: observation → hypothesis → action → verification.</td></tr>
+</table></div>
+</div>
+
+<div class="schema-group">
+<h3>Group 7 · What keeps happening — patterns &amp; knowledge quality</h3>
+<div class="tablewrap"><table>
+  <tr><th>Table</th><th>Plain English</th></tr>
+  <tr><td class="tname">patterns</td><td>A recurring problem, detected by clustering similar approved episodes (embedding distance &lt; 0.20). Carries <code>confidence</code>, <code>episode_count</code>, aggregated triggers, errors, root causes, and resolution steps.</td></tr>
+  <tr><td class="tname">pattern_evidence_links</td><td>The receipts: which episodes and which evidence items support each pattern.</td></tr>
+  <tr><td class="tname">negative_knowledge_items</td><td>Things that <em>didn't</em> work ("restarting the gateway does NOT fix this"), so recommendations can be penalized by real failure history.</td></tr>
+  <tr><td class="tname">contradictions</td><td>Detected conflicts between an approved playbook and newer reality ("the playbook says X, but recent cases show X failing").</td></tr>
+  <tr><td class="tname">contradiction_scan_state</td><td>A cursor so the contradiction scanner only re-examines what changed — an LLM-cost saver.</td></tr>
+</table></div>
+</div>
+
+<div class="schema-group">
+<h3>Group 8 · The approved fix — playbooks</h3>
+<div class="tablewrap"><table>
+  <tr><th>Table</th><th>Plain English</th></tr>
+  <tr><td class="tname">playbooks</td><td>The fix manual for a pattern. Key columns: <code>lifecycle_state</code> (candidate → approved), <code>risk_tier</code> (computed by policy from step safety classes; the AI can suggest higher, never lower), <code>automation_mode</code> (suggest_only → shadow → human_confirmed → supervised → full_auto), and an optional <code>approval_policy_id</code>.</td></tr>
+  <tr><td class="tname">playbook_versions</td><td>Immutable, semantically-versioned step lists — with per-step <code>safety_class</code>, rollback hints, verification policy, and <code>evidence_refs</code> pointing at the evidence that justifies them. Publishing a version is what makes it executable.</td></tr>
+  <tr><td class="tname">playbook_evidence_links</td><td>Which evidence supports which playbook version.</td></tr>
+  <tr><td class="tname">playbook_approvals</td><td>The human sign-off record for the playbook lifecycle itself.</td></tr>
+</table></div>
+</div>
+
+<div class="schema-group">
+<h3>Group 9 · The connective tissue — the graph</h3>
+<div class="tablewrap"><table>
+  <tr><th>Table</th><th>Plain English</th></tr>
+  <tr><td class="tname">graph_edges</td><td>Every relationship you saw in the tour's stage-by-stage section, as one adjacency table: <code>source_type/id → edge_type → target_type/id</code>, with a weight, optional confidence, and <code>valid_from</code>/<code>valid_to</code> so the graph can be queried "as of" a past moment. A unique index guarantees one active edge per logical relationship. This is the single most connected table in the system — and deliberately just a table, not a graph database.</td></tr>
+</table></div>
+</div>
+
+<div class="schema-group">
+<h3>Group 10 · Working a live case — sessions &amp; decisions</h3>
+<pre class="mermaid-lazy">
+erDiagram
+  RESOLUTION_SESSIONS ||--o{ DECISIONS : "made during"
+  DECISIONS ||--o{ DECISION_OPTIONS : "considered"
+  DECISIONS ||--o{ DECISION_OUTCOMES : "resulted in"
+  RESOLUTION_SESSIONS ||--o{ EXECUTION_RUNS : "has"
+</pre>
+<div class="tablewrap"><table>
+  <tr><th>Table</th><th>Plain English</th></tr>
+  <tr><td class="tname">resolution_sessions</td><td>One live support case being worked right now — the container that decisions, executions, and outcomes attach to.</td></tr>
+  <tr><td class="tname">decisions</td><td>A first-class record of an operational choice: what was decided, by whom (human or AI), with what confidence, and its own embedding so similar past decisions can be retrieved.</td></tr>
+  <tr><td class="tname">decision_options</td><td>The alternatives that were on the table — including the rejected ones, with structured <code>rejection_code</code>s. "What we didn't do and why" is knowledge too.</td></tr>
+  <tr><td class="tname">decision_outcomes</td><td>What actually happened after the chosen action ran — success, failure, or rejected — feeding future confidence calibration.</td></tr>
+  <tr><td class="tname">decision_trace_events</td><td>The older, flat audit trail of session events, kept as a compact chronological log.</td></tr>
+</table></div>
+</div>
+
+<div class="schema-group">
+<h3>Group 11 · Hypotheses and their proof — claims</h3>
+<div class="tablewrap"><table>
+  <tr><th>Table</th><th>Plain English</th></tr>
+  <tr><td class="tname">claims</td><td>A testable assertion made during diagnosis — "the SMTP relay is down" — with a validation status, so reasoning is explicit instead of buried in chat.</td></tr>
+  <tr><td class="tname">claim_evidence</td><td>Which evidence supports, contradicts, or weakens each claim.</td></tr>
+  <tr><td class="tname">decision_evidence</td><td>Which evidence a decision was directly based on.</td></tr>
+  <tr><td class="tname">decision_claims</td><td>Which claims a decision relied on. Together these make "why did the AI do that?" answerable with receipts.</td></tr>
+</table></div>
+</div>
+
+<div class="schema-group">
+<h3>Group 12 · Doing things safely — execution &amp; governance</h3>
+<pre class="mermaid-lazy">
+erDiagram
+  EXECUTION_RUNS ||--o{ EXECUTION_STEP_RUNS : "steps"
+  EXECUTION_STEP_RUNS ||--o{ TOOL_INVOCATIONS : "invokes"
+  EXECUTION_RUNS ||--o{ APPROVAL_REQUESTS : "requires"
+  ACTION_POLICIES ||--o{ DECISION_ACTION_POLICIES : "applied to"
+</pre>
+<div class="tablewrap"><table>
+  <tr><th>Table</th><th>Plain English</th></tr>
+  <tr><td class="tname">execution_runs</td><td>One governed run of an approved playbook: who started it, its <code>max_safety_class</code> cap, status, and final <code>outcome</code> (validated against a fixed list; completion is refused while steps are still open).</td></tr>
+  <tr><td class="tname">execution_step_runs</td><td>Each step's own record — status, inputs/outputs, <code>safety_class</code>, and whether it <code>requires_approval</code>. Unknown safety classes fail closed.</td></tr>
+  <tr><td class="tname">tool_invocations</td><td>Every tool call a step made, with shadow-mode runs explicitly tagged so dry-runs never masquerade as real outcomes.</td></tr>
+  <tr><td class="tname">approval_requests</td><td>The human gate for risky steps: pending → approved / denied / modified, row-locked so two admins can't double-decide, and policy-checked (approver roles, self-approval bans).</td></tr>
+  <tr><td class="tname">action_policies</td><td>Rules about specific actions ("restarting a production DB needs L2 approval"), applied per governed workflow entity.</td></tr>
+  <tr><td class="tname">decision_action_policies</td><td>The record that a given policy was evaluated for a given decision, with the verdict snapshot.</td></tr>
+</table></div>
+</div>
+
+<div class="schema-group">
+<h3>Group 13 · The operational world model — entities &amp; fixes</h3>
+<p>These tables model the IT landscape itself. The schema is ready; several
+population paths await the AutomationEdge connector (see KNOWN_GAPS).</p>
+<div class="tablewrap"><table>
+  <tr><th>Table</th><th>Plain English</th></tr>
+  <tr><td class="tname">entities</td><td>Operational nouns that aren't people: a workflow (MG22), a server, a schedule — with their external system ids for exact matching.</td></tr>
+  <tr><td class="tname">error_signatures</td><td>A recognizable error fingerprint ("AUTH_CERT_EXPIRED") that can be matched against new incidents and linked to its pattern.</td></tr>
+  <tr><td class="tname">fix_patterns</td><td>A known remedy for an error signature, pointing at the recommended playbook, with success/failure counts.</td></tr>
+  <tr><td class="tname">case_outcomes</td><td>How a case ultimately ended, in structured form.</td></tr>
+  <tr><td class="tname">case_state_transitions</td><td>The state history of a case over time.</td></tr>
+  <tr><td class="tname">case_outcome_fix_patterns</td><td>The feedback loop: which fix a given outcome validated or invalidated — this is how the system learns which remedies actually work.</td></tr>
+</table></div>
+</div>
+
+<div class="schema-group">
+<h3>Group 14 · Rules, receipts &amp; messages — policy, audit, ops</h3>
+<div class="tablewrap"><table>
+  <tr><th>Table</th><th>Plain English</th></tr>
+  <tr><td class="tname">tenant_policies</td><td>Tenant-configured policy documents by type — retention, classification, access, approval — as JSON configs referenced from sources and playbooks. Approval policies are actually <em>evaluated</em> at execution time.</td></tr>
+  <tr><td class="tname">audit_logs</td><td>Who did what over the API — including denied and failed attempts by authenticated users, with an outcome field.</td></tr>
+  <tr><td class="tname">operational_events</td><td>The system's own diary: every notable internal event (identity resolved, correlation created, approval decided, LLM usage) with correlation ids for tracing one action across HTTP → worker → LLM.</td></tr>
+  <tr><td class="tname">notifications</td><td>In-app notifications (plus email/webhook delivery when configured), for review assignments, drift alerts, and sync failures.</td></tr>
+</table></div>
+</div>
+
+<div class="schema-group">
+<h3>Group 15 · Is it actually good? — evaluation</h3>
+<div class="tablewrap"><table>
+  <tr><th>Table</th><th>Plain English</th></tr>
+  <tr><td class="tname">evaluation_datasets</td><td>Golden question-and-expected-answer sets for regression-testing retrieval quality.</td></tr>
+  <tr><td class="tname">evaluation_runs</td><td>The results of running those sets — so a prompt or model change that hurts accuracy is caught, not felt.</td></tr>
+  <tr><td class="tname">retrieval_feedback</td><td>Thumbs-up/down style signals on retrieval results, raw material for future ranking improvements.</td></tr>
+</table></div>
+</div>
+
+<blockquote class="good">
+  <b>The one-sentence summary:</b> raw material (Groups 2–3) is identified
+  (4), connected (5, 9), storied (6), generalized (7), operationalized (8),
+  acted on with governance (10–12), grounded in a world model (13), and
+  audited and measured (14–15) — all inside one PostgreSQL database, all
+  scoped by tenant.
+</blockquote>
+
+</div><!-- /tab-schema -->
+
 <footer>
   <p>All file paths are relative to <code>backend/src/contextedge/</code> unless
   they start with <code>alembic/</code>. The Acme VPN incident is this
@@ -728,6 +985,32 @@ agent = Agent(
       : { primaryColor: "#e0f0ec", primaryBorderColor: "#0e7c66", primaryTextColor: "#1c2b2d", lineColor: "#5b6b68" },
     flowchart: { curve: "basis" }
   });
+
+  // Tab switching. Schema-tab diagrams use class "mermaid-lazy" so the
+  // startOnLoad pass skips them — rendering inside a display:none panel
+  // would produce zero-width SVGs. They render on first activation.
+  function activateTab(tab) {
+    document.querySelectorAll(".tabbtn").forEach((b) => {
+      const on = b.dataset.tab === tab;
+      b.classList.toggle("active", on);
+      b.setAttribute("aria-selected", String(on));
+    });
+    document.querySelectorAll(".tabpanel").forEach((p) => {
+      p.classList.toggle("active", p.id === "tab-" + tab);
+    });
+    if (tab === "schema") {
+      const lazy = [...document.querySelectorAll("#tab-schema pre.mermaid-lazy")];
+      if (lazy.length) {
+        lazy.forEach((p) => { p.classList.remove("mermaid-lazy"); p.classList.add("mermaid"); });
+        mermaid.run({ nodes: lazy });
+      }
+    }
+    if (history.replaceState) history.replaceState(null, "", "#" + tab);
+  }
+  document.querySelectorAll(".tabbtn").forEach((b) =>
+    b.addEventListener("click", () => activateTab(b.dataset.tab))
+  );
+  if (location.hash === "#schema") activateTab("schema");
 </script>
 </body>
 </html>
