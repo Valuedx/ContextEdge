@@ -32,6 +32,7 @@
 | 11 | [UI Tabs Explanation](11_UI_Tabs_Explanation.md) | Every dashboard tab with business purpose, workflow, APIs, and data flow | Frontend Developers & PMs |
 | 11A | [UI Tabs Plain English Guide](UI_TABS_FUNCTIONALITY_PLAIN_ENGLISH.md) | Plain-English explanation of each UI tab, why it is needed, main functionality, and examples | Business Users, PMs & Freshers |
 | 11B | [UI Tabs Backend File Map](UI_TABS_BACKEND_FILE_MAP.md) | Tab-wise frontend/backend file mapping for explaining which backend files power each screen | Developers, PMs & Demo Presenters |
+| 11C | [UI Tabs Workflow Flows](UI_TABS_WORKFLOW_FLOWS_PLAIN_ENGLISH.md) | Simple flow for every UI tab, including input, process, output, and MG22 demo path | Business Users, PMs & Demo Presenters |
 | 12 | [File Dependency Map](12_File_Dependency_Map.md) | Import relationships, data flow, control flow with Mermaid dependency diagrams | Developers |
 | 13 | [Developer Guide](13_Developer_Guide.md) | Setup, running, testing, adding features, migrations, deployment | New Developers |
 | 14 | [Debugging Guide](14_Debugging_Guide.md) | Common errors, debugging steps, logging, observability, troubleshooting | All Developers |
