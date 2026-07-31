@@ -46,6 +46,10 @@ ENTITY_TYPES = (
     "sop",
     "tool",
     "approval_group",
+    # ServiceNow reference enrichment (servicenow_reference_service):
+    # cmdb_ci rows whose class has no richer mapping, and the owning team.
+    "configuration_item",
+    "assignment_group",
 )
 
 

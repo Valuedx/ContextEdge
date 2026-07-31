@@ -14,6 +14,7 @@ Two correlation tiers:
 from datetime import datetime, timedelta, timezone
 import uuid
 
+import structlog
 from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -28,6 +29,8 @@ from contextedge.models.source import Source
 from contextedge.services.artifact_extraction_service import load_raw_payload
 from contextedge.services.event_log_service import append_operational_event
 from contextedge.services.identity_service import get_identity_ids_for_evidence
+
+logger = structlog.get_logger()
 
 # Identity co-occurrence only counts within this window; outside it two
 # mentions of the same entity are unrelated operational history.
@@ -101,6 +104,20 @@ def extract_case_link_candidates(
         add(source_type, raw_object.external_id)
         payload = raw_payload if isinstance(raw_payload, dict) else {}
         add(f"{source_type}:thread", payload.get("_thread_id"))
+        if source_type == "servicenow":
+            # Task-to-task reference sys_ids (problem_id / rfc / caused_by /
+            # parent_incident) join the same key namespace as the referenced
+            # record's own external_id — so incident↔problem↔change
+            # correlate at 1.0 regardless of ingestion order. cmdb_ci /
+            # assignment_group are deliberately NOT case-link keys (shared
+            # infrastructure would mass-merge unrelated cases); they go
+            # through the entity path in servicenow_reference_service.
+            from contextedge.services.servicenow_reference_service import (
+                extract_task_references,
+            )
+
+            for _edge_type, ref_sys_id in extract_task_references(payload):
+                add(source_type, ref_sys_id)
 
     add(f"{source_type}:thread", thread_external_id)
     return candidates
@@ -304,6 +321,38 @@ async def correlate_evidence_item(
         )
         correlations_created += 1
 
+    # ServiceNow reference enrichment (Phase 1): typed evidence→evidence
+    # edges + CI / assignment-group entities from the reference fields the
+    # connector now ingests. Session autoflush makes the CaseLink rows
+    # added above visible to reverse healing's SELECT. Fail-soft: a
+    # failure here loses enrichment, never the correlation itself.
+    snow_references: dict | None = None
+    if (source.source_type or "") == "servicenow" and isinstance(raw_payload, dict):
+        try:
+            from contextedge.services.servicenow_reference_service import (
+                process_servicenow_references,
+            )
+
+            # SAVEPOINT so a database error inside enrichment rolls back
+            # its partial edges and the session stays usable for the
+            # flush + operational event below.
+            async with db.begin_nested():
+                snow_references = await process_servicenow_references(
+                    db,
+                    tenant_id,
+                    evidence,
+                    raw_payload,
+                    own_sys_id=raw_object.external_id if raw_object is not None else None,
+                )
+        except Exception as exc:
+            logger.warning(
+                "servicenow_reference.enrichment_failed",
+                tenant_id=str(tenant_id),
+                evidence_id=str(evidence.id),
+                error_type=type(exc).__name__,
+                error=str(exc),
+            )
+
     await db.flush()
     await append_operational_event(
         db,
@@ -318,6 +367,7 @@ async def correlate_evidence_item(
             "case_links_updated": updated_links,
             "correlations_created": correlations_created,
             "identity_match_candidates": len(identity_related_evidence_ids),
+            "servicenow_references": snow_references,
         },
     )
     return {
@@ -328,4 +378,5 @@ async def correlate_evidence_item(
         "case_links_updated": updated_links,
         "correlations_created": correlations_created,
         "identity_match_candidates": len(identity_related_evidence_ids),
+        "servicenow_references": snow_references,
     }

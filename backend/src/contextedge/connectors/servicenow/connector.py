@@ -25,10 +25,18 @@ from contextedge.connectors.base import (
     RateLimitConfig,
 )
 
+# Reference fields (problem_id, rfc, caused_by, parent_incident, cmdb_ci,
+# assignment_group) serialize as {"value": <sys_id>, "link": ...} under the
+# default sysparm_display_value=false; the dot-walked companions
+# (cmdb_ci.name, ...) come back as flat display strings. Both feed
+# services/servicenow_reference_service.py — deterministic case links,
+# typed graph edges, and CI / team entities. Keep sysparm_display_value
+# at its default: flipping it to all/true turns EVERY field into a dict
+# and breaks the (sys_updated_on, sys_id) keyset checkpoint parsing.
 TABLES = {
-    "incident": {"label": "Incidents", "fields": "number,short_description,description,state,priority,assigned_to,opened_at,resolved_at,close_notes,sys_updated_on"},
-    "problem": {"label": "Problems", "fields": "number,short_description,description,state,priority,assigned_to,opened_at,resolved_at,sys_updated_on"},
-    "change_request": {"label": "Change Requests", "fields": "number,short_description,description,state,type,assigned_to,start_date,end_date,sys_updated_on"},
+    "incident": {"label": "Incidents", "fields": "number,short_description,description,state,priority,assigned_to,opened_at,resolved_at,close_notes,close_code,category,sys_updated_on,problem_id,rfc,caused_by,parent_incident,cmdb_ci,cmdb_ci.name,cmdb_ci.sys_class_name,assignment_group,assignment_group.name"},
+    "problem": {"label": "Problems", "fields": "number,short_description,description,state,priority,assigned_to,opened_at,resolved_at,sys_updated_on,rfc,cmdb_ci,cmdb_ci.name,cmdb_ci.sys_class_name,assignment_group,assignment_group.name"},
+    "change_request": {"label": "Change Requests", "fields": "number,short_description,description,state,type,assigned_to,start_date,end_date,close_code,category,sys_updated_on,cmdb_ci,cmdb_ci.name,cmdb_ci.sys_class_name,assignment_group,assignment_group.name"},
     "kb_knowledge": {"label": "KB Articles", "fields": "number,short_description,text,workflow_state,author,sys_updated_on"},
 }
 
