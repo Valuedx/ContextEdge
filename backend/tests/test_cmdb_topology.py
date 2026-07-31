@@ -412,3 +412,101 @@ async def test_lookup_serves_fresh_cache_without_api_calls():
     assert result["source"] == "cache"
     assert result["stale"] is False
     loader.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_warm_task_rejects_unvalidated_sys_id():
+    """Task args are an external boundary — junk must never reach a
+    sysparm_query."""
+    from contextedge.workers.cmdb_tasks import _warm
+
+    db = SimpleNamespace(execute=AsyncMock())
+    result = await _warm(db, uuid4(), uuid4(), "x^ORDERBYsys_id")
+    assert result == {"status": "invalid_sys_id"}
+    db.execute.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_cache_does_not_churn_edges_missing_rel_sys_id():
+    """An edge cached without a rel sys_id must be left open, not closed
+    and re-created on every refresh."""
+    tenant_id = uuid4()
+    center = SimpleNamespace(id=uuid4(), last_synced_at=None)
+
+    unmatched_edge = SimpleNamespace(
+        source_node_id=center.id,
+        target_node_id=uuid4(),
+        edge_type="depends_on",
+        metadata_extra={"origin": TOPOLOGY_EDGE_ORIGIN, "rel_sys_id": ""},
+        valid_to=None,
+    )
+    edge_result = Mock()
+    edge_result.scalars.return_value.all.return_value = [unmatched_edge]
+    db = SimpleNamespace(execute=AsyncMock(return_value=edge_result), flush=AsyncMock())
+
+    with (
+        patch(
+            "contextedge.services.cmdb_topology_service._ensure_entity",
+            AsyncMock(return_value=center),
+        ),
+        patch("contextedge.services.cmdb_topology_service.ensure_edge", AsyncMock()),
+    ):
+        counts = await cache_neighborhood(
+            db, tenant_id, {"sys_id": GW_SYS_ID, "relationships": [], "ci_details": {}}
+        )
+
+    assert counts["edges_closed"] == 0
+    assert unmatched_edge.valid_to is None
+
+
+@pytest.mark.asyncio
+async def test_fetch_details_requests_center_first():
+    """Hub truncation must never cut the center CI's own details."""
+    requested = []
+
+    class _Recorder(_FakeConnector):
+        async def fetch_ci_details(self, sys_ids):
+            requested.extend(sys_ids)
+            return []
+
+    connector = _Recorder(rels=_gateway_connector().rels, details=[])
+    await fetch_ci_neighborhood(connector, GW_SYS_ID)
+    assert requested[0] == GW_SYS_ID
+
+
+@pytest.mark.asyncio
+async def test_unknown_sys_id_does_not_materialize_junk_entity():
+    """A hallucinated-but-well-formed sys_id (ServiceNow returns nothing)
+    must not create a hex-named entity stamped fresh."""
+    db = SimpleNamespace(flush=AsyncMock())
+
+    with patch(
+        "contextedge.services.cmdb_topology_service._ensure_entity", AsyncMock()
+    ) as ensure_mock:
+        counts = await cache_neighborhood(
+            db, uuid4(), {"sys_id": "9" * 32, "relationships": [], "ci_details": {}}
+        )
+
+    assert counts["skipped_unknown_ci"] is True
+    ensure_mock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_live_lookup_flags_nonexistent_ci():
+    empty_connector = _FakeConnector(rels=[], details=[])
+    with (
+        patch(
+            "contextedge.services.cmdb_topology_service.resolve_ci_entity",
+            AsyncMock(return_value=None),
+        ),
+        patch(
+            "contextedge.services.cmdb_topology_service.load_servicenow_connector",
+            AsyncMock(return_value=empty_connector),
+        ),
+    ):
+        result = await lookup_topology(_tool_db(), uuid4(), "9" * 32)
+
+    assert result["source"] == "live"
+    assert result["ci_found"] is False
+    assert result["neighbors"] == []
+    assert result["cache"]["skipped_unknown_ci"] is True

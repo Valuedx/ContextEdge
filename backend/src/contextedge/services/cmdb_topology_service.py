@@ -108,8 +108,11 @@ async def fetch_ci_neighborhood(connector, sys_id: str) -> dict:
         )
         neighbor_ids.add(child if parent == sys_id else parent)
 
+    # Center first: on a hub CI the detail fetch is truncated downstream,
+    # and losing the center's own name/class is the worst possible cut.
+    detail_ids = [sys_id] + sorted(neighbor_ids - {sys_id})
     details: dict[str, dict] = {}
-    for item in await connector.fetch_ci_details(sorted(neighbor_ids | {sys_id})):
+    for item in await connector.fetch_ci_details(detail_ids):
         item_sys_id = _ref_sys_id(item.get("sys_id"))
         if item_sys_id is not None:
             details[item_sys_id] = item
@@ -125,6 +128,13 @@ async def cache_neighborhood(
     center_sys_id = neighborhood["sys_id"]
     details = neighborhood["ci_details"]
     relationships = neighborhood["relationships"]
+
+    # A sys_id ServiceNow knows nothing about (no relationships AND no CI
+    # detail row) must not materialize a junk entity — an agent passing a
+    # hallucinated-but-well-formed sys_id would otherwise pollute the
+    # entity table with hex-named rows stamped fresh.
+    if not relationships and center_sys_id not in details:
+        return {"entities": 0, "edges_ensured": 0, "edges_closed": 0, "skipped_unknown_ci": True}
 
     all_sys_ids = {center_sys_id}
     for rel in relationships:
@@ -194,7 +204,12 @@ async def cache_neighborhood(
         meta = edge.metadata_extra or {}
         if meta.get("origin") != TOPOLOGY_EDGE_ORIGIN:
             continue
-        if meta.get("rel_sys_id") in seen_rel_ids:
+        rel_sys_id = meta.get("rel_sys_id")
+        # Only close edges we can positively match to a now-absent
+        # relationship. An edge cached without a rel sys_id would
+        # otherwise be closed and re-created on every refresh — churn,
+        # not correctness.
+        if not rel_sys_id or rel_sys_id in seen_rel_ids:
             continue
         edge.valid_to = now
         edges_closed += 1
@@ -253,7 +268,10 @@ async def load_servicenow_connector(
     )
     if source_id is not None:
         q = q.where(Source.id == source_id)
-    source = (await db.execute(q.limit(1))).scalars().first()
+    # Deterministic pick for multi-instance tenants: oldest source wins.
+    source = (
+        await db.execute(q.order_by(Source.created_at).limit(1))
+    ).scalars().first()
     if source is None:
         raise ValueError("no_active_servicenow_source")
     return await _load_connector(db, source)
@@ -270,12 +288,18 @@ def _cached_neighbor_payload(entity: Entity, edge: GraphEdge, other: Entity | No
     }
 
 
+# Response-payload ceiling for cached lookups: 2× the live truncation
+# bound, since refreshes can accrete beyond one fetch's 200 relationships.
+CACHED_NEIGHBORS_MAX = 400
+
+
 async def _cached_topology(
     db: AsyncSession, tenant_id: uuid.UUID, entity: Entity
 ) -> list[dict]:
     edges = (
         await db.execute(
-            select(GraphEdge).where(
+            select(GraphEdge)
+            .where(
                 GraphEdge.tenant_id == tenant_id,
                 GraphEdge.valid_to.is_(None),
                 GraphEdge.edge_type.in_(TOPOLOGY_EDGE_TYPES),
@@ -286,6 +310,7 @@ async def _cached_topology(
                     & (GraphEdge.target_node_id == entity.id),
                 ),
             )
+            .limit(CACHED_NEIGHBORS_MAX)
         )
     ).scalars().all()
     topology_edges = [
@@ -353,6 +378,7 @@ async def lookup_topology(
         if (datetime.now(UTC) - last) <= FRESH_SERVE_WINDOW:
             return {
                 "source": "cache",
+                "ci_found": True,
                 "stale": False,
                 "as_of": entity.last_synced_at.isoformat(),
                 "center": {
@@ -386,6 +412,7 @@ async def lookup_topology(
         neighbors = await _cached_topology(db, tenant_id, entity)
         return {
             "source": "cache",
+            "ci_found": True,
             "stale": True,
             "as_of": entity.last_synced_at.isoformat() if entity.last_synced_at else None,
             "center": {
@@ -429,6 +456,10 @@ async def lookup_topology(
         )
     return {
         "source": "live",
+        # False when ServiceNow returned neither a detail row nor any
+        # relationship for this sys_id — "does not exist" rather than
+        # "exists but isolated".
+        "ci_found": bool(neighborhood["relationships"]) or sys_id in neighborhood["ci_details"],
         "center": {
             "name": _display(center_detail.get("name"))
             or (entity.name if entity is not None else sys_id),
