@@ -1,0 +1,733 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ContextEdge, Explained — from raw tickets to an operational memory graph</title>
+<!-- Mermaid renders the diagrams. Needs internet once; without it, each
+     diagram degrades to its readable text definition. -->
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+<style>
+  :root {
+    --bg: #f7f9f8;
+    --surface: #ffffff;
+    --ink: #1c2b2d;
+    --muted: #5b6b68;
+    --accent: #0e7c66;
+    --accent-soft: #e0f0ec;
+    --pain: #b0501d;
+    --pain-soft: #f7e9e0;
+    --line: #d8e2df;
+    --code-bg: #eef4f2;
+    --new: #0e7c66;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #101b1a;
+      --surface: #162423;
+      --ink: #e4edea;
+      --muted: #93a5a1;
+      --accent: #3ecfae;
+      --accent-soft: #14332d;
+      --pain: #e08a55;
+      --pain-soft: #33231a;
+      --line: #24403c;
+      --code-bg: #1b2e2b;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font: 17px/1.65 "Segoe UI", system-ui, -apple-system, sans-serif;
+  }
+  main { max-width: 78ch; margin: 0 auto; padding: 0 24px 96px; }
+  p, li { max-width: 70ch; }
+  h1, h2, h3 { line-height: 1.2; text-wrap: balance; letter-spacing: -0.015em; }
+  h1 { font-size: 2.3rem; font-weight: 750; margin: 0 0 8px; }
+  h2 { font-size: 1.55rem; font-weight: 700; margin: 64px 0 12px; }
+  h3 { font-size: 1.15rem; font-weight: 700; margin: 36px 0 8px; }
+  a { color: var(--accent); }
+
+  header.hero { padding: 64px 0 8px; border-bottom: 1px solid var(--line); }
+  .eyebrow {
+    font-size: 0.72rem; font-weight: 700; letter-spacing: 0.14em;
+    text-transform: uppercase; color: var(--accent); margin: 0 0 12px;
+  }
+  .lede { font-size: 1.15rem; color: var(--muted); max-width: 62ch; }
+
+  code, .file {
+    font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+    font-size: 0.86em;
+  }
+  code { background: var(--code-bg); padding: 1px 5px; border-radius: 4px; }
+  .file {
+    display: inline-block; background: var(--code-bg); color: var(--accent);
+    border: 1px solid var(--line); border-radius: 4px; padding: 1px 7px;
+    margin: 2px 2px 2px 0; white-space: nowrap;
+  }
+  .refs {
+    margin: 14px 0 0; padding: 12px 14px; border-left: 3px solid var(--accent);
+    background: var(--surface); border-radius: 0 6px 6px 0; font-size: 0.92rem;
+  }
+  .refs b { font-size: 0.72rem; letter-spacing: 0.12em; text-transform: uppercase;
+    color: var(--muted); display: block; margin-bottom: 6px; }
+
+  .compare { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; margin: 24px 0; }
+  @media (max-width: 720px) { .compare { grid-template-columns: 1fr; } }
+  .panel { background: var(--surface); border: 1px solid var(--line);
+    border-radius: 10px; padding: 20px 22px; }
+  .panel h3 { margin-top: 0; }
+  .panel.without { border-top: 4px solid var(--pain); }
+  .panel.with { border-top: 4px solid var(--accent); }
+  .panel.without h3 { color: var(--pain); }
+  .panel.with h3 { color: var(--accent); }
+  .panel ol, .panel ul { padding-left: 20px; margin: 8px 0; }
+  .panel li { margin: 6px 0; font-size: 0.97rem; }
+
+  table { border-collapse: collapse; width: 100%; margin: 20px 0; font-size: 0.95rem; }
+  .tablewrap { overflow-x: auto; }
+  th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { font-size: 0.75rem; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); }
+  td:first-child { font-weight: 600; white-space: nowrap; }
+
+  .stage {
+    background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
+    padding: 22px 24px; margin: 26px 0;
+  }
+  .stage-tag {
+    display: inline-block; font-size: 0.72rem; font-weight: 700;
+    letter-spacing: 0.12em; text-transform: uppercase; color: var(--accent);
+    background: var(--accent-soft); border-radius: 999px; padding: 3px 12px;
+    margin-bottom: 8px;
+  }
+  .stage h3 { margin: 4px 0 10px; }
+  .legend { font-size: 0.85rem; color: var(--muted); margin-top: 8px; }
+  .legend .newdot { display: inline-block; width: 10px; height: 10px;
+    border-radius: 50%; background: var(--new); margin-right: 5px; vertical-align: baseline; }
+
+  pre.mermaid {
+    background: var(--code-bg); border: 1px solid var(--line); border-radius: 8px;
+    padding: 14px; overflow-x: auto; font-size: 0.8rem; line-height: 1.45;
+    margin: 16px 0;
+  }
+  blockquote {
+    margin: 18px 0; padding: 12px 18px; border-left: 3px solid var(--pain);
+    background: var(--pain-soft); border-radius: 0 6px 6px 0; font-size: 0.97rem;
+  }
+  blockquote.good { border-left-color: var(--accent); background: var(--accent-soft); }
+  dl.gloss dt { font-weight: 700; margin-top: 14px; }
+  dl.gloss dd { margin: 2px 0 0 0; color: var(--muted); }
+  footer { margin-top: 72px; padding-top: 20px; border-top: 1px solid var(--line);
+    font-size: 0.85rem; color: var(--muted); }
+  nav.toc { background: var(--surface); border: 1px solid var(--line);
+    border-radius: 10px; padding: 16px 22px; margin: 28px 0; font-size: 0.95rem; }
+  nav.toc ol { margin: 6px 0 0; padding-left: 20px; }
+  nav.toc li { margin: 4px 0; }
+</style>
+</head>
+<body>
+<main>
+
+<header class="hero">
+  <p class="eyebrow">ContextEdge · a plain-English tour for new engineers</p>
+  <h1>From raw tickets to an operational memory graph</h1>
+  <p class="lede">
+    ContextEdge watches your company's support tools (ServiceNow, Jira Service
+    Management, Gmail, Microsoft Teams), remembers every incident, learns which
+    problems repeat, and hands that memory — with governance — to humans and AI
+    agents. This page explains how, using one real incident followed end to end.
+  </p>
+</header>
+
+<nav class="toc">
+  <b>On this page</b>
+  <ol>
+    <li><a href="#without">Life without ContextEdge</a></li>
+    <li><a href="#with">The same day, with ContextEdge</a></li>
+    <li><a href="#value">What value is actually added</a></li>
+    <li><a href="#high">Architecture at high level</a></li>
+    <li><a href="#growth">How the context graph is created and grows — stage by stage</a></li>
+    <li><a href="#granular">Architecture at granular level</a></li>
+    <li><a href="#maf">Plugging into MAF agents</a></li>
+    <li><a href="#glossary">Glossary</a></li>
+  </ol>
+</nav>
+
+<!-- ============================================================ -->
+<h2 id="without">1 · Life without ContextEdge</h2>
+<p>
+  It is 2 a.m. at Acme. Every VPN login in the company starts failing.
+  A ticket appears in ServiceNow, engineers argue in a Teams thread, and the
+  on-call engineer — who joined three months ago — starts from zero:
+</p>
+<div class="compare">
+  <div class="panel without">
+    <h3>Without ContextEdge</h3>
+    <ol>
+      <li>Search old tickets by guessing keywords. Miss the relevant one because
+          it says "RADIUS timeout", not "VPN down".</li>
+      <li>Scroll months of Teams history looking for "that time this happened before".</li>
+      <li>Wake up the senior engineer who remembers the fix.</li>
+      <li>Fix it (renew the expired certificate on <code>vpn-gw-east-01</code>,
+          restart the auth service). Close the ticket.</li>
+      <li>The knowledge of <em>why</em> and <em>how</em> lives only in that
+          engineer's head and a closed ticket nobody will ever read again.</li>
+    </ol>
+  </div>
+  <div class="panel with">
+    <h3>With ContextEdge</h3>
+    <ol>
+      <li>The ticket and the Teams thread were ingested automatically as they happened.</li>
+      <li>ContextEdge links them to the same incident, and to the identical
+          incident from four months ago.</li>
+      <li>The engineer (or an AI agent) asks: <em>"VPN logins failing"</em> —
+          and gets back the past episode, its root cause
+          ("expired VPN certificate"), and the approved, step-by-step playbook.</li>
+      <li>Fixing takes minutes. The new evidence strengthens the pattern for next time.</li>
+      <li>Nobody's memory is a single point of failure.</li>
+    </ol>
+  </div>
+</div>
+<blockquote>
+  The core problem: operational knowledge is created constantly and lost
+  immediately. It is scattered across tools, trapped in people's heads, and
+  buried in closed tickets.
+</blockquote>
+<blockquote class="good">
+  The core idea: turn that scattered exhaust into a <b>governed, queryable
+  memory</b> — evidence you can trust, connected in a graph, distilled into
+  approved playbooks, and served to humans and agents with safety rules attached.
+</blockquote>
+
+<!-- ============================================================ -->
+<h2 id="value">2 · What value is actually added</h2>
+<div class="tablewrap"><table>
+  <tr><th>Capability</th><th>Plain-English meaning</th><th>Where it lives</th></tr>
+  <tr><td>One memory</td>
+      <td>Tickets, chats, and emails from four connectors land in one place,
+          with secrets and PII redacted before anything else touches them.</td>
+      <td><span class="file">connectors/</span> <span class="file">services/redaction_service.py</span></td></tr>
+  <tr><td>Who is who</td>
+      <td>"jsmith", "John Smith", and "jsmith@acme.com" resolve to <em>one</em>
+          person; "vpn-gw-east-01" is one device — not four duplicates.</td>
+      <td><span class="file">services/identity_service.py</span></td></tr>
+  <tr><td>What belongs together</td>
+      <td>Evidence about the same incident is linked deterministically (same
+          case number) or carefully (shared systems within 7 days). A shared
+          person alone never links two incidents.</td>
+      <td><span class="file">services/correlation_service.py</span></td></tr>
+  <tr><td>Stories, not noise</td>
+      <td>Correlated evidence becomes an <b>Episode</b>: one clean incident
+          story with symptom, root cause, and fix.</td>
+      <td><span class="file">services/episode_service.py</span></td></tr>
+  <tr><td>Patterns &amp; playbooks</td>
+      <td>Similar approved episodes cluster into a <b>Pattern</b> ("this keeps
+          happening"), which drafts a <b>Playbook</b> ("here is the approved fix").</td>
+      <td><span class="file">workers/pattern_tasks.py</span></td></tr>
+  <tr><td>Governance</td>
+      <td>Playbooks carry risk tiers and safety classes; risky steps require
+          human approval; policies can ban self-approval; every decision is audited.</td>
+      <td><span class="file">services/execution_service.py</span> <span class="file">services/approval_policy_service.py</span></td></tr>
+  <tr><td>Agent-ready memory</td>
+      <td>Any MAF agent can receive a bounded, security-filtered slice of the
+          graph as context — automatically, every turn.</td>
+      <td><span class="file">integrations/maf/</span> <span class="file">graph/agent/</span></td></tr>
+</table></div>
+
+<!-- ============================================================ -->
+<h2 id="high">3 · Architecture at high level</h2>
+<p>
+  Think of ContextEdge as a factory line. Raw material (tickets, chats, emails)
+  enters on the left; refined knowledge (patterns, playbooks, agent context)
+  exits on the right. Everything in the middle writes into two shared stores:
+  PostgreSQL tables for the facts, and a <code>graph_edges</code> table for the
+  relationships between them.
+</p>
+<pre class="mermaid">
+flowchart LR
+  subgraph Sources["External tools"]
+    SN[ServiceNow]
+    JR[Jira SM]
+    GM[Gmail]
+    TM[MS Teams]
+  end
+  subgraph Ingest["Ingestion &amp; understanding"]
+    C[Connectors] --> N["Normalize pipeline<br/>redact · classify · embed"]
+    N --> I[Identity resolution]
+    N --> D[Decision extraction]
+    I --> CO[Correlation]
+  end
+  subgraph Learn["Learning"]
+    CO --> EP[Episodes]
+    EP --> PA[Patterns]
+    PA --> PB[Playbooks]
+  end
+  subgraph Serve["Serving"]
+    S["Hybrid search<br/>FTS + vectors"]
+    G["Context graph<br/>projection"]
+    X["Governed execution<br/>approvals · audit"]
+  end
+  SN & JR & GM & TM --> C
+  EP & PA & PB --> G
+  N --> S
+  G --> A["MAF agents / dashboard"]
+  S --> A
+  PB --> X
+</pre>
+<div class="refs"><b>Code references</b>
+  <span class="file">connectors/registry.py</span>
+  <span class="file">workers/extraction_tasks.py</span>
+  <span class="file">workers/pattern_tasks.py</span>
+  <span class="file">graph/builder.py</span>
+  <span class="file">graph/agent/service.py</span>
+  <span class="file">search/hybrid_ranker.py</span>
+  <span class="file">services/execution_service.py</span>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="growth">4 · How the context graph is created and grows — stage by stage</h2>
+<p>
+  This is the heart of ContextEdge, so let's watch it happen. We follow
+  <b>one incident</b> — the Acme VPN outage — from the first ticket to an
+  AI agent using the finished knowledge. In every diagram,
+  <span class="legend"><span class="newdot"></span><b>green</b> marks what is
+  <em>new at that stage</em></span>; everything grey already existed.
+  Every edge you see is one row in the <code>graph_edges</code> table, written
+  by <code>ensure_edge()</code> in <span class="file">graph/builder.py</span>
+  (safe to call twice — it never creates duplicates).
+</p>
+
+<!-- Stage 1 -->
+<div class="stage">
+  <span class="stage-tag">Stage 1 · Ingest &amp; resolve identities</span>
+  <h3>Two pieces of evidence arrive; the graph gets its first nodes</h3>
+  <p>
+    The ServiceNow connector pulls ticket <code>INC0007421</code> ("VPN
+    authentication failures"); the Teams connector pulls the engineers' thread.
+    The normalize pipeline redacts secrets, classifies relevance, and creates an
+    embedding. Then identity resolution reads the text: it finds
+    "J. Smith (jsmith@acme.com)" and "vpn-gw-east-01". The email is a
+    <b>strong identifier</b> — it matches deterministically. The hostname
+    creates a device identity. Each mention becomes a
+    <code>mentions_identity</code> edge, weighted by how confident the match is.
+  </p>
+  <pre class="mermaid">
+flowchart LR
+  EV1["Evidence<br/>ServiceNow INC0007421"]:::new
+  EV2["Evidence<br/>Teams thread"]:::new
+  ID1(["Identity: John Smith<br/>(person)"]):::new
+  ID2(["Identity: vpn-gw-east-01<br/>(device)"]):::new
+  EV1 -- "mentions_identity (1.0)" --> ID1
+  EV1 -- "mentions_identity" --> ID2
+  EV2 -- "mentions_identity" --> ID1
+  EV2 -- "mentions_identity" --> ID2
+  classDef new fill:#0e7c66,color:#ffffff,stroke:#0e7c66
+</pre>
+  <div class="refs"><b>What wrote this</b>
+    <span class="file">workers/extraction_tasks.py</span> (the <code>_normalize</code> pipeline)
+    <span class="file">services/identity_service.py</span> (<code>resolve_extracted_entities</code>: strong IDs → typed alias → LLM adjudication → provisional)
+    <span class="file">services/identity_normalizer.py</span>
+  </div>
+  <p class="legend">Fresher note: an unknown name doesn't become a trusted
+  identity — it's created as <em>provisional</em> (confidence 0.5) until
+  evidence or a reviewer upgrades it. That's why duplicates stay rare.</p>
+</div>
+
+<!-- Stage 2 -->
+<div class="stage">
+  <span class="stage-tag">Stage 2 · Correlate</span>
+  <h3>The two evidence items are linked as "same incident"</h3>
+  <p>
+    Correlation asks: do these belong together? Both reference case
+    <code>INC0007421</code> → a deterministic <b>case link</b> at confidence 1.0.
+    (If only a shared device inside a 7-day window connected them, the link
+    would be a cautious 0.65–0.75. A shared <em>person</em> alone creates no
+    link at all — John Smith touching two unrelated tickets months apart must
+    never glue them together.)
+  </p>
+  <pre class="mermaid">
+flowchart LR
+  EV1["Evidence<br/>ServiceNow INC0007421"]
+  EV2["Evidence<br/>Teams thread"]
+  ID1(["John Smith"])
+  ID2(["vpn-gw-east-01"])
+  EV1 -- mentions_identity --> ID1
+  EV1 -- mentions_identity --> ID2
+  EV2 -- mentions_identity --> ID1
+  EV2 -- mentions_identity --> ID2
+  EV1 -. "correlation: case_link_match (1.0)" .- EV2
+  linkStyle 4 stroke:#0e7c66,stroke-width:3px
+</pre>
+  <div class="refs"><b>What wrote this</b>
+    <span class="file">services/correlation_service.py</span>
+    (<code>correlate_evidence_item</code>: case/thread refs first, then gated identity co-occurrence)
+  </div>
+</div>
+
+<!-- Stage 3 -->
+<div class="stage">
+  <span class="stage-tag">Stage 3 · Reconstruct the episode</span>
+  <h3>Correlated evidence becomes one incident story</h3>
+  <p>
+    An LLM reads the correlated cluster and writes the story: symptom
+    ("all VPN logins failing"), root cause ("VPN certificate expired on
+    vpn-gw-east-01"), resolution ("renewed certificate, restarted auth
+    service"). That story is an <b>Episode</b> node, wired to its proof with
+    <code>derived_from</code> edges and to the systems it touched with
+    <code>affects</code> edges. A human reviewer approves it before it can
+    teach anything downstream.
+  </p>
+  <pre class="mermaid">
+flowchart TD
+  EP1["Episode<br/>'VPN outage — expired certificate'<br/>reviewer_state: approved"]:::new
+  EV1["Evidence INC0007421"]
+  EV2["Evidence Teams thread"]
+  ID2(["vpn-gw-east-01"])
+  EP1 -- derived_from --> EV1
+  EP1 -- derived_from --> EV2
+  EP1 -- affects --> ID2
+  classDef new fill:#0e7c66,color:#ffffff,stroke:#0e7c66
+</pre>
+  <div class="refs"><b>What wrote this</b>
+    <span class="file">services/episode_service.py</span>
+    <span class="file">ai/extractors/episode_extractor.py</span>
+    <span class="file">graph/builder.py</span> (<code>build_episode_graph</code>)
+  </div>
+</div>
+
+<!-- Stage 4 -->
+<div class="stage">
+  <span class="stage-tag">Stage 4 · Detect the pattern</span>
+  <h3>Months later, it happens again — and the graph notices</h3>
+  <p>
+    A second VPN-certificate episode gets approved. The pattern worker compares
+    episode embeddings: anything within cosine distance 0.20 (roughly ≥ 80%
+    similar) clusters together. A <b>Pattern</b> node is born —
+    "Recurring VPN auth failures from expired certificates" — with
+    <code>clusters</code> edges to both episodes. More recurrences raise its
+    confidence.
+  </p>
+  <pre class="mermaid">
+flowchart TD
+  PA1["Pattern<br/>'VPN auth failures —<br/>expired certificates'"]:::new
+  EP1["Episode #1 (March)"]
+  EP2["Episode #2 (July)"]:::new
+  PA1 -- clusters --> EP1
+  PA1 -- clusters --> EP2
+  EP1 -- derived_from --> EV["…evidence…"]
+  EP2 -- derived_from --> EV2["…evidence…"]
+  classDef new fill:#0e7c66,color:#ffffff,stroke:#0e7c66
+</pre>
+  <div class="refs"><b>What wrote this</b>
+    <span class="file">workers/pattern_tasks.py</span>
+    (<code>cluster_episodes</code>: pgvector <code>cosine_distance &lt; 0.20</code> over approved episodes)
+    — relational links also land in <code>pattern_evidence_links</code>
+  </div>
+</div>
+
+<!-- Stage 5 -->
+<div class="stage">
+  <span class="stage-tag">Stage 5 · Draft the playbook</span>
+  <h3>The pattern proposes a fix manual — grounded in its evidence</h3>
+  <p>
+    From the pattern's episodes, a <b>Playbook</b> candidate is generated:
+    "Renew VPN certificate and restart authentication service", with ordered
+    steps, per-step safety classes, and <code>evidence_refs</code> pointing back
+    at the exact evidence that justifies it. Its risk tier is computed by
+    policy from the step safety classes — the LLM can suggest higher risk,
+    never lower. It starts life as <code>suggest_only</code> until a knowledge
+    manager approves it.
+  </p>
+  <pre class="mermaid">
+flowchart TD
+  PB1["Playbook<br/>'Renew VPN cert + restart auth'<br/>risk: medium · state: candidate"]:::new
+  PA1["Pattern"]
+  EP1["Episode #1"]
+  EP2["Episode #2"]
+  PB1 -- derived_from --> PA1
+  PA1 -- clusters --> EP1
+  PA1 -- clusters --> EP2
+  classDef new fill:#0e7c66,color:#ffffff,stroke:#0e7c66
+</pre>
+  <div class="refs"><b>What wrote this</b>
+    <span class="file">workers/pattern_tasks.py</span> (<code>generate_playbook_candidate</code>)
+    <span class="file">services/playbook_service.py</span> (versioning, publication)
+  </div>
+</div>
+
+<!-- Stage 6 -->
+<div class="stage">
+  <span class="stage-tag">Stage 6 · Execute with governance</span>
+  <h3>Using the playbook adds decisions, approvals, and outcomes to the graph</h3>
+  <p>
+    The third time the incident strikes, an engineer starts a governed run of
+    the approved playbook. The graph records the whole trail: the run
+    <code>executes</code> the playbook, the risky restart step
+    <code>requires_approval</code>, a domain admin approves it (policies can
+    require specific roles and ban self-approval), and the result becomes an
+    <code>execution_outcome</code>. First-class <b>Decision</b> nodes capture
+    what was considered and chosen. This is what auditors — and future
+    agents — can trace.
+  </p>
+  <pre class="mermaid">
+flowchart TD
+  RUN["Execution run"]:::new
+  PB1["Playbook (approved)"]
+  AP["Approval request"]:::new
+  DEC["Decision<br/>considered → chose"]:::new
+  OUT["Outcome: success"]:::new
+  RUN -- executes --> PB1
+  RUN -- requires_approval --> AP
+  DEC -- based_on --> EV1["…evidence…"]
+  DEC -- required_approval --> AP
+  DEC -- resulted_in --> OUT
+  classDef new fill:#0e7c66,color:#ffffff,stroke:#0e7c66
+</pre>
+  <div class="refs"><b>What wrote this</b>
+    <span class="file">services/execution_service.py</span>
+    <span class="file">services/approval_policy_service.py</span>
+    <span class="file">services/decision_trace_service.py</span>
+    — a scheduled reconciler backfills any relationship the live path missed:
+    <span class="file">graph/agent/materializer.py</span> via
+    <span class="file">workers/graph_tasks.py</span>
+  </div>
+</div>
+
+<!-- Stage 7 -->
+<div class="stage">
+  <span class="stage-tag">Stage 7 · Serve it to an agent</span>
+  <h3>An agent asks in plain English; the graph answers with a bounded slice</h3>
+  <p>
+    A MAF agent handling "VPN logins are failing again" triggers seed
+    resolution: full-text search finds the playbook, embedding similarity finds
+    the past episodes, and identifier extraction exact-matches
+    <code>vpn-gw-east-01</code>. Traversal expands 2 hops from those seeds,
+    visibility rules strip anything the caller may not see, and the result is a
+    compact JSON subgraph — at most 24 nodes / 48 edges / 12,000 characters by
+    default — injected into the agent's context as <em>untrusted reference
+    data</em>.
+  </p>
+  <pre class="mermaid">
+flowchart LR
+  Q["Agent query:<br/>'VPN logins are failing again'"]:::new
+  subgraph Seeds["Seed resolution"]
+    F["FTS → Playbook"]
+    S["Embeddings → Episodes"]
+    T["Identifiers → vpn-gw-east-01"]
+  end
+  Q --> Seeds
+  Seeds --> TR["2-hop traversal<br/>+ visibility filters<br/>+ budgets"]
+  TR --> OUTJ["Bounded subgraph →<br/>agent context"]:::new
+  classDef new fill:#0e7c66,color:#ffffff,stroke:#0e7c66
+</pre>
+  <div class="refs"><b>What serves this</b>
+    <span class="file">graph/agent/repository.py</span> (<code>resolve_seeds</code>, traversal)
+    <span class="file">graph/agent/selector.py</span> (relevance scoring, budgets)
+    <span class="file">graph/agent/hydrators.py</span> (per-type facts + visibility)
+    <span class="file">graph/agent/profiles.py</span> (the <code>maf.v1</code> contract)
+  </div>
+</div>
+
+<blockquote class="good">
+  The takeaway: the graph is never built in one big batch. Every stage of
+  normal operation — ingesting, correlating, reviewing, executing — adds a few
+  well-typed edges. Knowledge accumulates as a side effect of doing the work.
+</blockquote>
+
+<!-- ============================================================ -->
+<h2 id="granular">5 · Architecture at granular level</h2>
+
+<h3>5.1 The normalize pipeline (every evidence item passes through this)</h3>
+<pre class="mermaid">
+flowchart LR
+  RAW["Raw payload<br/>(raw_evidence_objects)"] --> RED["Redact PII/secrets"]
+  RED --> CLS["Relevance classify<br/>(skip junk early)"]
+  CLS --> EMB["Embed (3072-dim)"]
+  EMB --> IDR["Identity resolution"]
+  IDR --> DEX["Decision extraction"]
+  DEX --> CH["Chunking<br/>(long bodies → chunks)"]
+  CH --> COR["Correlation → episodes"]
+</pre>
+<div class="refs"><b>Code references</b>
+  <span class="file">workers/extraction_tasks.py</span> (<code>_normalize</code> orchestrates the whole line)
+  <span class="file">services/redaction_service.py</span>
+  <span class="file">services/chunkers/</span>
+  — order matters: the content hash is computed <em>before</em> redaction so
+  dedup survives redaction-rule changes.
+</div>
+
+<h3>5.2 Identity resolution — the layered resolver</h3>
+<p>Four layers, cheapest and most certain first. The LLM is a judge of last
+resort between a handful of candidates — never a database search engine.</p>
+<pre class="mermaid">
+flowchart TD
+  IN["Extracted mention<br/>'J. Smith (jsmith@acme.com)'"] --> L1{"Layer 1<br/>Strong identifier?<br/>email/username/hostname/…"}
+  L1 -- "hit → confidence 1.0" --> DONE["Link to identity"]
+  L1 -- miss --> L2{"Layer 2<br/>Exact alias,<br/>same entity type?"}
+  L2 -- "hit → 0.95" --> DONE
+  L2 -- miss --> L3{"Layer 3<br/>Candidates found?<br/>LLM judges: match /<br/>new / needs_review"}
+  L3 -- "match ≥ threshold<br/>(person: 0.95)" --> DONE
+  L3 -- "abstain / low" --> REV["Create identity<br/>state: needs_review"]
+  L3 -- none --> L4["Layer 4<br/>Create provisional<br/>identity (0.5)"]
+</pre>
+<div class="refs"><b>Code references</b>
+  <span class="file">services/identity_service.py</span>
+  <span class="file">services/identity_normalizer.py</span>
+  <span class="file">ai/prompts/identity.py</span> (extraction v2 + adjudication prompts)
+  <span class="file">alembic/versions/0033_identity_resolution_hardening.py</span>
+  (strong identifiers are unique per tenant at the database level)
+</div>
+
+<h3>5.3 Retrieval — how search actually works</h3>
+<ul>
+  <li><b>Full-text search</b> over evidence and playbooks uses PostgreSQL
+      tsvectors — <span class="file">search/pg_fts.py</span>.</li>
+  <li><b>Vector search</b> uses 3,072-dim embeddings. pgvector's plain HNSW
+      caps at 2,000 dims, so all similarity queries go through a
+      <code>halfvec</code> expression index —
+      <span class="file">search/vector_ops.py</span>,
+      <span class="file">alembic/versions/0032_halfvec_hnsw_indexes.py</span>.</li>
+  <li><b>Hybrid ranking</b> combines both plus graph and identity signals to
+      recommend playbooks — <span class="file">search/hybrid_ranker.py</span>.</li>
+</ul>
+
+<h3>5.4 Governed execution — the approval flow</h3>
+<pre class="mermaid">
+sequenceDiagram
+  participant E as Engineer
+  participant X as Execution service
+  participant P as Approval policy
+  participant A as Approver (domain admin)
+  E->>X: start run (approved playbook)
+  X->>P: evaluate policy (roles, automation cap, min safety class)
+  X->>X: create step runs and gate risky ones
+  X-->>A: approval request (restart = high side effect)
+  A->>X: approve / modify / reject (self-approval can be banned)
+  X->>X: step proceeds — outcome + decision recorded
+</pre>
+<div class="refs"><b>Code references</b>
+  <span class="file">services/execution_service.py</span>
+  <span class="file">services/approval_policy_service.py</span>
+  <span class="file">api/v1/execution.py</span>
+  — unknown safety classes fail <em>closed</em>; completion is refused while
+  steps are still open.
+</div>
+
+<h3>5.5 Where everything is stored</h3>
+<div class="tablewrap"><table>
+  <tr><th>Store</th><th>What lives there</th></tr>
+  <tr><td><code>evidence_items</code> / <code>evidence_chunks</code></td>
+      <td>Redacted content, embeddings, chunked long bodies.</td></tr>
+  <tr><td><code>canonical_identities</code> / <code>identity_aliases</code></td>
+      <td>People, devices, services — and every name they go by.</td></tr>
+  <tr><td><code>episodes</code>, <code>patterns</code>, <code>playbooks</code></td>
+      <td>The learning ladder: story → recurrence → approved fix.</td></tr>
+  <tr><td><code>graph_edges</code></td>
+      <td>Every relationship in section 4 — one adjacency table, tenant-scoped,
+          temporally versioned, uniquely constrained per active logical edge.</td></tr>
+  <tr><td><code>decisions</code>, <code>approval_requests</code>, <code>execution_runs</code></td>
+      <td>The governance and audit trail.</td></tr>
+</table></div>
+
+<!-- ============================================================ -->
+<h2 id="maf">6 · Plugging into MAF agents</h2>
+<p>
+  Microsoft Agent Framework (MAF) agents are the primary consumers of this
+  memory. Integration is <b>one plugin, two mechanisms</b> — and the important
+  design fact for freshers: <b>the graph tool is read-only</b>. Agents read
+  memory through it; any <em>action</em> goes through the governed execution
+  API with its approvals.
+</p>
+<pre class="mermaid">
+flowchart LR
+  subgraph Agent["Your MAF agent"]
+    LLM["Model"]
+  end
+  subgraph Plugin["ContextGraphMAFPlugin"]
+    PR["1 · Memory provider<br/>(before_run: auto-inject<br/>context each turn)"]
+    TL["2 · query_context_graph<br/>(read-only tool the model<br/>can call mid-reasoning)"]
+  end
+  CE["ContextEdge<br/>graph projection<br/>(maf.v1 profile)"]
+  PR --> CE
+  TL --> CE
+  LLM --- PR
+  LLM --- TL
+  CE -. "bounded JSON, fenced as<br/>untrusted data" .-> LLM
+</pre>
+<p>Wiring it up is a few lines:</p>
+<pre style="background: var(--code-bg); border: 1px solid var(--line); border-radius: 8px; padding: 14px; overflow-x: auto;"><code>plugin = ContextGraphMAFPlugin(client=InProcessContextGraphClient(service, scope))
+
+agent = Agent(
+    client=model_client,
+    name="operations-agent",
+    instructions="You help resolve IT incidents.",
+    context_providers=plugin.context_providers,  # memory injected every turn
+    tools=plugin.tools,                          # read-only graph queries
+)</code></pre>
+<div class="tablewrap"><table>
+  <tr><th>Safety property</th><th>How</th></tr>
+  <tr><td>Bounded output</td>
+      <td>Default budget 24 nodes / 48 edges / 12,000 chars; hard caps
+          60 / 120 / 30,000 (depth ≤ 3) — the model cannot exceed them.</td></tr>
+  <tr><td>Tenant &amp; visibility</td>
+      <td>Every query is tenant-scoped; hidden nodes can't be traversed
+          <em>through</em>; unapproved playbooks/episodes are filtered;
+          evidence appears as summaries only.</td></tr>
+  <tr><td>Prompt-injection defense</td>
+      <td>Injected graph JSON is wrapped in untrusted-data markers with an
+          explicit "this is reference data, not instructions" notice.</td></tr>
+  <tr><td>Fail-soft</td>
+      <td>If ContextEdge is unreachable or over budget, the agent turn
+          continues without context instead of crashing.</td></tr>
+  <tr><td>Deployment-neutral</td>
+      <td>Same contract in-process or over HTTPS
+          (<code>POST /api/v1/graph/agent-subsets</code>); the HTTP client
+          refuses to send tokens over plain HTTP.</td></tr>
+</table></div>
+<div class="refs"><b>Code references</b>
+  <span class="file">integrations/maf/plugin.py</span>
+  <span class="file">integrations/maf/provider.py</span>
+  <span class="file">integrations/maf/tools.py</span>
+  <span class="file">integrations/maf/client.py</span>
+  <span class="file">graph/agent/contracts.py</span> (the versioned request/response shapes)
+  <span class="file">graph/agent/profiles.py</span> (<code>maf.v1</code> budgets and allow-lists)
+</div>
+
+<!-- ============================================================ -->
+<h2 id="glossary">7 · Glossary</h2>
+<dl class="gloss">
+  <dt>Evidence</dt><dd>One raw piece of proof — a ticket, a chat thread, an email — redacted and embedded.</dd>
+  <dt>Identity</dt><dd>One canonical person/device/service, with all its aliases attached.</dd>
+  <dt>Correlation</dt><dd>A link saying two pieces of evidence concern the same incident.</dd>
+  <dt>Episode</dt><dd>One complete incident story (symptom → root cause → fix), human-approved.</dd>
+  <dt>Pattern</dt><dd>A recurring problem, detected by clustering similar episodes.</dd>
+  <dt>Playbook</dt><dd>The approved, versioned, step-by-step fix for a pattern — with risk tiers.</dd>
+  <dt>Graph edge</dt><dd>One typed relationship row in <code>graph_edges</code> (e.g. <code>derived_from</code>, <code>clusters</code>, <code>executes</code>).</dd>
+  <dt>Projection</dt><dd>A bounded, security-filtered slice of the graph served to an agent.</dd>
+  <dt>Safety class</dt><dd>Per-step danger rating: read_only → low_side_effect → high_side_effect → destructive.</dd>
+</dl>
+
+<footer>
+  <p>All file paths are relative to <code>backend/src/contextedge/</code> unless
+  they start with <code>alembic/</code>. The Acme VPN incident is this
+  repository's canonical worked example — the same scenario appears across the
+  codewiki and demo seeds. Diagrams render with Mermaid (CDN); without internet
+  they display as readable text definitions.</p>
+</footer>
+
+</main>
+<script>
+  const dark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+  mermaid.initialize({
+    startOnLoad: true,
+    theme: dark ? "dark" : "neutral",
+    themeVariables: dark
+      ? { primaryColor: "#14332d", primaryBorderColor: "#3ecfae", primaryTextColor: "#e4edea", lineColor: "#93a5a1" }
+      : { primaryColor: "#e0f0ec", primaryBorderColor: "#0e7c66", primaryTextColor: "#1c2b2d", lineColor: "#5b6b68" },
+    flowchart: { curve: "basis" }
+  });
+</script>
+</body>
+</html>
