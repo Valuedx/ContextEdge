@@ -553,6 +553,29 @@ async def correlate_evidence_item(
                     )
                 if ticket_bridge is not None:
                     ticket_bridge["thread_topic"] = topic_result
+            # A4: indirect references ("John's ticket") — last resort,
+            # only when every earlier tier left the message un-anchored
+            # in THIS pass (a pre-existing membership from an earlier
+            # pass is harmless: first-writer-wins blocks a duplicate).
+            tb = ticket_bridge or {}
+            unanchored = (
+                not tb.get("memberships")
+                and not (tb.get("reply_inheritance") or {}).get("inherited")
+                and not (
+                    (tb.get("thread_topic") or {}).get("applied") or {}
+                ).get("applied")
+            )
+            if unanchored:
+                from contextedge.services.conversational_reference_service import (
+                    resolve_conversational_references,
+                )
+
+                async with db.begin_nested():
+                    reference_result = await resolve_conversational_references(
+                        db, tenant_id, evidence
+                    )
+                if ticket_bridge is not None:
+                    ticket_bridge["conversational_reference"] = reference_result
     except Exception as exc:
         logger.warning(
             "ticket_bridge.failed",
