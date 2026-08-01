@@ -40,7 +40,9 @@ TABLES = {
             "number,short_description,description,state,priority,assigned_to,"
             "opened_at,resolved_at,close_notes,close_code,category,sys_updated_on,"
             "problem_id,rfc,caused_by,parent_incident,cmdb_ci,cmdb_ci.name,"
-            "cmdb_ci.sys_class_name,assignment_group,assignment_group.name"
+            "cmdb_ci.sys_class_name,cmdb_ci.manufacturer.name,"
+            "cmdb_ci.model_id.name,cmdb_ci.os,cmdb_ci.os_version,"
+            "assignment_group,assignment_group.name"
         ),
     },
     "problem": {
@@ -48,7 +50,9 @@ TABLES = {
         "fields": (
             "number,short_description,description,state,priority,assigned_to,"
             "opened_at,resolved_at,sys_updated_on,rfc,cmdb_ci,cmdb_ci.name,"
-            "cmdb_ci.sys_class_name,assignment_group,assignment_group.name"
+            "cmdb_ci.sys_class_name,cmdb_ci.manufacturer.name,"
+            "cmdb_ci.model_id.name,cmdb_ci.os,cmdb_ci.os_version,"
+            "assignment_group,assignment_group.name"
         ),
     },
     "change_request": {
@@ -56,8 +60,9 @@ TABLES = {
         "fields": (
             "number,short_description,description,state,type,assigned_to,"
             "start_date,end_date,close_code,category,sys_updated_on,cmdb_ci,"
-            "cmdb_ci.name,cmdb_ci.sys_class_name,assignment_group,"
-            "assignment_group.name"
+            "cmdb_ci.name,cmdb_ci.sys_class_name,cmdb_ci.manufacturer.name,"
+            "cmdb_ci.model_id.name,cmdb_ci.os,cmdb_ci.os_version,"
+            "assignment_group,assignment_group.name"
         ),
     },
     "kb_knowledge": {
@@ -449,7 +454,13 @@ class ServiceNowConnector(BaseConnector):
             "/api/now/table/cmdb_ci",
             {
                 "sysparm_query": "sys_idIN" + ",".join(sys_ids[:200]),
-                "sysparm_fields": "sys_id,name,sys_class_name,operational_status",
+                "sysparm_fields": (
+                    "sys_id,name,sys_class_name,operational_status,"
+                    # B2 traits. os/os_version exist only on computer
+                    # subclasses — ServiceNow returns them empty for
+                    # other classes, which lands as absent traits.
+                    "manufacturer.name,model_id.name,os,os_version"
+                ),
                 "sysparm_limit": "200",
             },
         )

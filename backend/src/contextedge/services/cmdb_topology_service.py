@@ -44,6 +44,7 @@ from contextedge.services.servicenow_reference_service import (
     _display,
     _ensure_entity,
     _ref_sys_id,
+    extract_ci_traits,
 )
 
 logger = structlog.get_logger()
@@ -154,6 +155,7 @@ async def cache_neighborhood(
                 entity_type=CI_CLASS_ENTITY_TYPES.get(ci_class, "configuration_item"),
                 edge_type="",
                 attributes={"ci_class": ci_class} if ci_class else {},
+                traits=extract_ci_traits(detail, prefix=""),
             ),
         )
         # B1: cached topology CIs join the class taxonomy too.

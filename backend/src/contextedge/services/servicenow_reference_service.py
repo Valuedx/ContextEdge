@@ -119,6 +119,21 @@ def _ref_sys_id(raw: object) -> str | None:
     return None
 
 
+TRAIT_FIELDS = ("manufacturer", "model", "os_name", "os_version")
+
+
+def extract_ci_traits(p: dict, prefix: str = "cmdb_ci.") -> dict:
+    """Normalized traits from dot-walked CMDB fields. Only present,
+    non-empty values make it in — absent is absent, never guessed."""
+    raw = {
+        "manufacturer": _display(p.get(prefix + "manufacturer.name")),
+        "model": _display(p.get(prefix + "model_id.name")),
+        "os_name": _display(p.get(prefix + "os")),
+        "os_version": _display(p.get(prefix + "os_version")),
+    }
+    return {k: v for k, v in raw.items() if v}
+
+
 def _display(raw: object) -> str | None:
     """Human-readable value from a plain or display_value=all field."""
     if isinstance(raw, dict):
@@ -175,6 +190,8 @@ class EntityReference:
     entity_type: str
     edge_type: str
     attributes: dict = field(default_factory=dict)
+    # Normalized traits (B2): only keys the source actually provided.
+    traits: dict = field(default_factory=dict)
 
 
 def extract_entity_references(payload: dict | None) -> list[EntityReference]:
@@ -195,6 +212,7 @@ def extract_entity_references(payload: dict | None) -> list[EntityReference]:
                 entity_type=CI_CLASS_ENTITY_TYPES.get(ci_class, "configuration_item"),
                 edge_type="affects_ci",
                 attributes={"ci_class": ci_class} if ci_class else {},
+                traits=extract_ci_traits(p),
             )
         )
 
@@ -263,6 +281,11 @@ async def _ensure_entity(
         # sys_id fallback name never overwrites a real name.
         if ref.name != ref.sys_id and existing.name != ref.name:
             existing.name = ref.name
+        # Traits refresh in place (B2): a present upstream value wins;
+        # an absent one never clears what an earlier sync captured.
+        for trait, value in ref.traits.items():
+            if value and getattr(existing, trait, None) != value:
+                setattr(existing, trait, value)
         return existing
 
     entity = Entity(
@@ -274,6 +297,7 @@ async def _ensure_entity(
         attributes=ref.attributes,
         source_ref={"system": external_system, "sys_id": ref.sys_id},
         confidence=1.0,
+        **{k: v for k, v in ref.traits.items() if k in TRAIT_FIELDS},
     )
     try:
         async with db.begin_nested():
