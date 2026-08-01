@@ -131,6 +131,14 @@ _EXPECTED_MARKERS: set[tuple[str, str]] = {
     ('correlation_suggestion.py', 'ForeignKey("evidence_items.id", ondelete="CASCADE"),'),
     ('correlation_suggestion.py',
      'UniqueConstraint( "evidence_id_low", "evidence_id_high", name="uq_correlation_suggestion_pair" ),'),
+    # issue_signature.py (migration 0045): problem fingerprints.
+    ('issue_signature.py', 'ForeignKey("error_signatures.id", ondelete="SET NULL"),'),
+    ('issue_signature.py', 'ForeignKey("episodes.id", ondelete="CASCADE"),'),
+    ('issue_signature.py', 'ForeignKey("issue_signatures.id", ondelete="CASCADE"),'),
+    ('issue_signature.py',
+     'UniqueConstraint("tenant_id", "signature_key", name="uq_issue_signature_key"),'),
+    ('issue_signature.py',
+     'UniqueConstraint( "episode_id", "issue_signature_id", name="uq_episode_issue_signature" ),'),
     # thread_topic.py (migration 0044): per-thread topic state.
     ('thread_topic.py', 'ForeignKey("threads.id", ondelete="CASCADE"),'),
     ('thread_topic.py', 'UniqueConstraint("thread_id", name="uq_thread_topic"),'),

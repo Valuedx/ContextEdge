@@ -182,6 +182,7 @@ from contextedge.ai.prompts import (  # noqa: E402, F401
     decision,
     episode,
     identity,
+    issue_signature,
     message_function,
     pattern,
     playbook,

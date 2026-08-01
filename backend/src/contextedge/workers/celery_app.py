@@ -165,6 +165,8 @@ celery_app = Celery(
         # Gated semantic correlation suggestions (evaluation.* name →
         # evaluation queue via the routing rule below).
         "contextedge.workers.suggestion_tasks",
+        # Issue-signature extraction on episode approval (B3).
+        "contextedge.workers.signature_tasks",
         # Post-hard-delete orphan sweeps (review F-18 / F-20).
         "contextedge.workers.cleanup_tasks",
         # Relational-to-graph edge reconciliation for post-0031 rows.
