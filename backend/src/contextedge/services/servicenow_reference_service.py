@@ -457,6 +457,15 @@ async def process_servicenow_references(
         )
         counts["entity_edges"] += 1
         if ref.edge_type == "affects_ci":
+            # B1: CIs join the class taxonomy (unknown classes fall back
+            # to configuration_item; a pre-0042 DB is a logged no-op).
+            from contextedge.services.entity_class_service import (
+                ensure_entity_class_edges,
+            )
+
+            await ensure_entity_class_edges(
+                db, tenant_id, entity, (ref.attributes or {}).get("ci_class")
+            )
             from contextedge.services.cmdb_topology_service import entity_is_stale
 
             if entity_is_stale(entity):

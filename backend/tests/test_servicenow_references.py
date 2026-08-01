@@ -135,7 +135,12 @@ def test_case_link_candidates_unchanged_for_other_sources():
 
 
 @pytest.mark.asyncio
-async def test_process_creates_typed_edges_and_entities():
+async def test_process_creates_typed_edges_and_entities(monkeypatch):
+    from unittest.mock import AsyncMock as _AM
+    monkeypatch.setattr(
+        "contextedge.services.entity_class_service.ensure_entity_class_edges",
+        _AM(return_value=None),
+    )
     tenant_id = uuid4()
     evidence = SimpleNamespace(id=uuid4(), domain_id=None)
     problem_evidence_id = uuid4()

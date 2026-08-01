@@ -109,7 +109,12 @@ async def test_fetch_neighborhood_filters_to_center_and_parses_refs():
 
 
 @pytest.mark.asyncio
-async def test_cache_neighborhood_ensures_edges_and_closes_deleted_rels():
+async def test_cache_neighborhood_ensures_edges_and_closes_deleted_rels(monkeypatch):
+    from unittest.mock import AsyncMock as _AM
+    monkeypatch.setattr(
+        "contextedge.services.entity_class_service.ensure_entity_class_edges",
+        _AM(return_value=None),
+    )
     tenant_id = uuid4()
     entities = {
         GW_SYS_ID: SimpleNamespace(id=uuid4(), last_synced_at=None),
@@ -319,7 +324,12 @@ async def test_warm_task_skips_fresh_entity_without_api_calls():
 
 
 @pytest.mark.asyncio
-async def test_stale_ci_surfaces_warm_candidate_from_reference_processing():
+async def test_stale_ci_surfaces_warm_candidate_from_reference_processing(monkeypatch):
+    from unittest.mock import AsyncMock as _AM
+    monkeypatch.setattr(
+        "contextedge.services.entity_class_service.ensure_entity_class_edges",
+        _AM(return_value=None),
+    )
     from contextedge.services.servicenow_reference_service import (
         process_servicenow_references,
     )
