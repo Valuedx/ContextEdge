@@ -236,17 +236,22 @@ async def _resolve_evidence_for_sys_id(
 
 
 async def _ensure_entity(
-    db: AsyncSession, tenant_id: uuid.UUID, ref: EntityReference
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    ref: EntityReference,
+    external_system: str = "servicenow",
 ) -> Entity:
     """Find-or-create on ``(external_system, external_id)`` — deliberately
     ignoring entity_type in the lookup so a CI whose class mapping changes
-    later updates the one existing row instead of forking a duplicate."""
+    later updates the one existing row instead of forking a duplicate.
+    ``external_system`` defaults to servicenow; the Jira reference service
+    reuses this with its own namespace."""
     existing = (
         await db.execute(
             select(Entity)
             .where(
                 Entity.tenant_id == tenant_id,
-                Entity.external_system == "servicenow",
+                Entity.external_system == external_system,
                 Entity.external_id == ref.sys_id,
             )
             .order_by(Entity.created_at)
@@ -263,11 +268,11 @@ async def _ensure_entity(
     entity = Entity(
         tenant_id=tenant_id,
         entity_type=ref.entity_type,
-        external_system="servicenow",
+        external_system=external_system,
         external_id=ref.sys_id,
         name=ref.name,
         attributes=ref.attributes,
-        source_ref={"system": "servicenow", "sys_id": ref.sys_id},
+        source_ref={"system": external_system, "sys_id": ref.sys_id},
         confidence=1.0,
     )
     try:
@@ -282,7 +287,7 @@ async def _ensure_entity(
                 select(Entity).where(
                     Entity.tenant_id == tenant_id,
                     Entity.entity_type == ref.entity_type,
-                    Entity.external_system == "servicenow",
+                    Entity.external_system == external_system,
                     Entity.external_id == ref.sys_id,
                 )
             )

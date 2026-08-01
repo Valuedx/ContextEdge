@@ -240,12 +240,15 @@ async def resolve_ci_entity(
                 .limit(1)
             )
         ).scalar_one_or_none()
+    # Name lookup is deliberately system-agnostic: Jira components and
+    # JSM services (external_system "jira_sm") are CI-like anchors too,
+    # and change-risk assessment must find them by name. The sys_id path
+    # above stays servicenow-scoped — 32-hex ids are a ServiceNow shape.
     return (
         await db.execute(
             select(Entity)
             .where(
                 Entity.tenant_id == tenant_id,
-                Entity.external_system == "servicenow",
                 func.lower(Entity.name) == term.strip().lower(),
             )
             .order_by(Entity.created_at)
@@ -357,6 +360,19 @@ async def lookup_topology(
         return {"error": {"code": "invalid_ci", "message": "Provide a CI name or sys_id."}}
 
     entity = await resolve_ci_entity(db, tenant_id, term)
+    if entity is not None and entity.external_system not in (None, "servicenow"):
+        # Name resolution is system-agnostic (Jira components resolve
+        # too), but live topology is a ServiceNow capability — a Jira
+        # entity's id must never reach a sysparm_query.
+        return {
+            "error": {
+                "code": "topology_unsupported_for_source",
+                "message": (
+                    f"'{entity.name}' is a {entity.external_system} entity; "
+                    "CMDB topology is only available for ServiceNow CIs."
+                ),
+            }
+        }
     sys_id = entity.external_id if entity is not None else _ref_sys_id(term)
     if sys_id is None:
         return {
