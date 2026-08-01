@@ -15,6 +15,17 @@ from contextedge.schemas.review import PatternEvidenceLinkCreate, PatternEvidenc
 from contextedge.workers.pattern_tasks import cluster_episodes
 
 router = APIRouter()
+
+
+@router.post("/audit-domains")
+async def audit_pattern_domains_endpoint(db: DbSession, user: AuthUser):
+    """C7: flag pre-guard patterns whose members belong to other
+    domains. Flags for review via operational events - never deletes;
+    reviewers fix membership through the pattern-link APIs."""
+    user.require_role("knowledge_manager")
+    from contextedge.services.pattern_audit_service import audit_pattern_domains
+
+    return await audit_pattern_domains(db, user.tenant_id)
 logger = structlog.get_logger()
 
 

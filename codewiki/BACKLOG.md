@@ -37,6 +37,7 @@ disposes; the mass-merge guard applies to every new linking signal.
 | Entity rarity | Degree-weighted identity tier; hub dampening (≥200 links = no signal) | #31 |
 | Semantic suggestions | Chunk-ANN + similarity floor 0.7 + non-semantic corroborator → reviewer queue; reject permanent (migration 0039) | #32 |
 | Field authority | Episode prompt v3 (authority by fact type), contradictions preserved (migration 0040), strict draft schema, per-source `synthesis_role`, quality metric | #34 |
+| M6 surfaces & robustness | C4 queue cap + Review Queues console · C6 projection contradictions · A8 edits/deletes lifecycle · A9 ASR normalization · C5 episode_citation eval kind · C7 pattern domain audit | #53–#58 |
 | M5 learning loops | B5 cohort stats + reviewer-gated promotion (0047: model/class/family counters, candidate rules always review-gated, failures narrow automatically) · C1 suggestion learning (per-pair floors from reviewer outcomes, stats endpoint) · C3 conflicting-ticket hard veto in the identity tier · B6 fleet grouping (0048: change-keyed detector, reviewer-gated parent-case minting, fleet_member memberships, 30m beat) | #49–#52 |
 | M4 similarity & transfer | B3 issue signatures (0045: fingerprint dedupe per tenant, approval-gated extraction, P4-pattern Pydantic gate) · C2 recurrence membership (pointer to precedent, excluded from cluster expansion) · B4 applicability ladder (0046: rules with required/excluded trait predicates, 7-level deterministic assessment, level floors, named provisional weights, MAF tool + API; Doc-3's four LPT001 examples are the acceptance tests) | #47–#48 |
 | M3 thread understanding | A3 thread topics (0044: anchored/provisional topics, unification sweep, thread_topic memberships) · A4 reference resolver (trigger-gated, identity-layer candidates, exactly-one-or-abstain) · A5 quoted content (quote detection, mentioned_only cap, weighted digest, quoted reconciliation) · A6 bot handling (structural card parsing at 0.95, prose downweight, no bot anchors, reduced bot inheritance) | #43–#46 |
@@ -162,7 +163,7 @@ a negative row; reviewer remove-evidence endpoint also writes one.
 a later plain mention of that ticket in the same thread does not re-create an active
 membership without review.
 
-### A8 · Edits & deletes reconciliation — M
+### A8 · Edits & deletes reconciliation — M — **SHIPPED 2026-08-03**
 **What.** Act on the edit/delete markers PR #28 captures: an edited message re-extracts
 (tokens may have changed) and supersedes its prior derived rows; a deleted message's
 derived memberships/pending mentions are retired.
@@ -175,7 +176,7 @@ cluster change.
 **Dependencies.** None. **Acceptance.** Editing "INC0010427" to "INC0010455" in Teams
 moves the membership; deleting the message retires it.
 
-### A9 · Transcript robustness (ASR + code-switching) — M
+### A9 · Transcript robustness (ASR + code-switching) — M — **SHIPPED 2026-08-03**
 **What.** Ticket-token and entity extraction tolerant of speech-to-text mangling
 ("I N C zero zero one zero four two seven", "V P N gateway") and mixed-language text.
 **Why.** Doc-2: meeting transcripts are a first-class evidence source
@@ -332,25 +333,25 @@ ticket memberships between the two evidence items = hard veto.
 **Acceptance.** Two evidence items sharing a rare device but carrying memberships to
 two *different* cases do not get an identity-tier edge.
 
-### C4 · Suggestion queue cap + reviewer console — M [Gap]
+### C4 · Suggestion queue cap + reviewer console — M [Gap] — **SHIPPED 2026-08-03**
 **What.** Per-tenant pending-suggestion cap (backfill storm protection) + minimal
 review UI (list/accept/reject exist as API only).
 **Acceptance.** A 10k-item backfill cannot create an unbounded pending queue; a
 reviewer can work the queue without curl.
 
-### C5 · Attribution-rate evaluation — M/L [Gap]
+### C5 · Attribution-rate evaluation — M/L [Gap] — **SHIPPED 2026-08-03**
 **What.** The labeled-data half of P4 item 6: an evaluation dataset with per-step gold
 citations; measure unsupported-claim and wrong-source-attribution rates per prompt
 version through the existing evaluation harness.
 **Acceptance.** `evaluation_runs` can compare episode v2 vs v3 on citation accuracy.
 
-### C6 · Agent projection renders contradictions — S [Gap]
+### C6 · Agent projection renders contradictions — S [Gap] — **SHIPPED 2026-08-03**
 **What.** `episodes.contradictions` reaches reviewers but not the MAF agent surface.
 Render a bounded contradictions block in episode facts (budget-aware).
 **Acceptance.** An agent consuming the Acme VPN episode sees that close notes and the
 Teams thread disagreed on the fix.
 
-### C7 · Historical pattern cleanup — S [Gap]
+### C7 · Historical pattern cleanup — S [Gap] — **SHIPPED 2026-08-03**
 **What.** Pre-domain-guard patterns may contain cross-domain members (PR #17 caveat).
 One-off audited cleanup task: recompute memberships, flag violations for review.
 
