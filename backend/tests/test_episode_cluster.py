@@ -63,6 +63,13 @@ async def test_cluster_expands_through_case_links_and_correlations():
             return _rows_result([(email, case_id)])  # cases → members
         if text.startswith("SELECT case_links.canonical_case_id"):
             return _scalars_result([case_id])  # frontier → cases
+        if "evidence_case_memberships" in text:
+            # No ticket-number memberships in this scenario; both the
+            # scalars() and rows() consumption shapes must be satisfied.
+            empty = Mock()
+            empty.scalars.return_value.all.return_value = []
+            empty.all.return_value = []
+            return empty
         if "correlation_edges" in text:
             return _rows_result([(incident, teams, "case_link_match")])
         return _rows_result([])

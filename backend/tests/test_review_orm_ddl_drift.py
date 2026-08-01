@@ -117,6 +117,15 @@ _EXPECTED_MARKERS: set[tuple[str, str]] = {
     # uq_identity_aliases_tenant_strong — partial unique index created in
     # migration 0033; mirrored into IdentityAlias.__table_args__ so
     # metadata-built schemas enforce strong-alias tenant uniqueness too.
+    # case_bridge.py (migration 0038): ticket-number bridging membership
+    # model — identifiers, memberships, pending mentions.
+    ('case_bridge.py', 'ForeignKey("evidence_items.id", ondelete="CASCADE"),'),
+    ('case_bridge.py',
+     'UniqueConstraint( "evidence_id", "canonical_case_id", name="uq_evidence_case_membership" ),'),
+    ('case_bridge.py',
+     'UniqueConstraint( "evidence_id", "normalized_value", name="uq_pending_mention" ),'),
+    ('case_bridge.py',
+     'UniqueConstraint( "tenant_id", "source_system", "normalized_value", name="uq_case_identifiers_tenant_system_value", ),'),
     ('episode.py', 'unique=True,'),
     # episode_evidence_links (migration 0037): normalized episode↔evidence
     # provenance added in the P0 cluster-materialization work.
