@@ -156,6 +156,14 @@ async def cache_neighborhood(
                 attributes={"ci_class": ci_class} if ci_class else {},
             ),
         )
+        # B1: cached topology CIs join the class taxonomy too.
+        from contextedge.services.entity_class_service import (
+            ensure_entity_class_edges,
+        )
+
+        await ensure_entity_class_edges(
+            db, tenant_id, entities_by_sys_id[sid], ci_class or None
+        )
 
     seen_rel_ids: set[str] = set()
     edges_ensured = 0

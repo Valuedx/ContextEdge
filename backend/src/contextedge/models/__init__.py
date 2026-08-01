@@ -33,6 +33,7 @@ from contextedge.models.decision import Decision, DecisionOption, DecisionOutcom
 
 # AE Ops Context Graph alignment (migration 0029).
 from contextedge.models.entity import ENTITY_TYPES, Entity
+from contextedge.models.entity_class import EntityClass
 from contextedge.models.episode import (
     CanonicalIdentity,
     CorrelationEdge,
@@ -94,7 +95,7 @@ __all__ = [
     "EvaluationDataset", "EvaluationRun", "RetrievalFeedback",
     "POLICY_TYPES", "TenantPolicy",
     # AE Ops Context Graph alignment
-    "ENTITY_TYPES", "Entity",
+    "ENTITY_TYPES", "Entity", "EntityClass",
     "CLAIM_TYPES", "VALIDATION_STATUSES", "CREATED_BY_TYPES",
     "Claim", "ClaimEvidence", "DecisionClaim", "DecisionEvidence",
     "RISK_LEVELS", "POLICY_RESULTS", "EXECUTION_MODES", "ActionPolicy",

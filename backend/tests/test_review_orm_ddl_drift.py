@@ -131,6 +131,9 @@ _EXPECTED_MARKERS: set[tuple[str, str]] = {
     ('correlation_suggestion.py', 'ForeignKey("evidence_items.id", ondelete="CASCADE"),'),
     ('correlation_suggestion.py',
      'UniqueConstraint( "evidence_id_low", "evidence_id_high", name="uq_correlation_suggestion_pair" ),'),
+    # entity_class.py (migration 0042): global class taxonomy.
+    ('entity_class.py',
+     'UniqueConstraint("canonical_key", name="uq_entity_classes_key"),'),
     ('episode.py', 'unique=True,'),
     # episode_evidence_links (migration 0037): normalized episode↔evidence
     # provenance added in the P0 cluster-materialization work.
