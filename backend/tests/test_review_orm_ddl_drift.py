@@ -126,6 +126,11 @@ _EXPECTED_MARKERS: set[tuple[str, str]] = {
      'UniqueConstraint( "evidence_id", "normalized_value", name="uq_pending_mention" ),'),
     ('case_bridge.py',
      'UniqueConstraint( "tenant_id", "source_system", "normalized_value", name="uq_case_identifiers_tenant_system_value", ),'),
+    # correlation_suggestion.py (migration 0039): gated semantic
+    # suggestions — normalized evidence pair, reviewer decision.
+    ('correlation_suggestion.py', 'ForeignKey("evidence_items.id", ondelete="CASCADE"),'),
+    ('correlation_suggestion.py',
+     'UniqueConstraint( "evidence_id_low", "evidence_id_high", name="uq_correlation_suggestion_pair" ),'),
     ('episode.py', 'unique=True,'),
     # episode_evidence_links (migration 0037): normalized episode↔evidence
     # provenance added in the P0 cluster-materialization work.

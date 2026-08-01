@@ -4,6 +4,7 @@ from fastapi import APIRouter, HTTPException, Query, status
 from sqlalchemy import or_, select
 
 from contextedge.deps import AuthUser, DbSession
+from contextedge.models.correlation_suggestion import CorrelationSuggestion
 from contextedge.models.episode import CorrelationEdge
 from contextedge.schemas.common import StatusResponse
 from contextedge.schemas.review import (
@@ -11,8 +12,13 @@ from contextedge.schemas.review import (
     CorrelationEdgeCreate,
     CorrelationEdgeResponse,
     CorrelationEdgeUpdate,
+    CorrelationSuggestionResponse,
 )
 from contextedge.services.correlation_service import create_correlation
+from contextedge.services.correlation_suggestion_service import (
+    accept_suggestion,
+    reject_suggestion,
+)
 
 router = APIRouter()
 
@@ -58,6 +64,71 @@ async def create_manual_correlation(
         body.confidence,
         explanation=body.explanation,
         created_by=user.email,
+    )
+
+
+@router.get("/suggestions", response_model=list[CorrelationSuggestionResponse])
+async def list_suggestions(
+    db: DbSession,
+    user: AuthUser,
+    status_filter: str = Query("pending", alias="status"),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+):
+    user.require_role("knowledge_manager")
+    stmt = (
+        select(CorrelationSuggestion)
+        .where(
+            CorrelationSuggestion.tenant_id == user.tenant_id,
+            CorrelationSuggestion.status == status_filter,
+        )
+        .order_by(CorrelationSuggestion.created_at.desc())
+        .limit(limit)
+        .offset(offset)
+    )
+    return (await db.execute(stmt)).scalars().all()
+
+
+async def _pending_suggestion(db, user, suggestion_id: UUID) -> CorrelationSuggestion:
+    suggestion = (
+        await db.execute(
+            select(CorrelationSuggestion).where(
+                CorrelationSuggestion.id == suggestion_id,
+                CorrelationSuggestion.tenant_id == user.tenant_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if not suggestion:
+        raise HTTPException(status_code=404, detail="Suggestion not found")
+    if suggestion.status != "pending":
+        raise HTTPException(
+            status_code=409, detail=f"Suggestion already {suggestion.status}"
+        )
+    return suggestion
+
+
+@router.post("/suggestions/{suggestion_id}/accept", response_model=CorrelationEdgeResponse)
+async def accept_correlation_suggestion(
+    suggestion_id: UUID,
+    db: DbSession,
+    user: AuthUser,
+):
+    user.require_role("knowledge_manager")
+    suggestion = await _pending_suggestion(db, user, suggestion_id)
+    return await accept_suggestion(db, user.tenant_id, suggestion, user.email)
+
+
+@router.post("/suggestions/{suggestion_id}/reject", response_model=StatusResponse)
+async def reject_correlation_suggestion(
+    suggestion_id: UUID,
+    db: DbSession,
+    user: AuthUser,
+):
+    user.require_role("knowledge_manager")
+    suggestion = await _pending_suggestion(db, user, suggestion_id)
+    await reject_suggestion(db, user.tenant_id, suggestion, user.email)
+    return StatusResponse(
+        status="rejected", detail={"suggestion_id": str(suggestion_id)}
     )
 
 

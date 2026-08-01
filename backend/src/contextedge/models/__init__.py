@@ -28,6 +28,7 @@ from contextedge.models.claim import (
     DecisionClaim,
     DecisionEvidence,
 )
+from contextedge.models.correlation_suggestion import CorrelationSuggestion
 from contextedge.models.decision import Decision, DecisionOption, DecisionOutcome
 
 # AE Ops Context Graph alignment (migration 0029).
@@ -84,6 +85,7 @@ __all__ = [
     "CanonicalIdentity", "IdentityAlias", "EvidenceIdentityLink", "CorrelationEdge",
     "Episode", "EpisodeStep",
     "CaseIdentifier", "EvidenceCaseMembership", "PendingIdentifierMention",
+    "CorrelationSuggestion",
     "Pattern", "PatternEvidenceLink", "NegativeKnowledgeItem", "Contradiction", "GraphEdge",
     "Playbook", "PlaybookVersion", "PlaybookEvidenceLink", "PlaybookApproval",
     "ResolutionSession", "DecisionTraceEvent", "CaseLink",

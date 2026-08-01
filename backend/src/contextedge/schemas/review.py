@@ -149,6 +149,21 @@ class CorrelationEdgeResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class CorrelationSuggestionResponse(BaseModel):
+    id: UUID
+    tenant_id: UUID
+    evidence_id_low: UUID
+    evidence_id_high: UUID
+    similarity: float
+    corroborators: list[str]
+    status: str
+    reviewed_by: str | None
+    reviewed_at: datetime | None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
 class CorrelationDecisionRequest(BaseModel):
     decision: str = Field(..., pattern=r"^(accept|reject|merge|split)$")
     confidence: float | None = Field(None, ge=0.0, le=1.0)
