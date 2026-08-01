@@ -67,6 +67,26 @@ async def create_manual_correlation(
     )
 
 
+@router.get("/suggestions/stats")
+async def suggestion_stats(db: DbSession, user: AuthUser):
+    """Reviewer-outcome aggregates per source pair and corroborator
+    type (C1). The per-pair learned floors derive from these counts —
+    visible here so a raised bar is never a mystery."""
+    user.require_role("knowledge_manager")
+    from contextedge.services.correlation_suggestion_service import (
+        SIMILARITY_FLOOR,
+        similarity_floor_for,
+        suggestion_review_stats,
+    )
+
+    stats = await suggestion_review_stats(db, user.tenant_id)
+    floors = {
+        pair: similarity_floor_for(pair, stats["pairs"])
+        for pair in stats["pairs"]
+    }
+    return {**stats, "base_floor": SIMILARITY_FLOOR, "effective_floors": floors}
+
+
 @router.get("/suggestions", response_model=list[CorrelationSuggestionResponse])
 async def list_suggestions(
     db: DbSession,

@@ -45,6 +45,14 @@ logger = structlog.get_logger()
 # Floor on 1 - cosine_distance. Below this the pair is not similar
 # enough to bother a reviewer with, corroborated or not.
 SIMILARITY_FLOOR = 0.7
+# Learning from reviewer decisions (C1) — counting, not ML: a source
+# pair whose suggestions reviewers keep rejecting gets a raised floor.
+# Ticket↔ticket text is boilerplate-heavy; chat↔chat is not — the
+# reviewers' accept rate is the ground truth for which is which.
+LEARNING_MIN_DECIDED = 10
+LEARNING_LOW_ACCEPT_RATE = 0.2
+LEARNING_FLOOR_RAISE = 0.05
+LEARNING_FLOOR_CAP = 0.85
 # Confidence stamped on the edge a reviewer's accept creates — a human
 # confirmed it, but the signal source is still semantic.
 ACCEPTED_EDGE_CONFIDENCE = 0.6
@@ -53,6 +61,69 @@ ACCEPTED_EDGE_CONFIDENCE = 0.6
 MAX_QUERY_CHUNKS = 6
 ANN_ROWS_PER_CHUNK = 20
 MAX_SUGGESTIONS_PER_RUN = 5
+
+
+def source_pair_key(type_a: str | None, type_b: str | None) -> str:
+    return "|".join(sorted([type_a or "unknown", type_b or "unknown"]))
+
+
+def similarity_floor_for(pair: str, pair_stats: dict) -> float:
+    """Per-pair floor: the base floor, raised when reviewers keep
+    rejecting this pair's suggestions. Floors only ever RAISE — learning
+    can make the generator stricter, never looser."""
+    stat = pair_stats.get(pair) or {}
+    accepted = stat.get("accepted", 0)
+    rejected = stat.get("rejected", 0)
+    decided = accepted + rejected
+    if decided >= LEARNING_MIN_DECIDED and (
+        accepted / decided
+    ) < LEARNING_LOW_ACCEPT_RATE:
+        return min(SIMILARITY_FLOOR + LEARNING_FLOOR_RAISE, LEARNING_FLOOR_CAP)
+    return SIMILARITY_FLOOR
+
+
+async def suggestion_review_stats(db: AsyncSession, tenant_id: uuid.UUID) -> dict:
+    """Reviewer-outcome aggregates: per source pair and per corroborator
+    type. Pure counting over decided suggestions; feeds the per-pair
+    floor and the reviewer-facing stats endpoint."""
+    from sqlalchemy.orm import aliased
+
+    from contextedge.models.source import Source
+
+    ev_low = aliased(EvidenceItem)
+    ev_high = aliased(EvidenceItem)
+    src_low = aliased(Source)
+    src_high = aliased(Source)
+    rows = (
+        await db.execute(
+            select(
+                CorrelationSuggestion.status,
+                CorrelationSuggestion.corroborators,
+                src_low.source_type,
+                src_high.source_type,
+            )
+            .join(ev_low, ev_low.id == CorrelationSuggestion.evidence_id_low)
+            .join(ev_high, ev_high.id == CorrelationSuggestion.evidence_id_high)
+            .outerjoin(src_low, src_low.id == ev_low.source_id)
+            .outerjoin(src_high, src_high.id == ev_high.source_id)
+            .where(
+                CorrelationSuggestion.tenant_id == tenant_id,
+                CorrelationSuggestion.status.in_(("accepted", "rejected")),
+            )
+            .limit(5000)
+        )
+    ).all()
+    pairs: dict[str, dict[str, int]] = {}
+    corroborators: dict[str, dict[str, int]] = {}
+    for status, corroborator_list, type_low, type_high in rows:
+        pair = source_pair_key(type_low, type_high)
+        pairs.setdefault(pair, {"accepted": 0, "rejected": 0})[status] += 1
+        for reason in corroborator_list or []:
+            kind = str(reason).split(":", 1)[0]
+            corroborators.setdefault(kind, {"accepted": 0, "rejected": 0})[
+                status
+            ] += 1
+    return {"pairs": pairs, "corroborators": corroborators}
 
 
 def _pair_key(a: uuid.UUID, b: uuid.UUID) -> tuple[uuid.UUID, uuid.UUID]:
@@ -267,11 +338,34 @@ async def suggest_semantic_correlations(
         db, tenant_id, evidence_id, candidate_ids
     )
 
+    # C1: per-pair learned floors. One batched source-type lookup for
+    # the seed + all candidates; a pair reviewers keep rejecting must
+    # clear a higher bar. Floors only raise, never lower.
+    stats = await suggestion_review_stats(db, tenant_id)
+    from contextedge.models.source import Source as _Source
+
+    type_rows = (
+        await db.execute(
+            select(EvidenceItem.id, _Source.source_type)
+            .outerjoin(_Source, _Source.id == EvidenceItem.source_id)
+            .where(
+                EvidenceItem.tenant_id == tenant_id,
+                EvidenceItem.id.in_(tuple([evidence_id, *candidate_ids])),
+            )
+        )
+    ).all()
+    source_types = {row[0]: row[1] for row in type_rows}
+    seed_type = source_types.get(evidence_id)
+
     ranked = sorted(candidates.items(), key=lambda kv: kv[1], reverse=True)
     for other_id, similarity in ranked:
         if counts["suggested"] >= MAX_SUGGESTIONS_PER_RUN:
             break
         if other_id in already_linked:
+            continue
+        pair = source_pair_key(seed_type, source_types.get(other_id))
+        if similarity < similarity_floor_for(pair, stats["pairs"]):
+            counts["floor_filtered"] = counts.get("floor_filtered", 0) + 1
             continue
         reasons = corroborators.get(other_id, [])
         if not reasons:

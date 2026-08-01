@@ -59,6 +59,12 @@ def _suggestion_db(
         result = Mock()
         if text.startswith("SET LOCAL hnsw.ef_search"):
             return result
+        if text.startswith("SELECT correlation_suggestions.status"):
+            result.all.return_value = []  # no decided suggestions yet
+            return result
+        if text.startswith("SELECT evidence_items.id,"):
+            result.all.return_value = []  # source types unknown in fakes
+            return result
         if text.startswith("SELECT evidence_items.id"):
             result.scalar_one_or_none.return_value = (
                 uuid4() if seed_visible else None
@@ -310,3 +316,137 @@ async def test_invisible_seed_generates_nothing():
     )
     counts = await suggest_semantic_correlations(db, tenant_id, uuid4())
     assert counts == {"suggested": 0, "candidates": 0, "uncorroborated": 0}
+
+
+# --- suggestion learning (C1) ----------------------------------------------
+
+
+def test_pair_floor_raises_only_on_evidence():
+    from contextedge.services.correlation_suggestion_service import (
+        LEARNING_FLOOR_RAISE,
+        SIMILARITY_FLOOR,
+        similarity_floor_for,
+        source_pair_key,
+    )
+
+    pair = source_pair_key("servicenow", "servicenow")
+    # Not enough decided suggestions: base floor holds.
+    assert similarity_floor_for(pair, {pair: {"accepted": 1, "rejected": 5}}) == (
+        SIMILARITY_FLOOR
+    )
+    # 1/12 accepted: reviewers keep rejecting -> raised floor.
+    assert similarity_floor_for(pair, {pair: {"accepted": 1, "rejected": 11}}) == (
+        SIMILARITY_FLOOR + LEARNING_FLOOR_RAISE
+    )
+    # Healthy accept rate: base floor, learning never loosens.
+    assert similarity_floor_for(pair, {pair: {"accepted": 8, "rejected": 4}}) == (
+        SIMILARITY_FLOOR
+    )
+    # Unknown pair: base floor.
+    assert similarity_floor_for("gmail|teams", {}) == SIMILARITY_FLOOR
+
+
+def test_source_pair_key_is_order_independent():
+    from contextedge.services.correlation_suggestion_service import source_pair_key
+
+    assert source_pair_key("teams", "servicenow") == source_pair_key(
+        "servicenow", "teams"
+    )
+    assert source_pair_key(None, "teams") == "teams|unknown"
+
+
+@pytest.mark.asyncio
+async def test_review_stats_aggregate_pairs_and_corroborators():
+    from contextedge.services.correlation_suggestion_service import (
+        suggestion_review_stats,
+    )
+
+    tenant_id = uuid4()
+    rows = [
+        ("accepted", ["shared_identity:x"], "servicenow", "teams"),
+        ("rejected", ["shared_identity:y"], "teams", "servicenow"),
+        ("rejected", ["shared_case:z", "shared_identity:w"], "servicenow", "servicenow"),
+    ]
+
+    async def execute(stmt):
+        result = Mock()
+        result.all.return_value = rows
+        return result
+
+    stats = await suggestion_review_stats(
+        SimpleNamespace(execute=execute), tenant_id
+    )
+
+    assert stats["pairs"]["servicenow|teams"] == {"accepted": 1, "rejected": 1}
+    assert stats["pairs"]["servicenow|servicenow"] == {"accepted": 0, "rejected": 1}
+    assert stats["corroborators"]["shared_identity"] == {
+        "accepted": 1,
+        "rejected": 2,
+    }
+    assert stats["corroborators"]["shared_case"] == {"accepted": 0, "rejected": 1}
+
+
+@pytest.mark.asyncio
+async def test_generator_filters_below_learned_floor():
+    """A rejected-heavy ticket|ticket pair needs > base-floor similarity;
+    a 0.72 candidate that would have passed the base floor is dropped."""
+    tenant_id = uuid4()
+    seed_id = uuid4()
+    other_id = uuid4()
+    identity_id = uuid4()
+    added = []
+    decided = [("rejected", [], "servicenow", "servicenow")] * 12
+
+    def build_db():
+        async def execute(stmt):
+            text = str(stmt)
+            result = Mock()
+            if text.startswith("SET LOCAL hnsw.ef_search"):
+                return result
+            if text.startswith("SELECT correlation_suggestions.status"):
+                result.all.return_value = decided
+                return result
+            if text.startswith("SELECT evidence_items.id,"):
+                result.all.return_value = [
+                    (seed_id, "servicenow"),
+                    (other_id, "servicenow"),
+                ]
+                return result
+            if text.startswith("SELECT evidence_items.id"):
+                result.scalar_one_or_none.return_value = uuid4()
+                return result
+            if text.startswith("SELECT evidence_chunks.embedding"):
+                result.scalars.return_value.all.return_value = [[0.1] * 4]
+                return result
+            if text.startswith("SELECT evidence_chunks.evidence_id"):
+                result.all.return_value = [(other_id, 0.28)]  # sim 0.72
+                return result
+            if text.startswith("SELECT correlation_edges.source_evidence_id"):
+                result.all.return_value = []
+                return result
+            if text.startswith("SELECT evidence_identity_links.identity_id") and "count(" in str(stmt):
+                result.all.return_value = [(identity_id, 3)]
+                return result
+            if text.startswith("SELECT evidence_identity_links.identity_id"):
+                result.scalars.return_value.all.return_value = [identity_id]
+                return result
+            if text.startswith("SELECT evidence_identity_links.evidence_id"):
+                result.all.return_value = [(other_id, identity_id)]
+                return result
+            result.scalar_one_or_none.return_value = None
+            result.scalars.return_value.all.return_value = []
+            result.all.return_value = []
+            return result
+
+        return SimpleNamespace(
+            execute=execute,
+            add=added.append,
+            flush=AsyncMock(),
+            begin_nested=Mock(return_value=_NestedTx()),
+        )
+
+    counts = await suggest_semantic_correlations(build_db(), tenant_id, seed_id)
+
+    assert counts["suggested"] == 0
+    assert counts.get("floor_filtered") == 1
+    assert added == []
