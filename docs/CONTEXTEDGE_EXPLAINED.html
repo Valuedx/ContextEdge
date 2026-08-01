@@ -171,7 +171,7 @@
   <h1>From raw tickets to an operational memory graph</h1>
   <p class="lede">
     ContextEdge watches your company's support tools (ServiceNow, Jira Service
-    Management, Gmail, Microsoft Teams), remembers every incident, learns which
+    Management, SapphireIMS, Gmail, Microsoft Teams), remembers every incident, learns which
     problems repeat, and hands that memory — with governance — to humans and AI
     agents. This page explains how, using one real incident followed end to end.
   </p>
@@ -293,6 +293,7 @@ flowchart LR
   subgraph Sources["External tools"]
     SN[ServiceNow]
     JR[Jira SM]
+    SI[SapphireIMS]
     GM[Gmail]
     TM[MS Teams]
   end
@@ -312,7 +313,7 @@ flowchart LR
     G["Context graph<br/>projection"]
     X["Governed execution<br/>approvals · audit"]
   end
-  SN & JR & GM & TM --> C
+  SN & JR & SI & GM & TM --> C
   EP & PA & PB --> G
   N --> S
   G --> A["MAF agents / dashboard"]
@@ -385,10 +386,17 @@ flowchart LR
   <p>
     Correlation asks: do these belong together? Both reference case
     <code>INC0007421</code> → a deterministic <b>case link</b> at confidence 1.0.
-    (If only a shared device inside a 7-day window connected them, the link
-    would be a cautious 0.65–0.75. A shared <em>person</em> alone creates no
-    link at all — John Smith touching two unrelated tickets months apart must
-    never glue them together.)
+    A ticket number quoted in a Teams message or email creates a
+    <b>case membership</b> for that evidence (proof it relates to the case —
+    never that every ticket quoted together is one case), and a Teams
+    <em>reply</em> inherits its parent message's case unless the reply says
+    otherwise ("different issue&hellip;"). If only a shared device connected
+    them inside a 7-day window, the link is rarity-weighted: a device seen in
+    a handful of items scores 0.75–0.85; a common one 0.65; a <em>hub</em>
+    entity linked to hundreds of items ("corporate network") creates no link
+    at all. A shared <em>person</em> alone never does either — John Smith
+    touching two unrelated tickets months apart must never glue them
+    together.
   </p>
   <pre class="mermaid">
 flowchart LR
@@ -406,6 +414,8 @@ flowchart LR
   <div class="refs"><b>What wrote this</b>
     <span class="file">services/correlation_service.py</span>
     (<code>correlate_evidence_item</code>: case/thread refs first, then gated identity co-occurrence)
+    <span class="file">services/ticket_bridge_service.py</span>
+    (ticket-number memberships, reply inheritance)
   </div>
 </div>
 
@@ -414,10 +424,16 @@ flowchart LR
   <span class="stage-tag">Stage 3 · Reconstruct the episode</span>
   <h3>Correlated evidence becomes one incident story</h3>
   <p>
-    An LLM reads the correlated cluster and writes the story: symptom
+    First the <b>cluster resolver</b> walks case links, ticket
+    memberships, and correlation edges (max 3 hops, 50 items, a 30-day
+    window, legal-hold and redaction fences applied in SQL) to assemble the
+    full evidence set — and reconstruction is <em>debounced</em>, waiting for
+    a burst of messages to settle instead of re-writing the story on every
+    reply. Then an LLM reads the cluster and writes the story: symptom
     ("all VPN logins failing"), root cause ("VPN certificate expired on
     vpn-gw-east-01"), resolution ("renewed certificate, restarted auth
-    service"). That story is an <b>Episode</b> node, wired to its proof with
+    service"). That story is an <b>Episode</b> node that cites which specific
+    evidence backs each step, wired to its proof with
     <code>derived_from</code> edges and to the systems it touched with
     <code>affects</code> edges. A human reviewer approves it before it can
     teach anything downstream.
@@ -434,6 +450,7 @@ flowchart TD
   classDef new fill:#0e7c66,color:#ffffff,stroke:#0e7c66
 </pre>
   <div class="refs"><b>What wrote this</b>
+    <span class="file">services/episode_cluster_service.py</span>
     <span class="file">services/episode_service.py</span>
     <span class="file">ai/extractors/episode_extractor.py</span>
     <span class="file">graph/builder.py</span> (<code>build_episode_graph</code>)
@@ -450,7 +467,11 @@ flowchart TD
     similar) clusters together. A <b>Pattern</b> node is born —
     "Recurring VPN auth failures from expired certificates" — with
     <code>clusters</code> edges to both episodes. More recurrences raise its
-    confidence.
+    confidence. At the evidence level, recurrence is also caught earlier:
+    when a new item's chunks read nearly identically to an old incident's
+    <em>and</em> the pair shares a rare entity or a case, a
+    <b>correlation suggestion</b> is queued for a reviewer — similarity alone
+    never links anything, and only an accepted suggestion becomes an edge.
   </p>
   <pre class="mermaid">
 flowchart TD
@@ -631,7 +652,12 @@ flowchart TD
       caps at 2,000 dims, so all similarity queries go through a
       <code>halfvec</code> expression index —
       <span class="file">search/vector_ops.py</span>,
-      <span class="file">alembic/versions/0032_halfvec_hnsw_indexes.py</span>.</li>
+      <span class="file">alembic/versions/0032_halfvec_hnsw_indexes.py</span>.
+      Search is <em>chunk-first</em>: it oversamples chunk-level matches,
+      diversifies them (MMR), and rolls up to one hit per parent evidence
+      scored by its best chunk — so the result points at the relevant
+      paragraph, not just the document —
+      <span class="file">search/chunk_rollup.py</span>.</li>
   <li><b>Hybrid ranking</b> combines both plus graph and identity signals to
       recommend playbooks — <span class="file">search/hybrid_ranker.py</span>.</li>
 </ul>
@@ -678,10 +704,16 @@ sequenceDiagram
 <h2 id="maf">6 · Plugging into MAF agents</h2>
 <p>
   Microsoft Agent Framework (MAF) agents are the primary consumers of this
-  memory. Integration is <b>one plugin, two mechanisms</b> — and the important
-  design fact for freshers: <b>the graph tool is read-only</b>. Agents read
-  memory through it; any <em>action</em> goes through the governed execution
-  API with its approvals.
+  memory. Integration is <b>one plugin, two mechanisms</b> — a memory provider
+  that injects context every turn, and read-only tools the model can call
+  mid-reasoning: <code>query_context_graph</code> (the graph slice, including
+  playbook steps), <code>cmdb_topology</code> (live ±1-hop CI neighborhood,
+  served from a demand-driven cache), and <code>assess_change_risk</code>
+  (deterministic per-CI risk profile from blamed-change history, incident
+  pressure, and blast radius). The important design fact for freshers:
+  <b>every tool is read-only</b>. Agents read memory through them; any
+  <em>action</em> goes through the governed execution API with its
+  approvals.
 </p>
 <pre class="mermaid">
 flowchart LR
@@ -690,7 +722,7 @@ flowchart LR
   end
   subgraph Plugin["ContextGraphMAFPlugin"]
     PR["1 · Memory provider<br/>(before_run: auto-inject<br/>context each turn)"]
-    TL["2 · query_context_graph<br/>(read-only tool the model<br/>can call mid-reasoning)"]
+    TL["2 · Read-only tools<br/>query_context_graph<br/>cmdb_topology · assess_change_risk"]
   end
   CE["ContextEdge<br/>graph projection<br/>(maf.v1 profile)"]
   PR --> CE
@@ -744,6 +776,8 @@ agent = Agent(
   <dt>Evidence</dt><dd>One raw piece of proof — a ticket, a chat thread, an email — redacted and embedded.</dd>
   <dt>Identity</dt><dd>One canonical person/device/service, with all its aliases attached.</dd>
   <dt>Correlation</dt><dd>A link saying two pieces of evidence concern the same incident.</dd>
+  <dt>Case membership</dt><dd>Proof that one evidence item relates to one case (e.g. it quotes the ticket number) — deliberately weaker than merging cases.</dd>
+  <dt>Correlation suggestion</dt><dd>A semantically-similar, corroborated evidence pair queued for human review; only an accepted suggestion becomes a correlation edge.</dd>
   <dt>Episode</dt><dd>One complete incident story (symptom → root cause → fix), human-approved.</dd>
   <dt>Pattern</dt><dd>A recurring problem, detected by clustering similar episodes.</dd>
   <dt>Playbook</dt><dd>The approved, versioned, step-by-step fix for a pattern — with risk tiers.</dd>
@@ -758,9 +792,9 @@ agent = Agent(
 
 <h2 style="margin-top: 40px;">The entire schema, in plain English</h2>
 <p class="lede" style="font-size: 1.05rem;">
-  ContextEdge stores everything in one PostgreSQL database — 61 tables, defined
+  ContextEdge stores everything in one PostgreSQL database — 66 tables, defined
   in <span class="file">models/</span> and evolved through numbered migrations
-  in <span class="file">alembic/versions/</span> (currently 0001–0034). Below is
+  in <span class="file">alembic/versions/</span> (currently 0001–0039). Below is
   every table, grouped by what it's <em>for</em>, described the way you'd
   explain it to a new teammate. Column names in <code>code</code> are the ones
   worth remembering.
@@ -840,7 +874,11 @@ erDiagram
 <div class="tablewrap"><table>
   <tr><th>Table</th><th>Plain English</th></tr>
   <tr><td class="tname">case_links</td><td>Maps external case identifiers (ticket number <code>INC0007421</code>, a thread id) to one internal <code>canonical_case_id</code>, so evidence from different tools about the same incident meets in the middle.</td></tr>
-  <tr><td class="tname">correlation_edges</td><td>"Evidence A and evidence B concern the same incident" — with a <code>correlation_type</code> and confidence: 1.0 for a shared case number, 0.5–0.75 for shared systems inside a 7-day window. A shared person alone never creates one.</td></tr>
+  <tr><td class="tname">correlation_edges</td><td>"Evidence A and evidence B concern the same incident" — with a <code>correlation_type</code> and confidence: 1.0 for a shared case number; rarity-weighted 0.65–0.85 for shared systems inside a 7-day window (a rarely-seen device is a strong signal; a hub entity linked to hundreds of items creates <em>no</em> edge). A shared person alone never creates one.</td></tr>
+  <tr><td class="tname">case_identifiers</td><td>The authoritative registry mapping a ticket's human-readable number (<code>INC0010427</code>, <code>ITOPS-101</code>) to its canonical case — written when the ticket itself is ingested.</td></tr>
+  <tr><td class="tname">evidence_case_memberships</td><td>"This evidence relates to that case" — one row per relationship with its type (<code>primary_case</code> / <code>explicit_reference</code> / <code>mentioned_only</code> / <code>reply_inheritance</code>) and confidence. A weekly digest quoting three tickets gets three <code>mentioned_only</code> rows; nothing ever merges the cases themselves.</td></tr>
+  <tr><td class="tname">pending_identifier_mentions</td><td>Ticket numbers quoted <em>before</em> their ticket was ingested — reconciled the moment the identifier registers, so bridging is ingestion-order independent.</td></tr>
+  <tr><td class="tname">correlation_suggestions</td><td>Semantically-similar evidence pairs (chunk-embedding similarity ≥ 0.7) that also share a rare trusted entity or a case — queued for a reviewer. Accept creates a real correlation edge; reject is permanent, so a pair is never re-suggested.</td></tr>
 </table></div>
 </div>
 
@@ -850,6 +888,7 @@ erDiagram
   <tr><th>Table</th><th>Plain English</th></tr>
   <tr><td class="tname">episodes</td><td>One complete incident story reconstructed from correlated evidence: title, <code>root_cause_summary</code>, <code>final_outcome</code>, its own embedding for similarity, and <code>reviewer_state</code> — an episode teaches nothing downstream until a human approves it.</td></tr>
   <tr><td class="tname">episode_steps</td><td>The ordered timeline inside the story: observation → hypothesis → action → verification.</td></tr>
+  <tr><td class="tname">episode_evidence_links</td><td>Which evidence each episode is actually built from, with the reason it joined the cluster ("same case", "ticket_ref:explicit_reference") — the provenance behind "why does this episode cite that message?".</td></tr>
 </table></div>
 </div>
 
@@ -925,7 +964,7 @@ erDiagram
 </pre>
 <div class="tablewrap"><table>
   <tr><th>Table</th><th>Plain English</th></tr>
-  <tr><td class="tname">execution_runs</td><td>One governed run of an approved playbook: who started it, its <code>max_safety_class</code> cap, status, and final <code>outcome</code> (validated against a fixed list; completion is refused while steps are still open).</td></tr>
+  <tr><td class="tname">execution_runs</td><td>One governed run of an approved playbook: who started it, its <code>max_safety_class</code> cap, status, and final <code>outcome</code> (validated against a fixed list; completion is refused while steps are still open). After completion, telemetry-based verification checks whether the fix actually held and stamps <code>verified</code> / <code>failed</code> / <code>unverifiable</code>.</td></tr>
   <tr><td class="tname">execution_step_runs</td><td>Each step's own record — status, inputs/outputs, <code>safety_class</code>, and whether it <code>requires_approval</code>. Unknown safety classes fail closed.</td></tr>
   <tr><td class="tname">tool_invocations</td><td>Every tool call a step made, with shadow-mode runs explicitly tagged so dry-runs never masquerade as real outcomes.</td></tr>
   <tr><td class="tname">approval_requests</td><td>The human gate for risky steps: pending → approved / denied / modified, row-locked so two admins can't double-decide, and policy-checked (approver roles, self-approval bans).</td></tr>
@@ -936,8 +975,12 @@ erDiagram
 
 <div class="schema-group">
 <h3>Group 13 · The operational world model — entities &amp; fixes</h3>
-<p>These tables model the IT landscape itself. The schema is ready; several
-population paths await the AutomationEdge connector (see KNOWN_GAPS).</p>
+<p>These tables model the IT landscape itself. Entities are populated from
+ticket references (CIs, assignment groups, business services) and by the
+demand-driven CMDB topology cache — which fetches a CI's live ±1-hop
+neighborhood from ServiceNow when a ticket references it, instead of
+bulk-copying the CMDB. Some population paths still await the AutomationEdge
+connector (see KNOWN_GAPS).</p>
 <div class="tablewrap"><table>
   <tr><th>Table</th><th>Plain English</th></tr>
   <tr><td class="tname">entities</td><td>Operational nouns that aren't people: a workflow (MG22), a server, a schedule — with their external system ids for exact matching.</td></tr>
