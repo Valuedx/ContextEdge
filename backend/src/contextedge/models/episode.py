@@ -12,6 +12,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    UniqueConstraint,
     func,
     text,
 )
@@ -238,6 +239,9 @@ class Episode(Base, TenantScopedMixin):
     )
     reviewer_user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     evidence_ids: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    # Hash of the resolved cluster's evidence set (0037): powers draft
+    # idempotency and supersede-on-growth in episode reconstruction.
+    cluster_fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True)
     entity_refs: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     embedding = mapped_column(Vector(3072), nullable=True)
 
@@ -268,3 +272,41 @@ class EpisodeStep(Base):
     extraction_confidence: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
 
     episode: Mapped["Episode"] = relationship(back_populates="steps")
+
+
+class EpisodeEvidenceLink(Base):
+    """Normalized episode↔evidence membership (migration 0037).
+
+    The JSONB ``Episode.evidence_ids`` list remains for cheap reads; this
+    table is the queryable provenance — which evidence grounds which
+    episode, and why (``link_reason``: the cluster reason or
+    ``model_attribution`` when the extractor assigned it).
+    """
+
+    __tablename__ = "episode_evidence_links"
+    __table_args__ = (
+        UniqueConstraint("episode_id", "evidence_id", name="uq_episode_evidence"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=False, index=True
+    )
+    episode_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("episodes.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    evidence_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("evidence_items.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    link_reason: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )

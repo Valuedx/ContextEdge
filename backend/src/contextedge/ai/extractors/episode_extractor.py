@@ -45,16 +45,38 @@ PER_ITEM_CHAR_LIMIT = 2000
 
 
 def _format_evidence_block(evidence_items: list[dict]) -> str:
+    """Each item is labelled [ev-N] so the model can ground episodes and
+    steps in specific evidence; ``source_role`` (ticket / working
+    discussion / external communication …) rides next to the raw source
+    so synthesis can weight them differently."""
     out = ""
     for i, item in enumerate(evidence_items):
-        out += f"\n--- Evidence {i + 1} ---\n"
-        out += f"Source: {item.get('source_type', 'unknown')}\n"
+        out += f"\n--- Evidence [ev-{i + 1}] ---\n"
+        out += f"Source: {item.get('source_type', 'unknown')}"
+        if item.get("source_role"):
+            out += f" ({item['source_role']})"
+        out += "\n"
         if item.get("timestamp"):
             out += f"Time: {item['timestamp']}\n"
         if item.get("title"):
             out += f"Title: {item['title']}\n"
         out += f"Content: {(item.get('body', '') or '')[:PER_ITEM_CHAR_LIMIT]}\n"
     return out
+
+
+def _translate_refs(raw_refs: object, ref_map: dict[str, str]) -> list[str] | None:
+    """Model-emitted [ev-N] labels → real evidence UUID strings. Unknown
+    or malformed labels are dropped (the model must never mint evidence);
+    None when nothing valid remains, so callers can distinguish "model
+    attributed nothing" from "model attributed these"."""
+    if not isinstance(raw_refs, list):
+        return None
+    translated = [
+        ref_map[str(label).strip().strip("[]")]
+        for label in raw_refs
+        if str(label).strip().strip("[]") in ref_map
+    ]
+    return translated or None
 
 
 def _chunk(items: list[dict], size: int):
@@ -88,11 +110,18 @@ async def _extract_from_chunk(
         # instruction — rare but observed on older model snapshots.
         episodes = [result]
 
+    ref_map = {
+        f"ev-{i + 1}": str(item.get("evidence_id"))
+        for i, item in enumerate(evidence_items)
+        if item.get("evidence_id")
+    }
     for ep in episodes:
+        ep["evidence_refs"] = _translate_refs(ep.get("evidence_refs"), ref_map)
         for step in ep.get("steps", []):
             step.setdefault("failed_flag", step.get("result_state") == "failure")
             step.setdefault("successful_flag", step.get("result_state") == "success")
             step.setdefault("confidence", 0.5)
+            step["evidence_refs"] = _translate_refs(step.get("evidence_refs"), ref_map)
 
     return episodes
 

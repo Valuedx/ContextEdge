@@ -227,6 +227,81 @@ async def trigger_manual_reconstruction(
     )
 
 
+@router.post("/{episode_id}/evidence/{evidence_id}", response_model=EpisodeResponse)
+async def add_episode_evidence(
+    episode_id: UUID, evidence_id: UUID, db: DbSession, user: AuthUser
+):
+    """Reviewer action (P0): attach evidence the cluster missed. Updates
+    both the JSONB list and the normalized provenance link."""
+    user.require_role("knowledge_manager")
+    from sqlalchemy import select as sa_select
+
+    from contextedge.models.episode import EpisodeEvidenceLink
+    from contextedge.models.evidence import EvidenceItem
+
+    episode = await db.get(Episode, episode_id)
+    if episode is None or episode.tenant_id != user.tenant_id:
+        raise HTTPException(status_code=404, detail="Episode not found")
+    evidence = await db.get(EvidenceItem, evidence_id)
+    if evidence is None or evidence.tenant_id != user.tenant_id:
+        raise HTTPException(status_code=404, detail="Evidence not found")
+
+    current = list(episode.evidence_ids or [])
+    if str(evidence_id) not in current:
+        episode.evidence_ids = current + [str(evidence_id)]
+        existing_link = (
+            await db.execute(
+                sa_select(EpisodeEvidenceLink.id).where(
+                    EpisodeEvidenceLink.episode_id == episode_id,
+                    EpisodeEvidenceLink.evidence_id == evidence_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if existing_link is None:
+            db.add(
+                EpisodeEvidenceLink(
+                    tenant_id=user.tenant_id,
+                    episode_id=episode_id,
+                    evidence_id=evidence_id,
+                    link_reason="reviewer_added",
+                )
+            )
+        await db.flush()
+    await db.commit()
+    await db.refresh(episode)
+    return episode
+
+
+@router.delete("/{episode_id}/evidence/{evidence_id}", response_model=EpisodeResponse)
+async def remove_episode_evidence(
+    episode_id: UUID, evidence_id: UUID, db: DbSession, user: AuthUser
+):
+    """Reviewer action (P0): detach evidence that does not belong to
+    this episode (mis-correlated or split-off content)."""
+    user.require_role("knowledge_manager")
+    from sqlalchemy import delete as sa_delete
+
+    from contextedge.models.episode import EpisodeEvidenceLink
+
+    episode = await db.get(Episode, episode_id)
+    if episode is None or episode.tenant_id != user.tenant_id:
+        raise HTTPException(status_code=404, detail="Episode not found")
+
+    current = list(episode.evidence_ids or [])
+    if str(evidence_id) in current:
+        episode.evidence_ids = [e for e in current if e != str(evidence_id)]
+        await db.execute(
+            sa_delete(EpisodeEvidenceLink).where(
+                EpisodeEvidenceLink.episode_id == episode_id,
+                EpisodeEvidenceLink.evidence_id == evidence_id,
+            )
+        )
+        await db.flush()
+    await db.commit()
+    await db.refresh(episode)
+    return episode
+
+
 @router.delete("/{episode_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_episode(episode_id: UUID, db: DbSession, user: AuthUser):
     """Permanently delete an episode and its steps."""

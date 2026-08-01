@@ -152,7 +152,7 @@ def test_all_migrated_prompt_families_registered():
     # identity defaults to v2 since the layered-resolver shipment (v1 stays
     # registered for tenants pinned to it); identity_adjudication is new.
     expected_defaults = {
-        "episode": "v1",
+        "episode": "v2",
         "decision": "v1",
         "identity": "v2",
         "identity_adjudication": "v1",
@@ -222,7 +222,7 @@ def test_episode_extractor_forwards_prompt_identity():
         ))
 
     assert captured.get("prompt_name") == "episode"
-    assert captured.get("prompt_version") == "v1"
+    assert captured.get("prompt_version") == "v2"
 
 
 def test_relevance_classifier_passes_prompt_version_to_llm():
