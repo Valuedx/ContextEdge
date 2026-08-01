@@ -65,6 +65,52 @@ TICKET_SOURCE_TYPES = {"servicenow", "jira_sm", "sapphireims"}
 CONVERSATIONAL_SOURCE_TYPES = {"teams", "gmail", "local_file"}
 
 
+# --- Transcript robustness: ASR normalization (A9) --------------------------
+
+# Speech-to-text renders "INC0010427" as "I N C zero zero one zero four
+# two seven". Normalize-then-match: collapse RUNS of single-character
+# tokens and digit words into one token, then let the SAME conservative
+# regex decide — never fuzzy matching. A run must be at least
+# _ASR_MIN_RUN tokens so ordinary prose ("a I b") is untouched.
+_ASR_DIGIT_WORDS = {
+    "zero": "0", "one": "1", "two": "2", "three": "3", "four": "4",
+    "five": "5", "six": "6", "seven": "7", "eight": "8", "nine": "9",
+    "oh": "0",
+}
+_ASR_MIN_RUN = 5
+_ASR_SINGLE = r"(?:[A-Za-z]|\d|zero|one|two|three|four|five|six|seven|eight|nine|oh)"
+_ASR_TOKEN_RE = re.compile(
+    rf"\b{_ASR_SINGLE}\b(?:[\s.-]+{_ASR_SINGLE}\b){{{_ASR_MIN_RUN - 1},}}",
+    re.IGNORECASE,
+)
+
+
+def normalize_transcript_text(text: str | None) -> str:
+    """Collapse spelled-out runs so the ticket regex can see them. NFKC
+    unicode folding first (full-width digits, code-switched text)."""
+    import unicodedata
+
+    if not text:
+        return ""
+    folded = unicodedata.normalize("NFKC", text)
+
+    def _collapse(match: re.Match) -> str:
+        parts = re.split(r"[\s.-]+", match.group(0).strip())
+        out = []
+        for part in parts:
+            lower = part.lower()
+            if lower in _ASR_DIGIT_WORDS:
+                out.append(_ASR_DIGIT_WORDS[lower])
+            else:
+                out.append(part.upper())
+        return "".join(out)
+
+    return _ASR_TOKEN_RE.sub(_collapse, folded)
+
+
+TRANSCRIPT_CONFIDENCE = 0.7
+
+
 # --- Quoted / forwarded content (A5) ----------------------------------------
 
 # Deterministic quote markers. Everything from a block marker to the end
@@ -336,6 +382,16 @@ async def register_ticket_identifier(
                 "dissociation",
                 status="negative",
             )
+        elif mention.extraction_location == "transcript_normalized":
+            added = await _add_membership(
+                db,
+                tenant_id,
+                mention.evidence_id,
+                canonical_case_id,
+                "explicit_reference",
+                TRANSCRIPT_CONFIDENCE,
+                "transcript_normalized",
+            )
         elif mention.extraction_location == "quoted_body":
             added = await _add_membership(
                 db,
@@ -408,13 +464,32 @@ async def bridge_conversational_mentions(
         for t, quoted in extract_ticket_tokens_with_spans(evidence.body_text)
         if t not in subject_tokens and t not in card_tokens
     ]
-    if not subject_tokens and not body_pairs and not card_tokens:
+    # A9: tokens the regex only sees after ASR normalization ("I N C
+    # zero zero...") join at reduced confidence. Normalize-then-match —
+    # the conservative regex still makes every decision.
+    already = (
+        set(subject_tokens)
+        | set(card_tokens)
+        | {t for t, _q in body_pairs}
+    )
+    transcript_tokens = [
+        t
+        for t in extract_ticket_tokens(normalize_transcript_text(evidence.body_text))
+        if t not in already
+    ]
+    if (
+        not subject_tokens
+        and not body_pairs
+        and not card_tokens
+        and not transcript_tokens
+    ):
         return counts
 
     located = (
         [("bot_card", t) for t in card_tokens]
         + [("subject", t) for t in subject_tokens if t not in card_tokens]
         + [("quoted_body" if quoted else "body", t) for t, quoted in body_pairs]
+        + [("transcript_normalized", t) for t in transcript_tokens]
     )
 
     resolved: list[tuple[str, str, uuid.UUID]] = []
@@ -534,6 +609,10 @@ async def bridge_conversational_mentions(
             # A bot's own prose is second-hand narration: downweighted,
             # and never a thread-topic anchor by itself.
             confidence = BOT_TEXT_CONFIDENCE
+        elif location == "transcript_normalized":
+            # ASR-recovered token (A9): reduced confidence, and it never
+            # anchors a thread topic — speech transcription is lossy.
+            confidence = TRANSCRIPT_CONFIDENCE
         elif not is_digest:
             anchored_cases.add(case_id)
         if await _add_membership(

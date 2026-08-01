@@ -1364,3 +1364,53 @@ async def test_lifecycle_noop_without_markers_or_id():
         SimpleNamespace(), tenant_id, ev, {"is_deleted": True}
     )
     assert counts["action"] is None  # no message_id -> nothing to match
+
+
+# --- transcript robustness (A9) ---------------------------------------------
+
+
+def test_asr_normalization_collapses_long_runs_only():
+    from contextedge.services.ticket_bridge_service import (
+        extract_ticket_tokens,
+        normalize_transcript_text,
+    )
+
+    spoken = "we are tracking this under I N C zero zero one zero four two seven"
+    assert extract_ticket_tokens(normalize_transcript_text(spoken)) == ["INC0010427"]
+    # Short runs and ordinary prose are untouched.
+    assert normalize_transcript_text("the V P N is down") == "the V P N is down"
+    assert normalize_transcript_text("a I b said hello") == "a I b said hello"
+    assert normalize_transcript_text(None) == ""
+    # "oh" as spoken zero.
+    spoken_oh = "ticket I N C oh oh one oh four two seven please"
+    assert "INC0010427" in normalize_transcript_text(spoken_oh)
+
+
+@pytest.mark.asyncio
+async def test_asr_recovered_token_joins_at_reduced_confidence():
+    from contextedge.services.ticket_bridge_service import (
+        TRANSCRIPT_CONFIDENCE,
+        bridge_conversational_mentions,
+    )
+
+    tenant_id = uuid4()
+    case_id = uuid4()
+    added = []
+    ev = SimpleNamespace(
+        id=uuid4(), title=None,
+        body_text="okay so we are tracking under I N C zero zero one zero four two seven",
+        thread_id=None, message_function=None, message_function_confidence=None,
+    )
+    db = _negation_db(case_id, [], added)
+
+    counts = await bridge_conversational_mentions(db, tenant_id, ev)
+
+    assert counts["memberships"] == 1
+    # ASR recovery never anchors a thread topic.
+    assert counts.get("anchor_case_id") is None
+    from contextedge.models.case_bridge import EvidenceCaseMembership
+
+    (row,) = [a for a in added if isinstance(a, EvidenceCaseMembership)]
+    assert row.confidence == TRANSCRIPT_CONFIDENCE
+    assert row.extraction_location == "transcript_normalized"
+    assert row.relationship_type == "explicit_reference"
