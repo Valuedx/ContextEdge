@@ -18,6 +18,7 @@ import structlog
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from contextedge.models.case_bridge import EvidenceCaseMembership
 from contextedge.models.episode import (
     CanonicalIdentity,
     CorrelationEdge,
@@ -324,6 +325,68 @@ async def correlate_evidence_item(
         if signal is None:
             continue
         identity_correlations[related_id] = signal
+
+    # Negative signal (C3): conflicting ticket anchors are a HARD veto.
+    # Two evidence items firmly attached to DIFFERENT cases sharing a
+    # rare device within the window is the "same infrastructure,
+    # different incidents" trap — the identity tier must not glue them.
+    # Recurrence memberships are excluded from both sides: recurrence
+    # explicitly means a different occurrence and must neither create
+    # nor suppress a conflict.
+    conflict_vetoes = 0
+    if identity_correlations:
+        anchor_relationships = (
+            "primary_case",
+            "explicit_reference",
+            "reply_inheritance",
+            "thread_topic",
+        )
+        seed_case_rows = (
+            await db.execute(
+                select(EvidenceCaseMembership.canonical_case_id).where(
+                    EvidenceCaseMembership.tenant_id == tenant_id,
+                    EvidenceCaseMembership.evidence_id == evidence.id,
+                    EvidenceCaseMembership.status == "active",
+                    EvidenceCaseMembership.relationship_type.in_(
+                        anchor_relationships
+                    ),
+                )
+            )
+        ).scalars().all()
+        seed_case_set = set(seed_case_rows)
+        if seed_case_set:
+            related_case_rows = (
+                await db.execute(
+                    select(
+                        EvidenceCaseMembership.evidence_id,
+                        EvidenceCaseMembership.canonical_case_id,
+                    ).where(
+                        EvidenceCaseMembership.tenant_id == tenant_id,
+                        EvidenceCaseMembership.evidence_id.in_(
+                            tuple(identity_correlations)
+                        ),
+                        EvidenceCaseMembership.status == "active",
+                        EvidenceCaseMembership.relationship_type.in_(
+                            anchor_relationships
+                        ),
+                    )
+                )
+            ).all()
+            cases_by_evidence: dict[uuid.UUID, set[uuid.UUID]] = {}
+            for related_id, case_id in related_case_rows:
+                cases_by_evidence.setdefault(related_id, set()).add(case_id)
+            for related_id in list(identity_correlations):
+                other_cases = cases_by_evidence.get(related_id, set())
+                if other_cases and not (other_cases & seed_case_set):
+                    del identity_correlations[related_id]
+                    conflict_vetoes += 1
+            if conflict_vetoes:
+                logger.info(
+                    "correlation.conflicting_ticket_veto",
+                    tenant_id=str(tenant_id),
+                    evidence_id=str(evidence.id),
+                    vetoed=conflict_vetoes,
+                )
 
     identity_related_evidence_ids = set(identity_correlations)
     related_evidence_ids.update(identity_related_evidence_ids)
