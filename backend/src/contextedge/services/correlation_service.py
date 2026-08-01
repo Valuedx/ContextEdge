@@ -480,6 +480,23 @@ async def correlate_evidence_item(
                     )
                 if ticket_bridge is not None:
                     ticket_bridge["reply_inheritance"] = reply_result
+            # A2: a confident correction retires what its target message
+            # established. Runs AFTER the bridge so the correction's own
+            # tokens have become memberships it can propagate from.
+            if getattr(evidence, "message_function", None) == "correction":
+                from contextedge.services.ticket_bridge_service import (
+                    apply_correction,
+                )
+
+                async with db.begin_nested():
+                    correction_result = await apply_correction(
+                        db,
+                        tenant_id,
+                        evidence,
+                        raw_payload if isinstance(raw_payload, dict) else None,
+                    )
+                if ticket_bridge is not None:
+                    ticket_bridge["correction"] = correction_result
     except Exception as exc:
         logger.warning(
             "ticket_bridge.failed",
