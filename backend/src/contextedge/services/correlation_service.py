@@ -15,7 +15,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 
 import structlog
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from contextedge.models.episode import (
@@ -37,21 +37,52 @@ logger = structlog.get_logger()
 IDENTITY_CORRELATION_WINDOW = timedelta(days=7)
 
 
+# Rarity weighting for the identity tier. An entity linked to a handful
+# of evidence items is a strong correlation signal (vpn-gw-emea-03 in
+# four items is one story); an entity linked to hundreds is operational
+# wallpaper ("corporate network" would correlate everything — the
+# mass-merge lesson applied to identities). Degree = count of evidence
+# links for the identity across the tenant.
+RARE_DEGREE_MAX = 5
+HUB_DEGREE_MIN = 200
+RARE_ENTITY_CONFIDENCE = 0.75
+COMMON_ENTITY_CONFIDENCE = 0.65
+
+
 def _identity_correlation_signal(
     shared_identity_ids: set[uuid.UUID],
     identity_types: dict[uuid.UUID, str],
+    identity_degrees: dict[uuid.UUID, int] | None = None,
 ) -> tuple[float, str] | None:
     """Score a shared-identity correlation, or None when the signal is too
-    weak to record (person-only single identity)."""
-    non_person = [
+    weak to record (person-only single identity, or hub-only overlap).
+
+    Hub identities (degree >= HUB_DEGREE_MIN) carry no correlation
+    signal at all — not even toward the multi-identity person tier.
+    Unknown degrees fail open as common (missing stats must not silence
+    the tier).
+    """
+    degrees = identity_degrees or {}
+    non_hub = {
         identity_id
         for identity_id in shared_identity_ids
+        if degrees.get(identity_id, 0) < HUB_DEGREE_MIN
+    }
+    non_person = [
+        identity_id
+        for identity_id in non_hub
         if identity_types.get(identity_id) not in (None, "person")
     ]
     if non_person:
-        confidence = 0.65 + (0.1 if len(shared_identity_ids) >= 2 else 0.0)
-        return min(confidence, 0.75), "Shared non-person entity within time window"
-    if len(shared_identity_ids) >= 2:
+        rare = any(
+            0 < degrees.get(identity_id, 0) <= RARE_DEGREE_MAX
+            for identity_id in non_person
+        )
+        base = RARE_ENTITY_CONFIDENCE if rare else COMMON_ENTITY_CONFIDENCE
+        confidence = base + (0.1 if len(non_hub) >= 2 else 0.0)
+        label = "rare operational entity" if rare else "shared non-person entity"
+        return min(confidence, 0.85), f"Shared {label} within time window"
+    if len(non_hub) >= 2:
         return 0.5, "Multiple shared identities within time window"
     return None
 
@@ -226,15 +257,42 @@ async def correlate_evidence_item(
         )
         identity_types = {row[0]: row[1] for row in type_rows.all()}
 
-    shared_by_evidence: dict[uuid.UUID, set[uuid.UUID]] = {}
+    # Degree stats for rarity weighting — one grouped count for every
+    # trusted identity, computed BEFORE the link fetch so hub identities
+    # never fan out: an identity linked to hundreds of evidence items
+    # must not correlate them all, and must not drag hundreds of link
+    # rows into every correlate call either.
+    identity_degrees: dict[uuid.UUID, int] = {}
     if identity_types:
+        degree_rows = await db.execute(
+            select(
+                EvidenceIdentityLink.identity_id,
+                # distinct: the same (evidence, identity) pair can be
+                # linked more than once (alias + strong-id matches).
+                func.count(func.distinct(EvidenceIdentityLink.evidence_id)),
+            )
+            .where(
+                EvidenceIdentityLink.tenant_id == tenant_id,
+                EvidenceIdentityLink.identity_id.in_(tuple(identity_types)),
+            )
+            .group_by(EvidenceIdentityLink.identity_id)
+        )
+        identity_degrees = {row[0]: int(row[1]) for row in degree_rows.all()}
+    non_hub_identity_ids = {
+        identity_id
+        for identity_id in identity_types
+        if identity_degrees.get(identity_id, 0) < HUB_DEGREE_MIN
+    }
+
+    shared_by_evidence: dict[uuid.UUID, set[uuid.UUID]] = {}
+    if non_hub_identity_ids:
         link_rows = await db.execute(
             select(
                 EvidenceIdentityLink.evidence_id,
                 EvidenceIdentityLink.identity_id,
             ).where(
                 EvidenceIdentityLink.tenant_id == tenant_id,
-                EvidenceIdentityLink.identity_id.in_(tuple(identity_types)),
+                EvidenceIdentityLink.identity_id.in_(tuple(non_hub_identity_ids)),
                 EvidenceIdentityLink.evidence_id != evidence.id,
             )
         )
@@ -262,7 +320,7 @@ async def correlate_evidence_item(
             continue
         if abs(evidence_time - related_time) > IDENTITY_CORRELATION_WINDOW:
             continue
-        signal = _identity_correlation_signal(shared, identity_types)
+        signal = _identity_correlation_signal(shared, identity_types, identity_degrees)
         if signal is None:
             continue
         identity_correlations[related_id] = signal

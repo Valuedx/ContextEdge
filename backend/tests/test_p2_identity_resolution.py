@@ -190,6 +190,7 @@ async def test_correlation_links_shared_device_identity_within_window():
         evidence, source, raw,
         [
             _AllResult([(identity_id, "device")]),  # trusted identity types
+            _AllResult([(identity_id, 12)]),  # identity degrees
             _AllResult([(other_evidence_id, identity_id)]),  # shared links
             _AllResult([(other_evidence_id, evidence.ingested_at)]),  # times
             _ScalarOneOrNoneResult(None),  # correlation-edge dedupe
@@ -221,6 +222,7 @@ async def test_correlation_ignores_person_only_single_identity():
         evidence, source, raw,
         [
             _AllResult([(identity_id, "person")]),
+            _AllResult([(identity_id, 12)]),
             _AllResult([(other_evidence_id, identity_id)]),
             _AllResult([(other_evidence_id, evidence.ingested_at)]),
         ],
@@ -248,6 +250,7 @@ async def test_correlation_ignores_identity_outside_time_window():
         evidence, source, raw,
         [
             _AllResult([(identity_id, "device")]),
+            _AllResult([(identity_id, 12)]),
             _AllResult([(other_evidence_id, identity_id)]),
             _AllResult([(other_evidence_id, six_months_ago)]),
         ],
@@ -299,3 +302,61 @@ async def test_rank_playbooks_identity_signal_boosts_score():
     assert len(ranked) == 1
     assert ranked[0].breakdown["identity"] == 1.0
     assert ranked[0].score > 0.0
+
+
+@pytest.mark.asyncio
+async def test_correlation_rare_entity_scores_higher():
+    """A rarely-seen operational entity is a stronger signal than the flat tier."""
+    tenant_id = uuid4()
+    identity_id = uuid4()
+    other_evidence_id = uuid4()
+    evidence, source, raw = _correlation_fixtures(tenant_id)
+
+    db, added = _correlation_db(
+        evidence, source, raw,
+        [
+            _AllResult([(identity_id, "device")]),
+            _AllResult([(identity_id, 4)]),  # rare: 4 linked evidence items
+            _AllResult([(other_evidence_id, identity_id)]),
+            _AllResult([(other_evidence_id, evidence.ingested_at)]),
+            _ScalarOneOrNoneResult(None),
+        ],
+    )
+
+    with patch(
+        "contextedge.services.correlation_service.get_identity_ids_for_evidence",
+        AsyncMock(return_value={identity_id}),
+    ):
+        result = await correlate_evidence_item(db, tenant_id, evidence.id)
+
+    assert result["correlations_created"] == 1
+    edges = [obj for obj in added if isinstance(obj, CorrelationEdge)]
+    assert edges[0].confidence == 0.75
+    assert "rare operational entity" in edges[0].explanation
+
+
+@pytest.mark.asyncio
+async def test_correlation_hub_entity_carries_no_signal():
+    """An identity linked to hundreds of evidence items must not correlate
+    them (mass-merge guard applied to the identity tier)."""
+    tenant_id = uuid4()
+    identity_id = uuid4()
+    other_evidence_id = uuid4()
+    evidence, source, raw = _correlation_fixtures(tenant_id)
+
+    db, added = _correlation_db(
+        evidence, source, raw,
+        [
+            _AllResult([(identity_id, "service")]),
+            _AllResult([(identity_id, 350)]),  # hub: link fetch is skipped
+        ],
+    )
+
+    with patch(
+        "contextedge.services.correlation_service.get_identity_ids_for_evidence",
+        AsyncMock(return_value={identity_id}),
+    ):
+        result = await correlate_evidence_item(db, tenant_id, evidence.id)
+
+    assert not [obj for obj in added if isinstance(obj, CorrelationEdge)]
+    assert result.get("correlations_created", 0) == 0
