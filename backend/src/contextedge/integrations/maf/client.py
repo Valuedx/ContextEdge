@@ -170,3 +170,54 @@ class HttpContextGraphClient:
         finally:
             if owns_client:
                 await client.aclose()
+
+
+class HttpCmdbTopologyClient:
+    """Deployment-neutral twin of InProcessCmdbTopologyClient (D3): the
+    same ``lookup`` contract over HTTPS against
+    ``GET /api/v1/graph/cmdb-topology``. Token hygiene mirrors
+    HttpContextGraphClient — headers carry credentials, so plain HTTP is
+    refused unless local development opts in.
+    """
+
+    def __init__(
+        self,
+        base_url: str,
+        *,
+        bearer_token: str | None = None,
+        service_token: str | None = None,
+        timeout: float = 15.0,
+        client: httpx.AsyncClient | None = None,
+        allow_insecure_http: bool = False,
+    ):
+        self.base_url = base_url.rstrip("/")
+        scheme = self.base_url.split("://", 1)[0].lower() if "://" in self.base_url else ""
+        if scheme != "https" and not (allow_insecure_http and scheme == "http"):
+            raise ValueError(
+                "HttpCmdbTopologyClient requires an https:// base_url; pass "
+                "allow_insecure_http=True to use http:// in local development."
+            )
+        self.bearer_token = bearer_token
+        self.service_token = service_token
+        self.timeout = timeout
+        self.client = client
+
+    async def lookup(self, term: str) -> dict:
+        headers: dict[str, str] = {}
+        if self.bearer_token:
+            headers["Authorization"] = f"Bearer {self.bearer_token}"
+        if self.service_token:
+            headers["X-Service-Token"] = self.service_token
+        owns_client = self.client is None
+        client = self.client or httpx.AsyncClient(timeout=self.timeout)
+        try:
+            response = await client.get(
+                f"{self.base_url}/api/v1/graph/cmdb-topology",
+                params={"ci": term},
+                headers=headers,
+            )
+            response.raise_for_status()
+            return response.json()
+        finally:
+            if owns_client:
+                await client.aclose()

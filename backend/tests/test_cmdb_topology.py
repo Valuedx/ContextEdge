@@ -522,3 +522,44 @@ async def test_live_lookup_flags_nonexistent_ci():
     assert result["ci_found"] is False
     assert result["neighbors"] == []
     assert result["cache"]["skipped_unknown_ci"] is True
+
+
+# --- HTTP client twin (D3) --------------------------------------------------
+
+
+def test_http_topology_client_refuses_plain_http():
+    from contextedge.integrations.maf.client import HttpCmdbTopologyClient
+
+    with pytest.raises(ValueError, match="https"):
+        HttpCmdbTopologyClient("http://contextedge.internal")
+    # Local development opt-in works; https always works.
+    HttpCmdbTopologyClient("http://localhost:8000", allow_insecure_http=True)
+    HttpCmdbTopologyClient("https://contextedge.internal")
+
+
+@pytest.mark.asyncio
+async def test_http_topology_client_calls_endpoint_with_tokens():
+    from unittest.mock import AsyncMock, Mock
+
+    from contextedge.integrations.maf.client import HttpCmdbTopologyClient
+
+    response = Mock()
+    response.raise_for_status = Mock()
+    response.json = Mock(return_value={"ci_found": True})
+    fake_http = Mock()
+    fake_http.get = AsyncMock(return_value=response)
+
+    client = HttpCmdbTopologyClient(
+        "https://contextedge.internal",
+        bearer_token="jwt",
+        service_token="svc",
+        client=fake_http,
+    )
+    out = await client.lookup("vpn-gw-emea-03")
+
+    assert out == {"ci_found": True}
+    call = fake_http.get.await_args
+    assert call.args[0].endswith("/api/v1/graph/cmdb-topology")
+    assert call.kwargs["params"] == {"ci": "vpn-gw-emea-03"}
+    assert call.kwargs["headers"]["Authorization"] == "Bearer jwt"
+    assert call.kwargs["headers"]["X-Service-Token"] == "svc"
