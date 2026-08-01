@@ -22,7 +22,7 @@ from contextedge.models.error_signature import ErrorSignature, FixPattern
 from contextedge.models.evidence import EvidenceItem
 from contextedge.models.execution import ApprovalRequest, ExecutionRun
 from contextedge.models.pattern import Pattern
-from contextedge.models.playbook import Playbook
+from contextedge.models.playbook import Playbook, PlaybookVersion
 from contextedge.models.policy import TenantPolicy
 from contextedge.models.session import ResolutionSession
 from contextedge.models.tenant import User
@@ -151,6 +151,49 @@ def node_is_visible(
     } and not getattr(obj, "is_active", True):
         return False
     return True
+
+
+# Bounded rendering of a playbook's current version into node facts — an
+# agent that can see a playbook exists but not what it DOES has to make a
+# second round-trip (or worse, guess). Caps keep a 40-step runbook from
+# eating the projection's token budget: the playbook budget in maf.v1 is
+# 2 nodes, so worst case is ~2 bounded step lists per projection.
+PLAYBOOK_STEPS_CAP = 15
+PLAYBOOK_STEP_CHARS = 200
+PLAYBOOK_TRIGGER_BUDGET = 600
+PLAYBOOK_ROLLBACK_CHARS = 300
+
+
+def playbook_version_facts(version: PlaybookVersion) -> tuple[dict[str, Any], float | None]:
+    """(facts, confidence) from the current version. Steps render as
+    ordered labels (title / text / action, same precedence the embedding
+    text uses); trigger conditions flatten to bounded strings."""
+    from contextedge.services.playbook_embedding import _flatten_strings
+
+    # JSONB defends nothing: a corrupt non-list steps value must degrade
+    # to "no steps shown", never TypeError the whole projection.
+    steps = version.steps if isinstance(version.steps, list) else []
+    step_labels: list[str] = []
+    for index, step in enumerate(steps[:PLAYBOOK_STEPS_CAP], start=1):
+        if isinstance(step, dict):
+            label = step.get("title") or step.get("text") or step.get("action")
+        else:
+            label = step
+        if label:
+            step_labels.append(f"{index}. {_text(label, PLAYBOOK_STEP_CHARS)}")
+
+    facts: dict[str, Any] = {
+        "semantic_version": version.semantic_version,
+        "steps_total": len(steps),
+        "steps": step_labels,
+    }
+    triggers = _flatten_strings(version.trigger_conditions, PLAYBOOK_TRIGGER_BUDGET)
+    if triggers:
+        facts["trigger_conditions"] = triggers
+    rollback = _text(version.rollback_notes, PLAYBOOK_ROLLBACK_CHARS)
+    if rollback:
+        facts["rollback_notes"] = rollback
+    return facts, _float(version.playbook_confidence)
 
 
 def hydrate_node(node_type: str, obj: Any) -> HydratedGraphNode:

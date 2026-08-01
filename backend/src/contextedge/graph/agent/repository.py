@@ -21,7 +21,12 @@ from contextedge.graph.agent.contracts import (
     HydratedGraphNode,
     RankedGraphSeed,
 )
-from contextedge.graph.agent.hydrators import NODE_MODELS, hydrate_node, node_is_visible
+from contextedge.graph.agent.hydrators import (
+    NODE_MODELS,
+    hydrate_node,
+    node_is_visible,
+    playbook_version_facts,
+)
 from contextedge.graph.temporal import edge_valid_at
 from contextedge.models.entity import Entity
 from contextedge.models.episode import CanonicalIdentity, Episode, IdentityAlias
@@ -545,6 +550,29 @@ class SQLAlchemyAgentGraphRepository:
                 model.tenant_id == scope.tenant_id,
             )
             rows = (await self.db.execute(query)).scalars().all()
+
+            # Playbook nodes carry their current version's steps and
+            # trigger conditions (bounded — see hydrators caps): a
+            # playbook the agent can't see the steps of forces a second
+            # round-trip or a guess. Batch-loaded, one query per
+            # projection regardless of playbook count.
+            version_map: dict = {}
+            if node_type == "playbook":
+                from contextedge.models.playbook import PlaybookVersion
+
+                version_ids = [
+                    row.current_version_id for row in rows if row.current_version_id
+                ]
+                if version_ids:
+                    versions = (
+                        await self.db.execute(
+                            select(PlaybookVersion).where(
+                                PlaybookVersion.id.in_(version_ids)
+                            )
+                        )
+                    ).scalars().all()
+                    version_map = {v.id: v for v in versions}
+
             for row in rows:
                 if not node_is_visible(
                     node_type,
@@ -554,5 +582,17 @@ class SQLAlchemyAgentGraphRepository:
                 ):
                     continue
                 node = hydrate_node(node_type, row)
+                if node_type == "playbook":
+                    version = version_map.get(row.current_version_id)
+                    # playbook_id check: a stale/corrupt current_version_id
+                    # pointing at another playbook's version must not leak
+                    # that version's steps here.
+                    if version is not None and version.playbook_id == row.id:
+                        version_facts, version_confidence = playbook_version_facts(
+                            version
+                        )
+                        node.facts.update(version_facts)
+                        if node.confidence is None:
+                            node.confidence = version_confidence
                 hydrated[node.ref.key] = node
         return hydrated

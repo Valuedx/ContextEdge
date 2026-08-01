@@ -15,6 +15,10 @@ The July 2026 production-readiness review's P0/P1 code gaps were closed in one b
 - **ServiceNow.** Compound `(sys_updated_on, sys_id)` checkpoint (no boundary-second loss), paged incremental sync, retry/backoff with Retry-After.
 - **Graph/MAF hardening.** `ensure_edge` is ON CONFLICT-safe; one canonical domain-derivation rule across all edge writers; `GraphRelationshipMaterializer` on Beat (6h); traversal capped per frontier node; MAF provider truncates long conversations instead of dropping context and fences injected graph data as untrusted; generated playbooks carry `evidence_refs` and a policy-derived risk tier.
 
+## Resolved: playbook steps in the agent projection (2026-08-01)
+
+A playbook node in the agent projection previously carried only title/description facts — the agent knew a playbook existed but not what it does, forcing a second round-trip or a guess. `hydrate_nodes` now batch-loads each visible playbook's current version (one query per projection) and `playbook_version_facts` renders it bounded into the node facts: ordered step labels (15 max, 200 chars each, total count reported), flattened trigger conditions (600-char budget), rollback notes (300 chars), semantic version; `playbook_confidence` becomes the node confidence. Safety: a `current_version_id` pointing at another playbook's version is never surfaced (`playbook_id` check — also covers cross-tenant corruption, since `playbook_versions` has no tenant column); corrupt non-list steps degrade to empty, never a TypeError. The selector's character budget counts the enriched facts via `model_dump_json`, so steps cannot blow the projection budget.
+
 ## Resolved: change-risk assessment (2026-08-01, Phase 4 — SLA priors deferred)
 
 `services/change_risk_service.py` composes Phases 1-3 into a deterministic, explainable risk profile per CI: distinct change records on the CI (`affects_ci` edges, record kind from the thread-id prefix) versus those blamed for incidents (`caused_by_change` edges — human-written references, not inference), incident pressure and alert-rollup activity in the window (default 180d, max 730d), and the cached-topology blast radius (dependency edge types only — `contains` is composition, not dependency). Transparent additive scoring; the `factors` list is the explanation. Exposed as the `assess_change_risk` MAF tool (read-only client port), and `GET /api/v1/graph/change-risk`. Coverage honesty is built into the payload: the `topology_note` states dependents come from the cached working set and whether the CI's topology was ever fetched.
@@ -47,7 +51,7 @@ Playbooks previously had no embedding, so the agent seed resolver could only rea
 - **Sync single-flight** — no advisory lock per source object for overlapping backfills/retries (evidence dedup at normalize is DB-enforced since `0026`).
 - **Identity review queue UI** — `needs_review` / `provisional` states exist and are indexed; a reviewer console for them is not built (API-led for now).
 - **Execution engine depth** — tool registry, idempotency keys, rollback execution, telemetry-based outcome verification remain future work (Release 2 scope).
-- **Telemetry/topology/alert/change-event ingestion, SLO + business impact** — Release 3 scope, unchanged.
+- **SLO + business impact modeling** — still Release 3 scope. (The rest of the old "telemetry/topology/alert/change-event ingestion" line shipped 2026-07/08: CMDB topology hybrid, em_alert rollups, change reference edges — see the resolved sections above.)
 
 ## Adding a new connector type
 
