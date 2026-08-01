@@ -15,6 +15,10 @@ The July 2026 production-readiness review's P0/P1 code gaps were closed in one b
 - **ServiceNow.** Compound `(sys_updated_on, sys_id)` checkpoint (no boundary-second loss), paged incremental sync, retry/backoff with Retry-After.
 - **Graph/MAF hardening.** `ensure_edge` is ON CONFLICT-safe; one canonical domain-derivation rule across all edge writers; `GraphRelationshipMaterializer` on Beat (6h); traversal capped per frontier node; MAF provider truncates long conversations instead of dropping context and fences injected graph data as untrusted; generated playbooks carry `evidence_refs` and a policy-derived risk tier.
 
+## Resolved: chunk search-side rollup (2026-08-01)
+
+Chunks were written (0030 pipeline, halfvec index in 0032) but never read by any search path — semantic search hit parent embeddings only. Now `search/vector_search.py` implements CHUNKING_DESIGN §6: oversampled chunk ANN (80), **MMR at the chunk level** (`search/chunk_rollup.py`, λ=0.7, numpy similarity matrix) so near-duplicate chunks across evidence rows of the same thread can't crowd out distinct threads, then **rollup to one hit per parent** scored by its closest chunk — merged with a parent-embedding pass so unchunked evidence still surfaces (shared cosine space, scores merge directly). Results are `(EvidenceItem, distance, best_chunk|None)` — the hybrid ranker's `row[0]`/`row[1]` indexing is preserved, and `best_chunk` carries chunk id + `parent_section` breadcrumb + snippet for context rendering. Both passes now enforce search-surface visibility (legal hold, pending redaction, excluded access policies) — the parent pass previously filtered access policy only, so this is a deliberate tightening. The playbook-scoped variant got the same treatment; the hybrid ranker's corpus scoring is chunk-aware with zero interface change.
+
 ## Resolved: CI workflow (2026-08-01)
 
 `.github/workflows/ci.yml`: two required jobs — backend pytest (Python 3.12, `pip install -e .[dev]`; the whole suite runs without live services, so no containers) and frontend vitest (Node 20, `npm ci`) — plus an **advisory** ruff job (`continue-on-error`). Lint is not a gate yet because the codebase carries 367 pre-existing ruff findings; making it required now would turn every PR red for unrelated reasons. Flip it to required once the lint debt is paid down. Triggers: pushes to `main` / `feature/maf-context-graph-integration` and all pull requests, with per-ref concurrency cancellation.
@@ -55,7 +59,7 @@ Playbooks previously had no embedding, so the agent seed resolver could only rea
 
 - **LLM provider resilience** — per-call timeout, circuit breaker, and provider fallback are still absent from `ai/provider.py` (budget gates, retries, and schema validation exist).
 - **Prompt-injection fencing at ingest extractors** — the MAF provider fences untrusted graph content, but episode/decision/identity extractors still concatenate evidence text into prompts without delimiters.
-- **Ranking calibration** — `quality_score = 0.5` placeholder, no abstention threshold, N+1 per-playbook queries, and the chunk search-side rollup remain (see the chunking entry).
+- **Ranking calibration** — `quality_score = 0.5` placeholder, no abstention threshold, and N+1 per-playbook queries remain. (The chunk search-side rollup shipped 2026-08-01 — see the resolved entry.)
 - **Sync single-flight** — no advisory lock per source object for overlapping backfills/retries (evidence dedup at normalize is DB-enforced since `0026`).
 - **Identity review queue UI** — `needs_review` / `provisional` states exist and are indexed; a reviewer console for them is not built (API-led for now).
 - **Execution engine depth** — tool registry, idempotency keys, rollback execution, telemetry-based outcome verification remain future work (Release 2 scope).
