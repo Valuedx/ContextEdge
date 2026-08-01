@@ -64,9 +64,12 @@ jobs:
         run: npm test
 
   lint:
+    # --exit-zero keeps this job green while still emitting inline
+    # annotations: a continue-on-error job would show a red ✗ on every
+    # PR's check list even though the workflow passes — permanent noise.
+    # A real ruff crash (not findings) still fails the job, as it should.
     name: Ruff (advisory — pre-existing debt)
     runs-on: ubuntu-latest
-    continue-on-error: true
     defaults:
       run:
         working-directory: backend
@@ -78,4 +81,4 @@ jobs:
       - name: Install ruff
         run: pip install "ruff>=0.8"
       - name: Ruff check (advisory)
-        run: ruff check src --output-format=github
+        run: ruff check src --output-format=github --exit-zero
