@@ -257,6 +257,40 @@ async def verify_execution_run(
     run.verification_details = details
     await db.flush()
 
+    # B5: a verified/failed verdict is a fix OUTCOME for every fix
+    # pattern recommending this playbook, counted per cohort of each
+    # resolved CI. Fail-soft — cohort accounting never breaks the
+    # verification sweep.
+    if verdict in ("verified", "failed") and version is not None and cis:
+        try:
+            from contextedge.models.error_signature import FixPattern as _FixPattern
+            from contextedge.services.fix_cohort_service import record_fix_outcome
+
+            fix_ids = (
+                (
+                    await db.execute(
+                        select(_FixPattern.id).where(
+                            _FixPattern.tenant_id == tenant_id,
+                            _FixPattern.recommended_playbook_id == version.playbook_id,
+                        ).limit(10)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            for fix_id in fix_ids:
+                for ci in cis[:5]:
+                    await record_fix_outcome(
+                        db, tenant_id, fix_id, ci, verdict == "verified"
+                    )
+        except Exception as exc:
+            logger.warning(
+                "fix_cohort.recording_failed",
+                tenant_id=str(tenant_id),
+                execution_run_id=str(run.id),
+                error=str(exc),
+            )
+
     await append_operational_event(
         db,
         tenant_id=tenant_id,

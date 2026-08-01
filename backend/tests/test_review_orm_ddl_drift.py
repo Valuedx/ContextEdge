@@ -131,6 +131,10 @@ _EXPECTED_MARKERS: set[tuple[str, str]] = {
     ('correlation_suggestion.py', 'ForeignKey("evidence_items.id", ondelete="CASCADE"),'),
     ('correlation_suggestion.py',
      'UniqueConstraint( "evidence_id_low", "evidence_id_high", name="uq_correlation_suggestion_pair" ),'),
+    # fix_cohort.py (migration 0047): per-cohort outcome counters.
+    ('fix_cohort.py', 'ForeignKey("fix_patterns.id", ondelete="CASCADE"),'),
+    ('fix_cohort.py',
+     'UniqueConstraint( "fix_pattern_id", "cohort_type", "cohort_key", name="uq_fix_cohort" ),'),
     # fix_applicability.py (migration 0046): applicability rules.
     ('fix_applicability.py', 'ForeignKey("fix_patterns.id", ondelete="CASCADE"),'),
     # issue_signature.py (migration 0045): problem fingerprints.

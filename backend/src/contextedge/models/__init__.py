@@ -53,6 +53,7 @@ from contextedge.models.execution import (
     ToolInvocation,
 )
 from contextedge.models.fix_applicability import FixApplicabilityRule
+from contextedge.models.fix_cohort import FixCohortStat
 from contextedge.models.issue_signature import EpisodeIssueSignature, IssueSignature
 from contextedge.models.pattern import (
     Contradiction,
@@ -90,7 +91,7 @@ __all__ = [
     "Episode", "EpisodeStep",
     "CaseIdentifier", "EvidenceCaseMembership", "PendingIdentifierMention",
     "CorrelationSuggestion", "ThreadTopic",
-    "IssueSignature", "EpisodeIssueSignature", "FixApplicabilityRule",
+    "IssueSignature", "EpisodeIssueSignature", "FixApplicabilityRule", "FixCohortStat",
     "Pattern", "PatternEvidenceLink", "NegativeKnowledgeItem", "Contradiction", "GraphEdge",
     "Playbook", "PlaybookVersion", "PlaybookEvidenceLink", "PlaybookApproval",
     "ResolutionSession", "DecisionTraceEvent", "CaseLink",
