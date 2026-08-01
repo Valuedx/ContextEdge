@@ -24,6 +24,7 @@ from contextedge.services.policy_assignment import assert_policy_assignment
 from contextedge.services.source_service import (
     discover_source_objects,
     encrypt_credentials,
+    probe_source_configuration,
     rotate_source_credentials,
     validate_source_credentials,
 )
@@ -516,3 +517,28 @@ async def delete_source(source_id: UUID, db: DbSession, user: AuthUser):
         details={"display_name": source.display_name},
     )
     return None
+
+
+@router.post("/{source_id}/probe-config")
+async def probe_source_config(source_id: UUID, db: DbSession, user: AuthUser):
+    """D4: verify a config-mapped connector's instance mapping — which
+    configured endpoints respond and which mapped field names actually
+    appear in sample payloads. Read-only against the upstream API."""
+    user.require_role("tenant_admin")
+    from sqlalchemy import select as sa_select
+
+    from contextedge.models.source import Source
+
+    source = (
+        await db.execute(
+            sa_select(Source).where(
+                Source.id == source_id, Source.tenant_id == user.tenant_id
+            )
+        )
+    ).scalar_one_or_none()
+    if source is None:
+        raise HTTPException(status_code=404, detail="Source not found")
+    try:
+        return await probe_source_configuration(db, source)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
