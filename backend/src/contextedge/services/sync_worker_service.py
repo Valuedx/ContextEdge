@@ -5,6 +5,7 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime, timedelta
 
+import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -28,6 +29,8 @@ from contextedge.services.sync_ingestion_queue import (
     NormalizeEnqueueError,
     queue_normalize_raw_objects,
 )
+
+logger = structlog.get_logger()
 
 
 async def run_discovery_job(db: AsyncSession, source_id: uuid.UUID, tenant_id: uuid.UUID) -> dict:
@@ -357,6 +360,25 @@ async def _commit_and_queue_normalization(
         raise
 
 
+async def acquire_sync_lock(
+    db: AsyncSession, source_object_id: uuid.UUID
+) -> bool:
+    """Single-flight per source object (backlog E4): a transaction-
+    scoped Postgres advisory lock. A second worker starting a sync for
+    the same object gets ``False`` and skips instead of racing —
+    overlapping backfills/retries previously interleaved checkpoint
+    writes. Transaction-scoped means the lock releases automatically at
+    commit/rollback; a crashed worker cannot leak it."""
+    from sqlalchemy import text as sa_text
+
+    result = await db.execute(
+        sa_text(
+            "SELECT pg_try_advisory_xact_lock(hashtext(:key))"
+        ).bindparams(key=f"sync:{source_object_id}")
+    )
+    return bool(result.scalar_one())
+
+
 async def run_backfill_job(
     db: AsyncSession,
     source_id: uuid.UUID,
@@ -364,6 +386,13 @@ async def run_backfill_job(
     tenant_id: uuid.UUID,
     window_days: int = 90,
 ) -> dict:
+    if not await acquire_sync_lock(db, source_object_id):
+        logger.info(
+            "sync.skipped_locked",
+            source_object_id=str(source_object_id),
+            mode="backfill",
+        )
+        return {"status": "skipped_locked"}
     r = await db.execute(
         select(SourceObject).where(
             SourceObject.id == source_object_id,
@@ -448,6 +477,13 @@ async def run_incremental_job(
     source_object_id: uuid.UUID,
     tenant_id: uuid.UUID,
 ) -> dict:
+    if not await acquire_sync_lock(db, source_object_id):
+        logger.info(
+            "sync.skipped_locked",
+            source_object_id=str(source_object_id),
+            mode="incremental",
+        )
+        return {"status": "skipped_locked"}
     r = await db.execute(
         select(SourceObject).where(
             SourceObject.id == source_object_id,

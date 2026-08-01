@@ -84,7 +84,7 @@ Playbooks previously had no embedding, so the agent seed resolver could only rea
 - **LLM provider resilience — RESOLVED 2026-08-03 (backlog E1)**: 120s per-call timeout, per-model in-process circuit breaker (5 consecutive failures → 60s open, single half-open probe), and optional one-shot fallback via `settings.llm_fallback_model` (usage recorded against the serving model). The breaker is per-worker by design — no cross-process coordination.
 - **Prompt-injection fencing at ingest extractors — RESOLVED 2026-08-03 (backlog E2)**: episode/decision/identity/pattern extractors now wrap untrusted content in `<untrusted-evidence>` markers with a data-not-instructions notice at the formatting layer (registered prompt versions stay immutable); embedded closing markers are neutralized. Identity ADJUDICATION passes short structured JSON fields (names/aliases), not raw bodies — out of this scope by design.
 - **Ranking calibration** — `quality_score = 0.5` placeholder, no abstention threshold, and N+1 per-playbook queries remain. (The chunk search-side rollup shipped 2026-08-01 — see the resolved entry.)
-- **Sync single-flight** — no advisory lock per source object for overlapping backfills/retries (evidence dedup at normalize is DB-enforced since `0026`).
+- **Sync single-flight — RESOLVED 2026-08-03 (backlog E4)**: transaction-scoped Postgres advisory lock per source object; a second worker gets `skipped_locked` instead of racing checkpoint writes. Lock releases automatically at commit/rollback — a crashed worker cannot leak it.
 - **Identity review queue UI** — `needs_review` / `provisional` states exist and are indexed; a reviewer console for them is not built (API-led for now).
 - **Execution engine depth** — tool registry and rollback execution remain future work (Release 2 scope). Idempotency keys exist on step runs; telemetry-based outcome verification shipped 2026-08-01 (see the post-action verification entry).
 - **Reply-inheritance ordering — RESOLVED 2026-08-02 (backlog A10)**: debounced reconstruction now re-attempts inheritance for un-anchored teams replies in the cluster (`_reconcile_reply_inheritance`), carrying every shipped guard (single-case parent, dissociation veto, thread negation).
@@ -105,9 +105,9 @@ Built-in types `teams`, `gmail`, `servicenow`, and `jira_sm` are registered in `
 
 Fix direction: include `sync` in consumed queues and verify worker routing against [`docs/RUNBOOK.md`](../docs/RUNBOOK.md).
 
-## Sync overlap (still open)
+## Sync overlap (resolved 2026-08-03, E4)
 
-Sync scheduling is not single-flight per source object yet; avoid overlapping manual backfills or retries for the same object. Evidence-dedup race was closed in migration `0026_dedup_uniqueness` — the normalize worker now catches `IntegrityError` from the partial unique index on `(tenant_id, content_hash)` and falls through to the existing-row path.
+Single-flight per source object shipped (advisory xact lock; overlapping runs skip with `skipped_locked`). Evidence-dedup race was closed in migration `0026_dedup_uniqueness` — the normalize worker now catches `IntegrityError` from the partial unique index on `(tenant_id, content_hash)` and falls through to the existing-row path.
 
 ## JWT secret in non-development
 

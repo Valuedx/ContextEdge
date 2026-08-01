@@ -388,7 +388,7 @@ responded, so operators verify mapping without reading logs.
 | E1 | LLM provider resilience: per-call timeout, circuit breaker, fallback — **SHIPPED 2026-08-03** | M | budget gates/retries/validation exist; `ai/provider.py` |
 | E2 | Prompt-injection fencing at ingest extractors — **SHIPPED 2026-08-03** | M | MAF provider fences; episode/decision/identity extractors concatenate raw evidence |
 | E3 | Ranking calibration + SLA priors | L | `quality_score=0.5` placeholder, no abstention threshold, N+1 playbook queries; SLA priors deferred from change-risk work |
-| E4 | Sync single-flight | M | advisory lock per source object; overlapping backfills currently race (dedup is DB-safe since 0026) |
+| E4 | Sync single-flight — **SHIPPED 2026-08-03** | M | advisory lock per source object; overlapping backfills currently race (dedup is DB-safe since 0026) |
 | E5 | Reviewer/admin consoles | L | identity `needs_review` queue, suggestion queue (C4), episode membership editing — all API-led today |
 | E6 | Execution engine depth | L | Release 2: tool registry, rollback execution, timeouts, resume; verification shipped (0036) |
 | E7 | Prompt-family doubled-brace fixes — **SHIPPED 2026-08-03** | S | `decision`/`pattern`/`playbook` v1 system prompts still carry literal `{{ }}`; ship v2s (episode + identity already fixed) |
