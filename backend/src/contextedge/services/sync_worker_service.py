@@ -477,7 +477,7 @@ async def run_incremental_job(
             .limit(1)
         )
     ).scalar_one_or_none()
-    
+
     ck = Checkpoint(data=ck_row.checkpoint_data, captured_at=ck_row.captured_at) if ck_row else None
 
     try:

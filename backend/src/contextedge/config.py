@@ -2,7 +2,6 @@ from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-
 REPO_ROOT = Path(__file__).resolve().parents[3]
 BACKEND_ROOT = Path(__file__).resolve().parents[2]
 
@@ -64,7 +63,8 @@ class Settings(BaseSettings):
     backend_port: int = 8000
     frontend_url: str = "http://localhost:3000"
 
-    # JSON map: token string -> { "tenant_id": "uuid", "user_id": "uuid", "email": "...", "roles": ["service_account"] }
+    # JSON map: token string ->
+    #   { "tenant_id": "uuid", "user_id": "uuid", "email": "...", "roles": ["service_account"] }
     service_tokens_json: str = "{}"
 
     # Scheduled retention purge behavior. "soft_purge" scrubs content in

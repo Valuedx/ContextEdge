@@ -61,6 +61,23 @@ line-length = 100
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W", "UP"]
+# N818: the four pre-existing exception classes without an Error suffix
+# (ApprovalPolicyViolation, TenantBudgetExceeded,
+# CredentialEncryptionUnavailable, DestructiveResetBlocked) are released
+# API — renaming breaks catch sites. New exceptions follow the suffix
+# convention (enforced in review, not by rule).
+ignore = ["N818"]
+
+[tool.ruff.lint.per-file-ignores]
+# Prompt text is data: wrapping long prompt lines risks altering the
+# exact strings sent to the model, and eval baselines pin those strings.
+"src/contextedge/ai/prompts/*" = ["E501"]
+# Seed scripts carry long demo-content strings — data, not code.
+"src/contextedge/demo_maf_seed.py" = ["E501"]
+"src/contextedge/reset_db_and_seed.py" = ["E501"]
+# Module docstring holds a markdown table whose rows exceed the limit;
+# wrapping would break the table.
+"src/contextedge/services/chunkers/attachment.py" = ["E501"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

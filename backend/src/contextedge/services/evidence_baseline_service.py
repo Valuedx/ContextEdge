@@ -22,9 +22,9 @@ that have domain knowledge of what a meaningful delta looks like.
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import and_, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from contextedge.models.evidence import EvidenceItem
@@ -67,7 +67,7 @@ async def compute_evidence_baseline(
     if target.evidence_type in _SKIP_EVIDENCE_TYPES:
         return None
 
-    current_ingested_at = target.ingested_at or datetime.now(timezone.utc)
+    current_ingested_at = target.ingested_at or datetime.now(UTC)
     window_start = current_ingested_at - timedelta(days=window_days)
 
     prior_stmt = (

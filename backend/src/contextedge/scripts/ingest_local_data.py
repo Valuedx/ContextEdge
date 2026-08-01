@@ -2,16 +2,16 @@ import asyncio
 import hashlib
 import json
 import logging
-import os
 import uuid
 from pathlib import Path
 
 from sqlalchemy import select
+
 from contextedge.database import async_session_factory
 from contextedge.models.evidence import RawEvidenceObject
-from contextedge.models.source import Source, SourceObject
-from contextedge.services.sync_ingestion_queue import queue_normalize_raw_objects
+from contextedge.models.source import Source
 from contextedge.models.tenant import Tenant, User
+from contextedge.services.sync_ingestion_queue import queue_normalize_raw_objects
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -40,7 +40,7 @@ async def get_or_create_local_source(db):
         )
     )
     source = result.scalar_one_or_none()
-    
+
     if not source:
         logger.info("Creating local_file source...")
         source = Source(
@@ -55,7 +55,7 @@ async def get_or_create_local_source(db):
         )
         db.add(source)
         await db.flush()
-    
+
     return source
 
 async def ingest_files():
@@ -65,11 +65,11 @@ async def ingest_files():
             return
 
         new_raw_ids = []
-        
+
         for file_path in DATA_DIR.glob("*.txt"):
             logger.info(f"Processing {file_path.name}...")
-            
-            with open(file_path, "r", encoding="utf-8") as f:
+
+            with open(file_path, encoding="utf-8") as f:
                 content = f.read()
 
             external_id = f"local://{file_path.name}"
@@ -117,9 +117,11 @@ async def ingest_files():
             logger.info(f"Ingested {file_path.name} as {raw.id}")
 
         await db.commit()
-        
+
         if new_raw_ids:
-            logger.info(f"Enqueuing normalization for {len(new_raw_ids)} items (new and existing)...")
+            logger.info(
+                f"Enqueuing normalization for {len(new_raw_ids)} items (new and existing)..."
+            )
             try:
                 queue_normalize_raw_objects(new_raw_ids, TENANT_ID)
                 logger.info("Successfully enqueued normalization tasks.")

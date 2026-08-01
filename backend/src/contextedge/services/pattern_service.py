@@ -5,9 +5,9 @@ import uuid
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from contextedge.graph.builder import build_episode_graph, persist_pattern_enrichment_edges
 from contextedge.models.episode import Episode
 from contextedge.models.pattern import Pattern, PatternEvidenceLink
-from contextedge.graph.builder import persist_pattern_enrichment_edges, build_episode_graph
 from contextedge.services.identity_service import identity_ids_from_refs
 from contextedge.services.memory_service import promote_pattern_memory
 

@@ -7,15 +7,17 @@ on Windows when Celery workers encounter "unregistered task" or pathing errors.
 
 Usage:
     cd backend
-    $env:PYTHONPATH="src"; .\venv\Scripts\python.exe -m contextedge.scripts.process_all_raw
+    $env:PYTHONPATH="src"; .\venv\\Scripts\\python.exe -m contextedge.scripts.process_all_raw
 """
 
 import asyncio
 import logging
 import uuid
+
 from sqlalchemy import select
+
 from contextedge.database import async_session_factory
-from contextedge.models.evidence import RawEvidenceObject, EvidenceItem
+from contextedge.models.evidence import RawEvidenceObject
 from contextedge.workers.extraction_tasks import _normalize
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s:%(name)s:%(message)s")
@@ -30,9 +32,9 @@ async def main():
             select(RawEvidenceObject).where(RawEvidenceObject.tenant_id == TENANT_ID)
         )
         raw_objects = res.scalars().all()
-        
+
         log.info(f"Found {len(raw_objects)} raw evidence objects total.")
-        
+
         processed_count = 0
         for obj in raw_objects:
             # 2. Check if already processed (to avoid duplicates)
@@ -44,13 +46,13 @@ async def main():
                 if result.get("error"):
                     log.error(f"  - Error: {result.get('error')}")
                 elif result.get("deduped"):
-                    log.info(f"  - Already exists (deduped).")
+                    log.info("  - Already exists (deduped).")
                 else:
-                    log.info(f"  - Successfully processed.")
+                    log.info("  - Successfully processed.")
                     processed_count += 1
             except Exception as e:
                 log.error(f"  - Failed to process {obj.external_id}: {e}")
-                
+
         await db.commit()
         log.info(f"Finished! Processed {processed_count} new items.")
 

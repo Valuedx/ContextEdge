@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import structlog
 from sqlalchemy import select
@@ -27,7 +27,7 @@ def _parse_msg_timestamp(raw: str | None) -> datetime | None:
     # Gmail returns internalDate as epoch milliseconds (string)
     try:
         epoch_ms = int(raw)
-        return datetime.fromtimestamp(epoch_ms / 1000.0, tz=timezone.utc)
+        return datetime.fromtimestamp(epoch_ms / 1000.0, tz=UTC)
     except (ValueError, TypeError, OverflowError, OSError):
         return None
 

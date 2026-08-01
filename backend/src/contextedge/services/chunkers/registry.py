@@ -23,7 +23,6 @@ from __future__ import annotations
 
 from contextedge.services.chunkers.base import Chunker
 
-
 # Populated by ``_register_chunkers`` on first ``get_chunker`` call.
 chunkers: dict[str, Chunker] = {}
 

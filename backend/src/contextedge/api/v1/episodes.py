@@ -1,6 +1,6 @@
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
-from datetime import datetime, timedelta, UTC
 from fastapi import APIRouter, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
@@ -205,7 +205,7 @@ async def trigger_manual_reconstruction(
 
     from contextedge.workers.extraction_tasks import reconstruct_episode_task
     cluster_id = ",".join([str(eid) for eid in evidence_ids])
-    
+
     # Try to determine domain_id from evidence if possible, or fallback to default
     domain_id = body.domain_id if hasattr(body, "domain_id") and body.domain_id else None
     if not domain_id:
@@ -213,7 +213,9 @@ async def trigger_manual_reconstruction(
         res = await db.execute(select(Domain.id).where(Domain.tenant_id == user.tenant_id).limit(1))
         domain_id = res.scalar_one_or_none()
 
-    task = reconstruct_episode_task.delay(cluster_id, str(user.tenant_id), domain_id=str(domain_id) if domain_id else None)
+    task = reconstruct_episode_task.delay(
+        cluster_id, str(user.tenant_id), domain_id=str(domain_id) if domain_id else None
+    )
 
     return TaskDispatchResponse(
         status="reconstruction_queued",
@@ -239,6 +241,7 @@ async def delete_episode(episode_id: UUID, db: DbSession, user: AuthUser):
         raise HTTPException(status_code=404, detail="Episode not found")
 
     from sqlalchemy import delete
+
     from contextedge.models.episode import EpisodeStep
 
     # 1. Delete Episode Steps

@@ -210,7 +210,8 @@ async def verify_execution_run(
     if completed_at.tzinfo is None:
         completed_at = completed_at.replace(tzinfo=UTC)
     if now < completed_at + timedelta(seconds=recheck_after):
-        return {"status": "not_due", "due_at": (completed_at + timedelta(seconds=recheck_after)).isoformat()}
+        due_at = completed_at + timedelta(seconds=recheck_after)
+        return {"status": "not_due", "due_at": due_at.isoformat()}
 
     session = None
     if run.session_id is not None:

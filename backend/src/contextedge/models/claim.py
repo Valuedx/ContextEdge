@@ -31,7 +31,6 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from contextedge.models.base import Base, TenantScopedMixin
 
-
 CLAIM_TYPES = (
     "probable_root_cause",
     "confirmed_root_cause",
@@ -103,7 +102,7 @@ class Claim(Base, TenantScopedMixin):
         JSONB, server_default="{}", nullable=False
     )
 
-    evidence_links: Mapped[list["ClaimEvidence"]] = relationship(
+    evidence_links: Mapped[list[ClaimEvidence]] = relationship(
         back_populates="claim",
         cascade="all, delete-orphan",
     )
@@ -140,7 +139,7 @@ class ClaimEvidence(Base):
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
 
-    claim: Mapped["Claim"] = relationship(back_populates="evidence_links")
+    claim: Mapped[Claim] = relationship(back_populates="evidence_links")
 
 
 class DecisionEvidence(Base):

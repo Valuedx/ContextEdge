@@ -25,7 +25,7 @@ Chunks were written (0030 pipeline, halfvec index in 0032) but never read by any
 
 ## Resolved: CI workflow (2026-08-01)
 
-`.github/workflows/ci.yml`: two required jobs — backend pytest (Python 3.12, `pip install -e .[dev]`; the whole suite runs without live services, so no containers) and frontend vitest (Node 20, `npm ci`) — plus an **advisory** ruff job (`continue-on-error`). Lint is not a gate yet because the codebase carries 367 pre-existing ruff findings; making it required now would turn every PR red for unrelated reasons. Flip it to required once the lint debt is paid down. Triggers: pushes to `main` / `feature/maf-context-graph-integration` and all pull requests, with per-ref concurrency cancellation.
+`.github/workflows/ci.yml`: two required jobs — backend pytest (Python 3.12, `pip install -e .[dev]`; the whole suite runs without live services, so no containers) and frontend vitest (Node 20, `npm ci`) — plus a ruff job — **a required gate since 2026-08-01**, when the 367-finding lint debt was cleared (369 at cleanup time): ~220 auto-fixed, ~110 long lines hand-wrapped, and the remainder resolved individually (a SQLAlchemy `== True` → `.is_(True)`, dead assignments removed, PEP 695 generics, a real `TYPE_CHECKING` import for a string forward-reference). Deliberate exceptions carry their reasons: per-file E501 ignores for prompt/seed data strings and one docstring table; a global N818 ignore for four released exception classes whose rename would break catch sites; two `noqa: UP042` because StrEnum changes `str(member)` semantics. Triggers: pushes to `main` / `feature/maf-context-graph-integration` and all pull requests, with per-ref concurrency cancellation.
 
 ## Resolved: domain-safe pattern mining (2026-08-01)
 

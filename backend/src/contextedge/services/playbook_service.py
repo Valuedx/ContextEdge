@@ -152,7 +152,9 @@ async def transition_playbook(
         payload={
             "from_state": current,
             "to_state": new_state,
-            "current_version_id": str(playbook.current_version_id) if playbook.current_version_id else None,
+            "current_version_id": (
+                str(playbook.current_version_id) if playbook.current_version_id else None
+            ),
             "approval_id": str(approval.id),
             "comments": comments,
         },

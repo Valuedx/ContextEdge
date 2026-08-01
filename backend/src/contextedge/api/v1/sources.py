@@ -10,16 +10,16 @@ from contextedge.schemas.common import TaskDispatchResponse
 from contextedge.schemas.source import (
     BackfillRequest,
     CredentialRotateRequest,
+    LocalIngestRequest,
     SourceCreate,
     SourceCredentialResponse,
-    LocalFilePayload,
-    LocalIngestRequest,
     SourceObjectApproval,
     SourceObjectResponse,
     SourceResponse,
     SourceUpdate,
     SyncRunResponse,
 )
+from contextedge.services.evidence_normalization import evidence_content_hash_from_payload
 from contextedge.services.policy_assignment import assert_policy_assignment
 from contextedge.services.source_service import (
     discover_source_objects,
@@ -27,7 +27,6 @@ from contextedge.services.source_service import (
     rotate_source_credentials,
     validate_source_credentials,
 )
-from contextedge.services.evidence_normalization import evidence_content_hash_from_payload
 
 router = APIRouter()
 
@@ -85,7 +84,7 @@ async def create_source(body: SourceCreate, db: DbSession, user: AuthUser):
                 timeout=10.0
             )
             source.auth_status = "connected" if valid else "failed"
-        except asyncio.TimeoutError:
+        except TimeoutError:
             source.auth_status = "failed"
         except Exception:
             source.auth_status = "failed"
@@ -372,7 +371,7 @@ async def local_ingest(body: LocalIngestRequest, db: DbSession, user: AuthUser):
             "evidence_type": file.metadata.get("evidence_type", "message"),
             **file.metadata,
         }
-        
+
         # Generate hash and external ID
         c_hash = evidence_content_hash_from_payload(payload)
         ext_id = f"local_{source.id}_{file.filename}"
@@ -441,6 +440,7 @@ async def delete_source(source_id: UUID, db: DbSession, user: AuthUser):
         raise HTTPException(status_code=404, detail="Source not found")
 
     from sqlalchemy import delete, or_
+
     from contextedge.models.evidence import EvidenceItem, RawEvidenceObject
     from contextedge.models.source import SourceObject, SyncRun
 
@@ -473,7 +473,7 @@ async def delete_source(source_id: UUID, db: DbSession, user: AuthUser):
         await db.execute(
             delete(EvidenceItem).where(EvidenceItem.source_id == source_id)
         )
-    
+
     # 5. Delete Threads
     from contextedge.models.evidence import Thread
     await db.execute(
@@ -484,12 +484,12 @@ async def delete_source(source_id: UUID, db: DbSession, user: AuthUser):
     await db.execute(
         delete(RawEvidenceObject).where(RawEvidenceObject.source_id == source_id)
     )
-    
+
     # 6. Delete Sync Runs
     await db.execute(
         delete(SyncRun).where(SyncRun.source_id == source_id)
     )
-    
+
     # 7. Delete Source Objects
     await db.execute(
         delete(SourceObject).where(SourceObject.source_id == source_id)

@@ -11,8 +11,8 @@ Two correlation tiers:
   signal, and provisional / needs-review identities carry none.
 """
 
-from datetime import datetime, timedelta, timezone
 import uuid
+from datetime import UTC, datetime, timedelta
 
 import structlog
 from sqlalchemy import and_, or_, select
@@ -144,7 +144,9 @@ async def correlate_evidence_item(
             try:
                 raw_payload = await load_raw_payload(raw_object)
             except (ValueError, Exception):
-                raw_payload = raw_object.raw_payload if isinstance(raw_object.raw_payload, dict) else {}
+                raw_payload = (
+                    raw_object.raw_payload if isinstance(raw_object.raw_payload, dict) else {}
+                )
 
     thread_external_id = None
     if evidence.thread_id is not None:
@@ -170,7 +172,9 @@ async def correlate_evidence_item(
         existing_links.extend(result.scalars().all())
 
     canonical_case_id = (
-        existing_links[0].canonical_case_id if existing_links else (uuid.uuid4() if candidates else None)
+        existing_links[0].canonical_case_id
+        if existing_links
+        else (uuid.uuid4() if candidates else None)
     )
     related_evidence_ids = {
         link.evidence_id
@@ -243,7 +247,7 @@ async def correlate_evidence_item(
     if not candidates and not identity_related_evidence_ids:
         return {"status": "skipped", "reason": "no_candidates"}
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     created_links = 0
     updated_links = 0
 

@@ -118,12 +118,10 @@ _EXPECTED_MARKERS: set[tuple[str, str]] = {
     # migration 0033; mirrored into IdentityAlias.__table_args__ so
     # metadata-built schemas enforce strong-alias tenant uniqueness too.
     ('episode.py', 'unique=True,'),
-    ('episode.py',
-     'source_evidence_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), '
-     'ForeignKey("evidence_items.id", ondelete="CASCADE"), nullable=False)'),
-    ('episode.py',
-     'target_evidence_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), '
-     'ForeignKey("evidence_items.id", ondelete="CASCADE"), nullable=False)'),
+    # The CorrelationEdge source/target FK lines were re-wrapped in the
+    # 2026-08 lint-debt cleanup: multi-line mapped_column style puts the
+    # ForeignKey on its own line, whose fingerprint matches the generic
+    # episode.py entry above. No constraint change — pure reformatting.
     ('error_signature.py', 'ForeignKey("entities.id", ondelete="SET NULL"),'),
     ('error_signature.py',
      'ForeignKey("error_signatures.id", ondelete="SET NULL"),'),

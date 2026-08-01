@@ -40,7 +40,10 @@ class SimilarDecisionAggregate(BaseModel):
     )
     success_rate: float | None = Field(
         None,
-        description="success / (success+failure+rejected+timeout+partial); null when no outcomes recorded",
+        description=(
+            "success / (success+failure+rejected+timeout+partial); "
+            "null when no outcomes recorded"
+        ),
     )
 
 

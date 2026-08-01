@@ -36,7 +36,7 @@ import structlog
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from contextedge.models.evidence import AttachmentArtifact, EvidenceItem, RawEvidenceObject
+from contextedge.models.evidence import EvidenceItem, RawEvidenceObject
 from contextedge.models.pattern import GraphEdge
 from contextedge.models.tenant import Tenant
 from contextedge.services.event_log_service import append_operational_event
@@ -195,7 +195,13 @@ def cleanup_hard_deleted_evidence(self, tenant_id: str, limit: int = 1000):
     async def work(db):
         if tenant_id == "all":
             tids = [row[0] for row in (await db.execute(select(Tenant.id))).all()]
-            aggregate = {"tenants": len(tids), "blob_count": 0, "raw_row_count": 0, "artifact_blob_count": 0, "edge_count": 0}
+            aggregate = {
+                "tenants": len(tids),
+                "blob_count": 0,
+                "raw_row_count": 0,
+                "artifact_blob_count": 0,
+                "edge_count": 0,
+            }
             for tid in tids:
                 try:
                     result = await _sweep_one(db, tid)

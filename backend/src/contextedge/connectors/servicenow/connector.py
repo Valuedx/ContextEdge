@@ -7,7 +7,7 @@ handling, and journal/comment extraction.
 """
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 import httpx
@@ -34,16 +34,49 @@ from contextedge.connectors.base import (
 # at its default: flipping it to all/true turns EVERY field into a dict
 # and breaks the (sys_updated_on, sys_id) keyset checkpoint parsing.
 TABLES = {
-    "incident": {"label": "Incidents", "fields": "number,short_description,description,state,priority,assigned_to,opened_at,resolved_at,close_notes,close_code,category,sys_updated_on,problem_id,rfc,caused_by,parent_incident,cmdb_ci,cmdb_ci.name,cmdb_ci.sys_class_name,assignment_group,assignment_group.name"},
-    "problem": {"label": "Problems", "fields": "number,short_description,description,state,priority,assigned_to,opened_at,resolved_at,sys_updated_on,rfc,cmdb_ci,cmdb_ci.name,cmdb_ci.sys_class_name,assignment_group,assignment_group.name"},
-    "change_request": {"label": "Change Requests", "fields": "number,short_description,description,state,type,assigned_to,start_date,end_date,close_code,category,sys_updated_on,cmdb_ci,cmdb_ci.name,cmdb_ci.sys_class_name,assignment_group,assignment_group.name"},
-    "kb_knowledge": {"label": "KB Articles", "fields": "number,short_description,text,workflow_state,author,sys_updated_on"},
+    "incident": {
+        "label": "Incidents",
+        "fields": (
+            "number,short_description,description,state,priority,assigned_to,"
+            "opened_at,resolved_at,close_notes,close_code,category,sys_updated_on,"
+            "problem_id,rfc,caused_by,parent_incident,cmdb_ci,cmdb_ci.name,"
+            "cmdb_ci.sys_class_name,assignment_group,assignment_group.name"
+        ),
+    },
+    "problem": {
+        "label": "Problems",
+        "fields": (
+            "number,short_description,description,state,priority,assigned_to,"
+            "opened_at,resolved_at,sys_updated_on,rfc,cmdb_ci,cmdb_ci.name,"
+            "cmdb_ci.sys_class_name,assignment_group,assignment_group.name"
+        ),
+    },
+    "change_request": {
+        "label": "Change Requests",
+        "fields": (
+            "number,short_description,description,state,type,assigned_to,"
+            "start_date,end_date,close_code,category,sys_updated_on,cmdb_ci,"
+            "cmdb_ci.name,cmdb_ci.sys_class_name,assignment_group,"
+            "assignment_group.name"
+        ),
+    },
+    "kb_knowledge": {
+        "label": "KB Articles",
+        "fields": "number,short_description,text,workflow_state,author,sys_updated_on",
+    },
     # em_alert never produces per-record events — each sync invocation
     # rolls fetched alerts up per (CI, day) in alert_rollup.py. Severity
     # is filtered server-side (see _table_extra_query); the checkpoint
     # cursor still advances on the RAW alert rows, so rollup batching
     # cannot skip records.
-    "em_alert": {"label": "EM Alerts (rolled up)", "fields": "number,severity,state,short_description,description,source,cmdb_ci,cmdb_ci.name,incident,initial_event_time,last_event_time,sys_updated_on"},
+    "em_alert": {
+        "label": "EM Alerts (rolled up)",
+        "fields": (
+            "number,severity,state,short_description,description,source,"
+            "cmdb_ci,cmdb_ci.name,incident,initial_event_time,last_event_time,"
+            "sys_updated_on"
+        ),
+    },
 }
 
 # Alerts at or below this severity number are ingested (1=critical …
@@ -125,7 +158,7 @@ class ServiceNowConnector(BaseConnector):
 
     async def validate_credentials(self) -> CredentialStatus:
         try:
-            data = await self._snow_get(
+            await self._snow_get(
                 "/api/now/table/incident",
                 {"sysparm_limit": "1", "sysparm_fields": "number"},
             )
@@ -219,7 +252,7 @@ class ServiceNowConnector(BaseConnector):
                 # Empty final page: clamp the seed to "now" when the window
                 # extends into the future, or records updated between this
                 # backfill and window.end would be skipped by incremental.
-                now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+                now_str = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S")
                 latest_ts = min(end_str, now_str)
             # Seed the compound checkpoint fetch_changes resumes from.
             new_checkpoint = Checkpoint(
@@ -361,7 +394,7 @@ class ServiceNowConnector(BaseConnector):
         record_data = record.get("result", {})
 
         journal_data = await self._snow_get(
-            f"/api/now/table/sys_journal_field",
+            "/api/now/table/sys_journal_field",
             {
                 "sysparm_query": f"element_id={sys_id}^ORDERBYsys_created_on",
                 "sysparm_fields": "value,element,sys_created_on,sys_created_by",
@@ -430,6 +463,6 @@ def _parse_snow_datetime(value: str | None) -> datetime | None:
     if not value:
         return None
     try:
-        return datetime.strptime(value, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+        return datetime.strptime(value, "%Y-%m-%d %H:%M:%S").replace(tzinfo=UTC)
     except ValueError:
         return None

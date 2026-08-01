@@ -1,13 +1,14 @@
 from collections.abc import AsyncGenerator
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.pool import NullPool
 
 from contextedge.config import settings
 
-from sqlalchemy.pool import NullPool
 
 def create_db_engine(use_null_pool: bool = False):
-    """Create a new async engine. Use NullPool for worker tasks on Windows to avoid loop conflicts."""
+    """Create a new async engine. Use NullPool for worker tasks on Windows
+    to avoid loop conflicts."""
     kwargs = {
         "echo": False,
         "pool_pre_ping": True,
@@ -18,7 +19,7 @@ def create_db_engine(use_null_pool: bool = False):
         kwargs["pool_size"] = 20
         kwargs["max_overflow"] = 10
         kwargs["pool_timeout"] = 30
-        
+
     return create_async_engine(settings.database_url, **kwargs)
 
 engine = create_db_engine()

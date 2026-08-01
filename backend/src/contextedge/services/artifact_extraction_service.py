@@ -7,7 +7,7 @@ import json
 import re
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from sqlalchemy import func, select
@@ -218,9 +218,15 @@ async def register_attachment_artifacts(
 
     created: list[AttachmentArtifact] = []
     for index, attachment in enumerate(entries):
-        filename = str(attachment.get("filename") or attachment.get("name") or f"attachment-{index + 1}")
+        filename = str(
+            attachment.get("filename") or attachment.get("name") or f"attachment-{index + 1}"
+        )
         mime_type = (
-            str(attachment.get("mime_type") or attachment.get("content_type") or "application/octet-stream")
+            str(
+                attachment.get("mime_type")
+                or attachment.get("content_type")
+                or "application/octet-stream"
+            )
             .strip()
             or "application/octet-stream"
         )
@@ -305,7 +311,9 @@ async def synchronize_evidence_artifacts(
     )
     attachments = attachments_result.scalars().all()
     completed_count = sum(
-        1 for artifact in attachments if artifact.extraction_status == "completed" and artifact.extracted_text
+        1
+        for artifact in attachments
+        if artifact.extraction_status == "completed" and artifact.extracted_text
     )
 
     evidence.title = evidence_title_from_payload(payload)[:500]
@@ -314,7 +322,9 @@ async def synchronize_evidence_artifacts(
     evidence.body_summary = combined_body[:500] if combined_body else None
     evidence.embedding = await embed_evidence(evidence.title, evidence.body_text)
 
-    identity_content = "\n".join(part for part in [evidence.title or "", evidence.body_text or ""] if part)
+    identity_content = "\n".join(
+        part for part in [evidence.title or "", evidence.body_text or ""] if part
+    )
     if identity_content.strip():
         await link_evidence_identities(
             db,
@@ -322,7 +332,11 @@ async def synchronize_evidence_artifacts(
             evidence=evidence,
             content=identity_content,
             source_id=source_id,
-            source_metadata={"raw_object_id": str(evidence.raw_object_ref)} if evidence.raw_object_ref else None,
+            source_metadata=(
+                {"raw_object_id": str(evidence.raw_object_ref)}
+                if evidence.raw_object_ref
+                else None
+            ),
         )
 
     await db.flush()
@@ -374,7 +388,10 @@ async def process_attachment_artifact(
             parser_type=None,
             parser_confidence=0.0,
             text=None,
-            parser_metadata={"filename": artifact.filename, "mime_type": _clean_mime_type(artifact.mime_type)},
+            parser_metadata={
+                "filename": artifact.filename,
+                "mime_type": _clean_mime_type(artifact.mime_type),
+            },
             error=str(exc),
         )
 
@@ -387,7 +404,7 @@ async def process_attachment_artifact(
         **(artifact.parser_metadata or {}),
         **(extraction.parser_metadata or {}),
     }
-    artifact.extracted_at = datetime.now(timezone.utc)
+    artifact.extracted_at = datetime.now(UTC)
     await db.flush()
 
     merged_summary = None

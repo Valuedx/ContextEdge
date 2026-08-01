@@ -42,9 +42,10 @@ Legal hold is honoured in both archive and purge paths — items with
 """
 
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Literal
 
+import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -56,8 +57,6 @@ from contextedge.services.memory_service import (
     classify_evidence_memory_class,
     memory_retention_windows,
 )
-
-import structlog
 
 logger = structlog.get_logger()
 
@@ -79,7 +78,7 @@ async def apply_retention_policy(
 
     Items under legal hold are excluded.
     """
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     windows = memory_retention_windows(retention_days)
 
     q = select(EvidenceItem).where(
@@ -172,7 +171,7 @@ async def purge_archived_evidence(
     if mode not in ("hard_delete", "soft_purge"):
         raise ValueError(f"mode must be 'hard_delete' or 'soft_purge', got {mode!r}")
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     cutoff = now - timedelta(days=archive_grace_days)
 
     stmt = (

@@ -5,20 +5,19 @@ from sqlalchemy import or_, select
 
 from contextedge.deps import AuthUser, DbSession
 from contextedge.middleware.audit import log_audit_event
-from contextedge.models.evidence import AttachmentArtifact, EvidenceItem, Thread
+from contextedge.models.evidence import AttachmentArtifact, EvidenceItem
+from contextedge.models.source import Source
 from contextedge.schemas.common import StatusResponse
 from contextedge.schemas.evidence import (
     AttachmentArtifactResponse,
     EvidenceAccessPolicyUpdate,
+    EvidenceBulkDeleteRequest,
     EvidenceContextResponse,
     EvidenceItemDetail,
     EvidenceItemResponse,
-    EvidenceBulkDeleteRequest,
-    ThreadResponse,
 )
-from contextedge.models.source import Source
-from contextedge.services.policy_assignment import assert_policy_assignment
 from contextedge.search.access_control import resolve_excluded_access_policy_ids
+from contextedge.services.policy_assignment import assert_policy_assignment
 
 router = APIRouter()
 
@@ -177,8 +176,9 @@ async def bulk_delete_evidence(
     user.require_role("domain_admin")
 
     from sqlalchemy import delete, or_
-    from contextedge.models.evidence import AttachmentArtifact, RawEvidenceObject
+
     from contextedge.models.episode import CorrelationEdge
+    from contextedge.models.evidence import AttachmentArtifact
 
     ids = body.ids
     if not ids:
@@ -228,8 +228,9 @@ async def purge_evidence(db: DbSession, user: AuthUser):
     user.require_role("domain_admin")
 
     from sqlalchemy import delete, or_
-    from contextedge.models.evidence import RawEvidenceObject, AttachmentArtifact
+
     from contextedge.models.episode import CorrelationEdge
+    from contextedge.models.evidence import AttachmentArtifact, RawEvidenceObject
 
     # 1. Resolve Evidence IDs to delete dependencies
     evidence_ids_q = await db.execute(
@@ -311,7 +312,8 @@ async def delete_evidence(evidence_id: UUID, db: DbSession, user: AuthUser):
 
 @router.get("/{evidence_id}/context", response_model=EvidenceContextResponse)
 async def get_evidence_context(evidence_id: UUID, db: DbSession, user: AuthUser):
-    """Retrieve resolved source name, domain name, and linked Episode/Pattern knowledge graph context."""
+    """Retrieve resolved source name, domain name, and linked Episode/Pattern
+    knowledge graph context."""
     result = await db.execute(
         select(EvidenceItem).where(
             EvidenceItem.id == evidence_id,
@@ -350,8 +352,8 @@ async def get_evidence_context(evidence_id: UUID, db: DbSession, user: AuthUser)
             domain_name = d_obj.name
 
     # 3. Resolve Linked Episode, Pattern, and Playbook records
-    from contextedge.models.pattern import PatternEvidenceLink, Pattern, GraphEdge
     from contextedge.models.episode import Episode
+    from contextedge.models.pattern import GraphEdge, Pattern, PatternEvidenceLink
     from contextedge.models.playbook import Playbook
 
     episodes = []

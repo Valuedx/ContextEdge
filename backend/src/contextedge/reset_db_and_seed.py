@@ -11,15 +11,16 @@ from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import select, text
+
 from contextedge.database import async_session_factory
 from contextedge.graph.builder import ensure_edge
-from contextedge.seed_guard import require_destructive_reset_allowed
-from contextedge.models.pattern import Pattern, PatternEvidenceLink, GraphEdge
-from contextedge.models.playbook import Playbook, PlaybookVersion
 from contextedge.models.episode import Episode
 from contextedge.models.evidence import EvidenceItem
+from contextedge.models.pattern import Pattern, PatternEvidenceLink
+from contextedge.models.playbook import Playbook, PlaybookVersion
 from contextedge.models.source import Source
 from contextedge.models.tenant import Domain, Tenant, User
+from contextedge.seed_guard import require_destructive_reset_allowed
 
 DEMO_NAMESPACE = uuid.UUID("778ddaf7-0b68-4c26-a7df-3b539ba7a72c")
 

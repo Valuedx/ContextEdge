@@ -14,11 +14,11 @@ from contextedge.models.episode import EpisodeStep
 from contextedge.models.evidence import EvidenceItem, RawEvidenceObject
 from contextedge.models.source import Source
 from contextedge.models.tenant import Domain
-from contextedge.workers.chunk_tasks import chunk_evidence_task, embed_chunks_batch_task
 from contextedge.services.artifact_extraction_service import (
     load_raw_payload,
     register_attachment_artifacts,
 )
+from contextedge.services.decision_service import link_evidence_decisions
 from contextedge.services.evidence_chunk_service import write_chunks
 from contextedge.services.evidence_normalization import (
     ensure_thread_for_evidence,
@@ -26,11 +26,11 @@ from contextedge.services.evidence_normalization import (
     evidence_content_hash_from_payload,
     evidence_title_from_payload,
 )
-from contextedge.services.decision_service import link_evidence_decisions
 from contextedge.services.identity_service import link_evidence_identities
 from contextedge.services.redaction_service import redact, redact_evidence_fields
 from contextedge.workers.asyncio_runner import run_async
 from contextedge.workers.celery_app import celery_app
+from contextedge.workers.chunk_tasks import chunk_evidence_task, embed_chunks_batch_task
 from contextedge.workers.correlation_tasks import correlate_evidence
 
 logger = structlog.get_logger()
@@ -184,7 +184,8 @@ async def _normalize(db: AsyncSession, raw_object_id: str, tenant_id: uuid.UUID)
             logger.warning("embedding_failed", evidence_id=str(existing.id), error=str(embed_exc))
             embedded = False
         identity_count = None
-        if not ((existing.canonical_entity_refs or {}).get("identities")) and identity_content.strip():
+        has_identities = (existing.canonical_entity_refs or {}).get("identities")
+        if not has_identities and identity_content.strip():
             try:
                 refs = await link_evidence_identities(
                     db,
@@ -204,7 +205,8 @@ async def _normalize(db: AsyncSession, raw_object_id: str, tenant_id: uuid.UUID)
                     error=str(exc),
                 )
         decision_count = None
-        if not ((existing.canonical_entity_refs or {}).get("decisions")) and identity_content.strip():
+        has_decisions = (existing.canonical_entity_refs or {}).get("decisions")
+        if not has_decisions and identity_content.strip():
             try:
                 decision_refs = await link_evidence_decisions(
                     db,
@@ -438,7 +440,9 @@ async def _classify(db: AsyncSession, evidence_id: str, tenant_id: uuid.UUID) ->
     return {"evidence_id": evidence_id, "classification": ev.relevance_state}
 
 
-async def _reconstruct(db: AsyncSession, cluster_id: str, tenant_id: uuid.UUID, domain_id: uuid.UUID | None = None) -> dict:
+async def _reconstruct(
+    db: AsyncSession, cluster_id: str, tenant_id: uuid.UUID, domain_id: uuid.UUID | None = None
+) -> dict:
     """`cluster_id` is treated as a comma-separated list of evidence UUIDs for MVP wiring."""
     ids = [uuid.UUID(x.strip()) for x in cluster_id.split(",") if x.strip()]
     if len(ids) < 1:
@@ -481,7 +485,7 @@ async def _reconstruct(db: AsyncSession, cluster_id: str, tenant_id: uuid.UUID, 
         evidence_ids=[uuid.UUID(i["evidence_id"]) for i in items],
     )
     await db.flush()
-    
+
     total_steps = 0
     for episode in created_episodes:
         res = await db.execute(select(EpisodeStep).where(EpisodeStep.episode_id == episode.id))
@@ -509,7 +513,9 @@ def normalize_evidence(self, raw_object_id: str, tenant_id: str):
     try:
         res = run_async(work)
         if res and "evidence_id" in res:
-            attachment_ids = [artifact_id for artifact_id in (res.get("attachment_ids") or []) if artifact_id]
+            attachment_ids = [
+                artifact_id for artifact_id in (res.get("attachment_ids") or []) if artifact_id
+            ]
             if attachment_ids:
                 from contextedge.workers.artifact_tasks import extract_attachment_artifact
 
@@ -556,7 +562,9 @@ def classify_relevance_task(self, evidence_id: str, tenant_id: str):
     default_retry_delay=60,
     name="extraction.reconstruct_episode",
 )
-def reconstruct_episode_task(self, correlation_cluster_id: str, tenant_id: str, domain_id: str | None = None):
+def reconstruct_episode_task(
+    self, correlation_cluster_id: str, tenant_id: str, domain_id: str | None = None
+):
     tid = uuid.UUID(tenant_id)
     did = uuid.UUID(domain_id) if domain_id else None
 

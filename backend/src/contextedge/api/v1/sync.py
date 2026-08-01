@@ -58,7 +58,9 @@ async def retry_sync_run(run_id: UUID, db: DbSession, user: AuthUser):
     if run.run_type == "backfill":
         run_backfill.delay(str(run.source_id), str(run.source_object_id), str(user.tenant_id))
     else:
-        run_incremental_sync.delay(str(run.source_id), str(run.source_object_id), str(user.tenant_id))
+        run_incremental_sync.delay(
+            str(run.source_id), str(run.source_object_id), str(user.tenant_id)
+        )
 @router.delete("/purge", status_code=204)
 async def purge_sync_runs(db: DbSession, user: AuthUser):
     """Clear all sync run logs for the tenant."""

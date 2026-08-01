@@ -10,7 +10,8 @@ per tenant. Explicit task names route them to the ``evaluation`` queue.
 import uuid
 
 import structlog
-from sqlalchemy import select, func as sa_func
+from sqlalchemy import func as sa_func
+from sqlalchemy import select
 
 from contextedge.models.decision import Decision, DecisionOutcome
 from contextedge.models.tenant import Tenant

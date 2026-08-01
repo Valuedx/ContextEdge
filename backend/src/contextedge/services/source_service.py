@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from cryptography.fernet import Fernet
 from sqlalchemy import select
@@ -74,7 +74,7 @@ async def discover_source_objects(
         decrypted = await decrypt_credentials(cred.encrypted_credentials)
         connector = get_connector(source.source_type, source.config, decrypted)
         discovered = await connector.discover_objects()
-        
+
         # If we got here, connection works
         source.auth_status = "connected"
     except Exception as exc:
@@ -135,7 +135,7 @@ async def create_sync_run(
         tenant_id=tenant_id,
         run_type=run_type,
         status="running",
-        started_at=datetime.now(timezone.utc),
+        started_at=datetime.now(UTC),
     )
     db.add(run)
     await db.flush()
@@ -163,7 +163,7 @@ async def rotate_source_credentials(
             SourceCredential.status == "active",
         )
     )
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     for row in existing.scalars().all():
         row.status = "rotated"
         row.rotated_at = now

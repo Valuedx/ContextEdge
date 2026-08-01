@@ -5,7 +5,9 @@ from pydantic import BaseModel, Field
 
 
 class SourceCreate(BaseModel):
-    source_type: str = Field(..., pattern=r"^(local_file|teams|gmail|servicenow|jira_sm|confluence|sharepoint|exchange)$")
+    source_type: str = Field(
+        ..., pattern=r"^(local_file|teams|gmail|servicenow|jira_sm|confluence|sharepoint|exchange)$"
+    )
     display_name: str = Field(..., min_length=1, max_length=255)
     purpose: str | None = None
     workspace_id: UUID | None = None

@@ -17,7 +17,10 @@ from contextedge.models.pattern import GraphEdge, Pattern
 from contextedge.models.playbook import Playbook, PlaybookVersion
 from contextedge.models.session import ResolutionSession
 from contextedge.services.event_log_service import append_operational_event
-from contextedge.services.identity_service import identity_ids_from_refs, resolve_identity_ids_for_terms
+from contextedge.services.identity_service import (
+    identity_ids_from_refs,
+    resolve_identity_ids_for_terms,
+)
 
 SHORT_TERM_MEMORY = "short_term"
 LONG_TERM_MEMORY = "long_term"
