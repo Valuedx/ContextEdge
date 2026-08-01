@@ -37,6 +37,7 @@ disposes; the mass-merge guard applies to every new linking signal.
 | Entity rarity | Degree-weighted identity tier; hub dampening (≥200 links = no signal) | #31 |
 | Semantic suggestions | Chunk-ANN + similarity floor 0.7 + non-semantic corroborator → reviewer queue; reject permanent (migration 0039) | #32 |
 | Field authority | Episode prompt v3 (authority by fact type), contradictions preserved (migration 0040), strict draft schema, per-source `synthesis_role`, quality metric | #34 |
+| M2 applicability foundation | B1 entity class taxonomy (0042: 13-class seeded tree, deterministic uuid5 ids, instance_of/subclass_of edges, conservative sys_class_name map, configuration_item fallback; OS-as-trait design call) · B2 normalized traits (0043: manufacturer/model/os_name/os_version columns + partial model index, widened reference dot-walks + topology detail fields, present-wins/absent-never-clears refresh) | #40–#41 |
 | M1 conversational precision | A1 message-function classifier (0041, prompt family `message_function`, veto upgrade) · A2 correction supersession (`status='corrected'`, propagation, audit event) · A7 negative evidence (`status='negative'`, thread blocking, resolver fence, reviewer-removal negation) · A10 reply reconciliation in debounced reconstruction | #36–#39 |
 
 ---
@@ -200,7 +201,7 @@ Three distinct relationships, never conflated: same occurrence (correlation), si
 problem (pattern), applicable fix (precondition match). Phases are strictly ordered —
 every later phase predicates on traits and classes Phase B1/B2 create.
 
-### B1 · Entity class taxonomy — M
+### B1 · Entity class taxonomy — M — **SHIPPED 2026-08-02**
 **What.** `entity_classes` table (canonical_key, display_name, parent_class_id,
 class_family, attributes_schema) with a small seeded hierarchy
 (computing_device → endpoint → portable/fixed → laptop/desktop; server; network_device;
@@ -217,7 +218,7 @@ attributes); classifier fallback = `configuration_item` class. Graph edges via
 … → computing_device traversable in the graph; unknown classes degrade to today's
 behavior.
 
-### B2 · Normalized traits + widened CMDB ingestion — M
+### B2 · Normalized traits + widened CMDB ingestion — M — **SHIPPED 2026-08-02**
 **What.** First-class searchable traits on entities: manufacturer, model, os_family /
 os_version / os_build, device_role, environment, criticality (columns or indexed
 structured attributes) — populated by widening the ServiceNow reference/topology pulls
