@@ -22,6 +22,7 @@ MEMBERSHIP_RELATIONSHIPS = (
     "explicit_reference",  # unstructured evidence quoting the number
     "mentioned_only",      # multi-ticket digest guard: related, never merged
     "reply_inheritance",   # conversational tier (later phase)
+    "dissociation",        # negative evidence: explicitly NOT this case (A7)
 )
 
 

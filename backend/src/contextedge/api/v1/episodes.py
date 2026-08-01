@@ -299,6 +299,27 @@ async def remove_episode_evidence(
                 EpisodeEvidenceLink.evidence_id == evidence_id,
             )
         )
+        # A7: removal is a human's "this does not belong here". When the
+        # evidence has exactly ONE active case membership, negate it so
+        # the cluster resolver cannot pull the item straight back in on
+        # the next reconstruction. Multi-case evidence is ambiguous —
+        # which case the reviewer objected to is unknowable — so only
+        # the unambiguous case is negated.
+        from sqlalchemy import select as sa_select2
+
+        from contextedge.models.case_bridge import EvidenceCaseMembership
+
+        memberships = (
+            await db.execute(
+                sa_select2(EvidenceCaseMembership).where(
+                    EvidenceCaseMembership.tenant_id == user.tenant_id,
+                    EvidenceCaseMembership.evidence_id == evidence_id,
+                    EvidenceCaseMembership.status == "active",
+                )
+            )
+        ).scalars().all()
+        if len(memberships) == 1:
+            memberships[0].status = "negative"
         await db.flush()
     await db.commit()
     await db.refresh(episode)

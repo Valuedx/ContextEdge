@@ -102,10 +102,12 @@ async def _add_membership(
     relationship_type: str,
     confidence: float,
     extraction_location: str | None,
+    status: str = "active",
 ) -> bool:
     """Idempotent membership insert; existing rows are left untouched
     (first-writer wins — a primary_case row must not be downgraded by a
-    later mention of the same case)."""
+    later mention of the same case, and a negative row permanently
+    blocks automatic re-linking of its pair)."""
     existing = (
         await db.execute(
             select(EvidenceCaseMembership.id).where(
@@ -126,6 +128,7 @@ async def _add_membership(
                     relationship_type=relationship_type,
                     confidence=confidence,
                     extraction_location=extraction_location,
+                    status=status,
                 )
             )
             await db.flush()
@@ -205,20 +208,61 @@ async def register_ticket_identifier(
         )
     ).scalars().all()
     for mention in pending:
-        added = await _add_membership(
-            db,
-            tenant_id,
-            mention.evidence_id,
-            canonical_case_id,
-            "explicit_reference",
-            BODY_CONFIDENCE if mention.extraction_location != "subject" else SUBJECT_CONFIDENCE,
-            mention.extraction_location,
-        )
+        if mention.extraction_location == "dissociation":
+            # The mention was evidence AGAINST the link (A7): the ticket
+            # arriving later reconciles it to a negative row, exactly as
+            # it would have been written had the ticket existed first.
+            added = await _add_membership(
+                db,
+                tenant_id,
+                mention.evidence_id,
+                canonical_case_id,
+                "dissociation",
+                NEGATIVE_MEMBERSHIP_CONFIDENCE,
+                "dissociation",
+                status="negative",
+            )
+        else:
+            added = await _add_membership(
+                db,
+                tenant_id,
+                mention.evidence_id,
+                canonical_case_id,
+                "explicit_reference",
+                BODY_CONFIDENCE if mention.extraction_location != "subject" else SUBJECT_CONFIDENCE,
+                mention.extraction_location,
+            )
         mention.status = "resolved"
         mention.resolved_case_id = canonical_case_id
         if added:
             counts["reconciled_mentions"] += 1
     return counts
+
+
+NEGATIVE_MEMBERSHIP_CONFIDENCE = 0.7
+
+
+async def _thread_negated_case_ids(
+    db: AsyncSession, tenant_id: uuid.UUID, thread_id: uuid.UUID | None
+) -> set[uuid.UUID]:
+    """Cases some message in this thread explicitly dissociated from.
+    Automatic linking of (this thread, that case) requires review from
+    then on — a severed link must not quietly regrow (A7)."""
+    if thread_id is None:
+        return set()
+    rows = (
+        await db.execute(
+            select(EvidenceCaseMembership.canonical_case_id)
+            .join(EvidenceItem, EvidenceCaseMembership.evidence_id == EvidenceItem.id)
+            .where(
+                EvidenceCaseMembership.tenant_id == tenant_id,
+                EvidenceCaseMembership.status == "negative",
+                EvidenceItem.tenant_id == tenant_id,
+                EvidenceItem.thread_id == thread_id,
+            )
+        )
+    ).scalars().all()
+    return set(rows)
 
 
 async def bridge_conversational_mentions(
@@ -270,13 +314,61 @@ async def bridge_conversational_mentions(
         else:
             unresolved.append((location, token))
 
+    # Negative branch (A7): a dissociative message naming a ticket is
+    # evidence AGAINST the link — "not related to INC0010427" must never
+    # become an explicit_reference. Resolved tokens become negative
+    # rows; unresolved ones become dissociation-tagged pending mentions
+    # so a late-arriving ticket reconciles to a negative row too.
+    if states_dissociation(evidence):
+        for location, _token, case_id in resolved:
+            if await _add_membership(
+                db,
+                tenant_id,
+                evidence.id,
+                case_id,
+                "dissociation",
+                getattr(evidence, "message_function_confidence", None)
+                or NEGATIVE_MEMBERSHIP_CONFIDENCE,
+                "dissociation",
+                status="negative",
+            ):
+                counts["negated"] = counts.get("negated", 0) + 1
+        for location, token in unresolved:
+            try:
+                async with db.begin_nested():
+                    db.add(
+                        PendingIdentifierMention(
+                            tenant_id=tenant_id,
+                            evidence_id=evidence.id,
+                            normalized_value=token,
+                            extraction_location="dissociation",
+                        )
+                    )
+                    await db.flush()
+                counts["pending"] += 1
+            except IntegrityError:
+                continue
+        return counts
+
     # Multi-ticket digest guard: many distinct cases in one message is a
     # status report, not an incident conversation.
     distinct_cases = {case_id for _loc, _tok, case_id in resolved}
     is_digest = len(distinct_cases) >= DIGEST_THRESHOLD
     counts["digest_downgraded"] = is_digest
 
+    negated_in_thread = (
+        await _thread_negated_case_ids(
+            db, tenant_id, getattr(evidence, "thread_id", None)
+        )
+        if resolved
+        else set()
+    )
     for location, _token, case_id in resolved:
+        if case_id in negated_in_thread:
+            # A message in this thread severed the case; automatic
+            # re-linking stays blocked until a reviewer intervenes.
+            counts["blocked_by_negative"] = counts.get("blocked_by_negative", 0) + 1
+            continue
         relationship = "mentioned_only" if is_digest else "explicit_reference"
         confidence = (
             0.5 if is_digest
@@ -349,20 +441,19 @@ def has_dissociation_language(text: str | None) -> bool:
     return any(phrase in lowered for phrase in DISSOCIATION_PHRASES)
 
 
-def is_dissociative(evidence: EvidenceItem) -> bool:
-    """Dissociation verdict for the reply-inheritance veto (A1).
+def states_dissociation(evidence: EvidenceItem) -> bool:
+    """Does this message explicitly SEVER a case link? (A7 negative
+    branch.) Narrower than the inheritance veto: a correction abstains
+    from inheritance but its own ticket mention is a POSITIVE link —
+    "Correction — tracking under INC0010455" asserts INC0010455, and
+    A2's propagation depends on that membership existing.
 
-    The message-function classifier decides when it produced a
-    confident label; the conservative phrase list is the deterministic
-    floor whenever the label is missing, out-of-vocabulary, or
-    low-confidence (LLM budget exhausted, pre-0041 rows, provider
-    down)."""
+    The classifier decides when it produced a confident label; the
+    conservative phrase list is the deterministic floor whenever the
+    label is missing, out-of-vocabulary, or low-confidence (LLM budget
+    exhausted, pre-0041 rows, provider down)."""
     label = getattr(evidence, "message_function", None)
-    # A correction also abstains from inheritance: it changes or severs a
-    # link to earlier context, so inheriting the parent's (possibly
-    # wrong) case is premature — A2's supersession resolves what the
-    # correction actually establishes.
-    if label in ("dissociation", "correction"):
+    if label == "dissociation":
         return True
     confidence = getattr(evidence, "message_function_confidence", None) or 0.0
     if label in (None, "unclassified") or confidence < CLASSIFIER_TRUST_FLOOR:
@@ -370,6 +461,19 @@ def is_dissociative(evidence: EvidenceItem) -> bool:
             evidence.title
         )
     return False
+
+
+def is_dissociative(evidence: EvidenceItem) -> bool:
+    """Inheritance-veto verdict (A1): dissociations sever, and a
+    confident correction also abstains — it changes what earlier
+    messages established, so inheriting the parent's (possibly wrong)
+    case is premature; A2's supersession resolves what the correction
+    actually establishes."""
+    if states_dissociation(evidence):
+        return True
+    label = getattr(evidence, "message_function", None)
+    confidence = getattr(evidence, "message_function_confidence", None) or 0.0
+    return label == "correction" and confidence >= CLASSIFIER_TRUST_FLOOR
 
 
 async def _resolve_parent_evidence(
@@ -448,11 +552,18 @@ async def inherit_reply_membership(
         counts["abstained"] = len(distinct_cases) > 1
         return counts
 
+    case_id = next(iter(distinct_cases))
+    if case_id in await _thread_negated_case_ids(
+        db, tenant_id, getattr(evidence, "thread_id", None)
+    ):
+        counts["blocked_by_negative"] = True
+        return counts
+
     if await _add_membership(
         db,
         tenant_id,
         evidence.id,
-        next(iter(distinct_cases)),
+        case_id,
         "reply_inheritance",
         REPLY_INHERITANCE_CONFIDENCE,
         "reply_structure",
