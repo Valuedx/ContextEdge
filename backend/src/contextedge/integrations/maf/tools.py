@@ -9,7 +9,11 @@ from pydantic import Field, ValidationError
 
 from contextedge.graph.agent.contracts import AgentGraphRequest, GraphNodeRef
 from contextedge.integrations.maf._compat import FunctionInvocationContext, tool
-from contextedge.integrations.maf.client import CmdbTopologyClient, ContextGraphClient
+from contextedge.integrations.maf.client import (
+    ChangeRiskClient,
+    CmdbTopologyClient,
+    ContextGraphClient,
+)
 
 
 def _tool_error(code: str, message: str) -> dict[str, Any]:
@@ -127,5 +131,53 @@ class CmdbTopologyTools:
                 "error": {
                     "code": "topology_unavailable",
                     "message": f"Topology lookup failed ({type(exc).__name__}).",
+                }
+            }
+
+
+class ChangeRiskTools:
+    def __init__(self, client: ChangeRiskClient):
+        self.client = client
+
+    @tool(
+        name="assess_change_risk",
+        description=(
+            "Deterministic change-risk profile for a configuration item "
+            "from ingested operational history: how often past changes on "
+            "it were blamed for incidents (caused_by references), incident "
+            "pressure and alert activity in the window, and the cached "
+            "blast radius (dependents). Returns risk_level low/medium/high "
+            "with a factors list explaining every contributing signal. Use "
+            "BEFORE recommending or approving a change to a CI. Accepts a "
+            "CI display name or 32-hex sys_id."
+        ),
+    )
+    async def assess_change_risk(
+        self,
+        ci: Annotated[
+            str,
+            Field(description="CI display name or ServiceNow sys_id (32 hex chars)."),
+        ],
+        window_days: Annotated[
+            int,
+            Field(ge=1, le=730, description="History window in days (default 180)."),
+        ] = 180,
+        context: FunctionInvocationContext | None = None,
+    ) -> dict[str, Any]:
+        del context
+        term = " ".join(str(ci or "").split())[:500]
+        if not term:
+            return {"error": {"code": "invalid_ci", "message": "Provide a CI name or sys_id."}}
+        try:
+            window = min(max(int(window_days), 1), 730)
+        except (TypeError, ValueError):
+            window = 180
+        try:
+            return await self.client.assess(term, window)
+        except Exception as exc:
+            return {
+                "error": {
+                    "code": "risk_assessment_unavailable",
+                    "message": f"Change-risk assessment failed ({type(exc).__name__}).",
                 }
             }

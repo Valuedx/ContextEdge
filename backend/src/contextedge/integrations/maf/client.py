@@ -47,6 +47,28 @@ class InProcessCmdbTopologyClient:
                 raise
 
 
+class ChangeRiskClient(Protocol):
+    """Port for the assess_change_risk tool — deterministic risk profile
+    for a CI from ingested operational history (read-only)."""
+
+    async def assess(self, ci: str, window_days: int) -> dict: ...
+
+
+class InProcessChangeRiskClient:
+    def __init__(self, session_factory, tenant_id):
+        self.session_factory = session_factory
+        self.tenant_id = tenant_id
+
+    async def assess(self, ci: str, window_days: int) -> dict:
+        from contextedge.services.change_risk_service import assess_change_risk
+
+        async with self.session_factory() as db:
+            # Read-only — nothing to commit; rollback on exit is harmless.
+            return await assess_change_risk(
+                db, self.tenant_id, ci, window_days=window_days
+            )
+
+
 class InProcessContextGraphClient:
     def __init__(
         self,

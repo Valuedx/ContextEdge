@@ -50,6 +50,26 @@ async def cmdb_topology(
     return await lookup_topology(db, user.tenant_id, ci)
 
 
+@router.get("/change-risk")
+async def change_risk(
+    db: DbSession,
+    user: AuthUser,
+    ci: str = Query(
+        ...,
+        min_length=1,
+        max_length=500,
+        description="CI display name (e.g. vpn-gw-east-01) or 32-hex sys_id.",
+    ),
+    window_days: int = Query(180, ge=1, le=730),
+):
+    """Deterministic change-risk profile for a CI from operational history:
+    change→incident blame rate, incident pressure, alert activity, and
+    cached blast radius — every factor explained."""
+    from contextedge.services.change_risk_service import assess_change_risk
+
+    return await assess_change_risk(db, user.tenant_id, ci, window_days=window_days)
+
+
 @router.get("/neighbors")
 async def graph_neighbors(
     db: DbSession,
