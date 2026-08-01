@@ -27,6 +27,7 @@ from typing import Any
 import structlog
 
 from contextedge.ai.extractors.episode_schema import validate_episode
+from contextedge.ai.fencing import fence_untrusted
 from contextedge.ai.prompts import get_prompt
 from contextedge.ai.provider import llm_complete_json
 
@@ -98,7 +99,7 @@ async def _extract_from_chunk(
         prompt = get_prompt_version("episode", prompt_version)
     else:
         prompt = get_prompt("episode", tenant_id)
-    user = prompt.format_user(evidence_text=_format_evidence_block(evidence_items))
+    user = prompt.format_user(evidence_text=fence_untrusted(_format_evidence_block(evidence_items)))
     result = await llm_complete_json(
         user,
         task="extraction",
