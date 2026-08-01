@@ -118,6 +118,17 @@ def extract_case_link_candidates(
 
             for _edge_type, ref_sys_id in extract_task_references(payload):
                 add(source_type, ref_sys_id)
+        if source_type == "jira_sm":
+            # Linked issue keys join the same namespace as each issue's
+            # own key — symmetric, ordering-independent correlation,
+            # mirroring the ServiceNow sys_id contract. Components /
+            # services are deliberately NOT keys (mass-merge guard).
+            from contextedge.services.jira_reference_service import (
+                extract_issue_references,
+            )
+
+            for _edge_type, issue_key in extract_issue_references(payload):
+                add(source_type, issue_key)
 
     add(f"{source_type}:thread", thread_external_id)
     return candidates
@@ -357,6 +368,32 @@ async def correlate_evidence_item(
                 error=str(exc),
             )
 
+    # Jira SM reference enrichment — same SAVEPOINT containment and
+    # fail-soft contract as the ServiceNow branch above.
+    jira_references: dict | None = None
+    if (source.source_type or "") == "jira_sm" and isinstance(raw_payload, dict):
+        try:
+            from contextedge.services.jira_reference_service import (
+                process_jira_references,
+            )
+
+            async with db.begin_nested():
+                jira_references = await process_jira_references(
+                    db,
+                    tenant_id,
+                    evidence,
+                    raw_payload,
+                    own_key=raw_object.external_id if raw_object is not None else None,
+                )
+        except Exception as exc:
+            logger.warning(
+                "jira_reference.enrichment_failed",
+                tenant_id=str(tenant_id),
+                evidence_id=str(evidence.id),
+                error_type=type(exc).__name__,
+                error=str(exc),
+            )
+
     await db.flush()
     await append_operational_event(
         db,
@@ -372,6 +409,7 @@ async def correlate_evidence_item(
             "correlations_created": correlations_created,
             "identity_match_candidates": len(identity_related_evidence_ids),
             "servicenow_references": snow_references,
+            "jira_references": jira_references,
         },
     )
     return {
@@ -383,4 +421,5 @@ async def correlate_evidence_item(
         "correlations_created": correlations_created,
         "identity_match_candidates": len(identity_related_evidence_ids),
         "servicenow_references": snow_references,
+        "jira_references": jira_references,
     }

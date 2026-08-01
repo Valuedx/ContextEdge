@@ -246,6 +246,7 @@ async def test_lookup_falls_back_to_cache_marked_stale():
         id=uuid4(),
         name="vpn-gw-east-01",
         external_id=GW_SYS_ID,
+        external_system="servicenow",
         attributes={"ci_class": "cmdb_ci_netgear"},
         last_synced_at=datetime(2026, 7, 1, tzinfo=UTC),
     )
@@ -390,6 +391,7 @@ async def test_lookup_serves_fresh_cache_without_api_calls():
         id=uuid4(),
         name="vpn-gw-east-01",
         external_id=GW_SYS_ID,
+        external_system="servicenow",
         attributes={"ci_class": "cmdb_ci_netgear"},
         last_synced_at=datetime.now(UTC) - timedelta(minutes=2),
     )
