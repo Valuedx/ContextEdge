@@ -881,3 +881,141 @@ async def apply_correction(
     if corrected_case_id is not None:
         counts["corrected_case_id"] = str(corrected_case_id)
     return counts
+
+
+# --- Message lifecycle: edits & deletes (A8) --------------------------------
+
+# Relationship types a message's own conversational processing created —
+# the ones an edit or delete of THAT message must retire. Structured
+# rows (primary_case) and cross-message rows (recurrence, fleet_member)
+# are never touched by a chat message's lifecycle.
+LIFECYCLE_RELATIONSHIPS = (
+    "explicit_reference",
+    "reply_inheritance",
+    "thread_topic",
+    "mentioned_only",
+    "dissociation",
+)
+
+
+async def _evidence_ids_for_external_id(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    external_id: str,
+    *,
+    exclude: uuid.UUID | None = None,
+) -> list[uuid.UUID]:
+    rows = (
+        await db.execute(
+            select(EvidenceItem.id)
+            .join(RawEvidenceObject, EvidenceItem.raw_object_ref == RawEvidenceObject.id)
+            .join(Source, RawEvidenceObject.source_id == Source.id)
+            .where(
+                EvidenceItem.tenant_id == tenant_id,
+                RawEvidenceObject.tenant_id == tenant_id,
+                RawEvidenceObject.external_id == external_id,
+                Source.source_type == "teams",
+            )
+            .limit(20)
+        )
+    ).scalars().all()
+    return [r for r in rows if r != exclude]
+
+
+async def _retire_derived_rows(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    evidence_ids: list[uuid.UUID],
+    new_status: str,
+) -> dict:
+    """Retire (never delete) the conversational memberships and pending
+    mentions a set of evidence rows produced. Negative rows retire too:
+    deleting a dissociation retracts the severance."""
+    counts = {"memberships": 0, "pending": 0}
+    if not evidence_ids:
+        return counts
+    memberships = (
+        (
+            await db.execute(
+                select(EvidenceCaseMembership).where(
+                    EvidenceCaseMembership.tenant_id == tenant_id,
+                    EvidenceCaseMembership.evidence_id.in_(tuple(evidence_ids)),
+                    EvidenceCaseMembership.status.in_(("active", "negative")),
+                    EvidenceCaseMembership.relationship_type.in_(
+                        LIFECYCLE_RELATIONSHIPS
+                    ),
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    for membership in memberships:
+        membership.status = new_status
+        counts["memberships"] += 1
+    mentions = (
+        (
+            await db.execute(
+                select(PendingIdentifierMention).where(
+                    PendingIdentifierMention.tenant_id == tenant_id,
+                    PendingIdentifierMention.evidence_id.in_(tuple(evidence_ids)),
+                    PendingIdentifierMention.status == "pending",
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    for mention in mentions:
+        mention.status = new_status
+        counts["pending"] += 1
+    return counts
+
+
+async def reconcile_message_lifecycle(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    evidence: EvidenceItem,
+    payload: dict | None,
+) -> dict:
+    """A8: retracted statements must stop steering correlation.
+
+    - **Deleted** message: every evidence version of that message
+      retires its derived rows to ``retracted`` — including negative
+      rows (deleting a dissociation retracts the severance).
+    - **Edited** message: PRIOR evidence versions retire to ``edited``;
+      the new version's own bridging (which runs right after this)
+      writes fresh rows from the current text.
+
+    Fail-soft by the caller's savepoint; debounced reconstruction picks
+    up the cluster change on its own.
+    """
+    counts = {"action": None, "memberships": 0, "pending": 0}
+    p = payload or {}
+    external_id = p.get("message_id")
+    if not external_id:
+        return counts
+
+    if p.get("is_deleted"):
+        ids = await _evidence_ids_for_external_id(
+            db, tenant_id, str(external_id)
+        )
+        retired = await _retire_derived_rows(db, tenant_id, ids, "retracted")
+        counts.update(retired)
+        counts["action"] = "retracted"
+    elif p.get("last_edited_at"):
+        prior_ids = await _evidence_ids_for_external_id(
+            db, tenant_id, str(external_id), exclude=evidence.id
+        )
+        if prior_ids:
+            retired = await _retire_derived_rows(db, tenant_id, prior_ids, "edited")
+            counts.update(retired)
+            counts["action"] = "edited"
+    if counts["action"] and (counts["memberships"] or counts["pending"]):
+        logger.info(
+            "message_lifecycle.reconciled",
+            tenant_id=str(tenant_id),
+            evidence_id=str(evidence.id),
+            **counts,
+        )
+    return counts

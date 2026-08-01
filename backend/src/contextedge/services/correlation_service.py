@@ -528,6 +528,22 @@ async def correlate_evidence_item(
                     canonical_case_id=canonical_case_id,
                 )
         elif bridge_source in CONVERSATIONAL_SOURCE_TYPES:
+            # A8: lifecycle first — an edit retires the prior version's
+            # rows before this version's bridging writes fresh ones; a
+            # delete retracts everything the message established.
+            if bridge_source == "teams" and isinstance(raw_payload, dict) and (
+                raw_payload.get("is_deleted") or raw_payload.get("last_edited_at")
+            ):
+                from contextedge.services.ticket_bridge_service import (
+                    reconcile_message_lifecycle,
+                )
+
+                async with db.begin_nested():
+                    lifecycle_result = await reconcile_message_lifecycle(
+                        db, tenant_id, evidence, raw_payload
+                    )
+            else:
+                lifecycle_result = None
             async with db.begin_nested():
                 ticket_bridge = await bridge_conversational_mentions(
                     db,
@@ -535,6 +551,8 @@ async def correlate_evidence_item(
                     evidence,
                     payload=raw_payload if isinstance(raw_payload, dict) else None,
                 )
+            if ticket_bridge is not None and lifecycle_result is not None:
+                ticket_bridge["lifecycle"] = lifecycle_result
             if bridge_source == "teams" and isinstance(raw_payload, dict):
                 from contextedge.services.ticket_bridge_service import (
                     inherit_reply_membership,

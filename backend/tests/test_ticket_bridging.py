@@ -1267,3 +1267,100 @@ async def test_bot_reply_inherits_at_reduced_confidence():
 
     (row,) = [a for a in added if isinstance(a, EvidenceCaseMembership)]
     assert row.confidence == BOT_REPLY_INHERITANCE_CONFIDENCE
+
+
+# --- message lifecycle: edits & deletes (A8) --------------------------------
+
+
+def _lifecycle_db(version_ids, memberships, mentions):
+    async def execute(stmt):
+        text = str(stmt)
+        result = Mock()
+        if "sources" in text and "raw_evidence_objects" in text:
+            result.scalars.return_value.all.return_value = version_ids
+            return result
+        if text.startswith("SELECT evidence_case_memberships.id,"):
+            result.scalars.return_value.all.return_value = memberships
+            return result
+        if text.startswith("SELECT pending_identifier_mentions.id,"):
+            result.scalars.return_value.all.return_value = mentions
+            return result
+        result.scalar_one_or_none.return_value = None
+        result.scalars.return_value.all.return_value = []
+        return result
+
+    return SimpleNamespace(
+        execute=execute,
+        add=lambda o: None,
+        flush=AsyncMock(),
+        begin_nested=Mock(return_value=_NestedTx()),
+    )
+
+
+@pytest.mark.asyncio
+async def test_deleted_message_retracts_everything_including_negation():
+    from contextedge.services.ticket_bridge_service import (
+        reconcile_message_lifecycle,
+    )
+
+    tenant_id = uuid4()
+    version = uuid4()
+    membership = SimpleNamespace(status="active", relationship_type="explicit_reference")
+    negation = SimpleNamespace(status="negative", relationship_type="dissociation")
+    mention = SimpleNamespace(status="pending")
+    ev = SimpleNamespace(id=uuid4())
+    db = _lifecycle_db([version], [membership, negation], [mention])
+
+    counts = await reconcile_message_lifecycle(
+        db, tenant_id, ev, {"message_id": "m1", "is_deleted": True}
+    )
+
+    assert counts["action"] == "retracted"
+    assert counts["memberships"] == 2
+    assert membership.status == "retracted"
+    assert negation.status == "retracted"  # severance retracted too
+    assert mention.status == "retracted"
+
+
+@pytest.mark.asyncio
+async def test_edited_message_retires_only_prior_versions():
+    from contextedge.services.ticket_bridge_service import (
+        reconcile_message_lifecycle,
+    )
+
+    tenant_id = uuid4()
+    current = uuid4()
+    prior = uuid4()
+    old_membership = SimpleNamespace(
+        status="active", relationship_type="explicit_reference"
+    )
+    ev = SimpleNamespace(id=current)
+    db = _lifecycle_db([prior, current], [old_membership], [])
+
+    counts = await reconcile_message_lifecycle(
+        db,
+        tenant_id,
+        ev,
+        {"message_id": "m1", "last_edited_at": "2026-08-03T10:00:00Z"},
+    )
+
+    assert counts["action"] == "edited"
+    assert old_membership.status == "edited"
+
+
+@pytest.mark.asyncio
+async def test_lifecycle_noop_without_markers_or_id():
+    from contextedge.services.ticket_bridge_service import (
+        reconcile_message_lifecycle,
+    )
+
+    tenant_id = uuid4()
+    ev = SimpleNamespace(id=uuid4())
+    counts = await reconcile_message_lifecycle(
+        SimpleNamespace(), tenant_id, ev, {"message_id": "m1"}
+    )
+    assert counts["action"] is None
+    counts = await reconcile_message_lifecycle(
+        SimpleNamespace(), tenant_id, ev, {"is_deleted": True}
+    )
+    assert counts["action"] is None  # no message_id -> nothing to match
