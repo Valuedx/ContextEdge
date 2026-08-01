@@ -1122,3 +1122,147 @@ async def test_quoted_pending_mention_reconciles_as_mentioned_only():
         and a.relationship_type == "mentioned_only"
     ]
     assert len(quoted_rows) == 1
+
+
+# --- bot messages (A6) ------------------------------------------------------
+
+
+def test_bot_card_tokens_extracted_structurally():
+    from contextedge.services.ticket_bridge_service import (
+        extract_bot_card_tokens,
+        is_bot_message,
+    )
+
+    payload = {
+        "is_bot": True,
+        "attachments": [
+            {
+                "content_type": "application/vnd.microsoft.card.adaptive",
+                "content": {"title": "Incident INC0010427", "state": "In Progress"},
+            },
+            "garbage",
+            {"content": "also mentions INC0010427 again"},
+        ],
+    }
+    assert is_bot_message(payload) is True
+    assert is_bot_message({"from_application": "workflow"}) is True
+    assert is_bot_message({}) is False
+    assert extract_bot_card_tokens(payload) == ["INC0010427"]
+    assert extract_bot_card_tokens({}) == []
+
+
+@pytest.mark.asyncio
+async def test_servicenow_card_creates_anchor_membership_without_llm():
+    """Acceptance: a connector card announcing INC0010427 creates the
+    membership at card confidence and anchors the thread topic."""
+    from contextedge.services.ticket_bridge_service import (
+        BOT_CARD_CONFIDENCE,
+        bridge_conversational_mentions,
+    )
+
+    tenant_id = uuid4()
+    case_id = uuid4()
+    added = []
+    ev = SimpleNamespace(
+        id=uuid4(), title=None, body_text="", thread_id=None,
+        message_function=None, message_function_confidence=None,
+    )
+    payload = {
+        "is_bot": True,
+        "attachments": [{"content": {"title": "INC0010427 assigned"}}],
+    }
+    db = _negation_db(case_id, [], added)
+
+    counts = await bridge_conversational_mentions(db, tenant_id, ev, payload)
+
+    assert counts["memberships"] == 1
+    assert counts.get("anchor_case_id") == str(case_id)
+    from contextedge.models.case_bridge import EvidenceCaseMembership
+
+    (row,) = [a for a in added if isinstance(a, EvidenceCaseMembership)]
+    assert row.relationship_type == "explicit_reference"
+    assert row.confidence == BOT_CARD_CONFIDENCE
+    assert row.extraction_location == "bot_card"
+
+
+@pytest.mark.asyncio
+async def test_bot_prose_downweighted_and_never_anchors():
+    from contextedge.services.ticket_bridge_service import (
+        BOT_TEXT_CONFIDENCE,
+        bridge_conversational_mentions,
+    )
+
+    tenant_id = uuid4()
+    case_id = uuid4()
+    added = []
+    ev = SimpleNamespace(
+        id=uuid4(), title=None,
+        body_text="Automated notice: INC0010427 state changed",
+        thread_id=None, message_function=None, message_function_confidence=None,
+    )
+    db = _negation_db(case_id, [], added)
+
+    counts = await bridge_conversational_mentions(
+        db, tenant_id, ev, {"is_bot": True}
+    )
+
+    assert counts["memberships"] == 1
+    assert counts.get("anchor_case_id") is None  # never anchors
+    from contextedge.models.case_bridge import EvidenceCaseMembership
+
+    (row,) = [a for a in added if isinstance(a, EvidenceCaseMembership)]
+    assert row.confidence == BOT_TEXT_CONFIDENCE
+    assert row.relationship_type == "explicit_reference"
+
+
+@pytest.mark.asyncio
+async def test_human_message_confidence_unchanged_by_payload():
+    from contextedge.services.ticket_bridge_service import (
+        BODY_CONFIDENCE,
+        bridge_conversational_mentions,
+    )
+
+    tenant_id = uuid4()
+    case_id = uuid4()
+    added = []
+    ev = SimpleNamespace(
+        id=uuid4(), title=None, body_text="tracking under INC0010427",
+        thread_id=None, message_function=None, message_function_confidence=None,
+    )
+    db = _negation_db(case_id, [], added)
+
+    counts = await bridge_conversational_mentions(
+        db, tenant_id, ev, {"is_bot": False, "message_id": "m1"}
+    )
+    assert counts.get("anchor_case_id") == str(case_id)
+    from contextedge.models.case_bridge import EvidenceCaseMembership
+
+    (row,) = [a for a in added if isinstance(a, EvidenceCaseMembership)]
+    assert row.confidence == BODY_CONFIDENCE
+
+
+@pytest.mark.asyncio
+async def test_bot_reply_inherits_at_reduced_confidence():
+    from contextedge.services.ticket_bridge_service import (
+        BOT_REPLY_INHERITANCE_CONFIDENCE,
+        inherit_reply_membership,
+    )
+
+    tenant_id = uuid4()
+    case_id = uuid4()
+    added = []
+    reply = SimpleNamespace(
+        id=uuid4(), title=None, body_text="Status sync complete",
+        thread_id=None, message_function=None, message_function_confidence=None,
+    )
+    db = _reply_db(uuid4(), [case_id], added)
+
+    counts = await inherit_reply_membership(
+        db, tenant_id, reply, {"reply_to_id": "root-1", "is_bot": True}
+    )
+
+    assert counts["inherited"] == 1
+    from contextedge.models.case_bridge import EvidenceCaseMembership
+
+    (row,) = [a for a in added if isinstance(a, EvidenceCaseMembership)]
+    assert row.confidence == BOT_REPLY_INHERITANCE_CONFIDENCE

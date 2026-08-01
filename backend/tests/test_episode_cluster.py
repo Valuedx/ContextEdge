@@ -433,7 +433,7 @@ async def test_reconciliation_retries_inheritance_for_unanchored_replies():
             result.scalars.return_value.all.return_value = [anchored_msg]
             return result
         if "raw_evidence_objects" in text:
-            result.all.return_value = [(orphan_reply, "root-msg-9")]
+            result.all.return_value = [(orphan_reply, "root-msg-9", None)]
             return result
         raise AssertionError("unrouted: " + text[:60])
 
@@ -456,7 +456,9 @@ async def test_reconciliation_retries_inheritance_for_unanchored_replies():
         )
 
     assert counts == {"attempted": 1, "inherited": 1}
-    assert calls == [(orphan_reply, {"reply_to_id": "root-msg-9"})]
+    assert calls == [
+        (orphan_reply, {"reply_to_id": "root-msg-9", "is_bot": False})
+    ]
 
 
 @pytest.mark.asyncio

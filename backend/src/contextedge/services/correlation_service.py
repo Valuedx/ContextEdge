@@ -467,7 +467,10 @@ async def correlate_evidence_item(
         elif bridge_source in CONVERSATIONAL_SOURCE_TYPES:
             async with db.begin_nested():
                 ticket_bridge = await bridge_conversational_mentions(
-                    db, tenant_id, evidence
+                    db,
+                    tenant_id,
+                    evidence,
+                    payload=raw_payload if isinstance(raw_payload, dict) else None,
                 )
             if bridge_source == "teams" and isinstance(raw_payload, dict):
                 from contextedge.services.ticket_bridge_service import (

@@ -575,6 +575,7 @@ async def _reconcile_reply_inheritance(
                 select(
                     EvidenceItem.id,
                     RawEvidenceObject.raw_payload["reply_to_id"].astext,
+                    RawEvidenceObject.raw_payload["is_bot"].astext,
                 )
                 .join(
                     RawEvidenceObject,
@@ -587,13 +588,16 @@ async def _reconcile_reply_inheritance(
                 )
             )
         ).all()
-        for evidence_id, reply_to in reply_rows:
+        for evidence_id, reply_to, is_bot in reply_rows:
             ev = loaded_evidence.get(evidence_id)
             if ev is None or not reply_to:
                 continue
             counts["attempted"] += 1
             result = await inherit_reply_membership(
-                db, tenant_id, ev, {"reply_to_id": reply_to}
+                db,
+                tenant_id,
+                ev,
+                {"reply_to_id": reply_to, "is_bot": is_bot == "true"},
             )
             counts["inherited"] += result.get("inherited", 0)
         if counts["inherited"]:

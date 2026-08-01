@@ -37,6 +37,7 @@ disposes; the mass-merge guard applies to every new linking signal.
 | Entity rarity | Degree-weighted identity tier; hub dampening (≥200 links = no signal) | #31 |
 | Semantic suggestions | Chunk-ANN + similarity floor 0.7 + non-semantic corroborator → reviewer queue; reject permanent (migration 0039) | #32 |
 | Field authority | Episode prompt v3 (authority by fact type), contradictions preserved (migration 0040), strict draft schema, per-source `synthesis_role`, quality metric | #34 |
+| M3 thread understanding | A3 thread topics (0044: anchored/provisional topics, unification sweep, thread_topic memberships) · A4 reference resolver (trigger-gated, identity-layer candidates, exactly-one-or-abstain) · A5 quoted content (quote detection, mentioned_only cap, weighted digest, quoted reconciliation) · A6 bot handling (structural card parsing at 0.95, prose downweight, no bot anchors, reduced bot inheritance) | #43–#46 |
 | M2 applicability foundation | B1 entity class taxonomy (0042: 13-class seeded tree, deterministic uuid5 ids, instance_of/subclass_of edges, conservative sys_class_name map, configuration_item fallback; OS-as-trait design call) · B2 normalized traits (0043: manufacturer/model/os_name/os_version columns + partial model index, widened reference dot-walks + topology detail fields, present-wins/absent-never-clears refresh) | #40–#41 |
 | M1 conversational precision | A1 message-function classifier (0041, prompt family `message_function`, veto upgrade) · A2 correction supersession (`status='corrected'`, propagation, audit event) · A7 negative evidence (`status='negative'`, thread blocking, resolver fence, reviewer-removal negation) · A10 reply reconciliation in debounced reconstruction | #36–#39 |
 
@@ -79,7 +80,7 @@ audit trail. Never delete — supersede.
 **Dependencies.** A1. **Acceptance.** The 10:00 "John's VPN ticket" / 10:05
 "Correction — it is Mary's" sequence ends with exactly one active membership.
 
-### A3 · Thread-topic state + provisional cases — M/L
+### A3 · Thread-topic state + provisional cases — M/L — **SHIPPED 2026-08-03**
 **What.** A per-thread topic record: which case(s) a thread is currently "about",
 updated as anchors arrive; and a *provisional case* for threads discussing an incident
 that has no ticket yet.
@@ -98,7 +99,7 @@ where only message 3 says "tracking under INC0010427" yields memberships for
 subsequent messages via topic, not 40 pending mentions; a pre-ticket thread merges
 cleanly when the ticket arrives.
 
-### A4 · Conversational-reference resolver — L
+### A4 · Conversational-reference resolver — L — **SHIPPED 2026-08-03**
 **What.** Resolve indirect references: "John's ticket" (person→active-case index),
 "the prod DB of the ordering server" (entity→entity traversal→active case).
 **Why.** Doc-1's appendix + Doc-2: most chat references are indirect. Precision comes
@@ -114,7 +115,8 @@ mention when unresolved.
 **Acceptance.** "Can you look at John's ticket?" resolves when John has exactly one
 active assigned case; abstains (logged) when he has three.
 
-### A5 · Quoted/forwarded content + span-level references — M
+### A5 · Quoted/forwarded content + span-level references — M — **SHIPPED 2026-08-03**
+*(Shipped with categorical span provenance — subject/body/quoted_body; numeric character offsets deferred to the review-console work C4/E5.)*
 **What.** Detect quoted/forwarded blocks inside emails and Teams messages; extracted
 ticket tokens inside quoted spans get `extraction_location='quoted'` with reduced
 confidence, and memberships can carry character-span provenance.
@@ -128,7 +130,7 @@ mentioning three tickets first-hand. Span provenance makes review explainable.
 creates `mentioned_only`-at-most memberships from the quoted block while the author's
 own new sentence keeps full confidence.
 
-### A6 · Bot messages: weighting + structured card parsing — M
+### A6 · Bot messages: weighting + structured card parsing — M — **SHIPPED 2026-08-03**
 **What.** Bot/webhook messages (`is_bot`/`from_application`, already captured) get
 role-aware treatment: a ServiceNow card is parsed *structurally* for ticket
 fields/state (authoritative for those fields, per the P4 authority model); bot chatter
