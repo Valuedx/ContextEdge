@@ -1,6 +1,7 @@
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
+import structlog
 from fastapi import APIRouter, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
@@ -17,6 +18,8 @@ from contextedge.schemas.evidence import (
     EpisodeUpdate,
     ReconstructRequest,
 )
+
+logger = structlog.get_logger()
 
 router = APIRouter()
 
@@ -155,6 +158,15 @@ async def approve_episode(episode_id: UUID, db: DbSession, user: AuthUser):
         resource_type="episode",
         resource_id=str(episode.id),
     )
+    # B3: approved stories mint their issue signature. The task re-reads
+    # the episode and no-ops unless approved, so the small dispatch-vs-
+    # commit race resolves via its retry.
+    try:
+        from contextedge.workers.signature_tasks import extract_issue_signature_task
+
+        extract_issue_signature_task.delay(str(episode.id), str(user.tenant_id))
+    except Exception:  # broker down must not fail the approval
+        logger.warning("issue_signature.dispatch_failed", episode_id=str(episode.id))
     return episode
 
 

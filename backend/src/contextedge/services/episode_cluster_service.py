@@ -164,7 +164,11 @@ async def resolve_episode_cluster(
                     EvidenceCaseMembership.tenant_id == tenant_id,
                     EvidenceCaseMembership.evidence_id.in_(tuple(frontier)),
                     EvidenceCaseMembership.status == "active",
-                    EvidenceCaseMembership.relationship_type != "mentioned_only",
+                    # mentioned_only = digest guard; recurrence = similar
+                    # problem, never the same occurrence (C2).
+                    EvidenceCaseMembership.relationship_type.notin_(
+                        ("mentioned_only", "recurrence")
+                    ),
                 )
             )
         ).scalars().all()
@@ -181,7 +185,9 @@ async def resolve_episode_cluster(
                             tuple(membership_cases)
                         ),
                         EvidenceCaseMembership.status == "active",
-                        EvidenceCaseMembership.relationship_type != "mentioned_only",
+                        EvidenceCaseMembership.relationship_type.notin_(
+                            ("mentioned_only", "recurrence")
+                        ),
                     )
                 )
             ).all()

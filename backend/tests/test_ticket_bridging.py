@@ -309,7 +309,8 @@ async def test_cluster_expands_via_memberships_but_not_mentioned_only():
         if text.startswith(membership_select):
             # The digest email is filtered OUT by the SQL predicate in
             # production; the fake returns only the explicit reference.
-            assert "relationship_type !=" in text  # mentioned_only excluded
+            # mentioned_only + recurrence excluded (digest guard + C2)
+            assert "relationship_type NOT IN" in text
             result.all.return_value = [(email, "explicit_reference")]
             return result
         result.scalars.return_value.all.return_value = []

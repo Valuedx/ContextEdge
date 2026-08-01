@@ -52,6 +52,7 @@ from contextedge.models.execution import (
     ExecutionStepRun,
     ToolInvocation,
 )
+from contextedge.models.issue_signature import EpisodeIssueSignature, IssueSignature
 from contextedge.models.pattern import (
     Contradiction,
     GraphEdge,
@@ -87,7 +88,7 @@ __all__ = [
     "CanonicalIdentity", "IdentityAlias", "EvidenceIdentityLink", "CorrelationEdge",
     "Episode", "EpisodeStep",
     "CaseIdentifier", "EvidenceCaseMembership", "PendingIdentifierMention",
-    "CorrelationSuggestion", "ThreadTopic",
+    "CorrelationSuggestion", "ThreadTopic", "IssueSignature", "EpisodeIssueSignature",
     "Pattern", "PatternEvidenceLink", "NegativeKnowledgeItem", "Contradiction", "GraphEdge",
     "Playbook", "PlaybookVersion", "PlaybookEvidenceLink", "PlaybookApproval",
     "ResolutionSession", "DecisionTraceEvent", "CaseLink",
