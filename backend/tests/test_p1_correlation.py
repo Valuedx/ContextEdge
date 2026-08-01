@@ -87,7 +87,7 @@ async def test_correlation_links_matching_external_id():
         thread_id=None,
         ingested_at=None,
     )
-    source = SimpleNamespace(id=source_id, tenant_id=tenant_id, source_type="servicenow")
+    source = SimpleNamespace(id=source_id, tenant_id=tenant_id, source_type="servicenow", config={})
     raw = SimpleNamespace(external_id="INC-100", raw_payload={})
     existing_link = SimpleNamespace(
         system="servicenow",

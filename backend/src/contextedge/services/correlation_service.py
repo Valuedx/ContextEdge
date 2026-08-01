@@ -87,6 +87,7 @@ def extract_case_link_candidates(
     raw_object: RawEvidenceObject | None,
     raw_payload: dict | None = None,
     thread_external_id: str | None = None,
+    source_config: dict | None = None,
 ) -> list[tuple[str, str]]:
     candidates: list[tuple[str, str]] = []
     seen: set[tuple[str, str]] = set()
@@ -125,9 +126,11 @@ def extract_case_link_candidates(
             # services are deliberately NOT keys (mass-merge guard).
             from contextedge.services.jira_reference_service import (
                 extract_issue_references,
+                resolves_link_types,
             )
 
-            for _edge_type, issue_key in extract_issue_references(payload):
+            resolves = resolves_link_types(source_config)
+            for _edge_type, issue_key in extract_issue_references(payload, resolves):
                 add(source_type, issue_key)
 
     add(f"{source_type}:thread", thread_external_id)
@@ -170,6 +173,7 @@ async def correlate_evidence_item(
         raw_object=raw_object,
         raw_payload=raw_payload,
         thread_external_id=thread_external_id,
+        source_config=source.config if isinstance(source.config, dict) else None,
     )
     existing_links: list[CaseLink] = []
     for system, external_id in candidates:
@@ -384,6 +388,7 @@ async def correlate_evidence_item(
                     evidence,
                     raw_payload,
                     own_key=raw_object.external_id if raw_object is not None else None,
+                    source_config=source.config if isinstance(source.config, dict) else None,
                 )
         except Exception as exc:
             logger.warning(

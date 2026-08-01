@@ -19,6 +19,7 @@ re-delivery starts a fresh kind-prefixed thread (old threads remain
 readable — disclosed in KNOWN_GAPS).
 """
 
+import asyncio
 import base64
 from datetime import datetime, timedelta
 from typing import Any
@@ -115,18 +116,53 @@ class JiraSmConnector(BaseConnector):
             return f"{ISSUE_FIELDS},{service_field}"
         return ISSUE_FIELDS
 
+    # Retry transient failures (429 / 5xx / transport errors) with capped
+    # exponential backoff, honoring Retry-After — Atlassian rate-limits
+    # aggressively, and one 429 previously failed the whole sync task.
+    # Same contract as the ServiceNow connector's _snow_get.
+    MAX_ATTEMPTS = 3
+    BACKOFF_BASE_SECONDS = 1.0
+    MAX_RETRY_AFTER_SECONDS = 60.0
+
     async def _jira_get(self, path: str, params: dict | None = None) -> dict:
-        async with httpx.AsyncClient() as client:
-            resp = await client.get(
-                f"{self.base_url}/rest/api/3{path}",
-                headers={
-                    "Authorization": self._auth_header,
-                    "Accept": "application/json",
-                },
-                params=params,
-            )
-            resp.raise_for_status()
-            return resp.json()
+        last_exc: Exception | None = None
+        for attempt in range(1, self.MAX_ATTEMPTS + 1):
+            try:
+                async with httpx.AsyncClient(timeout=30.0) as client:
+                    resp = await client.get(
+                        f"{self.base_url}/rest/api/3{path}",
+                        headers={
+                            "Authorization": self._auth_header,
+                            "Accept": "application/json",
+                        },
+                        params=params,
+                    )
+                if resp.status_code == 429 or resp.status_code >= 500:
+                    retry_after = resp.headers.get("Retry-After")
+                    try:
+                        delay = min(
+                            float(retry_after) if retry_after else
+                            self.BACKOFF_BASE_SECONDS * (2 ** (attempt - 1)),
+                            self.MAX_RETRY_AFTER_SECONDS,
+                        )
+                    except ValueError:
+                        delay = self.BACKOFF_BASE_SECONDS * (2 ** (attempt - 1))
+                    if attempt < self.MAX_ATTEMPTS:
+                        await asyncio.sleep(delay)
+                        continue
+                resp.raise_for_status()
+                return resp.json()
+            except (httpx.TransportError, httpx.HTTPStatusError) as exc:
+                last_exc = exc
+                if (
+                    isinstance(exc, httpx.HTTPStatusError)
+                    and exc.response.status_code < 500
+                    and exc.response.status_code != 429
+                ):
+                    raise  # 4xx (auth, bad JQL) will not improve on retry
+                if attempt < self.MAX_ATTEMPTS:
+                    await asyncio.sleep(self.BACKOFF_BASE_SECONDS * (2 ** (attempt - 1)))
+        raise last_exc  # exhausted retries
 
     async def validate_credentials(self) -> CredentialStatus:
         try:
