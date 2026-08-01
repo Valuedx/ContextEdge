@@ -131,6 +131,10 @@ _EXPECTED_MARKERS: set[tuple[str, str]] = {
     ('correlation_suggestion.py', 'ForeignKey("evidence_items.id", ondelete="CASCADE"),'),
     ('correlation_suggestion.py',
      'UniqueConstraint( "evidence_id_low", "evidence_id_high", name="uq_correlation_suggestion_pair" ),'),
+    # fleet_group.py (migration 0048): fleet grouping suggestions.
+    ('fleet_group.py', 'ForeignKey("evidence_items.id", ondelete="SET NULL"),'),
+    ('fleet_group.py',
+     'UniqueConstraint("tenant_id", "change_ref", name="uq_fleet_group_change"),'),
     # fix_cohort.py (migration 0047): per-cohort outcome counters.
     ('fix_cohort.py', 'ForeignKey("fix_patterns.id", ondelete="CASCADE"),'),
     ('fix_cohort.py',

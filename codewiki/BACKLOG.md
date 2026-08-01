@@ -37,6 +37,7 @@ disposes; the mass-merge guard applies to every new linking signal.
 | Entity rarity | Degree-weighted identity tier; hub dampening (≥200 links = no signal) | #31 |
 | Semantic suggestions | Chunk-ANN + similarity floor 0.7 + non-semantic corroborator → reviewer queue; reject permanent (migration 0039) | #32 |
 | Field authority | Episode prompt v3 (authority by fact type), contradictions preserved (migration 0040), strict draft schema, per-source `synthesis_role`, quality metric | #34 |
+| M5 learning loops | B5 cohort stats + reviewer-gated promotion (0047: model/class/family counters, candidate rules always review-gated, failures narrow automatically) · C1 suggestion learning (per-pair floors from reviewer outcomes, stats endpoint) · C3 conflicting-ticket hard veto in the identity tier · B6 fleet grouping (0048: change-keyed detector, reviewer-gated parent-case minting, fleet_member memberships, 30m beat) | #49–#52 |
 | M4 similarity & transfer | B3 issue signatures (0045: fingerprint dedupe per tenant, approval-gated extraction, P4-pattern Pydantic gate) · C2 recurrence membership (pointer to precedent, excluded from cluster expansion) · B4 applicability ladder (0046: rules with required/excluded trait predicates, 7-level deterministic assessment, level floors, named provisional weights, MAF tool + API; Doc-3's four LPT001 examples are the acceptance tests) | #47–#48 |
 | M3 thread understanding | A3 thread topics (0044: anchored/provisional topics, unification sweep, thread_topic memberships) · A4 reference resolver (trigger-gated, identity-layer candidates, exactly-one-or-abstain) · A5 quoted content (quote detection, mentioned_only cap, weighted digest, quoted reconciliation) · A6 bot handling (structural card parsing at 0.95, prose downweight, no bot anchors, reduced bot inheritance) | #43–#46 |
 | M2 applicability foundation | B1 entity class taxonomy (0042: 13-class seeded tree, deterministic uuid5 ids, instance_of/subclass_of edges, conservative sys_class_name map, configuration_item fallback; OS-as-trait design call) · B2 normalized traits (0043: manufacturer/model/os_name/os_version columns + partial model index, widened reference dot-walks + topology detail fields, present-wins/absent-never-clears refresh) | #40–#41 |
@@ -267,7 +268,7 @@ Latitude-5420 BIOS/BitLocker → very high; Chrome-crash laptop→desktop → tr
 software scope; battery→random-power-off → no precedent; AX201 Code 10 laptop→desktop
 → partial transfer with `requires_review=true`, Realtek desktop scores much lower.
 
-### B5 · Cohort success statistics + promotion policy — M/L
+### B5 · Cohort success statistics + promotion policy — M/L — **SHIPPED 2026-08-03**
 **What.** Per-cohort outcome counts on fix patterns (9/10 on Latitude 5420, 0/4 on
 desktops) fed by the existing `case_outcome_fix_patterns` + execution-verification
 loop, and a reviewer-gated promotion ladder: one success = precedent → same-model rule
@@ -278,7 +279,7 @@ the calibration data B4's weights are waiting for.
 failing on a desktop yields a model-level candidate rule and an automatic desktop
 exclusion; promotion to `windows_endpoint` requires reviewer approval.
 
-### B6 · Fleet / major-incident grouping — M/L
+### B6 · Fleet / major-incident grouping — M/L — **SHIPPED 2026-08-03**
 **What.** Parent-incident correlation for "thirty endpoints failed after the same
 patch": tickets referencing the same recent change + same error signature within a
 tight window → a *suggested* parent grouping (reviewer-gated), never an automatic
@@ -299,7 +300,7 @@ yield nothing.
 
 ## Epic C — Correlation & episode quality remainders [Doc-1, Gap]
 
-### C1 · Suggestion learning + source-pair thresholds — M
+### C1 · Suggestion learning + source-pair thresholds — M — **SHIPPED 2026-08-03**
 **What.** Doc-1 P3 items 2 & 6, not shipped in PR #32: per-source-pair similarity
 thresholds (ticket↔ticket text is boilerplate-heavy and needs a higher floor than
 chat↔chat), and feeding reviewer accept/reject outcomes back into thresholds/corroborator
@@ -319,7 +320,8 @@ issue signature, different occurrence); `related`/`follow_on` from explicit refe
 **Dependencies.** B3 for recurrence. **Acceptance.** A new incident matching an old
 episode's signature records a `recurrence` membership to the old case (never a merge).
 
-### C3 · Correlation negative signals — M
+### C3 · Correlation negative signals — M — **SHIPPED 2026-08-03**
+*(Conflicting-ticket hard veto shipped; environment/customer signals await per-evidence trait plumbing.)*
 **What.** Doc-1 P2 item 4, not shipped in PR #31: explicit penalties — different
 production environment, different authoritative CI, conflicting ticket numbers, large
 time separation, different customer/account — reducing or vetoing identity-tier

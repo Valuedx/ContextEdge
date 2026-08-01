@@ -25,6 +25,7 @@ MEMBERSHIP_RELATIONSHIPS = (
     "dissociation",        # negative evidence: explicitly NOT this case (A7)
     "thread_topic",        # inherited from the thread's anchored topic (A3)
     "recurrence",          # similar problem, prior case — never a merge (C2)
+    "fleet_member",        # reviewer-accepted fleet incident member (B6)
 )
 
 

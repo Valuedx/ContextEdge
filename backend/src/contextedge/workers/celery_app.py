@@ -167,6 +167,8 @@ celery_app = Celery(
         "contextedge.workers.suggestion_tasks",
         # Issue-signature extraction on episode approval (B3).
         "contextedge.workers.signature_tasks",
+        # Fleet-group detection sweep (B6).
+        "contextedge.workers.fleet_tasks",
         # Post-hard-delete orphan sweeps (review F-18 / F-20).
         "contextedge.workers.cleanup_tasks",
         # Relational-to-graph edge reconciliation for post-0031 rows.
@@ -273,6 +275,10 @@ celery_app.conf.update(
             "task": "evaluation.verify_executions",
             "schedule": 900.0,
             "args": ("all",),
+        },
+        "detect-fleet-groups": {
+            "task": "evaluation.detect_fleet_groups",
+            "schedule": 1800.0,
         },
     },
 )
