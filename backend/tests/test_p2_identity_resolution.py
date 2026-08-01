@@ -107,7 +107,10 @@ async def test_create_episodes_from_evidence_aggregates_identity_refs():
         execute=AsyncMock(
             return_value=_AllResult(
                 [
+                    # (evidence_id, canonical_entity_refs) — the P0 per-episode
+                    # membership work made the entity-refs query id-keyed.
                     (
+                        evidence_id,
                         {
                             "identities": [
                                 {

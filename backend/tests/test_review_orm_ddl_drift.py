@@ -118,6 +118,11 @@ _EXPECTED_MARKERS: set[tuple[str, str]] = {
     # migration 0033; mirrored into IdentityAlias.__table_args__ so
     # metadata-built schemas enforce strong-alias tenant uniqueness too.
     ('episode.py', 'unique=True,'),
+    # episode_evidence_links (migration 0037): normalized episode↔evidence
+    # provenance added in the P0 cluster-materialization work.
+    ('episode.py', 'ForeignKey("episodes.id", ondelete="CASCADE"),'),
+    ('episode.py',
+     'UniqueConstraint("episode_id", "evidence_id", name="uq_episode_evidence"),'),
     # The CorrelationEdge source/target FK lines were re-wrapped in the
     # 2026-08 lint-debt cleanup: multi-line mapped_column style puts the
     # ForeignKey on its own line, whose fingerprint matches the generic

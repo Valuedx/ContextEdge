@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from contextedge.ai.classifiers.relevance import classify_relevance as run_relevance_classifier
 from contextedge.ai.embeddings import embed_evidence
 from contextedge.config import settings
-from contextedge.models.episode import EpisodeStep
+from contextedge.models.episode import Episode, EpisodeStep
 from contextedge.models.evidence import EvidenceItem, RawEvidenceObject
 from contextedge.models.source import Source
 from contextedge.models.tenant import Domain
@@ -442,40 +442,113 @@ async def _classify(db: AsyncSession, evidence_id: str, tenant_id: uuid.UUID) ->
     return {"evidence_id": evidence_id, "classification": ev.relevance_state}
 
 
+# source_type → the role synthesis should treat it as. Field-specific
+# authority is P4; the ROLE label is the P0 piece the extractor renders.
+SOURCE_ROLE_MAP = {
+    "servicenow": "ticket",
+    "jira_sm": "ticket",
+    "sapphireims": "ticket",
+    "teams": "working_discussion",
+    "gmail": "external_communication",
+    "local_file": "document",
+}
+
+
 async def _reconstruct(
     db: AsyncSession, cluster_id: str, tenant_id: uuid.UUID, domain_id: uuid.UUID | None = None
 ) -> dict:
-    """`cluster_id` is treated as a comma-separated list of evidence UUIDs for MVP wiring."""
-    ids = [uuid.UUID(x.strip()) for x in cluster_id.split(",") if x.strip()]
-    if len(ids) < 1:
+    """``cluster_id`` carries seed evidence UUIDs (comma-separated for
+    caller compatibility). The FULL connected cluster — case links +
+    correlation edges, visibility- and time-fenced — is resolved before
+    reconstruction; the seeds are only the entry point."""
+    seed_ids = [uuid.UUID(x.strip()) for x in cluster_id.split(",") if x.strip()]
+    if len(seed_ids) < 1:
         return {"error": "no_evidence_ids"}
+
+    from contextedge.services.episode_cluster_service import resolve_episode_cluster
+
+    cluster = await resolve_episode_cluster(db, tenant_id, seed_ids)
+    if not cluster.evidence_ids:
+        return {"error": "no_evidence_found"}
+
+    # Draft idempotency: the same cluster re-processed must not create a
+    # duplicate draft. Reviewers see one evolving draft, not four
+    # near-duplicates as sources trickle in.
+    existing_draft = (
+        await db.execute(
+            select(Episode.id).where(
+                Episode.tenant_id == tenant_id,
+                Episode.cluster_fingerprint == cluster.fingerprint,
+                Episode.reviewer_state == "pending_review",
+            ).limit(1)
+        )
+    ).scalar_one_or_none()
+    if existing_draft is not None:
+        return {
+            "status": "duplicate_cluster",
+            "cluster_fingerprint": cluster.fingerprint,
+            "episode_ids": [str(existing_draft)],
+        }
 
     if domain_id is None:
         # Resolve a default domain for the tenant if not provided
         dr = await db.execute(select(Domain.id).where(Domain.tenant_id == tenant_id).limit(1))
         domain_id = dr.scalar_one_or_none()
 
+    # Real source types + roles: join each evidence to its Source. The
+    # flattened "source_type": "evidence" this replaces made a ticket, a
+    # chat, and a transcript indistinguishable to synthesis.
+    source_types: dict[uuid.UUID, str] = {}
+    rows = (
+        await db.execute(
+            select(EvidenceItem.id, Source.source_type)
+            .join(Source, EvidenceItem.source_id == Source.id)
+            .where(EvidenceItem.id.in_(tuple(cluster.evidence_ids)))
+        )
+    ).all()
+    source_types = {row[0]: row[1] or "unknown" for row in rows}
+
     items = []
-    for eid in ids:
+    for eid in cluster.evidence_ids:
         ev = await db.get(EvidenceItem, eid)
-        # Legal-hold items must never reach the LLM — see review F-04.
-        # Mirrors the SQL WHERE used by retention + contradiction paths
-        # (``services.evidence_filters.exclude_legal_hold``).
-        if (
-            ev is not None
-            and ev.tenant_id == tenant_id
-            and ev.sensitivity_label != "legal_hold"
-        ):
-            items.append({
-                "title": ev.title,
-                "body": ev.body_text,
-                "source_type": "evidence",
-                "timestamp": str(ev.created_at_source or ev.ingested_at),
-                "evidence_id": str(ev.id),
-            })
+        # Cluster membership is tenant-verified upstream; this is belt-
+        # and-braces against a resolver regression.
+        if ev is None or ev.tenant_id != tenant_id:
+            continue
+        source_type = source_types.get(ev.id, "unknown")
+        items.append({
+            "title": ev.title,
+            "body": ev.body_text,
+            "source_type": source_type,
+            "source_role": SOURCE_ROLE_MAP.get(source_type, "evidence"),
+            "timestamp": str(ev.created_at_source or ev.ingested_at),
+            "evidence_id": str(ev.id),
+        })
+    items.sort(key=lambda item: item["timestamp"])
 
     if not items:
         return {"error": "no_evidence_found"}
+
+    # Supersede-on-growth: a pending draft built from a SUBSET of this
+    # cluster is an older view of the same incident. Mark it superseded
+    # (invisible to the agent surface, which requires "approved") so the
+    # reviewer sees one current draft.
+    superseded = 0
+    pending = (
+        await db.execute(
+            select(Episode).where(
+                Episode.tenant_id == tenant_id,
+                Episode.reviewer_state == "pending_review",
+                Episode.cluster_fingerprint.is_not(None),
+            ).limit(50)
+        )
+    ).scalars().all()
+    cluster_id_strings = {str(eid) for eid in cluster.evidence_ids}
+    for draft in pending:
+        draft_ids = set(draft.evidence_ids or [])
+        if draft_ids and draft_ids < cluster_id_strings:
+            draft.reviewer_state = "superseded"
+            superseded += 1
 
     from contextedge.services.episode_service import create_episodes_from_evidence
 
@@ -485,6 +558,8 @@ async def _reconstruct(
         domain_id=domain_id,
         evidence_items=items,
         evidence_ids=[uuid.UUID(i["evidence_id"]) for i in items],
+        cluster_fingerprint=cluster.fingerprint,
+        cluster_reasons=cluster.reasons,
     )
     await db.flush()
 
@@ -496,7 +571,10 @@ async def _reconstruct(
     return {
         "episode_ids": [str(ep.id) for ep in created_episodes],
         "count": len(created_episodes),
-        "total_steps": total_steps
+        "total_steps": total_steps,
+        "cluster_size": len(cluster.evidence_ids),
+        "cluster_fingerprint": cluster.fingerprint,
+        "superseded_drafts": superseded,
     }
 
 
