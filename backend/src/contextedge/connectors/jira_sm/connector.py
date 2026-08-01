@@ -25,6 +25,7 @@ from datetime import datetime, timedelta
 from typing import Any
 
 import httpx
+import structlog
 
 from contextedge.connectors.base import (
     BackfillResult,
@@ -96,6 +97,9 @@ def _slim_issue_links(fields: dict) -> list[dict]:
     return links
 
 
+logger = structlog.get_logger()
+
+
 class JiraSmConnector(BaseConnector):
     """Connector for Jira Service Management via REST API v3."""
 
@@ -110,11 +114,27 @@ class JiraSmConnector(BaseConnector):
         encoded = base64.b64encode(f"{email}:{token}".encode()).decode()
         return f"Basic {encoded}"
 
+    # source_config customfield keys (D1): every JSM instance maps these
+    # differently, so they are config, validated to the customfield_
+    # namespace — a typo degrades to "field absent", never a bad query.
+    _CUSTOMFIELD_KEYS = (
+        "service_field_id",
+        "request_type_field_id",
+        "change_start_field_id",
+        "change_end_field_id",
+    )
+
+    def _configured_customfields(self) -> dict[str, str]:
+        out: dict[str, str] = {}
+        for key in self._CUSTOMFIELD_KEYS:
+            value = (self.source_config or {}).get(key)
+            if value and str(value).startswith("customfield_"):
+                out[key] = str(value)
+        return out
+
     def _issue_fields_param(self) -> str:
-        service_field = (self.source_config or {}).get("service_field_id")
-        if service_field and str(service_field).startswith("customfield_"):
-            return f"{ISSUE_FIELDS},{service_field}"
-        return ISSUE_FIELDS
+        extra = ",".join(sorted(set(self._configured_customfields().values())))
+        return f"{ISSUE_FIELDS},{extra}" if extra else ISSUE_FIELDS
 
     # Retry transient failures (429 / 5xx / transport errors) with capped
     # exponential backoff, honoring Retry-After — Atlassian rate-limits
@@ -230,6 +250,31 @@ class JiraSmConnector(BaseConnector):
             content["parent_issue_type"] = (
                 (parent.get("fields") or {}).get("issuetype") or {}
             ).get("name")
+        configured = self._configured_customfields()
+        request_type_field = configured.get("request_type_field_id")
+        if request_type_field and fields.get(request_type_field) is not None:
+            raw_rt = fields[request_type_field]
+            # JSM shapes vary: {"requestType": {"name": ...}}, {"name": ...},
+            # or a plain string. Tolerant, never guessed.
+            name = None
+            if isinstance(raw_rt, dict):
+                inner = raw_rt.get("requestType")
+                if isinstance(inner, dict):
+                    name = inner.get("name")
+                name = name or raw_rt.get("name")
+            elif isinstance(raw_rt, str):
+                name = raw_rt
+            if name:
+                content["request_type"] = str(name)[:120]
+        window_start = configured.get("change_start_field_id")
+        window_end = configured.get("change_end_field_id")
+        start_value = fields.get(window_start) if window_start else None
+        end_value = fields.get(window_end) if window_end else None
+        if start_value or end_value:
+            content["change_window"] = {
+                "start": str(start_value) if start_value else None,
+                "end": str(end_value) if end_value else None,
+            }
         service_field = (self.source_config or {}).get("service_field_id")
         if service_field and service_field in fields:
             raw_services = fields.get(service_field) or []
@@ -330,6 +375,14 @@ class JiraSmConnector(BaseConnector):
         # dropped everything past the first page in a busy tick.
         latest_ts = last_updated
         start_at = 0
+        # Page-order guard (D1): offset pagination over a mutating result
+        # set can shift rows between pages. Within one tick the ASC order
+        # must be monotone across pages — a page whose first row sorts
+        # BEFORE the previous page's last row means the snapshot moved
+        # under us. Stop paging and clamp the cursor to the last
+        # consistent point; the rewind + dedup re-deliver the rest next
+        # tick instead of silently skipping.
+        prev_page_max = ""
         for _page in range(INCREMENTAL_MAX_PAGES):
             data = await self._jira_get(
                 "/search",
@@ -341,11 +394,24 @@ class JiraSmConnector(BaseConnector):
                 },
             )
             issues = data.get("issues", [])
+            page_stamps = [
+                issue.get("fields", {}).get("updated", "") for issue in issues
+            ]
+            page_min = min(filter(None, page_stamps), default="")
+            if issues and prev_page_max and page_min and page_min < prev_page_max:
+                logger.warning(
+                    "jira_sync.page_order_mutation",
+                    project=project_key,
+                    clamped_cursor=prev_page_max,
+                )
+                latest_ts = min(latest_ts, prev_page_max) if latest_ts else prev_page_max
+                break
             for issue in issues:
                 updated = issue.get("fields", {}).get("updated", "")
                 if updated > latest_ts:
                     latest_ts = updated
                 events.append(self._issue_event(issue, project_key))
+            prev_page_max = max(filter(None, page_stamps), default=prev_page_max)
             start_at += len(issues)
             if len(issues) < INCREMENTAL_PAGE_SIZE:
                 break
