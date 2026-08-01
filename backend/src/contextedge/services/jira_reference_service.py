@@ -62,6 +62,32 @@ REVERSE_HEAL_MAX_SIBLINGS = 25
 CHANGE_ISSUE_TYPES = {"change", "[system] change"}
 PROBLEM_ISSUE_TYPES = {"problem", "[system] problem"}
 
+# JSM has no STANDARD "is resolved by" link type, but "Resolves"-style
+# custom link types are common. The built-in default matches that name;
+# instances with different vocabulary extend it via
+# source_config["resolves_link_names"] (link TYPE names, case-insensitive,
+# capped). Emission mirrors the ServiceNow rfc semantics: the incident /
+# problem side emits remediated_by_change toward the Change.
+DEFAULT_RESOLVES_LINK_TYPES = frozenset({"resolves"})
+MAX_RESOLVES_LINK_NAMES = 10
+# Link types with built-in cause/duplicate/relation semantics can never
+# be reinterpreted as "resolves" — a misconfigured
+# resolves_link_names=["Causes"] would silently flip caused-by edges
+# into remediated_by_change.
+_RESOLVES_DENYLIST = frozenset({"causes", "duplicate", "cloners", "relates", "blocks"})
+
+
+def resolves_link_types(source_config: dict | None) -> frozenset[str]:
+    configured = (source_config or {}).get("resolves_link_names")
+    if not isinstance(configured, list):
+        return DEFAULT_RESOLVES_LINK_TYPES
+    names = {
+        str(name).strip().lower()
+        for name in configured[:MAX_RESOLVES_LINK_NAMES]
+        if isinstance(name, str) and str(name).strip()
+    }
+    return DEFAULT_RESOLVES_LINK_TYPES | frozenset(names - _RESOLVES_DENYLIST)
+
 
 def _valid_issue_key(value: object) -> str | None:
     if isinstance(value, str):
@@ -71,7 +97,10 @@ def _valid_issue_key(value: object) -> str | None:
     return None
 
 
-def extract_issue_references(payload: dict | None) -> list[tuple[str, str]]:
+def extract_issue_references(
+    payload: dict | None,
+    resolves_types: frozenset[str] = DEFAULT_RESOLVES_LINK_TYPES,
+) -> list[tuple[str, str]]:
     """``(edge_type, linked issue key)`` pairs, emitted from one side of
     each symmetric link so ensure_edge never doubles a relationship:
 
@@ -85,6 +114,8 @@ def extract_issue_references(payload: dict | None) -> list[tuple[str, str]]:
     - "relates to" → ``related_problem`` only when the linked issue is a
       Problem and this issue is not (the incident side emits) — generic
       relates-to links are too noisy to type.
+    - a Resolves-type link (``resolves_types``, inward side) toward a
+      Change → ``remediated_by_change`` — the ServiceNow rfc semantics.
     - parent → ``child_of_issue``.
     """
     out: list[tuple[str, str]] = []
@@ -104,7 +135,15 @@ def extract_issue_references(payload: dict | None) -> list[tuple[str, str]]:
         description = str(link.get("description") or "").strip().lower()
         direction = link.get("direction")
         linked_type = str(link.get("issue_type") or "").strip().lower()
-        if direction == "inward" and description == "is caused by":
+        type_name = str(link.get("type_name") or "").strip().lower()
+        if (
+            direction == "inward"
+            and type_name in resolves_types
+            and linked_type in CHANGE_ISSUE_TYPES
+        ):
+            # "is resolved by" a Change — the fix, not the cause.
+            add("remediated_by_change", link.get("key"))
+        elif direction == "inward" and description == "is caused by":
             if linked_type in CHANGE_ISSUE_TYPES:
                 add("caused_by_change", link.get("key"))
             else:
@@ -184,6 +223,7 @@ async def heal_reverse_references(
     tenant_id: uuid.UUID,
     evidence: EvidenceItem,
     own_key: str,
+    resolves_types: frozenset[str] = DEFAULT_RESOLVES_LINK_TYPES,
 ) -> int:
     """Typed edges from issues that referenced *this* issue before it was
     ingested — found via their case-link rows on our key, payloads
@@ -224,7 +264,7 @@ async def heal_reverse_references(
                 if raw is None:
                     continue
                 payload = await load_raw_payload(raw)
-                for edge_type, key in extract_issue_references(payload):
+                for edge_type, key in extract_issue_references(payload, resolves_types):
                     if key != own_key:
                         continue
                     await ensure_edge(
@@ -256,6 +296,7 @@ async def process_jira_references(
     evidence: EvidenceItem,
     payload: dict,
     own_key: str | None = None,
+    source_config: dict | None = None,
 ) -> dict:
     """Materialize typed edges and entities for one Jira evidence item.
     Idempotent; safe on every re-delivery. Called inside the correlation
@@ -266,8 +307,9 @@ async def process_jira_references(
         "unresolved_refs": 0,
         "healed_edges": 0,
     }
+    resolves = resolves_link_types(source_config)
 
-    for edge_type, issue_key in extract_issue_references(payload):
+    for edge_type, issue_key in extract_issue_references(payload, resolves):
         target_id = await _resolve_evidence_for_issue_key(db, tenant_id, issue_key)
         if target_id is None:
             counts["unresolved_refs"] += 1
@@ -304,6 +346,6 @@ async def process_jira_references(
 
     if own_key is not None:
         counts["healed_edges"] = await heal_reverse_references(
-            db, tenant_id, evidence, own_key
+            db, tenant_id, evidence, own_key, resolves
         )
     return counts

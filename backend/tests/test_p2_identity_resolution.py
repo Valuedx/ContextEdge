@@ -171,7 +171,7 @@ def _correlation_fixtures(tenant_id):
         thread_id=None,
         ingested_at=datetime.now(timezone.utc),
     )
-    source = SimpleNamespace(id=source_id, tenant_id=tenant_id, source_type="servicenow")
+    source = SimpleNamespace(id=source_id, tenant_id=tenant_id, source_type="servicenow", config={})
     raw = SimpleNamespace(external_id=None, raw_payload={})
     return evidence, source, raw
 

@@ -322,3 +322,103 @@ async def test_topology_lookup_refuses_non_servicenow_entities():
     ):
         result = await lookup_topology(SimpleNamespace(), uuid4(), "VPN Gateway")
     assert result["error"]["code"] == "topology_unsupported_for_source"
+
+
+# --- parity fixes: retry + resolves mapping ---------------------------------
+
+
+@pytest.mark.asyncio
+async def test_jira_get_retries_429_with_retry_after():
+    connector = _connector()
+    attempts = []
+
+    class _Resp:
+        def __init__(self, status, body=None):
+            self.status_code = status
+            self.headers = {"Retry-After": "0"} if status == 429 else {}
+            self._body = body or {}
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return self._body
+
+    async def fake_get(url, headers=None, params=None):
+        attempts.append(url)
+        return _Resp(429) if len(attempts) == 1 else _Resp(200, {"ok": True})
+
+    class _Client:
+        async def __aenter__(self):
+            return SimpleNamespace(get=fake_get)
+
+        async def __aexit__(self, *args):
+            return False
+
+    with (
+        patch("contextedge.connectors.jira_sm.connector.httpx.AsyncClient", return_value=_Client()),
+        patch("contextedge.connectors.jira_sm.connector.asyncio.sleep", AsyncMock()) as sleep_mock,
+    ):
+        result = await connector._jira_get("/myself")
+
+    assert result == {"ok": True}
+    assert len(attempts) == 2  # one 429, one success
+    sleep_mock.assert_awaited_once()
+
+
+def test_resolves_link_types_config_merges_with_default():
+    from contextedge.services.jira_reference_service import resolves_link_types
+
+    assert resolves_link_types(None) == frozenset({"resolves"})
+    merged = resolves_link_types({"resolves_link_names": ["Fixes", "  ", 42, "Remediates"]})
+    assert merged == frozenset({"resolves", "fixes", "remediates"})
+
+
+def test_resolves_link_emits_remediated_by_change_for_changes_only():
+    from contextedge.services.jira_reference_service import (
+        extract_issue_references,
+        resolves_link_types,
+    )
+
+    resolves = resolves_link_types({"resolves_link_names": ["Fixes"]})
+    payload = {
+        "record_kind": "incident",
+        "issue_links": [
+            _slim("inward", "is resolved by", "ITOPS-90", "[System] Change", "Resolves"),
+            _slim("inward", "is fixed by", "ITOPS-91", "[System] Change", "Fixes"),
+            _slim("inward", "is resolved by", "ITOPS-92", "Task", "Resolves"),  # not a Change
+            _slim("outward", "resolves", "ITOPS-93", "Incident", "Resolves"),  # change side: skip
+        ],
+    }
+    refs = extract_issue_references(payload, resolves)
+    assert ("remediated_by_change", "ITOPS-90") in refs
+    assert ("remediated_by_change", "ITOPS-91") in refs
+    assert not any(key == "ITOPS-92" for _t, key in refs)
+    assert not any(key == "ITOPS-93" for _t, key in refs)
+
+
+def test_resolves_keys_become_case_link_candidates():
+    from contextedge.services.correlation_service import extract_case_link_candidates
+
+    payload = {
+        "record_kind": "incident",
+        "issue_links": [
+            _slim("inward", "is fixed by", "ITOPS-91", "[System] Change", "Fixes"),
+        ],
+    }
+    candidates = extract_case_link_candidates(
+        source_type="jira_sm",
+        raw_object=SimpleNamespace(external_id="ITOPS-101"),
+        raw_payload=payload,
+        source_config={"resolves_link_names": ["Fixes"]},
+    )
+    assert ("jira_sm", "ITOPS-91") in candidates
+
+
+def test_resolves_config_cannot_hijack_builtin_semantics():
+    from contextedge.services.jira_reference_service import resolves_link_types
+
+    hijack = resolves_link_types({"resolves_link_names": ["Causes", "Duplicate", "Fixes"]})
+    assert "causes" not in hijack
+    assert "duplicate" not in hijack
+    assert "fixes" in hijack
