@@ -27,6 +27,7 @@ import {
   Waypoints,
   CheckCircle2,
   DollarSign,
+  ListChecks,
 } from "lucide-react";
 import { useAuthStore } from "@/lib/stores/auth-store";
 import { hasRole } from "@/lib/roles";
@@ -55,6 +56,7 @@ const navItems: NavItem[] = [
   { label: "Neg. Knowledge", href: "/negative-knowledge", icon: BrainCircuit, requiredRoles: ["knowledge_manager", "domain_admin", "tenant_admin"] },
   { label: "Identities", href: "/identities", icon: Fingerprint, requiredRoles: ["knowledge_manager", "domain_admin", "tenant_admin"] },
   { label: "Correlations", href: "/correlations", icon: Share2, requiredRoles: ["knowledge_manager", "domain_admin", "tenant_admin"] },
+  { label: "Review Queues", href: "/suggestions", icon: ListChecks, requiredRoles: ["knowledge_manager", "domain_admin", "tenant_admin"] },
   { label: "Graph Explorer", href: "/graph-explorer", icon: Waypoints },
   { label: "Contradictions", href: "/contradictions", icon: AlertTriangle },
   { label: "Drift", href: "/drift", icon: Activity },
