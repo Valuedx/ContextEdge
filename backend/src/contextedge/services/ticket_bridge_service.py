@@ -372,6 +372,28 @@ def is_dissociative(evidence: EvidenceItem) -> bool:
     return False
 
 
+async def _resolve_parent_evidence(
+    db: AsyncSession, tenant_id: uuid.UUID, reply_to: str
+) -> uuid.UUID | None:
+    """Parent message → parent evidence, scoped to teams sources
+    (message ids are the teams external_id namespace)."""
+    return (
+        await db.execute(
+            select(EvidenceItem.id)
+            .join(RawEvidenceObject, EvidenceItem.raw_object_ref == RawEvidenceObject.id)
+            .join(Source, RawEvidenceObject.source_id == Source.id)
+            .where(
+                EvidenceItem.tenant_id == tenant_id,
+                RawEvidenceObject.tenant_id == tenant_id,
+                RawEvidenceObject.external_id == reply_to,
+                Source.source_type == "teams",
+            )
+            .order_by(EvidenceItem.created_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+
+
 async def inherit_reply_membership(
     db: AsyncSession,
     tenant_id: uuid.UUID,
@@ -405,23 +427,7 @@ async def inherit_reply_membership(
         )
         return counts
 
-    # Parent message → parent evidence, scoped to teams sources (message
-    # ids are the teams external_id namespace).
-    parent_evidence_id = (
-        await db.execute(
-            select(EvidenceItem.id)
-            .join(RawEvidenceObject, EvidenceItem.raw_object_ref == RawEvidenceObject.id)
-            .join(Source, RawEvidenceObject.source_id == Source.id)
-            .where(
-                EvidenceItem.tenant_id == tenant_id,
-                RawEvidenceObject.tenant_id == tenant_id,
-                RawEvidenceObject.external_id == str(reply_to),
-                Source.source_type == "teams",
-            )
-            .order_by(EvidenceItem.created_at.desc())
-            .limit(1)
-        )
-    ).scalar_one_or_none()
+    parent_evidence_id = await _resolve_parent_evidence(db, tenant_id, str(reply_to))
     if parent_evidence_id is None:
         return counts
 
@@ -452,4 +458,142 @@ async def inherit_reply_membership(
         "reply_structure",
     ):
         counts["inherited"] = 1
+    return counts
+
+
+# --- Correction supersession (A2) -------------------------------------------
+
+# Membership relationship types a chat correction may retire. A ticket's
+# own primary_case row is never correctable from conversation — the
+# ticket system is authoritative for its own case (P4 authority rule).
+CORRECTABLE_RELATIONSHIPS = ("explicit_reference", "reply_inheritance")
+CORRECTED_MEMBERSHIP_CONFIDENCE = 0.8
+
+
+async def apply_correction(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    evidence: EvidenceItem,
+    payload: dict | None,
+) -> dict:
+    """A confident correction message retires what its target message
+    established and, when unambiguous, re-links the target to the
+    corrected case (backlog A2).
+
+    - Target = the replied-to message when reply structure exists,
+      otherwise the most recent other message in the same thread.
+    - Superseded rows keep their history: ``status='corrected'`` — never
+      deleted. Only conversational relationship types are correctable;
+      a ticket's primary_case row is not.
+    - Propagation: only when the correction itself resolved EXACTLY ONE
+      active case of its own ("Correction — tracking under INC0010455")
+      does the target gain that case (explicit_reference at reduced
+      confidence, extraction_location='correction'). A vague correction
+      ("that's the wrong ticket") supersedes without re-linking.
+    """
+    counts = {"superseded": 0, "propagated": 0, "target_found": False}
+    label = getattr(evidence, "message_function", None)
+    confidence = getattr(evidence, "message_function_confidence", None) or 0.0
+    if label != "correction" or confidence < CLASSIFIER_TRUST_FLOOR:
+        return counts
+
+    target_id: uuid.UUID | None = None
+    reply_to = (payload or {}).get("reply_to_id")
+    if reply_to:
+        target_id = await _resolve_parent_evidence(db, tenant_id, str(reply_to))
+    if target_id is None and evidence.thread_id is not None:
+        target_id = (
+            await db.execute(
+                select(EvidenceItem.id)
+                .where(
+                    EvidenceItem.tenant_id == tenant_id,
+                    EvidenceItem.thread_id == evidence.thread_id,
+                    EvidenceItem.id != evidence.id,
+                )
+                .order_by(EvidenceItem.ingested_at.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+    if target_id is None:
+        return counts
+    counts["target_found"] = True
+
+    superseded_case_ids: list[uuid.UUID] = []
+    target_memberships = (
+        (
+            await db.execute(
+                select(EvidenceCaseMembership).where(
+                    EvidenceCaseMembership.tenant_id == tenant_id,
+                    EvidenceCaseMembership.evidence_id == target_id,
+                    EvidenceCaseMembership.status == "active",
+                    EvidenceCaseMembership.relationship_type.in_(
+                        CORRECTABLE_RELATIONSHIPS
+                    ),
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    for membership in target_memberships:
+        membership.status = "corrected"
+        superseded_case_ids.append(membership.canonical_case_id)
+        counts["superseded"] += 1
+
+    # The correction's own case (written by bridge_conversational_mentions
+    # just before this runs) — exactly one, or no propagation.
+    own_cases = set(
+        (
+            await db.execute(
+                select(EvidenceCaseMembership.canonical_case_id).where(
+                    EvidenceCaseMembership.tenant_id == tenant_id,
+                    EvidenceCaseMembership.evidence_id == evidence.id,
+                    EvidenceCaseMembership.status == "active",
+                    EvidenceCaseMembership.relationship_type != "mentioned_only",
+                ).limit(3)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    corrected_case_id: uuid.UUID | None = None
+    if len(own_cases) == 1:
+        corrected_case_id = next(iter(own_cases))
+        if await _add_membership(
+            db,
+            tenant_id,
+            target_id,
+            corrected_case_id,
+            "explicit_reference",
+            CORRECTED_MEMBERSHIP_CONFIDENCE,
+            "correction",
+        ):
+            counts["propagated"] = 1
+
+    if counts["superseded"] or counts["propagated"]:
+        from contextedge.services.event_log_service import append_operational_event
+
+        await append_operational_event(
+            db,
+            tenant_id=tenant_id,
+            entity_type="evidence",
+            entity_id=target_id,
+            event_type="correlation.correction_applied",
+            payload={
+                "correction_evidence_id": str(evidence.id),
+                "superseded_case_ids": [str(c) for c in superseded_case_ids],
+                "corrected_case_id": (
+                    str(corrected_case_id) if corrected_case_id else None
+                ),
+                "superseded": counts["superseded"],
+            },
+        )
+        logger.info(
+            "correction.applied",
+            tenant_id=str(tenant_id),
+            correction_evidence_id=str(evidence.id),
+            target_evidence_id=str(target_id),
+            superseded=counts["superseded"],
+            propagated=counts["propagated"],
+        )
     return counts

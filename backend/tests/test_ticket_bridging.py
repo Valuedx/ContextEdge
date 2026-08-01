@@ -457,3 +457,199 @@ async def test_no_reply_target_or_unknown_parent_is_noop():
     )
     assert unknown["inherited"] == 0
     assert added == []
+
+
+# --- correction supersession (A2) ------------------------------------------
+
+
+def _correction_db(parent_evidence_id, target_memberships, own_cases, added, events):
+    async def execute(stmt):
+        text = str(stmt)
+        result = Mock()
+        if "sources" in text and "raw_evidence_objects" in text:
+            result.scalar_one_or_none.return_value = parent_evidence_id
+            return result
+        if text.startswith("SELECT evidence_case_memberships.canonical_case_id"):
+            result.scalars.return_value.all.return_value = own_cases
+            return result
+        if text.startswith("SELECT evidence_case_memberships.id,"):
+            # Whole-entity select (id, tenant_id, ...) = the retire query.
+            result.scalars.return_value.all.return_value = target_memberships
+            return result
+        if text.startswith("SELECT evidence_case_memberships.id"):
+            result.scalar_one_or_none.return_value = None  # _add_membership check
+            return result
+        if text.startswith("SELECT evidence_items.id"):
+            result.scalar_one_or_none.return_value = None
+            return result
+        result.scalar_one_or_none.return_value = None
+        return result
+
+    return SimpleNamespace(
+        execute=execute,
+        add=added.append,
+        flush=AsyncMock(),
+        begin_nested=Mock(return_value=_NestedTx()),
+    )
+
+
+def _correction_evidence(confidence=0.9, thread_id=None):
+    return SimpleNamespace(
+        id=uuid4(),
+        thread_id=thread_id,
+        message_function="correction",
+        message_function_confidence=confidence,
+        title=None,
+        body_text="Correction - tracking under INC0010455",
+    )
+
+
+@pytest.mark.asyncio
+async def test_correction_supersedes_and_propagates(monkeypatch):
+    from contextedge.services import ticket_bridge_service as tbs
+
+    tenant_id = uuid4()
+    parent_id = uuid4()
+    old_case, new_case = uuid4(), uuid4()
+    wrong = SimpleNamespace(
+        canonical_case_id=old_case,
+        relationship_type="reply_inheritance",
+        status="active",
+    )
+    added, events = [], []
+
+    async def fake_event(db, **kwargs):
+        events.append(kwargs)
+
+    monkeypatch.setattr(
+        "contextedge.services.event_log_service.append_operational_event", fake_event
+    )
+    db = _correction_db(parent_id, [wrong], [new_case], added, events)
+
+    counts = await tbs.apply_correction(
+        db, tenant_id, _correction_evidence(), {"reply_to_id": "msg-1"}
+    )
+
+    assert counts == {"superseded": 1, "propagated": 1, "target_found": True}
+    assert wrong.status == "corrected"
+    from contextedge.models.case_bridge import EvidenceCaseMembership
+
+    (new_row,) = [a for a in added if isinstance(a, EvidenceCaseMembership)]
+    assert new_row.canonical_case_id == new_case
+    assert new_row.evidence_id == parent_id
+    assert new_row.extraction_location == "correction"
+    assert events and events[0]["event_type"] == "correlation.correction_applied"
+    assert events[0]["payload"]["superseded_case_ids"] == [str(old_case)]
+
+
+@pytest.mark.asyncio
+async def test_vague_correction_supersedes_without_relinking(monkeypatch):
+    from contextedge.services import ticket_bridge_service as tbs
+
+    tenant_id = uuid4()
+    wrong = SimpleNamespace(
+        canonical_case_id=uuid4(),
+        relationship_type="explicit_reference",
+        status="active",
+    )
+    added, events = [], []
+
+    async def fake_event(db, **kwargs):
+        events.append(kwargs)
+
+    monkeypatch.setattr(
+        "contextedge.services.event_log_service.append_operational_event", fake_event
+    )
+    db = _correction_db(uuid4(), [wrong], [], added, events)
+
+    counts = await tbs.apply_correction(
+        db, tenant_id, _correction_evidence(), {"reply_to_id": "msg-1"}
+    )
+
+    assert counts["superseded"] == 1
+    assert counts["propagated"] == 0
+    assert wrong.status == "corrected"
+    assert added == []
+    assert events[0]["payload"]["corrected_case_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_ambiguous_correction_never_relinks(monkeypatch):
+    from contextedge.services import ticket_bridge_service as tbs
+
+    tenant_id = uuid4()
+    added, events = [], []
+
+    async def fake_event(db, **kwargs):
+        events.append(kwargs)
+
+    monkeypatch.setattr(
+        "contextedge.services.event_log_service.append_operational_event", fake_event
+    )
+    db = _correction_db(uuid4(), [], [uuid4(), uuid4()], added, events)
+
+    counts = await tbs.apply_correction(
+        db, tenant_id, _correction_evidence(), {"reply_to_id": "msg-1"}
+    )
+
+    assert counts["propagated"] == 0
+    assert added == []
+
+
+@pytest.mark.asyncio
+async def test_low_confidence_or_wrong_label_is_noop():
+    from contextedge.services import ticket_bridge_service as tbs
+
+    tenant_id = uuid4()
+    low = _correction_evidence(confidence=0.3)
+    counts = await tbs.apply_correction(
+        SimpleNamespace(), tenant_id, low, {"reply_to_id": "msg-1"}
+    )
+    assert counts == {"superseded": 0, "propagated": 0, "target_found": False}
+
+    status = _correction_evidence()
+    status.message_function = "status_update"
+    counts = await tbs.apply_correction(
+        SimpleNamespace(), tenant_id, status, {"reply_to_id": "msg-1"}
+    )
+    assert counts["target_found"] is False
+
+
+@pytest.mark.asyncio
+async def test_primary_case_membership_is_never_corrected(monkeypatch):
+    """The retire query filters to conversational relationship types; a
+    ticket's own primary_case row is untouchable from chat. Verified by
+    asserting the SQL the service issues carries the IN filter."""
+    from contextedge.services import ticket_bridge_service as tbs
+
+    tenant_id = uuid4()
+    seen_sql = []
+
+    async def execute(stmt):
+        text = str(stmt)
+        seen_sql.append(text)
+        result = Mock()
+        if "sources" in text and "raw_evidence_objects" in text:
+            result.scalar_one_or_none.return_value = uuid4()
+            return result
+        result.scalars.return_value.all.return_value = []
+        result.scalar_one_or_none.return_value = None
+        return result
+
+    db = SimpleNamespace(
+        execute=execute,
+        add=lambda o: None,
+        flush=AsyncMock(),
+        begin_nested=Mock(return_value=_NestedTx()),
+    )
+    await tbs.apply_correction(
+        db, tenant_id, _correction_evidence(), {"reply_to_id": "msg-1"}
+    )
+
+    retire_sql = [
+        s
+        for s in seen_sql
+        if s.startswith("SELECT evidence_case_memberships.")
+        and "relationship_type IN" in s
+    ]
+    assert retire_sql, "retire query must filter relationship_type IN correctable set"
