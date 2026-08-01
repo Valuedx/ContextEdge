@@ -131,6 +131,8 @@ _EXPECTED_MARKERS: set[tuple[str, str]] = {
     ('correlation_suggestion.py', 'ForeignKey("evidence_items.id", ondelete="CASCADE"),'),
     ('correlation_suggestion.py',
      'UniqueConstraint( "evidence_id_low", "evidence_id_high", name="uq_correlation_suggestion_pair" ),'),
+    # fix_applicability.py (migration 0046): applicability rules.
+    ('fix_applicability.py', 'ForeignKey("fix_patterns.id", ondelete="CASCADE"),'),
     # issue_signature.py (migration 0045): problem fingerprints.
     ('issue_signature.py', 'ForeignKey("error_signatures.id", ondelete="SET NULL"),'),
     ('issue_signature.py', 'ForeignKey("episodes.id", ondelete="CASCADE"),'),

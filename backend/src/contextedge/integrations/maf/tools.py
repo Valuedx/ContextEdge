@@ -13,6 +13,7 @@ from contextedge.integrations.maf.client import (
     ChangeRiskClient,
     CmdbTopologyClient,
     ContextGraphClient,
+    FixApplicabilityClient,
 )
 
 
@@ -183,5 +184,49 @@ class ChangeRiskTools:
                 "error": {
                     "code": "risk_assessment_unavailable",
                     "message": f"Change-risk assessment failed ({type(exc).__name__}).",
+                }
+            }
+
+
+class FixApplicabilityTools:
+    def __init__(self, client: FixApplicabilityClient):
+        self.client = client
+
+    @tool(
+        name="assess_fix_applicability",
+        description=(
+            "Deterministic check of which KNOWN fixes apply to a "
+            "configuration item, by validating each fix's required "
+            "preconditions (model, component, driver/software version, "
+            "OS, class) against the CI's recorded traits. Returns the "
+            "explicit applicability level (exact_ci / "
+            "same_model_and_configuration / same_component_or_version / "
+            "same_ci_class / related_ci_class / cross_class_capability / "
+            "semantic_only), matching factors, differences, and whether "
+            "human review is required before acting. An empty "
+            "'applicable' list means no validated precedent - do NOT "
+            "stretch a fix across unvalidated preconditions. Accepts a "
+            "CI display name or 32-hex sys_id."
+        ),
+    )
+    async def assess_fix_applicability(
+        self,
+        ci: Annotated[
+            str,
+            Field(description="CI display name or ServiceNow sys_id (32 hex chars)."),
+        ],
+        context: FunctionInvocationContext | None = None,
+    ) -> dict[str, Any]:
+        del context
+        term = " ".join(str(ci or "").split())[:500]
+        if not term:
+            return {"error": {"code": "invalid_ci", "message": "Provide a CI name or sys_id."}}
+        try:
+            return await self.client.assess(term)
+        except Exception as exc:
+            return {
+                "error": {
+                    "code": "fix_applicability_unavailable",
+                    "message": f"Fix-applicability assessment failed ({type(exc).__name__}).",
                 }
             }

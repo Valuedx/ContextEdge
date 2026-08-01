@@ -37,6 +37,7 @@ disposes; the mass-merge guard applies to every new linking signal.
 | Entity rarity | Degree-weighted identity tier; hub dampening (≥200 links = no signal) | #31 |
 | Semantic suggestions | Chunk-ANN + similarity floor 0.7 + non-semantic corroborator → reviewer queue; reject permanent (migration 0039) | #32 |
 | Field authority | Episode prompt v3 (authority by fact type), contradictions preserved (migration 0040), strict draft schema, per-source `synthesis_role`, quality metric | #34 |
+| M4 similarity & transfer | B3 issue signatures (0045: fingerprint dedupe per tenant, approval-gated extraction, P4-pattern Pydantic gate) · C2 recurrence membership (pointer to precedent, excluded from cluster expansion) · B4 applicability ladder (0046: rules with required/excluded trait predicates, 7-level deterministic assessment, level floors, named provisional weights, MAF tool + API; Doc-3's four LPT001 examples are the acceptance tests) | #47–#48 |
 | M3 thread understanding | A3 thread topics (0044: anchored/provisional topics, unification sweep, thread_topic memberships) · A4 reference resolver (trigger-gated, identity-layer candidates, exactly-one-or-abstain) · A5 quoted content (quote detection, mentioned_only cap, weighted digest, quoted reconciliation) · A6 bot handling (structural card parsing at 0.95, prose downweight, no bot anchors, reduced bot inheritance) | #43–#46 |
 | M2 applicability foundation | B1 entity class taxonomy (0042: 13-class seeded tree, deterministic uuid5 ids, instance_of/subclass_of edges, conservative sys_class_name map, configuration_item fallback; OS-as-trait design call) · B2 normalized traits (0043: manufacturer/model/os_name/os_version columns + partial model index, widened reference dot-walks + topology detail fields, present-wins/absent-never-clears refresh) | #40–#41 |
 | M1 conversational precision | A1 message-function classifier (0041, prompt family `message_function`, veto upgrade) · A2 correction supersession (`status='corrected'`, propagation, audit event) · A7 negative evidence (`status='negative'`, thread blocking, resolver fence, reviewer-removal negation) · A10 reply reconciliation in debounced reconstruction | #36–#39 |
@@ -232,7 +233,7 @@ do not ingest yet — do not pretend otherwise).
 manufacturer/model/OS traits when ServiceNow has them; absent traits are absent, not
 guessed.
 
-### B3 · Issue signatures (problem fingerprints) — M/L
+### B3 · Issue signatures (problem fingerprints) — M/L — **SHIPPED 2026-08-03**
 **What.** A structured `issue_signatures` record per approved episode: affected
 capability, failing component class, failure mode, trigger/recent change, error
 signature ref, environment, scope — LLM-extracted, schema-validated (P4 gate pattern),
@@ -246,7 +247,7 @@ signatures); dedupe by normalized signature key per tenant.
 LPT121 "adapter_missing_after_resume" episodes produce one shared signature with two
 episode links.
 
-### B4 · Fix applicability rules + the 7-level ladder — L
+### B4 · Fix applicability rules + the 7-level ladder — L — **SHIPPED 2026-08-03**
 **What.** `fix_applicability_rules` (fix_pattern_id, target_class_id, required_traits,
 excluded_traits, applicability_level, minimum_evidence, confidence, approval_requirement)
 plus a deterministic `assess_fix_applicability(target_ci, candidate_fixes)` service
@@ -309,7 +310,8 @@ volume exists. No ML — counting.
 **Acceptance.** Accept/reject rates are queryable per pair; a pair with <20% accept
 rate gets a raised floor (config, reviewer-visible).
 
-### C2 · Remaining membership relationship types — S/M
+### C2 · Remaining membership relationship types — S/M — **SHIPPED 2026-08-03**
+*(`recurrence` shipped with B3; `related`/`follow_on` remain future explicit-reference work.)*
 **What.** Doc-1 named `related`, `recurrence`, `follow_on` membership types;
 `MEMBERSHIP_RELATIONSHIPS` ships four. `recurrence` lands naturally with B3 (same
 issue signature, different occurrence); `related`/`follow_on` from explicit references
