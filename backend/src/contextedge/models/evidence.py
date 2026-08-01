@@ -73,6 +73,11 @@ class EvidenceItem(Base, TenantScopedMixin):
     )
     relevance_state: Mapped[str] = mapped_column(String(30), default="unclassified", nullable=False)
     relevance_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # What a conversational message is DOING (0041): status_update /
+    # question / correction / dissociation / resolution_confirmation /
+    # noise. NULL for non-conversational sources and pre-0041 rows.
+    message_function: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    message_function_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
     sensitivity_label: Mapped[str | None] = mapped_column(String(50), nullable=True)
     access_policy_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
