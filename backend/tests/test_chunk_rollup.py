@@ -199,3 +199,19 @@ async def test_playbook_variant_keeps_ranker_row_shape():
     score, count = _semantic_corpus_score(rows)
     assert count == 1
     assert score == pytest.approx(1.0 - 0.30 / 2.0)
+
+
+def test_mmr_degrades_on_corrupt_embedding_dimensions():
+    """A dimension-mismatched embedding (bad backfill) must degrade to
+    relevance ordering — never a ValueError that fails the search."""
+    a = _candidate(0.30, [1.0, 0.0, 0.0])
+    b = _candidate(0.10, [1.0, 0.0])  # wrong dimensionality
+    assert mmr_order([a, b], select_n=2) == [b, a]
+
+
+def test_oversample_scales_with_limit_within_bounds():
+    from contextedge.search.vector_search import _oversample_for
+
+    assert _oversample_for(10) == 80    # floor
+    assert _oversample_for(50) == 150   # 3× limit
+    assert _oversample_for(200) == 240  # ceiling
