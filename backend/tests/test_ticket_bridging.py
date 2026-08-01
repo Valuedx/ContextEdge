@@ -653,3 +653,309 @@ async def test_primary_case_membership_is_never_corrected(monkeypatch):
         and "relationship_type IN" in s
     ]
     assert retire_sql, "retire query must filter relationship_type IN correctable set"
+
+
+# --- negative evidence store (A7) -------------------------------------------
+
+
+def _negation_db(resolved_case, thread_negated, added):
+    """Fake for the bridge with one resolvable token; routes the
+    thread-negation join and _add_membership existence check."""
+
+    async def execute(stmt):
+        text = str(stmt)
+        result = Mock()
+        if text.startswith("SELECT case_identifiers.canonical_case_id"):
+            result.scalars.return_value.all.return_value = (
+                [resolved_case] if resolved_case else []
+            )
+            return result
+        if "JOIN evidence_items" in text and "canonical_case_id" in text:
+            result.scalars.return_value.all.return_value = thread_negated
+            return result
+        if text.startswith("SELECT evidence_case_memberships.id"):
+            result.scalar_one_or_none.return_value = None
+            return result
+        if text.startswith("SELECT pending_identifier_mentions.id"):
+            result.scalar_one_or_none.return_value = None
+            return result
+        result.scalar_one_or_none.return_value = None
+        result.scalars.return_value.all.return_value = []
+        return result
+
+    return SimpleNamespace(
+        execute=execute,
+        add=added.append,
+        flush=AsyncMock(),
+        begin_nested=Mock(return_value=_NestedTx()),
+    )
+
+
+def _teams_evidence(body, function=None, confidence=None, thread_id=None):
+    return SimpleNamespace(
+        id=uuid4(),
+        title=None,
+        body_text=body,
+        thread_id=thread_id,
+        message_function=function,
+        message_function_confidence=confidence,
+    )
+
+
+@pytest.mark.asyncio
+async def test_dissociative_mention_becomes_negative_row():
+    """"Not related to INC0010427" is evidence AGAINST the link."""
+    from contextedge.services.ticket_bridge_service import (
+        bridge_conversational_mentions,
+    )
+
+    tenant_id = uuid4()
+    case_id = uuid4()
+    added = []
+    ev = _teams_evidence(
+        "this is not related to INC0010427",
+        function="dissociation",
+        confidence=0.9,
+    )
+    db = _negation_db(case_id, [], added)
+
+    counts = await bridge_conversational_mentions(db, tenant_id, ev)
+
+    assert counts.get("negated") == 1
+    assert counts["memberships"] == 0
+    from contextedge.models.case_bridge import EvidenceCaseMembership
+
+    (row,) = [a for a in added if isinstance(a, EvidenceCaseMembership)]
+    assert row.status == "negative"
+    assert row.relationship_type == "dissociation"
+
+
+@pytest.mark.asyncio
+async def test_dissociative_unknown_token_becomes_tagged_pending():
+    from contextedge.services.ticket_bridge_service import (
+        bridge_conversational_mentions,
+    )
+
+    tenant_id = uuid4()
+    added = []
+    ev = _teams_evidence(
+        "not related to INC0099999", function="dissociation", confidence=0.9
+    )
+    db = _negation_db(None, [], added)
+
+    counts = await bridge_conversational_mentions(db, tenant_id, ev)
+
+    assert counts["pending"] == 1
+    from contextedge.models.case_bridge import PendingIdentifierMention
+
+    (mention,) = [a for a in added if isinstance(a, PendingIdentifierMention)]
+    assert mention.extraction_location == "dissociation"
+
+
+@pytest.mark.asyncio
+async def test_thread_negation_blocks_later_plain_mention():
+    """The acceptance case: after a dissociation, a later plain mention
+    in the SAME thread must not re-create an active membership."""
+    from contextedge.services.ticket_bridge_service import (
+        bridge_conversational_mentions,
+    )
+
+    tenant_id = uuid4()
+    case_id = uuid4()
+    thread = uuid4()
+    added = []
+    later = _teams_evidence("update on INC0010427 please", thread_id=thread)
+    db = _negation_db(case_id, [case_id], added)
+
+    counts = await bridge_conversational_mentions(db, tenant_id, later)
+
+    assert counts.get("blocked_by_negative") == 1
+    assert counts["memberships"] == 0
+    assert added == []
+
+
+@pytest.mark.asyncio
+async def test_thread_negation_blocks_reply_inheritance():
+    from contextedge.services.ticket_bridge_service import inherit_reply_membership
+
+    tenant_id = uuid4()
+    case_id = uuid4()
+    added = []
+    reply = SimpleNamespace(
+        id=uuid4(),
+        title=None,
+        body_text="thanks, checking",
+        thread_id=uuid4(),
+        message_function=None,
+        message_function_confidence=None,
+    )
+
+    async def execute(stmt):
+        text = str(stmt)
+        result = Mock()
+        if "sources" in text and "raw_evidence_objects" in text:
+            result.scalar_one_or_none.return_value = uuid4()
+            return result
+        if "JOIN evidence_items" in text and "canonical_case_id" in text:
+            result.scalars.return_value.all.return_value = [case_id]
+            return result
+        if text.startswith("SELECT evidence_case_memberships.canonical_case_id"):
+            result.scalars.return_value.all.return_value = [case_id]
+            return result
+        result.scalar_one_or_none.return_value = None
+        return result
+
+    db = SimpleNamespace(
+        execute=execute,
+        add=added.append,
+        flush=AsyncMock(),
+        begin_nested=Mock(return_value=_NestedTx()),
+    )
+
+    counts = await inherit_reply_membership(
+        db, tenant_id, reply, {"reply_to_id": "root-1"}
+    )
+
+    assert counts.get("blocked_by_negative") is True
+    assert counts["inherited"] == 0
+    assert added == []
+
+
+@pytest.mark.asyncio
+async def test_reconciliation_of_dissociation_mention_writes_negative():
+    from contextedge.services.ticket_bridge_service import register_ticket_identifier
+
+    tenant_id = uuid4()
+    case_id = uuid4()
+    mention = SimpleNamespace(
+        evidence_id=uuid4(),
+        extraction_location="dissociation",
+        status="pending",
+        resolved_case_id=None,
+    )
+    added = []
+
+    async def execute(stmt):
+        text = str(stmt)
+        result = Mock()
+        if text.startswith("SELECT case_identifiers.id,"):
+            result.scalar_one_or_none.return_value = None
+            return result
+        if text.startswith("SELECT pending_identifier_mentions.id,"):
+            result.scalars.return_value.all.return_value = [mention]
+            return result
+        if text.startswith("SELECT evidence_case_memberships.id"):
+            result.scalar_one_or_none.return_value = None
+            return result
+        result.scalar_one_or_none.return_value = None
+        result.scalars.return_value.all.return_value = []
+        return result
+
+    db = SimpleNamespace(
+        execute=execute,
+        add=added.append,
+        flush=AsyncMock(),
+        begin_nested=Mock(return_value=_NestedTx()),
+    )
+
+    counts = await register_ticket_identifier(
+        db,
+        tenant_id,
+        evidence=SimpleNamespace(id=uuid4()),
+        source_type="servicenow",
+        payload={"number": "INC0010427"},
+        canonical_case_id=case_id,
+    )
+
+    assert counts["reconciled_mentions"] == 1
+    assert mention.status == "resolved"
+    from contextedge.models.case_bridge import EvidenceCaseMembership
+
+    negative_rows = [
+        a
+        for a in added
+        if isinstance(a, EvidenceCaseMembership) and a.status == "negative"
+    ]
+    assert len(negative_rows) == 1
+    assert negative_rows[0].evidence_id == mention.evidence_id
+
+
+@pytest.mark.asyncio
+async def test_confident_correction_mention_stays_positive():
+    """A2/A7 interplay: the correction ABSTAINS from inheritance but its
+    own ticket mention is a positive link A2 propagates from."""
+    from contextedge.services.ticket_bridge_service import (
+        bridge_conversational_mentions,
+    )
+
+    tenant_id = uuid4()
+    case_id = uuid4()
+    added = []
+    ev = _teams_evidence(
+        "Correction - tracking under INC0010455",
+        function="correction",
+        confidence=0.9,
+    )
+    db = _negation_db(case_id, [], added)
+
+    counts = await bridge_conversational_mentions(db, tenant_id, ev)
+
+    assert counts["memberships"] == 1
+    assert counts.get("negated") is None
+    from contextedge.models.case_bridge import EvidenceCaseMembership
+
+    (row,) = [a for a in added if isinstance(a, EvidenceCaseMembership)]
+    assert row.status != "negative"
+    assert row.relationship_type == "explicit_reference"
+
+
+@pytest.mark.asyncio
+async def test_cluster_never_pulls_negated_evidence_back_in():
+    """A7 resolver fence: evidence explicitly dissociated from a cluster
+    anchor case stays out even when a correlation edge would pull it."""
+    from contextedge.services.episode_cluster_service import resolve_episode_cluster
+
+    tenant_id = uuid4()
+    ticket = uuid4()
+    severed = uuid4()
+    case_id = uuid4()
+    from datetime import UTC, datetime
+
+    now = datetime(2026, 8, 1, 12, 0, 0, tzinfo=UTC)
+    call = {"n": 0}
+
+    async def execute(stmt):
+        call["n"] += 1
+        text = str(stmt)
+        result = Mock()
+        if "evidence_items" in text and "correlation" not in text:
+            if call["n"] == 1:
+                result.all.return_value = [(ticket, now)]
+            else:
+                result.all.return_value = [(severed, now)]
+            return result
+        if text.startswith("SELECT evidence_case_memberships.canonical_case_id"):
+            result.scalars.return_value.all.return_value = [case_id]
+            return result
+        if text.startswith(
+            "SELECT evidence_case_memberships.evidence_id, "
+            "evidence_case_memberships.relationship_type"
+        ):
+            result.all.return_value = []
+            return result
+        if text.startswith("SELECT evidence_case_memberships.evidence_id"):
+            # The negative-evidence fence: severed is dissociated.
+            result.scalars.return_value.all.return_value = [severed]
+            return result
+        if "correlation_edges" in text:
+            result.all.return_value = [(ticket, severed, "identity_match")]
+            return result
+        result.scalars.return_value.all.return_value = []
+        result.all.return_value = []
+        return result
+
+    cluster = await resolve_episode_cluster(
+        SimpleNamespace(execute=execute), tenant_id, [ticket]
+    )
+    assert severed not in cluster.evidence_ids
+    assert cluster.evidence_ids == [ticket]

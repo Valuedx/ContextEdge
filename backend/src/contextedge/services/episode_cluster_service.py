@@ -217,9 +217,37 @@ async def resolve_episode_cluster(
         if not discovered:
             break
 
+        # Negative-evidence fence (A7): evidence explicitly dissociated
+        # from any case this cluster is anchored to must not be pulled
+        # back in through a different signal (thread edge, case link) —
+        # a severed link stays severed until a reviewer re-adds it.
+        anchor_cases = canonical_case_ids | membership_cases
+        negated_ids: set[uuid.UUID] = set()
+        if anchor_cases:
+            negated_ids = set(
+                (
+                    await db.execute(
+                        select(EvidenceCaseMembership.evidence_id).where(
+                            EvidenceCaseMembership.tenant_id == tenant_id,
+                            EvidenceCaseMembership.evidence_id.in_(
+                                tuple(discovered)
+                            ),
+                            EvidenceCaseMembership.status == "negative",
+                            EvidenceCaseMembership.canonical_case_id.in_(
+                                tuple(anchor_cases)
+                            ),
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+
         candidate_times = await _visible_times(db, tenant_id, set(discovered))
         next_frontier: set[uuid.UUID] = set()
         for evidence_id, why in discovered.items():
+            if evidence_id in negated_ids:
+                continue  # negative evidence: explicitly not this case
             if evidence_id not in candidate_times:
                 continue  # invisible: foreign tenant / legal hold / redaction
             if not _within_window(candidate_times[evidence_id], seed_times):
