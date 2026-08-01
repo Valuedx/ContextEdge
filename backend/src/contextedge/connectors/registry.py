@@ -8,6 +8,7 @@ CONNECTOR_CLASSES: dict[str, type[BaseConnector]] = {}
 def _register_connectors():
     from contextedge.connectors.gmail.connector import GmailConnector
     from contextedge.connectors.jira_sm.connector import JiraSmConnector
+    from contextedge.connectors.sapphireims.connector import SapphireIMSConnector
     from contextedge.connectors.servicenow.connector import ServiceNowConnector
     from contextedge.connectors.teams.connector import TeamsConnector
 
@@ -17,6 +18,7 @@ def _register_connectors():
             "gmail": GmailConnector,
             "servicenow": ServiceNowConnector,
             "jira_sm": JiraSmConnector,
+            "sapphireims": SapphireIMSConnector,
         }
     )
 

@@ -132,6 +132,16 @@ def extract_case_link_candidates(
             resolves = resolves_link_types(source_config)
             for _edge_type, issue_key in extract_issue_references(payload, resolves):
                 add(source_type, issue_key)
+        if source_type == "sapphireims":
+            # Related-ticket ids join the namespace symmetrically — same
+            # contract, third system. CI / service names are NOT keys
+            # (mass-merge guard).
+            from contextedge.services.sapphireims_reference_service import (
+                extract_ticket_references,
+            )
+
+            for ticket_id in extract_ticket_references(payload):
+                add(source_type, ticket_id)
 
     add(f"{source_type}:thread", thread_external_id)
     return candidates
@@ -372,6 +382,28 @@ async def correlate_evidence_item(
                 error=str(exc),
             )
 
+    # SapphireIMS reference enrichment — same SAVEPOINT containment and
+    # fail-soft contract as the branches above.
+    sapphire_references: dict | None = None
+    if (source.source_type or "") == "sapphireims" and isinstance(raw_payload, dict):
+        try:
+            from contextedge.services.sapphireims_reference_service import (
+                process_sapphireims_references,
+            )
+
+            async with db.begin_nested():
+                sapphire_references = await process_sapphireims_references(
+                    db, tenant_id, evidence, raw_payload
+                )
+        except Exception as exc:
+            logger.warning(
+                "sapphireims_reference.enrichment_failed",
+                tenant_id=str(tenant_id),
+                evidence_id=str(evidence.id),
+                error_type=type(exc).__name__,
+                error=str(exc),
+            )
+
     # Jira SM reference enrichment — same SAVEPOINT containment and
     # fail-soft contract as the ServiceNow branch above.
     jira_references: dict | None = None
@@ -415,6 +447,7 @@ async def correlate_evidence_item(
             "identity_match_candidates": len(identity_related_evidence_ids),
             "servicenow_references": snow_references,
             "jira_references": jira_references,
+            "sapphireims_references": sapphire_references,
         },
     )
     return {
@@ -427,4 +460,5 @@ async def correlate_evidence_item(
         "identity_match_candidates": len(identity_related_evidence_ids),
         "servicenow_references": snow_references,
         "jira_references": jira_references,
+        "sapphireims_references": sapphire_references,
     }
