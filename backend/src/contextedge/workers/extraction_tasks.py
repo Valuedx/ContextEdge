@@ -47,7 +47,9 @@ INLINE_CHUNK_BUDGET_BYTES = 16 * 1024
 # from sources outside this set always go async so a slow / unfamiliar
 # parser cannot stall ingest. Add a key here once the corresponding
 # chunker has been load-tested at typical body sizes.
-INLINE_CHUNK_SOURCE_ALLOWLIST = frozenset({"jira_sm", "servicenow", "gmail", "teams"})
+INLINE_CHUNK_SOURCE_ALLOWLIST = frozenset(
+    {"jira_sm", "servicenow", "gmail", "teams", "sapphireims"}
+)
 
 
 async def _ensure_embedding(db: AsyncSession, evidence: EvidenceItem) -> bool:
