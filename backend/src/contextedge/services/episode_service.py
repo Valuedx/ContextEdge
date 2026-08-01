@@ -132,6 +132,7 @@ async def create_episodes_from_evidence(
             evidence_ids=[str(eid) for eid in episode_evidence_ids],
             cluster_fingerprint=cluster_fingerprint,
             entity_refs=entity_refs,
+            contradictions=ep_data.get("contradictions") or None,
             embedding=embedding,
         )
         db.add(episode)
@@ -171,5 +172,23 @@ async def create_episodes_from_evidence(
         await db.flush()
         await db.refresh(episode)
         created_episodes.append(episode)
+
+        # Synthesis-quality signal (P4 item 6): the fraction of steps the
+        # model could not ground in evidence is the day-1 measurable
+        # proxy for unsupported claims. Logged per episode so drift in
+        # grounding quality shows up in operational events, not anecdotes.
+        steps = ep_data.get("steps", [])
+        ungrounded = sum(1 for s in steps if not s.get("evidence_refs"))
+        logger.info(
+            "episode.synthesis_quality",
+            tenant_id=str(tenant_id),
+            episode_id=str(episode.id),
+            steps_total=len(steps),
+            steps_ungrounded=ungrounded,
+            unsupported_step_rate=(
+                round(ungrounded / len(steps), 3) if steps else None
+            ),
+            contradiction_count=len(ep_data.get("contradictions") or []),
+        )
 
     return created_episodes

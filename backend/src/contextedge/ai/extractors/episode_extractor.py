@@ -26,6 +26,7 @@ from typing import Any
 
 import structlog
 
+from contextedge.ai.extractors.episode_schema import validate_episode
 from contextedge.ai.prompts import get_prompt
 from contextedge.ai.provider import llm_complete_json
 
@@ -115,15 +116,34 @@ async def _extract_from_chunk(
         for i, item in enumerate(evidence_items)
         if item.get("evidence_id")
     }
-    for ep in episodes:
+    validated: list[dict] = []
+    for raw_ep in episodes:
+        if not isinstance(raw_ep, dict):
+            continue
+        for step in raw_ep.get("steps", []) if isinstance(raw_ep.get("steps"), list) else []:
+            if isinstance(step, dict):
+                step.setdefault("failed_flag", step.get("result_state") == "failure")
+                step.setdefault("successful_flag", step.get("result_state") == "success")
+        # Contradiction accounts cite [ev-N] labels too — translate them
+        # to real evidence ids the same way, dropping minted references.
+        raw_contradictions = raw_ep.get("contradictions")
+        if isinstance(raw_contradictions, list):
+            for contradiction in raw_contradictions:
+                if not isinstance(contradiction, dict):
+                    continue
+                for account in contradiction.get("accounts", []) or []:
+                    if isinstance(account, dict):
+                        refs = _translate_refs([account.get("evidence_ref")], ref_map)
+                        account["evidence_id"] = refs[0] if refs else None
+        ep = validate_episode(raw_ep)
+        if ep is None:
+            continue
         ep["evidence_refs"] = _translate_refs(ep.get("evidence_refs"), ref_map)
         for step in ep.get("steps", []):
-            step.setdefault("failed_flag", step.get("result_state") == "failure")
-            step.setdefault("successful_flag", step.get("result_state") == "success")
-            step.setdefault("confidence", 0.5)
             step["evidence_refs"] = _translate_refs(step.get("evidence_refs"), ref_map)
+        validated.append(ep)
 
-    return episodes
+    return validated
 
 
 async def reconstruct_episode(

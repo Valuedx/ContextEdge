@@ -454,8 +454,14 @@ async def _classify(db: AsyncSession, evidence_id: str, tenant_id: uuid.UUID) ->
 RECONSTRUCT_DEBOUNCE_SECONDS = 180
 MAX_SYNTHESIS_DELAY_SECONDS = 1_800
 
-# source_type → the role synthesis should treat it as. Field-specific
-# authority is P4; the ROLE label is the P0 piece the extractor renders.
+# source_type → the role synthesis should treat it as. The prompt's
+# field-authority rules (episode v3) key off these labels. A tenant can
+# override the role per SOURCE via Source.config["synthesis_role"] —
+# e.g. a Teams channel that receives alert webhooks is really a
+# "monitoring" feed, and an ops mailbox may be a ticket intake. Unknown
+# override values are ignored (fall back to the type default) so a
+# config typo degrades to today's behavior instead of poisoning
+# authority resolution.
 SOURCE_ROLE_MAP = {
     "servicenow": "ticket",
     "jira_sm": "ticket",
@@ -464,6 +470,20 @@ SOURCE_ROLE_MAP = {
     "gmail": "external_communication",
     "local_file": "document",
 }
+SYNTHESIS_ROLES = (
+    "ticket",
+    "working_discussion",
+    "external_communication",
+    "monitoring",
+    "document",
+)
+
+
+def resolve_synthesis_role(source_type: str, source_config: dict | None) -> str:
+    override = (source_config or {}).get("synthesis_role")
+    if isinstance(override, str) and override in SYNTHESIS_ROLES:
+        return override
+    return SOURCE_ROLE_MAP.get(source_type, "evidence")
 
 
 async def _reconstruct(
@@ -552,14 +572,19 @@ async def _reconstruct(
     # flattened "source_type": "evidence" this replaces made a ticket, a
     # chat, and a transcript indistinguishable to synthesis.
     source_types: dict[uuid.UUID, str] = {}
+    source_roles: dict[uuid.UUID, str] = {}
     rows = (
         await db.execute(
-            select(EvidenceItem.id, Source.source_type)
+            select(EvidenceItem.id, Source.source_type, Source.config)
             .join(Source, EvidenceItem.source_id == Source.id)
             .where(EvidenceItem.id.in_(tuple(cluster.evidence_ids)))
         )
     ).all()
-    source_types = {row[0]: row[1] or "unknown" for row in rows}
+    for row in rows:
+        source_types[row[0]] = row[1] or "unknown"
+        source_roles[row[0]] = resolve_synthesis_role(
+            row[1] or "unknown", row[2] if isinstance(row[2], dict) else None
+        )
 
     items = []
     for eid in cluster.evidence_ids:
@@ -573,7 +598,7 @@ async def _reconstruct(
             "title": ev.title,
             "body": ev.body_text,
             "source_type": source_type,
-            "source_role": SOURCE_ROLE_MAP.get(source_type, "evidence"),
+            "source_role": source_roles.get(ev.id, "evidence"),
             "timestamp": str(ev.created_at_source or ev.ingested_at),
             "evidence_id": str(ev.id),
         })

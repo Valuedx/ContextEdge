@@ -90,7 +90,7 @@ def test_expected_migration_head_resolves():
     """Also validates the alembic chain has exactly one head."""
     main_module._expected_migration_head.cache_clear()
     head = main_module._expected_migration_head()
-    assert head == "0039_correlation_suggestions"
+    assert head == "0040_episode_contradictions"
 
 
 @pytest.mark.asyncio

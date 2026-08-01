@@ -186,14 +186,14 @@ def test_evidence_block_labels_refs_and_roles():
     assert "Source: teams (working_discussion)" in block
 
 
-def test_episode_prompt_v2_is_default_and_requests_refs():
+def test_episode_prompt_default_requests_refs():
     from contextedge.ai.prompts import get_prompt
 
     prompt = get_prompt("episode", None)
-    assert prompt.version == "v2"
+    assert prompt.version == "v3"  # P4: authority + contradictions default
     assert "evidence_refs" in prompt.system
-    # v1's doubled-brace bug must not carry into v2 (system is never
-    # .format()ed, so {{ would reach the model literally).
+    # v1's doubled-brace bug must not carry into later versions (system
+    # is never .format()ed, so {{ would reach the model literally).
     assert "{{" not in prompt.system
 
 
@@ -366,7 +366,9 @@ async def test_reconstruct_passes_real_source_types_and_supersedes_subset_drafts
         if "domains" in text:
             return _scalar_one(None)
         if "sources" in text:
-            return _rows_result([(ticket_ev.id, "servicenow"), (teams_ev.id, "teams")])
+            return _rows_result(
+                [(ticket_ev.id, "servicenow", {}), (teams_ev.id, "teams", None)]
+            )
         if "reviewer_state" in text:
             return _scalars_result([old_draft])
         return _rows_result([])

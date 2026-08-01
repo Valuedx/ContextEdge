@@ -243,6 +243,9 @@ class Episode(Base, TenantScopedMixin):
     # idempotency and supersede-on-growth in episode reconstruction.
     cluster_fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True)
     entity_refs: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    # Conflicting accounts between sources, preserved instead of merged
+    # (0040): [{"topic": ..., "accounts": [{"evidence_id": ..., "claim": ...}]}]
+    contradictions: Mapped[list | None] = mapped_column(JSONB, nullable=True)
     embedding = mapped_column(Vector(3072), nullable=True)
 
     steps: Mapped[list["EpisodeStep"]] = relationship(
