@@ -1,14 +1,12 @@
 # Continuous integration for ContextEdge.
 #
-# Two required jobs (backend-tests, frontend-tests) and one advisory
-# lint job. The full backend suite runs WITHOUT live services — every
+# Three required jobs: backend tests, frontend tests, and ruff. The full backend suite runs WITHOUT live services — every
 # test uses fakes/mocks for PostgreSQL, Redis, MinIO, and the LLM
 # provider — so CI needs no service containers and stays fast.
 #
-# Lint is continue-on-error because the codebase carries pre-existing
-# ruff debt (367 findings at introduction; see KNOWN_GAPS). Making it
-# required before that debt is paid would turn every PR red for
-# unrelated reasons. Flip it to required once the debt is cleared.
+# All three jobs are required. Lint became a gate after the 2026-08
+# debt cleanup (367 findings → 0); deliberate exceptions are documented
+# in backend/pyproject.toml per-file-ignores with their reasons.
 
 name: CI
 
@@ -64,11 +62,9 @@ jobs:
         run: npm test
 
   lint:
-    # --exit-zero keeps this job green while still emitting inline
-    # annotations: a continue-on-error job would show a red ✗ on every
-    # PR's check list even though the workflow passes — permanent noise.
-    # A real ruff crash (not findings) still fails the job, as it should.
-    name: Ruff (advisory — pre-existing debt)
+    # Required gate since the 2026-08 lint-debt cleanup: the codebase is
+    # ruff-clean (deliberate exceptions live in pyproject with reasons).
+    name: Ruff
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -80,5 +76,5 @@ jobs:
           python-version: "3.12"
       - name: Install ruff
         run: pip install "ruff>=0.8"
-      - name: Ruff check (advisory)
-        run: ruff check src --output-format=github --exit-zero
+      - name: Ruff check
+        run: ruff check src --output-format=github

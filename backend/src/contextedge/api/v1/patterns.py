@@ -92,7 +92,9 @@ async def list_pattern_evidence_links(pattern_id: UUID, db: DbSession, user: Aut
     return result.scalars().all()
 
 
-@router.post("/{pattern_id}/evidence-links", response_model=PatternEvidenceLinkResponse, status_code=201)
+@router.post(
+    "/{pattern_id}/evidence-links", response_model=PatternEvidenceLinkResponse, status_code=201
+)
 async def create_pattern_evidence_link(
     pattern_id: UUID,
     body: PatternEvidenceLinkCreate,
@@ -156,30 +158,30 @@ async def delete_pattern(
 ):
     """Delete a pattern and its associated evidence links."""
     user.require_role("knowledge_manager")
-    
+
     # 1. Fetch pattern to check ownership
     pattern = (
         await db.execute(
             select(Pattern).where(
-                Pattern.id == pattern_id, 
+                Pattern.id == pattern_id,
                 Pattern.tenant_id == user.tenant_id
             )
         )
     ).scalar_one_or_none()
-    
+
     if not pattern:
         raise HTTPException(status_code=404, detail="Pattern not found")
-        
+
     # 2. Cleanup associated evidence links manually if not using SQL-level CASCADE
     from sqlalchemy import delete
     await db.execute(
         delete(PatternEvidenceLink).where(PatternEvidenceLink.pattern_id == pattern_id)
     )
-    
+
     # 3. Delete the pattern itself
     await db.delete(pattern)
     await db.commit()
-    
+
     return None
 
 
@@ -196,11 +198,11 @@ async def discover_pattern(
     """Analyze episodes to synthesize a recurring knowledge pattern."""
     user.require_role("domain_admin")
 
-    from contextedge.models.episode import Episode
     from contextedge.ai.extractors.pattern_extractor import synthesize_pattern
-    from contextedge.services.pattern_service import create_pattern_from_episodes
     from contextedge.graph.builder import build_episode_graph
+    from contextedge.models.episode import Episode
     from contextedge.services.identity_service import identity_ids_from_refs
+    from contextedge.services.pattern_service import create_pattern_from_episodes
 
     # 1. Fetch episodes
     res = await db.execute(

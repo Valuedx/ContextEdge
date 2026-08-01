@@ -1,6 +1,7 @@
 import uuid
 
 from sqlalchemy import select
+
 from contextedge.services.sync_worker_service import (
     run_backfill_job,
     run_incremental_job,
@@ -16,14 +17,14 @@ def trigger_scheduled_syncs():
     """Find all approved objects and trigger incremental sync for them."""
     async def work(db):
         from contextedge.models.source import SourceObject
-        q = select(SourceObject).where(SourceObject.approved_for_sync == True)
+        q = select(SourceObject).where(SourceObject.approved_for_sync.is_(True))
         result = await db.execute(q)
         objects = result.scalars().all()
-        
+
         for obj in objects:
             run_incremental_sync.delay(
-                str(obj.source_id), 
-                str(obj.id), 
+                str(obj.source_id),
+                str(obj.id),
                 str(obj.tenant_id)
             )
         return len(objects)

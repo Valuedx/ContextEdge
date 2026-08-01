@@ -14,9 +14,11 @@ See ``codewiki/CHUNKING_DESIGN.md`` for the rationale and the
 per-source strategy table.
 """
 
-from contextedge.services.chunkers.base import ChunkSpec, Chunker
+from contextedge.services.chunkers.base import Chunker, ChunkSpec
 from contextedge.services.chunkers.registry import (
     chunkers as chunkers,
+)
+from contextedge.services.chunkers.registry import (
     get_chunker as get_chunker,
 )
 

@@ -34,7 +34,6 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from contextedge.models.base import Base, TenantScopedMixin
 
-
 RISK_LEVELS = ("low", "medium", "high", "restricted")
 POLICY_RESULTS = (
     "allowed_auto",

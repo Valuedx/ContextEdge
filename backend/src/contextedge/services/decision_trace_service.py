@@ -9,14 +9,15 @@ from __future__ import annotations
 import uuid
 
 import structlog
-from sqlalchemy import select, func as sa_func
+from sqlalchemy import func as sa_func
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from contextedge.graph.builder import (
     link_decision_chain,
-    link_decision_evidence,
     link_decision_episode,
+    link_decision_evidence,
     link_decision_option,
     link_decision_outcome,
     link_decision_pattern,
@@ -70,7 +71,11 @@ async def create_decision(
     policy_refs = policy_refs or []
 
     evidence_summary = [
-        {"ref_type": r.get("ref_type", ""), "ref_id": r.get("ref_id", ""), "description": r.get("description", "")}
+        {
+            "ref_type": r.get("ref_type", ""),
+            "ref_id": r.get("ref_id", ""),
+            "description": r.get("description", ""),
+        }
         for r in evidence_refs
     ]
 
@@ -358,7 +363,9 @@ async def get_decision_chain(
         if current.parent_decision_id in visited:
             break
         visited.add(current.parent_decision_id)
-        current = await get_decision(db, tenant_id=tenant_id, decision_id=current.parent_decision_id)
+        current = await get_decision(
+            db, tenant_id=tenant_id, decision_id=current.parent_decision_id
+        )
         if current:
             ancestors.append(current)
 

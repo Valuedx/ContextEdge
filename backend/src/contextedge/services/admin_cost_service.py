@@ -14,10 +14,10 @@ and is easy to override per deployment via env later if needed.
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from contextedge.models.events import OperationalEvent
@@ -75,7 +75,7 @@ async def get_llm_usage(
     materialised round trip keeps latency flat and avoids N+1 queries on
     the dashboard's polling refresh.
     """
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     from_time = now - timedelta(hours=window_hours)
 
     stmt = (

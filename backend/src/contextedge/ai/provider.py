@@ -5,7 +5,7 @@ import os
 import re
 import time
 import uuid as _uuid
-from typing import Any, TypeVar
+from typing import Any
 
 import litellm
 import structlog
@@ -185,14 +185,14 @@ def repair_truncated_json(s: str) -> str:
     s = s.strip()
     if not s:
         return s
-    
+
     # Remove trailing commas which frequently appear in truncated JSON
     s = re.sub(r',\s*$', '', s)
-    
+
     stack = []
     is_in_string = False
     escaped = False
-    
+
     for char in s:
         if is_in_string:
             if escaped:
@@ -214,15 +214,15 @@ def repair_truncated_json(s: str) -> str:
             elif char == "]":
                 if stack and stack[-1] == "]":
                     stack.pop()
-    
+
     # Close unclosed string
     if is_in_string:
         s += '"'
-    
+
     # Close unclosed objects/arrays in reverse order
     while stack:
         s += stack.pop()
-        
+
     return s
 
 
@@ -270,12 +270,12 @@ async def llm_complete_json(
         # Remove markdown wrappers
         cleaned = re.sub(r"```(?:json)?\s*", "", cleaned)
         cleaned = re.sub(r"```\s*", "", cleaned)
-        
+
         # Locate the JSON content start
         start = cleaned.find("{")
         if start == -1:
             start = cleaned.find("[")
-            
+
         if start != -1:
             # First try finding the last closing delimiter
             end = max(cleaned.rfind("}"), cleaned.rfind("]"))
@@ -285,7 +285,7 @@ async def llm_complete_json(
                     return json.loads(candidate)
                 except json.JSONDecodeError:
                     pass
-            
+
             # If that failed, it's likely truncated. Try to repair it.
             try:
                 repaired = repair_truncated_json(cleaned[start:])
@@ -309,7 +309,6 @@ async def llm_complete_json(
         raise ValueError(f"LLM returned invalid JSON for task '{task}'")
 
 
-T_Schema = TypeVar("T_Schema", bound=BaseModel)
 
 
 def _format_validation_errors(err: ValidationError, limit: int = 5) -> str:
@@ -361,9 +360,9 @@ def _build_repair_prompt(
     )
 
 
-async def llm_complete_json_validated(
+async def llm_complete_json_validated[T: BaseModel](
     prompt: str,
-    schema: type[T_Schema],
+    schema: type[T],
     task: str = "extraction",
     model: str | None = None,
     temperature: float = 0.0,
@@ -374,7 +373,7 @@ async def llm_complete_json_validated(
     max_retries: int = 1,
     prompt_name: str | None = None,
     prompt_version: str | None = None,
-) -> T_Schema:
+) -> T:
     """Parse LLM output against a Pydantic schema, with a bounded repair retry.
 
     Drops into place for callers of ``llm_complete_json`` that want
@@ -524,7 +523,9 @@ async def generate_embedding(
             logger.warning("embedding.usage_record_failed", error=str(exc))
 
 
-async def generate_embeddings_batch(texts: list[str], model: str | None = None) -> list[list[float]]:
+async def generate_embeddings_batch(
+    texts: list[str], model: str | None = None
+) -> list[list[float]]:
     """Generate embeddings for a batch of texts. Returns 3072-dimensional vectors."""
     model = model or get_model_for_task("embedding")
     # LiteLLM maps 'dimensions' -> outputDimensionality for Vertex AI

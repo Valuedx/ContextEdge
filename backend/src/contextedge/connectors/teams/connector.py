@@ -1,6 +1,6 @@
 """Microsoft Teams connector via Microsoft Graph API."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 import httpx
@@ -34,7 +34,7 @@ class TeamsConnector(BaseConnector):
         self._token_expires: datetime | None = None
 
     async def _get_token(self) -> str:
-        if self._token and self._token_expires and self._token_expires > datetime.now(timezone.utc):
+        if self._token and self._token_expires and self._token_expires > datetime.now(UTC):
             return self._token
 
         tenant_id = self.credentials["tenant_id"]
@@ -51,7 +51,7 @@ class TeamsConnector(BaseConnector):
             resp.raise_for_status()
             data = resp.json()
             self._token = data["access_token"]
-            self._token_expires = datetime.now(timezone.utc)
+            self._token_expires = datetime.now(UTC)
             return self._token
 
     async def _graph_get(self, path: str, params: dict | None = None) -> dict:
@@ -210,7 +210,13 @@ class TeamsConnector(BaseConnector):
                         "from": msg.get("from", {}).get("user", {}).get("displayName"),
                     },
                     thread_id=f"{team_id}:{channel_id}:{msg['id']}",
-                    timestamp=datetime.fromisoformat(msg["createdDateTime"].replace("Z", "+00:00")) if msg.get("createdDateTime") else None,
+                    timestamp=(
+                        datetime.fromisoformat(
+                            msg["createdDateTime"].replace("Z", "+00:00")
+                        )
+                        if msg.get("createdDateTime")
+                        else None
+                    ),
                     metadata={"team_id": team_id, "channel_id": channel_id},
                 )
             )

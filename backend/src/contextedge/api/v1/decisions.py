@@ -15,14 +15,32 @@ from contextedge.schemas.decision import (
 )
 from contextedge.services.decision_trace_service import (
     create_decision as svc_create_decision,
+)
+from contextedge.services.decision_trace_service import (
     find_similar_decisions as svc_find_similar,
+)
+from contextedge.services.decision_trace_service import (
     find_similar_decisions_aggregate as svc_find_similar_aggregate,
+)
+from contextedge.services.decision_trace_service import (
     get_decision as svc_get_decision,
+)
+from contextedge.services.decision_trace_service import (
     get_decision_chain as svc_get_chain,
+)
+from contextedge.services.decision_trace_service import (
     get_decision_effectiveness as svc_get_effectiveness,
+)
+from contextedge.services.decision_trace_service import (
     get_decision_provenance as svc_get_provenance,
+)
+from contextedge.services.decision_trace_service import (
     list_decisions as svc_list_decisions,
+)
+from contextedge.services.decision_trace_service import (
     record_outcome as svc_record_outcome,
+)
+from contextedge.services.decision_trace_service import (
     reject_decision as svc_reject_decision,
 )
 
@@ -39,11 +57,18 @@ async def find_similar_decisions(
     impacted_dependency: str | None = None,
     query_decision_id: UUID | None = Query(
         None,
-        description="When set, results are ordered semantically using this decision's embedding as the query vector; otherwise JSONB containment + created_at ordering applies.",
+        description=(
+            "When set, results are ordered semantically using this decision's "
+            "embedding as the query vector; otherwise JSONB containment + "
+            "created_at ordering applies."
+        ),
     ),
     query_text: str | None = Query(
         None,
-        description="Free-text query embedded on the fly and used as the query vector. Ignored when query_decision_id is set.",
+        description=(
+            "Free-text query embedded on the fly and used as the query vector. "
+            "Ignored when query_decision_id is set."
+        ),
     ),
     limit: int = Query(10, ge=1, le=50),
 ):

@@ -40,7 +40,14 @@ async def _sweep(db, tenant_id: str, limit: int) -> dict:
 
     now = datetime.now(UTC)
     floor_cutoff = now - timedelta(seconds=MIN_RECHECK_FLOOR_SEC)
-    totals = {"tenants": len(tids), "verified": 0, "failed": 0, "unverifiable": 0, "not_due": 0, "skipped": 0}
+    totals = {
+        "tenants": len(tids),
+        "verified": 0,
+        "failed": 0,
+        "unverifiable": 0,
+        "not_due": 0,
+        "skipped": 0,
+    }
     for tid in tids:
         runs = (
             (

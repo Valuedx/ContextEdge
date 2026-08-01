@@ -20,9 +20,6 @@ from contextedge.services.execution_service import (
     get_execution_run,
     list_execution_runs,
     modify_approval,
-    record_step_completion,
-    record_tool_invocation,
-    request_approval,
     start_execution,
 )
 

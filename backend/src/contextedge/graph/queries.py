@@ -88,10 +88,11 @@ async def get_pattern_subgraph(
     domain_id: uuid.UUID | None = None,
     as_of: datetime | None = None,
 ) -> dict:
-    """Get the subgraph around a pattern including episodes, evidence, entities, and playbooks (up to 2 hops)."""
-    from contextedge.models.pattern import Pattern, PatternEvidenceLink, GraphEdge
+    """Get the subgraph around a pattern including episodes, evidence,
+    entities, and playbooks (up to 2 hops)."""
     from contextedge.models.episode import Episode
     from contextedge.models.evidence import EvidenceItem
+    from contextedge.models.pattern import GraphEdge, Pattern, PatternEvidenceLink
 
     pattern_res = await db.execute(
         select(Pattern).where(Pattern.id == pattern_id, Pattern.tenant_id == tenant_id)
@@ -216,7 +217,9 @@ async def get_pattern_subgraph(
 
             if link.evidence_id:
                 add_node("evidence", str(link.evidence_id))
-                source_parent = f"episode:{link.episode_id}" if link.episode_id else f"pattern:{pattern_id}"
+                source_parent = (
+                    f"episode:{link.episode_id}" if link.episode_id else f"pattern:{pattern_id}"
+                )
                 edge_key = (source_parent, f"evidence:{link.evidence_id}", "derived_from")
                 if edge_key not in seen_edge_keys:
                     seen_edge_keys.add(edge_key)

@@ -32,7 +32,7 @@ def evidence_title_from_payload(payload: dict | None) -> str:
     # 3. Fallback to a snippet of the body
     body = (p.get("body") or p.get("body_text") or p.get("description")
             or p.get("text") or p.get("snippet"))
-    
+
     if body and isinstance(body, str) and body.strip():
         # Take first 60 chars, clean up newlines
         snippet = " ".join(body.split())[:60].strip()

@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, HTTPException, status
 from jose import jwt
@@ -7,7 +7,7 @@ from sqlalchemy import select
 
 from contextedge.config import settings
 from contextedge.deps import DbSession
-from contextedge.models.tenant import User, RoleBinding
+from contextedge.models.tenant import RoleBinding, User
 from contextedge.schemas.tenant import LoginRequest, TokenResponse
 
 router = APIRouter()
@@ -19,7 +19,7 @@ _DUMMY_PASSWORD_HASH = pwd_context.hash("contextedge-timing-equalizer")
 
 
 def _create_token(user: User, roles: list[str]) -> str:
-    expire = datetime.now(timezone.utc) + timedelta(
+    expire = datetime.now(UTC) + timedelta(
         minutes=settings.jwt_access_token_expire_minutes
     )
     payload = {

@@ -21,8 +21,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from contextedge.config import settings
 from contextedge.models.decision import Decision
 from contextedge.schemas.review_queue import ReviewQueueContext
-
-logger = structlog.get_logger()
 from contextedge.services.decision_trace_service import (
     count_similar_decisions,
     get_decision_effectiveness,
@@ -31,6 +29,8 @@ from contextedge.services.decision_trace_service import (
 from contextedge.services.event_log_service import list_operational_events
 from contextedge.services.execution_service import list_execution_runs
 from contextedge.services.session_service import get_resolution_session
+
+logger = structlog.get_logger()
 
 REVIEW_CONTEXT_CACHE_TTL_SEC = 300
 REVIEW_CONTEXT_CACHE_PREFIX = "review_queue"

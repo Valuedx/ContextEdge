@@ -3,12 +3,35 @@ from fastapi import APIRouter
 router = APIRouter()
 
 from contextedge.api.v1 import (  # noqa: E402, F401
-    auth, tenants, workspaces, domains, users, audit,
-    sources, sync, evidence, threads, episodes,
-    patterns, playbooks, runtime, evaluations, policies, drift, sessions,
-    execution, decisions, contradictions, notifications, negative_knowledge,
-    identities, correlations, policy_assignments, graph, review_queue,
     admin_cost,
+    audit,
+    auth,
+    contradictions,
+    correlations,
+    decisions,
+    domains,
+    drift,
+    episodes,
+    evaluations,
+    evidence,
+    execution,
+    graph,
+    identities,
+    negative_knowledge,
+    notifications,
+    patterns,
+    playbooks,
+    policies,
+    policy_assignments,
+    review_queue,
+    runtime,
+    sessions,
+    sources,
+    sync,
+    tenants,
+    threads,
+    users,
+    workspaces,
 )
 
 router.include_router(auth.router, prefix="/auth", tags=["auth"])
@@ -33,10 +56,14 @@ router.include_router(execution.router, prefix="/execution", tags=["execution"])
 router.include_router(decisions.router, prefix="/decisions", tags=["decisions"])
 router.include_router(contradictions.router, prefix="/contradictions", tags=["contradictions"])
 router.include_router(notifications.router, prefix="/notifications", tags=["notifications"])
-router.include_router(negative_knowledge.router, prefix="/negative-knowledge", tags=["negative-knowledge"])
+router.include_router(
+    negative_knowledge.router, prefix="/negative-knowledge", tags=["negative-knowledge"]
+)
 router.include_router(identities.router, prefix="/identities", tags=["identities"])
 router.include_router(correlations.router, prefix="/correlations", tags=["correlations"])
-router.include_router(policy_assignments.router, prefix="/policy-assignments", tags=["policy-assignments"])
+router.include_router(
+    policy_assignments.router, prefix="/policy-assignments", tags=["policy-assignments"]
+)
 router.include_router(graph.router, prefix="/graph", tags=["graph"])
 router.include_router(review_queue.router, prefix="/review-queue", tags=["review-queue"])
 router.include_router(admin_cost.router, prefix="/admin", tags=["admin"])

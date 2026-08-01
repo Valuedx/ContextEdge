@@ -12,7 +12,10 @@ class StartExecutionRequest(BaseModel):
     session_id: UUID | None = None
     max_safety_class: str = Field(
         "read_only",
-        description="Maximum safety class the caller authorises: read_only, low_side_effect, high_side_effect, destructive",
+        description=(
+            "Maximum safety class the caller authorises: read_only, "
+            "low_side_effect, high_side_effect, destructive"
+        ),
     )
 
 

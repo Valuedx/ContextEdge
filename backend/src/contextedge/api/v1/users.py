@@ -108,7 +108,9 @@ async def update_user(user_id: UUID, body: UserUpdate, db: DbSession, user: Auth
     return u
 
 
-@router.post("/{user_id}/roles", response_model=RoleBindingResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/{user_id}/roles", response_model=RoleBindingResponse, status_code=status.HTTP_201_CREATED
+)
 async def assign_role(user_id: UUID, body: RoleBindingCreate, db: DbSession, user: AuthUser):
     user.require_role("tenant_admin")
     rb = RoleBinding(

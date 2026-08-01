@@ -35,8 +35,7 @@ from __future__ import annotations
 
 import re
 
-from contextedge.services.chunkers.base import ChunkSpec, Chunker
-
+from contextedge.services.chunkers.base import ChunkSpec
 
 CHUNK_TARGET_CHARS = 1500
 """Soft target. Chunks may be slightly larger if no clean boundary exists."""

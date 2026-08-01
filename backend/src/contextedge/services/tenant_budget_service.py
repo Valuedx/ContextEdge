@@ -30,7 +30,7 @@ import asyncio
 import time
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Literal
 
@@ -165,7 +165,7 @@ async def get_current_day_usage(
         if cached is not None:
             return cached
 
-    start_of_day = datetime.now(timezone.utc).replace(
+    start_of_day = datetime.now(UTC).replace(
         hour=0, minute=0, second=0, microsecond=0,
     )
     rows = (

@@ -4,32 +4,32 @@ import uuid as uuid_mod
 from datetime import UTC, datetime
 from uuid import UUID
 
+import structlog
 from fastapi import APIRouter, HTTPException, Query, Request, status
+from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
-import structlog
 
 from contextedge.deps import AuthUser, DbSession
 from contextedge.middleware.audit import log_audit_event
 from contextedge.models.playbook import Playbook, PlaybookVersion
 from contextedge.schemas.playbook import (
     PlaybookCreate,
-    PlaybookRollbackRequest,
     PlaybookResponse,
+    PlaybookRollbackRequest,
     PlaybookTransition,
     PlaybookUpdate,
     PlaybookVersionCreate,
     PlaybookVersionDiffResponse,
     PlaybookVersionResponse,
 )
-from contextedge.services.policy_assignment import assert_policy_assignment
 from contextedge.services.playbook_service import (
     DuplicateVersionError,
     InvalidTransitionError,
     create_playbook_version,
     transition_playbook,
 )
-from pydantic import BaseModel, Field
+from contextedge.services.policy_assignment import assert_policy_assignment
 
 router = APIRouter()
 logger = structlog.get_logger()
@@ -360,12 +360,12 @@ async def generate_playbook(
     """Generate a playbook candidate from a knowledge pattern using AI."""
     user.require_role("knowledge_manager")
 
-    from contextedge.models.pattern import NegativeKnowledgeItem, Pattern
-    from contextedge.models.episode import Episode
     from contextedge.ai.generators.playbook_generator import generate_playbook_candidate
-    from contextedge.services.playbook_service import create_playbook_version
-    from contextedge.services.identity_service import identity_ids_from_refs
     from contextedge.graph.builder import ensure_edge, link_node_to_identities
+    from contextedge.models.episode import Episode
+    from contextedge.models.pattern import NegativeKnowledgeItem, Pattern
+    from contextedge.services.identity_service import identity_ids_from_refs
+    from contextedge.services.playbook_service import create_playbook_version
 
     # 1. Fetch Pattern and Episodes
     q = select(Pattern).where(

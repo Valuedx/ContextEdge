@@ -2,16 +2,16 @@ import uuid
 
 import structlog
 from sqlalchemy import select
-
 from sqlalchemy.orm import selectinload
-from contextedge.ai.generators import playbook_generator
+
 from contextedge.ai.extractors.pattern_extractor import synthesize_pattern
+from contextedge.ai.generators import playbook_generator
 from contextedge.ai.provider import generate_embedding
+from contextedge.graph.builder import ensure_edge, link_node_to_identities
 from contextedge.models.episode import Episode
 from contextedge.models.pattern import NegativeKnowledgeItem, Pattern, PatternEvidenceLink
 from contextedge.models.playbook import Playbook
 from contextedge.models.tenant import User
-from contextedge.graph.builder import ensure_edge, link_node_to_identities
 from contextedge.services.identity_service import identity_ids_from_refs
 from contextedge.services.pattern_service import create_pattern_from_episodes
 from contextedge.services.playbook_service import create_playbook_version
@@ -141,7 +141,7 @@ async def _cluster(db, tid: uuid.UUID, did: uuid.UUID | None) -> dict:
         )
         candidates = list(r.scalars().all())
         logger.info("cluster_episodes_candidates", count=len(candidates))
-        
+
         assigned_ids = set()
         created = 0
         total_considered = len(candidates)
@@ -149,7 +149,7 @@ async def _cluster(db, tid: uuid.UUID, did: uuid.UUID | None) -> dict:
         for ep in candidates:
             if ep.id in assigned_ids:
                 continue
-            
+
             # Find similar episodes using vector distance (threshold 0.20)
             # — same domain scope as the candidates: similarity must never
             # pull another domain's episode into this cluster.
@@ -171,7 +171,7 @@ async def _cluster(db, tid: uuid.UUID, did: uuid.UUID | None) -> dict:
             # better to create a pattern than silently drop a valid approved episode.
             if len(cluster) == 0:
                 cluster = [ep]
-            
+
             # Form a pattern using AI synthesis for high-fidelity results
             try:
                 # Fetch steps for the cluster episodes to provide context to the LLM
@@ -181,7 +181,7 @@ async def _cluster(db, tid: uuid.UUID, did: uuid.UUID | None) -> dict:
                     .options(selectinload(Episode.steps))
                 )
                 cluster_with_steps = list(synth_r.scalars().all())
-                
+
                 # Prepare data structure for the pattern extractor
                 ep_data = [
                     {
@@ -195,7 +195,7 @@ async def _cluster(db, tid: uuid.UUID, did: uuid.UUID | None) -> dict:
 
                 # Call AI to synthesize pattern from the cluster
                 synthesis = await synthesize_pattern(ep_data, tenant_id=tid, db=db)
-                
+
                 await create_pattern_from_episodes(
                     db,
                     tenant_id=tid,
@@ -225,8 +225,12 @@ async def _cluster(db, tid: uuid.UUID, did: uuid.UUID | None) -> dict:
                 )
             created += 1
             assigned_ids.update(e.id for e in cluster)
-            
-        return {"patterns_created": created, "episodes_considered": total_considered, "embeddings_repaired": repaired}
+
+        return {
+            "patterns_created": created,
+            "episodes_considered": total_considered,
+            "embeddings_repaired": repaired,
+        }
 
 
 @celery_app.task(

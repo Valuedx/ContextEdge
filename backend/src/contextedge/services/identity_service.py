@@ -855,8 +855,10 @@ async def merge_canonical_identities(
         select(GraphEdge).where(
             GraphEdge.tenant_id == tenant_id,
             or_(
-                (GraphEdge.source_node_type == "identity") & (GraphEdge.source_node_id == duplicate.id),
-                (GraphEdge.target_node_type == "identity") & (GraphEdge.target_node_id == duplicate.id),
+                (GraphEdge.source_node_type == "identity")
+                & (GraphEdge.source_node_id == duplicate.id),
+                (GraphEdge.target_node_type == "identity")
+                & (GraphEdge.target_node_id == duplicate.id),
             ),
         )
     )

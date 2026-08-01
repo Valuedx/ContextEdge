@@ -6,8 +6,8 @@ import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from contextedge.ai.provider import generate_embedding
 from contextedge.ai.extractors.episode_extractor import reconstruct_episode
+from contextedge.ai.provider import generate_embedding
 from contextedge.models.episode import Episode, EpisodeStep
 from contextedge.models.evidence import EvidenceItem
 
@@ -70,7 +70,7 @@ async def create_episodes_from_evidence(
         select(EvidenceItem.canonical_entity_refs).where(EvidenceItem.id.in_(evidence_ids))
     )
     entity_refs = _merge_identity_refs([row[0] for row in evidence_result.all()])
-    
+
     created_episodes = []
     for ep_data in extracted_episodes:
         # Generate semantic embedding for the episode
@@ -117,7 +117,7 @@ async def create_episodes_from_evidence(
                 evidence_refs=step_data.get("evidence_refs"),
             )
             db.add(step)
-        
+
         await db.flush()
         await db.refresh(episode)
         created_episodes.append(episode)

@@ -21,7 +21,7 @@ from contextedge.models.events import Notification
 logger = structlog.get_logger()
 
 
-class NotificationType(str, Enum):
+class NotificationType(str, Enum):  # noqa: UP042 — StrEnum changes str(member) semantics
     SYNC_FAILED = "sync_failed"
     CREDENTIALS_EXPIRED = "credentials_expired"
     PLAYBOOK_CANDIDATE = "playbook_candidate"
@@ -32,7 +32,7 @@ class NotificationType(str, Enum):
     PLAYBOOK_APPROVED = "playbook_approved"
 
 
-class NotificationChannel(str, Enum):
+class NotificationChannel(str, Enum):  # noqa: UP042 — StrEnum changes str(member) semantics
     IN_APP = "in_app"
     EMAIL = "email"
     WEBHOOK = "webhook"

@@ -4,7 +4,7 @@ Supports issue retrieval via JQL, comment extraction, and webhook-based sync.
 """
 
 import base64
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any
 
 import httpx
@@ -92,7 +92,10 @@ class JiraSmConnector(BaseConnector):
 
         start_date = window.start.strftime("%Y-%m-%d")
         end_date = window.end.strftime("%Y-%m-%d")
-        jql = f'project = "{project_key}" AND updated >= "{start_date}" AND updated <= "{end_date}" ORDER BY updated ASC'
+        jql = (
+            f'project = "{project_key}" AND updated >= "{start_date}" '
+            f'AND updated <= "{end_date}" ORDER BY updated ASC'
+        )
 
         data = await self._jira_get(
             "/search",
@@ -100,7 +103,10 @@ class JiraSmConnector(BaseConnector):
                 "jql": jql,
                 "maxResults": "50",
                 "startAt": str(start_at),
-                "fields": "summary,description,status,priority,assignee,reporter,created,updated,issuetype,comment",
+                "fields": (
+                    "summary,description,status,priority,assignee,reporter,"
+                    "created,updated,issuetype,comment"
+                ),
             },
         )
 
@@ -118,8 +124,16 @@ class JiraSmConnector(BaseConnector):
                         "status": fields.get("status", {}).get("name"),
                         "priority": fields.get("priority", {}).get("name"),
                         "issue_type": fields.get("issuetype", {}).get("name"),
-                        "assignee": fields.get("assignee", {}).get("displayName") if fields.get("assignee") else None,
-                        "reporter": fields.get("reporter", {}).get("displayName") if fields.get("reporter") else None,
+                        "assignee": (
+                            fields.get("assignee", {}).get("displayName")
+                            if fields.get("assignee")
+                            else None
+                        ),
+                        "reporter": (
+                            fields.get("reporter", {}).get("displayName")
+                            if fields.get("reporter")
+                            else None
+                        ),
                         "comment_count": fields.get("comment", {}).get("total", 0),
                     },
                     thread_id=issue["key"],
@@ -169,7 +183,10 @@ class JiraSmConnector(BaseConnector):
             {
                 "jql": jql,
                 "maxResults": "100",
-                "fields": "summary,description,status,priority,assignee,reporter,created,updated,issuetype,comment",
+                "fields": (
+                    "summary,description,status,priority,assignee,reporter,"
+                    "created,updated,issuetype,comment"
+                ),
             },
         )
 
@@ -192,8 +209,16 @@ class JiraSmConnector(BaseConnector):
                         "status": fields.get("status", {}).get("name"),
                         "priority": fields.get("priority", {}).get("name"),
                         "issue_type": fields.get("issuetype", {}).get("name"),
-                        "assignee": fields.get("assignee", {}).get("displayName") if fields.get("assignee") else None,
-                        "reporter": fields.get("reporter", {}).get("displayName") if fields.get("reporter") else None,
+                        "assignee": (
+                            fields.get("assignee", {}).get("displayName")
+                            if fields.get("assignee")
+                            else None
+                        ),
+                        "reporter": (
+                            fields.get("reporter", {}).get("displayName")
+                            if fields.get("reporter")
+                            else None
+                        ),
                     },
                     thread_id=issue["key"],
                     timestamp=_parse_jira_datetime(updated),
@@ -221,7 +246,11 @@ class JiraSmConnector(BaseConnector):
         messages.append({
             "id": f"{issue_key}_description",
             "body": _extract_adf_text(fields.get("description")),
-            "from": fields.get("reporter", {}).get("displayName", "") if fields.get("reporter") else "",
+            "from": (
+                fields.get("reporter", {}).get("displayName", "")
+                if fields.get("reporter")
+                else ""
+            ),
             "type": "description",
             "timestamp": fields.get("created"),
         })

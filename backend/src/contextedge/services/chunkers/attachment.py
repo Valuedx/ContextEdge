@@ -32,12 +32,11 @@ from __future__ import annotations
 import re
 from dataclasses import replace
 
-from contextedge.services.chunkers.base import ChunkSpec, Chunker
+from contextedge.services.chunkers.base import ChunkSpec
 from contextedge.services.chunkers.fallback import (
     CHUNK_TARGET_CHARS,
     FallbackChunker,
 )
-
 
 # Markdown heading: 1-6 ``#`` at line start + space + text.
 _MD_HEADING = re.compile(r"^(#{1,6})\s+(.+?)\s*$", re.MULTILINE)
@@ -293,12 +292,10 @@ def _chunk_log_plain(*, title: str | None, body: str) -> list[ChunkSpec]:
     boundaries.append(len(body))
     chunks: list[ChunkSpec] = []
     buffer_start = boundaries[0]
-    buffer_end = buffer_start
 
     # Group consecutive small events into one chunk under the size budget.
     cursor = 0
     while cursor < len(boundaries) - 1:
-        start = boundaries[cursor]
         end = boundaries[cursor + 1]
         size = end - buffer_start
         if size >= CHUNK_TARGET_CHARS or end == boundaries[-1]:
