@@ -520,6 +520,97 @@ def resolve_synthesis_role(source_type: str, source_config: dict | None) -> str:
     return SOURCE_ROLE_MAP.get(source_type, "evidence")
 
 
+async def _reconcile_reply_inheritance(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    cluster_evidence_ids: list[uuid.UUID],
+    source_types: dict[uuid.UUID, str],
+    loaded_evidence: dict[uuid.UUID, "EvidenceItem"],
+) -> dict:
+    """A10: replies that correlated before their parent gained a case
+    membership never retried inheritance. Reconstruction is the natural
+    retry point — it fires after a burst settles, and the cluster
+    already names every message in the conversation. For each teams
+    member with no active non-mentioned membership, re-attempt
+    inheritance through the shared ``inherit_reply_membership`` (which
+    carries all the shipped guards: single-case parent, dissociation
+    veto, thread negation). Fail-soft: reconciliation must never break
+    reconstruction."""
+    counts = {"attempted": 0, "inherited": 0}
+    teams_ids = [
+        eid for eid in cluster_evidence_ids if source_types.get(eid) == "teams"
+    ]
+    if not teams_ids:
+        return counts
+    try:
+        from contextedge.models.case_bridge import EvidenceCaseMembership
+        from contextedge.services.ticket_bridge_service import (
+            inherit_reply_membership,
+        )
+
+        anchored = set(
+            (
+                await db.execute(
+                    select(EvidenceCaseMembership.evidence_id).where(
+                        EvidenceCaseMembership.tenant_id == tenant_id,
+                        EvidenceCaseMembership.evidence_id.in_(tuple(teams_ids)),
+                        EvidenceCaseMembership.status == "active",
+                        EvidenceCaseMembership.relationship_type != "mentioned_only",
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        unanchored = [eid for eid in teams_ids if eid not in anchored]
+        if not unanchored:
+            return counts
+
+        # reply_to_id straight from the stored payload in SQL — loading
+        # full payloads (possibly offloaded to object storage) for a
+        # reconciliation sweep would be disproportionate. Offloaded rows
+        # have a NULL inline payload and are simply skipped.
+        reply_rows = (
+            await db.execute(
+                select(
+                    EvidenceItem.id,
+                    RawEvidenceObject.raw_payload["reply_to_id"].astext,
+                )
+                .join(
+                    RawEvidenceObject,
+                    EvidenceItem.raw_object_ref == RawEvidenceObject.id,
+                )
+                .where(
+                    EvidenceItem.tenant_id == tenant_id,
+                    RawEvidenceObject.tenant_id == tenant_id,
+                    EvidenceItem.id.in_(tuple(unanchored)),
+                )
+            )
+        ).all()
+        for evidence_id, reply_to in reply_rows:
+            ev = loaded_evidence.get(evidence_id)
+            if ev is None or not reply_to:
+                continue
+            counts["attempted"] += 1
+            result = await inherit_reply_membership(
+                db, tenant_id, ev, {"reply_to_id": reply_to}
+            )
+            counts["inherited"] += result.get("inherited", 0)
+        if counts["inherited"]:
+            logger.info(
+                "reply_reconciliation.applied",
+                tenant_id=str(tenant_id),
+                **counts,
+            )
+    except Exception as exc:
+        logger.warning(
+            "reply_reconciliation_failed",
+            tenant_id=str(tenant_id),
+            error=str(exc),
+        )
+    return counts
+
+
 async def _reconstruct(
     db: AsyncSession,
     cluster_id: str,
@@ -621,12 +712,14 @@ async def _reconstruct(
         )
 
     items = []
+    loaded_evidence: dict[uuid.UUID, EvidenceItem] = {}
     for eid in cluster.evidence_ids:
         ev = await db.get(EvidenceItem, eid)
         # Cluster membership is tenant-verified upstream; this is belt-
         # and-braces against a resolver regression.
         if ev is None or ev.tenant_id != tenant_id:
             continue
+        loaded_evidence[ev.id] = ev
         source_type = source_types.get(ev.id, "unknown")
         items.append({
             "title": ev.title,
@@ -640,6 +733,10 @@ async def _reconstruct(
 
     if not items:
         return {"error": "no_evidence_found"}
+
+    reply_reconciliation = await _reconcile_reply_inheritance(
+        db, tenant_id, cluster.evidence_ids, source_types, loaded_evidence
+    )
 
     # Supersede-on-growth: a pending draft built from a SUBSET of this
     # cluster is an older view of the same incident. Mark it superseded
@@ -705,6 +802,7 @@ async def _reconstruct(
         "cluster_size": len(cluster.evidence_ids),
         "cluster_fingerprint": cluster.fingerprint,
         "superseded_drafts": superseded,
+        "reply_reconciliation": reply_reconciliation,
     }
 
 

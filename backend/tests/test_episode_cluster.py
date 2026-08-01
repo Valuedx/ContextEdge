@@ -411,3 +411,91 @@ async def test_reconstruct_passes_real_source_types_and_supersedes_subset_drafts
     assert captured_items["cluster_fingerprint"] == "fp-new"
     assert old_draft.reviewer_state == "superseded"  # subset draft retired
     assert result["superseded_drafts"] == 1
+
+
+@pytest.mark.asyncio
+async def test_reconciliation_retries_inheritance_for_unanchored_replies():
+    """A10: a reply that correlated before its parent gained membership
+    gets its inheritance retried at reconstruction time."""
+    from contextedge.workers.extraction_tasks import _reconcile_reply_inheritance
+
+    tenant_id = uuid4()
+    anchored_msg = uuid4()
+    orphan_reply = uuid4()
+    orphan_ev = SimpleNamespace(id=orphan_reply, tenant_id=tenant_id)
+    loaded = {orphan_reply: orphan_ev, anchored_msg: SimpleNamespace(id=anchored_msg)}
+    source_types = {anchored_msg: "teams", orphan_reply: "teams"}
+
+    async def execute(stmt):
+        text = str(stmt)
+        result = Mock()
+        if text.startswith("SELECT evidence_case_memberships.evidence_id"):
+            result.scalars.return_value.all.return_value = [anchored_msg]
+            return result
+        if "raw_evidence_objects" in text:
+            result.all.return_value = [(orphan_reply, "root-msg-9")]
+            return result
+        raise AssertionError("unrouted: " + text[:60])
+
+    calls = []
+
+    async def fake_inherit(db, tid, ev, payload):
+        calls.append((ev.id, payload))
+        return {"inherited": 1, "vetoed": False, "abstained": False}
+
+    with patch(
+        "contextedge.services.ticket_bridge_service.inherit_reply_membership",
+        side_effect=fake_inherit,
+    ):
+        counts = await _reconcile_reply_inheritance(
+            SimpleNamespace(execute=execute),
+            tenant_id,
+            [anchored_msg, orphan_reply],
+            source_types,
+            loaded,
+        )
+
+    assert counts == {"attempted": 1, "inherited": 1}
+    assert calls == [(orphan_reply, {"reply_to_id": "root-msg-9"})]
+
+
+@pytest.mark.asyncio
+async def test_reconciliation_skips_anchored_and_non_teams():
+    from contextedge.workers.extraction_tasks import _reconcile_reply_inheritance
+
+    tenant_id = uuid4()
+    ticket = uuid4()
+    anchored = uuid4()
+
+    async def execute(stmt):
+        text = str(stmt)
+        result = Mock()
+        if text.startswith("SELECT evidence_case_memberships.evidence_id"):
+            result.scalars.return_value.all.return_value = [anchored]
+            return result
+        raise AssertionError("reply query must not run when all anchored")
+
+    counts = await _reconcile_reply_inheritance(
+        SimpleNamespace(execute=execute),
+        tenant_id,
+        [ticket, anchored],
+        {ticket: "servicenow", anchored: "teams"},
+        {},
+    )
+    assert counts == {"attempted": 0, "inherited": 0}
+
+
+@pytest.mark.asyncio
+async def test_reconciliation_is_fail_soft():
+    from contextedge.workers.extraction_tasks import _reconcile_reply_inheritance
+
+    tenant_id = uuid4()
+    msg = uuid4()
+
+    async def execute(stmt):
+        raise RuntimeError("db exploded")
+
+    counts = await _reconcile_reply_inheritance(
+        SimpleNamespace(execute=execute), tenant_id, [msg], {msg: "teams"}, {}
+    )
+    assert counts == {"attempted": 0, "inherited": 0}
