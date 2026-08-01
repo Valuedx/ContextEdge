@@ -66,7 +66,14 @@ async def _ci_evidence_by_kind(
 ) -> dict[str, dict[str, set[uuid.UUID]]]:
     """Evidence touching the CI, grouped by record kind (thread prefix)
     → {kind: {thread_key: {evidence ids}}}. Distinct thread = distinct
-    upstream record; multiple evidence rows per thread are versions."""
+    upstream record; multiple evidence rows per thread are versions.
+
+    Window semantics, stated honestly: the filter is on evidence-version
+    timestamps (the record's sys_updated_on at ingestion), so an old
+    record that was touched recently re-enters the window. For risk this
+    is tolerable — a change being edited today is operationally live —
+    and both the blame numerator and change denominator drift together.
+    """
     rows = (
         await db.execute(
             select(EvidenceItem.id, Thread.external_thread_id)
@@ -86,6 +93,10 @@ async def _ci_evidence_by_kind(
                 func.coalesce(EvidenceItem.created_at_source, EvidenceItem.created_at)
                 >= cutoff,
             )
+            # distinct: an evidence row with two affects_ci edges to the
+            # same entity (differing domain_id) must not eat two scan-cap
+            # slots.
+            .distinct()
             .order_by(EvidenceItem.created_at.desc())
             .limit(EVIDENCE_SCAN_CAP)
         )
@@ -153,6 +164,8 @@ async def _cached_dependents(
                 .where(
                     Entity.tenant_id == tenant_id,
                     Entity.id.in_(tuple(dependent_ids)),
+                    # Retired CIs must not inflate the blast radius.
+                    Entity.is_active.is_(True),
                 )
                 .order_by(Entity.name)
             )
@@ -234,7 +247,10 @@ async def assess_change_risk(
             }
         }
 
-    window_days = min(max(int(window_days), 1), MAX_WINDOW_DAYS)
+    try:
+        window_days = min(max(int(window_days), 1), MAX_WINDOW_DAYS)
+    except (TypeError, ValueError):
+        window_days = DEFAULT_WINDOW_DAYS
     cutoff = datetime.now(UTC) - timedelta(days=window_days)
 
     by_kind = await _ci_evidence_by_kind(db, tenant_id, entity.id, cutoff)
@@ -262,6 +278,9 @@ async def assess_change_risk(
             "name": entity.name,
             "sys_id": entity.external_id,
             "ci_class": (entity.attributes or {}).get("ci_class"),
+            # A retired CI can still be assessed (history stays valid),
+            # but the consumer should know it is no longer active.
+            "active": bool(entity.is_active),
         },
         "window_days": window_days,
         "changes_on_ci": changes,

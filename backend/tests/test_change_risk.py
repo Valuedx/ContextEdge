@@ -22,6 +22,7 @@ def _entity(**kw):
         external_id=GW_SYS_ID,
         attributes={"ci_class": "cmdb_ci_netgear"},
         last_synced_at=kw.get("last_synced_at"),
+        is_active=kw.get("is_active", True),
     )
 
 
@@ -206,3 +207,48 @@ async def test_maf_tool_passthrough_and_error_fencing():
         arguments={"ci": " "}, skip_parsing=True
     )
     assert empty["error"]["code"] == "invalid_ci"
+
+
+@pytest.mark.asyncio
+async def test_assessment_survives_garbage_window():
+    """Programmatic callers bypass API/tool validation — the service must
+    not crash on a None window."""
+    db = SimpleNamespace(
+        execute=AsyncMock(side_effect=[_rows_result([]), _scalars_result([])])
+    )
+    with patch(
+        "contextedge.services.cmdb_topology_service.resolve_ci_entity",
+        AsyncMock(return_value=_entity()),
+    ):
+        result = await assess_change_risk(db, uuid4(), GW_SYS_ID, window_days=None)
+    assert result["window_days"] == 180
+
+
+@pytest.mark.asyncio
+async def test_dependent_query_excludes_retired_entities():
+    """Retired CIs must not inflate the blast radius."""
+    from contextedge.services.change_risk_service import _cached_dependents
+
+    captured = []
+
+    async def execute(stmt):
+        captured.append(str(stmt))
+        return _scalars_result([uuid4()]) if len(captured) == 1 else _scalars_result([])
+
+    db = SimpleNamespace(execute=execute)
+    await _cached_dependents(db, uuid4(), uuid4())
+    assert "is_active" in captured[1]
+
+
+@pytest.mark.asyncio
+async def test_retired_ci_is_assessed_but_flagged():
+    db = SimpleNamespace(
+        execute=AsyncMock(side_effect=[_rows_result([]), _scalars_result([])])
+    )
+    with patch(
+        "contextedge.services.cmdb_topology_service.resolve_ci_entity",
+        AsyncMock(return_value=_entity(is_active=False)),
+    ):
+        result = await assess_change_risk(db, uuid4(), GW_SYS_ID)
+    assert result["ci"]["active"] is False
+    assert result["risk_level"] == "low"  # history still assessed
