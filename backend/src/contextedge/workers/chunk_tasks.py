@@ -40,6 +40,7 @@ from contextedge.services.evidence_chunk_service import (
 )
 from contextedge.workers.asyncio_runner import run_async
 from contextedge.workers.celery_app import celery_app
+from contextedge.workers.suggestion_tasks import generate_correlation_suggestions
 
 logger = structlog.get_logger()
 
@@ -157,6 +158,7 @@ async def _embed_chunks_batch(
     skipped = len(chunks) - len(pending)
 
     written = 0
+    embedded_evidence_ids: set[uuid.UUID] = set()
     for batch_start in range(0, len(pending), EMBED_BATCH_SIZE):
         batch = pending[batch_start : batch_start + EMBED_BATCH_SIZE]
         texts = [c.text for c in batch]
@@ -175,8 +177,13 @@ async def _embed_chunks_batch(
         written += await stamp_chunk_embeddings(
             db, chunks=batch, embeddings=embeddings,
         )
+        embedded_evidence_ids.update(c.evidence_id for c in batch)
 
-    return {"written": written, "skipped": skipped}
+    return {
+        "written": written,
+        "skipped": skipped,
+        "embedded_evidence_ids": sorted(str(e) for e in embedded_evidence_ids),
+    }
 
 
 # Re-export so ``write_chunks`` callers can find the helper without
@@ -238,6 +245,14 @@ def embed_chunks_batch_task(self, chunk_ids: list[str], tenant_id: str):
         return await _embed_chunks_batch(db, chunk_ids, tid)
 
     try:
-        return run_async(work)
+        result = run_async(work)
     except Exception as exc:
         raise self.retry(exc=exc) from exc
+
+    # Post-commit fan-out: with embeddings persisted, the evidence is
+    # ANN-visible — generate gated semantic correlation suggestions.
+    # Dispatching after run_async (which commits) means the suggestion
+    # task can never race an uncommitted embedding.
+    for eid in result.get("embedded_evidence_ids", []):
+        generate_correlation_suggestions.delay(eid, tenant_id)
+    return result
