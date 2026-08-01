@@ -37,6 +37,7 @@ import structlog
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from contextedge.models.case_bridge import EvidenceCaseMembership
 from contextedge.models.episode import CorrelationEdge
 from contextedge.models.evidence import EvidenceItem
 from contextedge.models.session import CaseLink
@@ -152,6 +153,42 @@ async def resolve_episode_cluster(
                 if evidence_id not in members:
                     discovered.setdefault(evidence_id, []).append(
                         f"case:{str(case_id)[:8]}"
+                    )
+
+        # Ticket-number memberships (P1): evidence attached to the same
+        # case via quoted ticket numbers. mentioned_only NEVER expands —
+        # that's the multi-ticket digest guard holding at cluster time.
+        membership_case_rows = (
+            await db.execute(
+                select(EvidenceCaseMembership.canonical_case_id).where(
+                    EvidenceCaseMembership.tenant_id == tenant_id,
+                    EvidenceCaseMembership.evidence_id.in_(tuple(frontier)),
+                    EvidenceCaseMembership.status == "active",
+                    EvidenceCaseMembership.relationship_type != "mentioned_only",
+                )
+            )
+        ).scalars().all()
+        membership_cases = set(membership_case_rows)
+        if membership_cases:
+            member_evidence_rows = (
+                await db.execute(
+                    select(
+                        EvidenceCaseMembership.evidence_id,
+                        EvidenceCaseMembership.relationship_type,
+                    ).where(
+                        EvidenceCaseMembership.tenant_id == tenant_id,
+                        EvidenceCaseMembership.canonical_case_id.in_(
+                            tuple(membership_cases)
+                        ),
+                        EvidenceCaseMembership.status == "active",
+                        EvidenceCaseMembership.relationship_type != "mentioned_only",
+                    )
+                )
+            ).all()
+            for evidence_id, relationship in member_evidence_rows:
+                if evidence_id not in members:
+                    discovered.setdefault(evidence_id, []).append(
+                        f"ticket_ref:{relationship}"
                     )
 
         # Accepted correlation edges, both directions.

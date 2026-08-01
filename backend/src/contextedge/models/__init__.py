@@ -7,6 +7,11 @@ from contextedge.models.action_policy import (
 )
 from contextedge.models.audit import AuditLog
 from contextedge.models.base import Base, TenantScopedMixin
+from contextedge.models.case_bridge import (
+    CaseIdentifier,
+    EvidenceCaseMembership,
+    PendingIdentifierMention,
+)
 from contextedge.models.case_outcome import (
     CASE_STATUSES,
     OUTCOME_STATUSES,
@@ -78,6 +83,7 @@ __all__ = [
     "RawEvidenceObject", "EvidenceItem", "Thread", "AttachmentArtifact",
     "CanonicalIdentity", "IdentityAlias", "EvidenceIdentityLink", "CorrelationEdge",
     "Episode", "EpisodeStep",
+    "CaseIdentifier", "EvidenceCaseMembership", "PendingIdentifierMention",
     "Pattern", "PatternEvidenceLink", "NegativeKnowledgeItem", "Contradiction", "GraphEdge",
     "Playbook", "PlaybookVersion", "PlaybookEvidenceLink", "PlaybookApproval",
     "ResolutionSession", "DecisionTraceEvent", "CaseLink",

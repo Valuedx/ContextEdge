@@ -382,6 +382,44 @@ async def correlate_evidence_item(
                 error=str(exc),
             )
 
+    # Ticket-number bridging (P1): ticket sources register their number
+    # as an authoritative identifier + primary membership (reconciling
+    # pending mentions); conversational sources resolve quoted numbers
+    # into memberships. Same SAVEPOINT containment as the branches below.
+    ticket_bridge: dict | None = None
+    try:
+        from contextedge.services.ticket_bridge_service import (
+            CONVERSATIONAL_SOURCE_TYPES,
+            TICKET_SOURCE_TYPES,
+            bridge_conversational_mentions,
+            register_ticket_identifier,
+        )
+
+        bridge_source = source.source_type or ""
+        if bridge_source in TICKET_SOURCE_TYPES:
+            async with db.begin_nested():
+                ticket_bridge = await register_ticket_identifier(
+                    db,
+                    tenant_id,
+                    evidence=evidence,
+                    source_type=bridge_source,
+                    payload=raw_payload if isinstance(raw_payload, dict) else None,
+                    canonical_case_id=canonical_case_id,
+                )
+        elif bridge_source in CONVERSATIONAL_SOURCE_TYPES:
+            async with db.begin_nested():
+                ticket_bridge = await bridge_conversational_mentions(
+                    db, tenant_id, evidence
+                )
+    except Exception as exc:
+        logger.warning(
+            "ticket_bridge.failed",
+            tenant_id=str(tenant_id),
+            evidence_id=str(evidence.id),
+            error_type=type(exc).__name__,
+            error=str(exc),
+        )
+
     # SapphireIMS reference enrichment — same SAVEPOINT containment and
     # fail-soft contract as the branches above.
     sapphire_references: dict | None = None
@@ -461,4 +499,5 @@ async def correlate_evidence_item(
         "servicenow_references": snow_references,
         "jira_references": jira_references,
         "sapphireims_references": sapphire_references,
+        "ticket_bridge": ticket_bridge,
     }
