@@ -787,12 +787,18 @@ class TestCorrelationEpisodeTrigger:
                 "contextedge.workers.extraction_tasks.reconstruct_episode_task",
             ) as mock_reconstruct,
         ):
-            mock_reconstruct.delay = Mock()
+            mock_reconstruct.apply_async = Mock()
             correlate_evidence(evidence_id, tenant_id)
-            # delay() now always receives domain_id kwarg (None when evidence
-            # has no domain set on the row).
-            mock_reconstruct.delay.assert_called_once_with(
-                evidence_id, tenant_id, domain_id=None,
+            # Dispatch is DEBOUNCED now: apply_async with a countdown so
+            # only the last task of a quiet period spends the LLM call.
+            from contextedge.workers.extraction_tasks import (
+                RECONSTRUCT_DEBOUNCE_SECONDS,
+            )
+
+            mock_reconstruct.apply_async.assert_called_once_with(
+                args=[evidence_id, tenant_id],
+                kwargs={"domain_id": None},
+                countdown=RECONSTRUCT_DEBOUNCE_SECONDS,
             )
 
     def test_correlation_without_new_edges_skips_episode_task(self):

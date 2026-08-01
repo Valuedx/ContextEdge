@@ -214,7 +214,10 @@ async def trigger_manual_reconstruction(
         domain_id = res.scalar_one_or_none()
 
     task = reconstruct_episode_task.delay(
-        cluster_id, str(user.tenant_id), domain_id=str(domain_id) if domain_id else None
+        cluster_id,
+        str(user.tenant_id),
+        domain_id=str(domain_id) if domain_id else None,
+        settle=False,  # explicit reviewer request bypasses the debounce
     )
 
     return TaskDispatchResponse(

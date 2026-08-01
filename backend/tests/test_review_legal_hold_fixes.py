@@ -64,6 +64,13 @@ async def test_episode_reconstruct_skips_legal_hold_evidence():
     async def execute(stmt):
         text = str(stmt)
         result = Mock()
+        if "min(evidence_items.ingested_at)" in text:
+            # Settlement bounds: long-settled cluster → synthesis proceeds.
+            from datetime import UTC, datetime, timedelta
+
+            settled = datetime.now(UTC) - timedelta(hours=2)
+            result.first.return_value = (settled, settled)
+            return result
         if "coalesce(evidence_items.created_at_source" in text:
             # The cluster resolver's visibility query: the SQL itself
             # excludes legal_hold; the fake returns only the visible row.

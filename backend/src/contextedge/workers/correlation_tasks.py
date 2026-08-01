@@ -37,10 +37,18 @@ def correlate_evidence(self, evidence_id: str, tenant_id: str):
     try:
         result, domain_id = run_async(work)
         if result and result.get("status") == "ok" and result.get("correlations_created", 0) > 0:
-            from contextedge.workers.extraction_tasks import reconstruct_episode_task
+            from contextedge.workers.extraction_tasks import (
+                RECONSTRUCT_DEBOUNCE_SECONDS,
+                reconstruct_episode_task,
+            )
 
-            reconstruct_episode_task.delay(
-                evidence_id, tenant_id, domain_id=str(domain_id) if domain_id else None
+            # Debounced: fires after the window; _reconstruct re-checks
+            # settlement so only the last task of a quiet period spends
+            # the LLM call.
+            reconstruct_episode_task.apply_async(
+                args=[evidence_id, tenant_id],
+                kwargs={"domain_id": str(domain_id) if domain_id else None},
+                countdown=RECONSTRUCT_DEBOUNCE_SECONDS,
             )
             logger.info(
                 "correlation.episode_reconstruction_enqueued",
