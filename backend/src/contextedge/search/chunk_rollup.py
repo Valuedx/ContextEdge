@@ -57,18 +57,23 @@ class ChunkCandidate:
 
 
 def _normalized_matrix(candidates: list[ChunkCandidate]) -> np.ndarray | None:
-    """Row-normalized embedding matrix, or None when any candidate lacks
-    an embedding (MMR then degrades to pure relevance ordering rather
-    than treating missing vectors as orthogonal-to-everything)."""
-    vectors = []
-    for candidate in candidates:
-        if candidate.embedding is None:
-            return None
-        vectors.append(np.asarray(candidate.embedding, dtype=np.float32))
-    matrix = np.stack(vectors)
-    norms = np.linalg.norm(matrix, axis=1, keepdims=True)
-    norms[norms == 0.0] = 1.0
-    return matrix / norms
+    """Row-normalized embedding matrix, or None when it cannot be built —
+    a missing embedding, a dimension mismatch (bad backfill, model
+    migration remnant), or any other malformed vector. MMR then degrades
+    to pure relevance ordering; a corrupt chunk must never turn into a
+    failed search request."""
+    try:
+        vectors = []
+        for candidate in candidates:
+            if candidate.embedding is None:
+                return None
+            vectors.append(np.asarray(candidate.embedding, dtype=np.float32))
+        matrix = np.stack(vectors)
+        norms = np.linalg.norm(matrix, axis=1, keepdims=True)
+        norms[norms == 0.0] = 1.0
+        return matrix / norms
+    except (ValueError, TypeError):
+        return None
 
 
 def mmr_order(

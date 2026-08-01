@@ -29,11 +29,18 @@ from contextedge.search.chunk_rollup import (
 )
 from contextedge.search.vector_ops import halfvec_cosine_distance, tune_ann_recall
 
-# Oversample factor for the chunk pass: the ANN returns this many chunks,
+# Oversample bounds for the chunk pass: the ANN returns this many chunks,
 # MMR + rollup compress them down to `limit` parents. §6 recommends
-# 50–100; 80 keeps the MMR similarity matrix trivially cheap.
-CHUNK_OVERSAMPLE = 80
+# 50–100 for typical limits; the floor keeps small-limit searches diverse,
+# the ceiling keeps the MMR similarity matrix and the embedding transfer
+# (oversample × 3072 floats) bounded for large-limit callers.
+CHUNK_OVERSAMPLE_MIN = 80
+CHUNK_OVERSAMPLE_MAX = 240
 SNIPPET_CHARS = 240
+
+
+def _oversample_for(limit: int) -> int:
+    return min(max(CHUNK_OVERSAMPLE_MIN, limit * 3), CHUNK_OVERSAMPLE_MAX)
 
 
 def _visibility_predicates(exclude_policy_ids: list[uuid.UUID] | None) -> list:
@@ -66,6 +73,7 @@ async def _chunk_candidates(
     emb: list[float],
     *,
     exclude_policy_ids: list[uuid.UUID] | None,
+    limit: int,
     playbook_id: uuid.UUID | None = None,
     playbook_version_id: uuid.UUID | None = None,
 ) -> list[ChunkCandidate]:
@@ -88,7 +96,7 @@ async def _chunk_candidates(
             *_visibility_predicates(exclude_policy_ids),
         )
         .order_by(distance)
-        .limit(CHUNK_OVERSAMPLE)
+        .limit(_oversample_for(limit))
     )
     if playbook_id is not None:
         stmt = stmt.join(
@@ -180,8 +188,11 @@ async def search_evidence_semantic(
 
     await tune_ann_recall(db)
     candidates = await _chunk_candidates(
-        db, tenant_id, emb, exclude_policy_ids=exclude_policy_ids
+        db, tenant_id, emb, exclude_policy_ids=exclude_policy_ids, limit=limit
     )
+    # MMR decides WHICH candidates survive (set selection); the rollup's
+    # re-sort by distance decides their final rank. Diversity shapes the
+    # set, relevance orders it — deliberate, not a lost ordering.
     diversified = mmr_order(candidates, select_n=max(limit * 4, limit))
     rolled = rollup_best_chunk_per_evidence(diversified)[:limit]
 
@@ -223,6 +234,7 @@ async def search_evidence_semantic_for_playbook(
         tenant_id,
         emb,
         exclude_policy_ids=exclude_policy_ids,
+        limit=limit,
         playbook_id=playbook_id,
         playbook_version_id=playbook_version_id,
     )
