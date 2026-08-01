@@ -250,3 +250,52 @@ def test_sensitive_nodes_fail_closed_and_user_projection_omits_email():
 def test_agent_request_rejects_naive_as_of():
     with pytest.raises(ValueError, match="timezone"):
         AgentGraphRequest(as_of=datetime.now())
+
+
+def test_episode_facts_render_bounded_contradictions():
+    """C6: an agent consuming an episode sees that its sources
+    disagreed — bounded to 3 entries with truncated claims."""
+    from types import SimpleNamespace as NS
+
+    episode = NS(
+        id=uuid4(),
+        title="VPN outage",
+        root_cause_summary="Expired certificate",
+        final_outcome="Renewed",
+        status="approved",
+        reviewer_state="approved",
+        extraction_confidence=0.9,
+        contradictions=[
+            {
+                "topic": "what fixed it",
+                "accounts": [
+                    {"evidence_id": "a", "claim": "close notes: cert renewed"},
+                    {"evidence_id": "b", "claim": "teams: auth service rolled back"},
+                ],
+            },
+            "garbage",
+        ]
+        + [{"topic": f"noise {i}", "accounts": [{"claim": "x"}]} for i in range(5)],
+    )
+    projected = hydrate_node("episode", episode)
+    rendered = projected.facts["contradictions"]
+    assert len(rendered) <= 3
+    assert rendered[0]["topic"] == "what fixed it"
+    assert "cert renewed" in rendered[0]["accounts"][0]
+
+
+def test_episode_without_contradictions_has_no_block():
+    from types import SimpleNamespace as NS
+
+    episode = NS(
+        id=uuid4(),
+        title="VPN outage",
+        root_cause_summary="Expired certificate",
+        final_outcome=None,
+        status="approved",
+        reviewer_state="approved",
+        extraction_confidence=0.9,
+        contradictions=None,
+    )
+    projected = hydrate_node("episode", episode)
+    assert "contradictions" not in projected.facts

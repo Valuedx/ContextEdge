@@ -311,6 +311,28 @@ def hydrate_node(node_type: str, obj: Any) -> HydratedGraphNode:
         label = obj.title
         summary = _text(obj.root_cause_summary or obj.final_outcome)
         facts = _facts(obj, "status", "reviewer_state", "final_outcome")
+        # C6: an agent consuming an episode must see that its sources
+        # DISAGREED (P4 preserved the accounts; the projection was
+        # silently dropping them). Bounded: 3 contradictions, topic +
+        # truncated claims only — the review surface has the full record.
+        contradictions = getattr(obj, "contradictions", None)
+        if contradictions:
+            rendered = []
+            for entry in contradictions[:3]:
+                if not isinstance(entry, dict):
+                    continue
+                rendered.append(
+                    {
+                        "topic": _text(entry.get("topic"), limit=120),
+                        "accounts": [
+                            _text(a.get("claim"), limit=160)
+                            for a in (entry.get("accounts") or [])[:3]
+                            if isinstance(a, dict)
+                        ],
+                    }
+                )
+            if rendered:
+                facts["contradictions"] = rendered
         confidence = _float(obj.extraction_confidence)
     elif node_type == "evidence":
         label = obj.title or f"Evidence {str(obj.id)[:8]}"
