@@ -37,6 +37,7 @@ disposes; the mass-merge guard applies to every new linking signal.
 | Entity rarity | Degree-weighted identity tier; hub dampening (≥200 links = no signal) | #31 |
 | Semantic suggestions | Chunk-ANN + similarity floor 0.7 + non-semantic corroborator → reviewer queue; reject permanent (migration 0039) | #32 |
 | Field authority | Episode prompt v3 (authority by fact type), contradictions preserved (migration 0040), strict draft schema, per-source `synthesis_role`, quality metric | #34 |
+| M1 conversational precision | A1 message-function classifier (0041, prompt family `message_function`, veto upgrade) · A2 correction supersession (`status='corrected'`, propagation, audit event) · A7 negative evidence (`status='negative'`, thread blocking, resolver fence, reviewer-removal negation) · A10 reply reconciliation in debounced reconstruction | #36–#39 |
 
 ---
 
@@ -46,7 +47,7 @@ The deterministic tiers (ticket tokens, reply structure) are live. What remains 
 *interpretive* layer: understanding what a message is doing, what it refers to, and
 when it changes its mind. Ordered by the design's own priority: precision first.
 
-### A1 · Message-function classifier — S/M
+### A1 · Message-function classifier — S/M — **SHIPPED 2026-08-02**
 **What.** A small LLM classification per conversational evidence item: is this message
 a status update, a question, a correction, an explicit dissociation, a resolution
 confirmation, or noise? Persist the label on the evidence (JSONB or column).
@@ -63,7 +64,7 @@ keeping the phrase list as a fallback when the LLM is unavailable.
 the classifier; a paraphrase ("this isn't about the VPN thing") also vetoes; phrase
 list still vetoes when LLM budget is exhausted.
 
-### A2 · Corrections supersede earlier links — M
+### A2 · Corrections supersede earlier links — M — **SHIPPED 2026-08-02**
 **What.** When a later message corrects an earlier one ("Correction — it's Mary's
 ticket, not John's"), the earlier message's derived memberships/links must be
 superseded, not accumulated alongside.
@@ -142,7 +143,7 @@ confidence — it IS the ticket system speaking); generic bot text excluded from
 INC0010427 creates the membership without an LLM call; a random webhook bot's message
 never anchors a thread topic by itself.
 
-### A7 · Negative evidence store — S/M
+### A7 · Negative evidence store — S/M — **SHIPPED 2026-08-02**
 **What.** Explicit dissociations ("this is NOT related to INC0010427") persist as
 negative links that veto future automatic linking of that (evidence/thread, case) pair.
 **Why.** Doc-2: today a veto only blocks one inheritance decision at one moment; the
@@ -181,7 +182,7 @@ memberships `extraction_location='transcript_normalized'` at reduced confidence.
 **Dependencies.** None. **Acceptance.** "we're tracking this under I N C zero zero one
 zero four two seven" resolves to INC0010427 as a pending mention/membership.
 
-### A10 · Reply-inheritance ordering reconciliation — S [Gap]
+### A10 · Reply-inheritance ordering reconciliation — S [Gap] — **SHIPPED 2026-08-02**
 **What.** A reply that correlated before its parent gained membership never retries.
 Re-run `inherit_reply_membership` for un-anchored replies when their parent's
 membership lands (mirror of pending-mention reconciliation) or during debounced
