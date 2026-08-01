@@ -351,3 +351,109 @@ async def test_ambiguous_identifier_abstains():
     assert counts.get("ambiguous") == 1
     assert counts["pending"] == 0  # ambiguous is not unknown
     assert state["added"] == []
+
+
+# --- reply inheritance ------------------------------------------------------
+
+
+def _reply_db(parent_evidence_id, parent_cases, added):
+    async def execute(stmt):
+        text = str(stmt)
+        result = Mock()
+        if "sources" in text and "raw_evidence_objects" in text:
+            result.scalar_one_or_none.return_value = parent_evidence_id
+            return result
+        if text.startswith("SELECT evidence_case_memberships.canonical_case_id"):
+            result.scalars.return_value.all.return_value = parent_cases
+            return result
+        result.scalar_one_or_none.return_value = None
+        return result
+
+    return SimpleNamespace(
+        execute=execute,
+        add=added.append,
+        flush=AsyncMock(),
+        begin_nested=Mock(return_value=_NestedTx()),
+    )
+
+
+@pytest.mark.asyncio
+async def test_reply_inherits_single_case_parent():
+    from contextedge.services.ticket_bridge_service import inherit_reply_membership
+
+    tenant_id = uuid4()
+    case_id = uuid4()
+    added = []
+    reply = SimpleNamespace(id=uuid4(), title=None, body_text="Has it recovered now?")
+    db = _reply_db(uuid4(), [case_id], added)
+
+    counts = await inherit_reply_membership(
+        db, tenant_id, reply, {"reply_to_id": "root-msg-1"}
+    )
+
+    assert counts["inherited"] == 1
+    from contextedge.models.case_bridge import EvidenceCaseMembership
+
+    (membership,) = [a for a in added if isinstance(a, EvidenceCaseMembership)]
+    assert membership.canonical_case_id == case_id
+    assert membership.relationship_type == "reply_inheritance"
+    assert membership.extraction_location == "reply_structure"
+
+
+@pytest.mark.asyncio
+async def test_dissociation_language_vetoes_inheritance():
+    from contextedge.services.ticket_bridge_service import inherit_reply_membership
+
+    tenant_id = uuid4()
+    added = []
+    reply = SimpleNamespace(
+        id=uuid4(),
+        title=None,
+        body_text="Different issue, but is the ordering database also down?",
+    )
+    db = _reply_db(uuid4(), [uuid4()], added)
+
+    counts = await inherit_reply_membership(
+        db, tenant_id, reply, {"reply_to_id": "root-msg-1"}
+    )
+
+    assert counts["vetoed"] is True
+    assert counts["inherited"] == 0
+    assert added == []
+
+
+@pytest.mark.asyncio
+async def test_multi_case_parent_abstains():
+    from contextedge.services.ticket_bridge_service import inherit_reply_membership
+
+    tenant_id = uuid4()
+    added = []
+    reply = SimpleNamespace(id=uuid4(), title=None, body_text="Any update?")
+    db = _reply_db(uuid4(), [uuid4(), uuid4()], added)
+
+    counts = await inherit_reply_membership(
+        db, tenant_id, reply, {"reply_to_id": "root-msg-1"}
+    )
+
+    assert counts["abstained"] is True
+    assert counts["inherited"] == 0
+
+
+@pytest.mark.asyncio
+async def test_no_reply_target_or_unknown_parent_is_noop():
+    from contextedge.services.ticket_bridge_service import inherit_reply_membership
+
+    tenant_id = uuid4()
+    reply = SimpleNamespace(id=uuid4(), title=None, body_text="hello")
+    no_target = await inherit_reply_membership(
+        SimpleNamespace(), tenant_id, reply, {}
+    )
+    assert no_target == {"inherited": 0, "vetoed": False, "abstained": False}
+
+    added = []
+    db = _reply_db(None, [], added)  # parent message never ingested
+    unknown = await inherit_reply_membership(
+        db, tenant_id, reply, {"reply_to_id": "gone"}
+    )
+    assert unknown["inherited"] == 0
+    assert added == []
