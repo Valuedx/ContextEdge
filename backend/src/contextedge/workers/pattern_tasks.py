@@ -66,23 +66,21 @@ async def _linked_episode_ids(db, tenant_id: uuid.UUID) -> set[uuid.UUID]:
     return {row[0] for row in r.all() if row[0]}
 
 
-@celery_app.task(
-    bind=True,
-    max_retries=2,
-    default_retry_delay=120,
-    name="pattern.cluster_episodes",
-)
-def cluster_episodes(self, domain_id: str, tenant_id: str):
-    """Group approved episodes in a domain into semantic patterns using vector similarity."""
+def _domain_predicate(did: uuid.UUID | None):
+    """Strict per-domain mining scope. A domain pass sees ONLY that
+    domain's episodes; the global pass (did=None) sees ONLY tenant-global
+    (NULL-domain) episodes. NULL episodes are deliberately NOT folded
+    into domain passes: whichever domain's pass ran first would capture
+    them into its pattern (episodes link once), making the tagging
+    arbitrary — the exact bug this replaces."""
+    return Episode.domain_id == did if did is not None else Episode.domain_id.is_(None)
 
-    async def work(db):
-        tid = uuid.UUID(tenant_id)
-        did = uuid.UUID(domain_id)
 
+async def _cluster(db, tid: uuid.UUID, did: uuid.UUID | None) -> dict:
         logger.info(
             "cluster_episodes_started",
             tenant_id=str(tid),
-            domain_id=str(did),
+            domain_id=str(did) if did else "global",
         )
 
         # 0. Repair: backfill embeddings for ALL approved episodes in the tenant
@@ -122,13 +120,18 @@ def cluster_episodes(self, domain_id: str, tenant_id: str):
         linked = await _linked_episode_ids(db, tid)
         logger.info("cluster_episodes_linked", linked_count=len(linked))
 
-        # 2. Fetch ALL unlinked approved episodes with embeddings across the tenant.
-        # Domain filter is intentionally removed here — we cluster at tenant level
-        # and tag the resulting pattern with the requested domain_id.
+        # 2. Fetch unlinked approved episodes with embeddings IN THIS
+        # DOMAIN SCOPE only. Mining used to run tenant-wide and stamp the
+        # result with the requested domain — which surfaced domain B's
+        # episode content in a domain-A pattern through the projection's
+        # domain predicate. Patterns are synthesized CONTENT, so the
+        # cluster must be domain-homogeneous (create_pattern_from_episodes
+        # enforces the same rule as a second layer).
         r = await db.execute(
             select(Episode)
             .where(
                 Episode.tenant_id == tid,
+                _domain_predicate(did),
                 Episode.reviewer_state == "approved",
                 Episode.embedding.is_not(None),
                 Episode.id.not_in(tuple(linked)) if linked else True,
@@ -148,10 +151,13 @@ def cluster_episodes(self, domain_id: str, tenant_id: str):
                 continue
             
             # Find similar episodes using vector distance (threshold 0.20)
+            # — same domain scope as the candidates: similarity must never
+            # pull another domain's episode into this cluster.
             similar_r = await db.execute(
                 select(Episode)
                 .where(
                     Episode.tenant_id == tid,
+                    _domain_predicate(did),
                     Episode.reviewer_state == "approved",
                     Episode.embedding.is_not(None),
                     Episode.id.not_in(tuple(linked)) if linked else True,
@@ -222,10 +228,28 @@ def cluster_episodes(self, domain_id: str, tenant_id: str):
             
         return {"patterns_created": created, "episodes_considered": total_considered, "embeddings_repaired": repaired}
 
+
+@celery_app.task(
+    bind=True,
+    max_retries=2,
+    default_retry_delay=120,
+    name="pattern.cluster_episodes",
+)
+def cluster_episodes(self, domain_id: str | None, tenant_id: str):
+    """Group approved episodes into semantic patterns, strictly within one
+    domain scope. ``domain_id=None`` runs the global pass over
+    tenant-global (NULL-domain) episodes and produces NULL-domain
+    patterns."""
+    tid = uuid.UUID(tenant_id)
+    did = uuid.UUID(domain_id) if domain_id else None
     try:
-        return run_async(work)
+        return run_async(lambda db: _cluster(db, tid, did))
     except Exception as exc:
-        logger.exception("pattern.cluster_failed", domain_id=domain_id, error=str(exc))
+        logger.exception(
+            "pattern.cluster_failed",
+            domain_id=domain_id or "global",
+            error=str(exc),
+        )
         raise self.retry(exc=exc) from exc
 
 
