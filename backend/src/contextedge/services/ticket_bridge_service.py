@@ -41,7 +41,8 @@ from contextedge.models.case_bridge import (
     EvidenceCaseMembership,
     PendingIdentifierMention,
 )
-from contextedge.models.evidence import EvidenceItem
+from contextedge.models.evidence import EvidenceItem, RawEvidenceObject
+from contextedge.models.source import Source
 
 logger = structlog.get_logger()
 
@@ -311,4 +312,116 @@ async def bridge_conversational_mentions(
             counts["pending"] += 1
         except IntegrityError:
             continue
+    return counts
+
+
+# --- Reply inheritance (conversational tier 1) ------------------------------
+
+# Explicit dissociation language vetoes inheritance: reply structure says
+# "same topic", but "different issue, is the ordering DB also down?"
+# says otherwise — and language wins. A conservative phrase list is the
+# deterministic v1; the future home is the message-function classifier
+# (an "explicit_dissociation" function), which will replace this.
+DISSOCIATION_PHRASES = (
+    "different issue",
+    "different problem",
+    "unrelated",
+    "not related",
+    "not this ticket",
+    "separate problem",
+    "separate issue",
+    "wrong incident",
+    "wrong ticket",
+)
+
+REPLY_INHERITANCE_CONFIDENCE = 0.85
+
+
+def has_dissociation_language(text: str | None) -> bool:
+    lowered = (text or "").lower()
+    return any(phrase in lowered for phrase in DISSOCIATION_PHRASES)
+
+
+async def inherit_reply_membership(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    evidence: EvidenceItem,
+    payload: dict | None,
+) -> dict:
+    """Deterministic conversational tier 1: a reply to a case-linked
+    message inherits that message's case membership.
+
+    Rules (from the review's safe-decision policy):
+    - Inherit only when the parent has EXACTLY ONE active,
+      non-mentioned-only membership — a reply to a multi-case digest or
+      an ambiguous parent abstains.
+    - Explicit dissociation language in the reply vetoes inheritance.
+    - Chains work naturally: an inherited membership is itself
+      inheritable, so the third reply in a thread anchors through the
+      second.
+    """
+    counts = {"inherited": 0, "vetoed": False, "abstained": False}
+    p = payload or {}
+    reply_to = p.get("reply_to_id")
+    if not reply_to:
+        return counts
+
+    if has_dissociation_language(evidence.body_text) or has_dissociation_language(
+        evidence.title
+    ):
+        counts["vetoed"] = True
+        logger.info(
+            "reply_inheritance.vetoed_by_dissociation",
+            tenant_id=str(tenant_id),
+            evidence_id=str(evidence.id),
+        )
+        return counts
+
+    # Parent message → parent evidence, scoped to teams sources (message
+    # ids are the teams external_id namespace).
+    parent_evidence_id = (
+        await db.execute(
+            select(EvidenceItem.id)
+            .join(RawEvidenceObject, EvidenceItem.raw_object_ref == RawEvidenceObject.id)
+            .join(Source, RawEvidenceObject.source_id == Source.id)
+            .where(
+                EvidenceItem.tenant_id == tenant_id,
+                RawEvidenceObject.tenant_id == tenant_id,
+                RawEvidenceObject.external_id == str(reply_to),
+                Source.source_type == "teams",
+            )
+            .order_by(EvidenceItem.created_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if parent_evidence_id is None:
+        return counts
+
+    parent_memberships = (
+        await db.execute(
+            select(EvidenceCaseMembership.canonical_case_id).where(
+                EvidenceCaseMembership.tenant_id == tenant_id,
+                EvidenceCaseMembership.evidence_id == parent_evidence_id,
+                EvidenceCaseMembership.status == "active",
+                EvidenceCaseMembership.relationship_type != "mentioned_only",
+            ).limit(3)
+        )
+    ).scalars().all()
+    distinct_cases = set(parent_memberships)
+    if len(distinct_cases) != 1:
+        # No anchor, or a multi-case parent — the single-case-topic rule
+        # abstains rather than guessing which case the reply continues.
+        counts["abstained"] = len(distinct_cases) > 1
+        return counts
+
+    if await _add_membership(
+        db,
+        tenant_id,
+        evidence.id,
+        next(iter(distinct_cases)),
+        "reply_inheritance",
+        REPLY_INHERITANCE_CONFIDENCE,
+        "reply_structure",
+    ):
+        counts["inherited"] = 1
     return counts

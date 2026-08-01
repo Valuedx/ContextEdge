@@ -411,6 +411,17 @@ async def correlate_evidence_item(
                 ticket_bridge = await bridge_conversational_mentions(
                     db, tenant_id, evidence
                 )
+            if bridge_source == "teams" and isinstance(raw_payload, dict):
+                from contextedge.services.ticket_bridge_service import (
+                    inherit_reply_membership,
+                )
+
+                async with db.begin_nested():
+                    reply_result = await inherit_reply_membership(
+                        db, tenant_id, evidence, raw_payload
+                    )
+                if ticket_bridge is not None:
+                    ticket_bridge["reply_inheritance"] = reply_result
     except Exception as exc:
         logger.warning(
             "ticket_bridge.failed",
