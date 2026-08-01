@@ -391,7 +391,7 @@ responded, so operators verify mapping without reading logs.
 | E4 | Sync single-flight | M | advisory lock per source object; overlapping backfills currently race (dedup is DB-safe since 0026) |
 | E5 | Reviewer/admin consoles | L | identity `needs_review` queue, suggestion queue (C4), episode membership editing — all API-led today |
 | E6 | Execution engine depth | L | Release 2: tool registry, rollback execution, timeouts, resume; verification shipped (0036) |
-| E7 | Prompt-family doubled-brace fixes | S | `decision`/`pattern`/`playbook` v1 system prompts still carry literal `{{ }}`; ship v2s (episode + identity already fixed) |
+| E7 | Prompt-family doubled-brace fixes — **SHIPPED 2026-08-03** | S | `decision`/`pattern`/`playbook` v1 system prompts still carry literal `{{ }}`; ship v2s (episode + identity already fixed) |
 
 ---
 
