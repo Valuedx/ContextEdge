@@ -45,8 +45,9 @@ async def test_reconstruct_dispatches_celery():
     db.commit.assert_awaited_once()
     # delay now receives cluster_id (comma-joined ids) instead of the raw id,
     # plus the tenant and domain_id kwarg.
+    # Manual reviewer triggers bypass the reconstruction debounce.
     delay_mock.assert_called_once_with(
-        str(evidence_id), str(user.tenant_id), domain_id=None,
+        str(evidence_id), str(user.tenant_id), domain_id=None, settle=False,
     )
 
 

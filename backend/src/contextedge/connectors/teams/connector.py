@@ -21,6 +21,61 @@ from contextedge.connectors.base import (
 GRAPH_BASE = "https://graph.microsoft.com/v1.0"
 
 
+def _message_content(msg: dict) -> dict:
+    """Conversational metadata the resolver layers depend on — captured
+    at ingest because the Graph API already returns it and discarding it
+    forecloses reply inheritance, bot/human authority, correction
+    handling, and edit auditing downstream.
+
+    - ``reply_to_id``: the deterministic thread-inheritance anchor.
+    - ``is_bot`` / ``from_application``: bot cards (ServiceNow /
+      monitoring / automation notifications) are structured payloads,
+      not human assertions — downstream must tell them apart.
+    - ``last_edited_at`` / ``is_deleted``: edits can invert meaning
+      ("prod" → "UAT"); deletions must mark evidence withdrawn, not
+      vanish silently.
+    - ``attachments`` / ``mentions``: slimmed; screenshots and pasted
+      files are frequent carriers of the only useful identifiers.
+    """
+    from_block = msg.get("from") or {}
+    application = from_block.get("application") or {}
+    user = from_block.get("user") or {}
+    content = {
+        "message_id": msg.get("id"),
+        "reply_to_id": msg.get("replyToId"),
+        "message_type": msg.get("messageType"),
+        "body": (msg.get("body") or {}).get("content", ""),
+        "content_type": (msg.get("body") or {}).get("contentType", "text"),
+        "subject": msg.get("subject"),
+        "from": user.get("displayName"),
+        "from_email": user.get("email"),
+        "is_bot": bool(application),
+        "importance": msg.get("importance"),
+        "last_edited_at": msg.get("lastEditedDateTime"),
+        "is_deleted": bool(msg.get("deletedDateTime")),
+    }
+    if application:
+        content["from_application"] = application.get("displayName")
+    if msg.get("deletedDateTime"):
+        content["deleted_at"] = msg.get("deletedDateTime")
+    attachments = [
+        {"name": a.get("name"), "content_type": a.get("contentType")}
+        for a in (msg.get("attachments") or [])[:10]
+        if isinstance(a, dict)
+    ]
+    if attachments:
+        content["attachments"] = attachments
+    mentions = [
+        (m.get("mentioned") or {}).get("user", {}).get("displayName")
+        for m in (msg.get("mentions") or [])[:10]
+        if isinstance(m, dict)
+    ]
+    mentions = [m for m in mentions if m]
+    if mentions:
+        content["mentions"] = mentions
+    return content
+
+
 class TeamsConnector(BaseConnector):
     """Connector for Microsoft Teams via Graph API.
 
@@ -131,14 +186,7 @@ class TeamsConnector(BaseConnector):
                     external_id=msg["id"],
                     source_type="teams",
                     object_type="channel_message",
-                    content={
-                        "body": msg.get("body", {}).get("content", ""),
-                        "content_type": msg.get("body", {}).get("contentType", "text"),
-                        "subject": msg.get("subject"),
-                        "from": msg.get("from", {}).get("user", {}).get("displayName"),
-                        "from_email": msg.get("from", {}).get("user", {}).get("email"),
-                        "importance": msg.get("importance"),
-                    },
+                    content=_message_content(msg),
                     thread_id=f"{team_id}:{channel_id}:{msg['id']}",
                     timestamp=datetime.fromisoformat(msg["createdDateTime"].replace("Z", "+00:00")),
                     metadata={"team_id": team_id, "channel_id": channel_id},
@@ -203,12 +251,7 @@ class TeamsConnector(BaseConnector):
                     external_id=msg["id"],
                     source_type="teams",
                     object_type="channel_message",
-                    content={
-                        "body": msg.get("body", {}).get("content", ""),
-                        "content_type": msg.get("body", {}).get("contentType", "text"),
-                        "subject": msg.get("subject"),
-                        "from": msg.get("from", {}).get("user", {}).get("displayName"),
-                    },
+                    content=_message_content(msg),
                     thread_id=f"{team_id}:{channel_id}:{msg['id']}",
                     timestamp=(
                         datetime.fromisoformat(
@@ -235,11 +278,14 @@ class TeamsConnector(BaseConnector):
         root = await self._graph_get(
             f"/teams/{team_id}/channels/{channel_id}/messages/{message_id}",
         )
+        root_content = _message_content(root)
         messages = [{
             "id": root["id"],
-            "body": root.get("body", {}).get("content", ""),
-            "subject": root.get("subject"),
-            "from": root.get("from", {}).get("user", {}).get("displayName"),
+            "body": root_content["body"],
+            "subject": root_content["subject"],
+            "from": root_content["from"],
+            "is_bot": root_content["is_bot"],
+            "reply_to_id": None,
             "timestamp": root.get("createdDateTime"),
         }]
 
@@ -247,10 +293,13 @@ class TeamsConnector(BaseConnector):
             f"/teams/{team_id}/channels/{channel_id}/messages/{message_id}/replies",
         )
         for reply in replies_data.get("value", []):
+            reply_content = _message_content(reply)
             messages.append({
                 "id": reply["id"],
-                "body": reply.get("body", {}).get("content", ""),
-                "from": reply.get("from", {}).get("user", {}).get("displayName"),
+                "body": reply_content["body"],
+                "from": reply_content["from"],
+                "is_bot": reply_content["is_bot"],
+                "reply_to_id": reply_content["reply_to_id"] or root["id"],
                 "timestamp": reply.get("createdDateTime"),
             })
 

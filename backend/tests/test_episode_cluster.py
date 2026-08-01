@@ -316,7 +316,8 @@ async def test_reconstruct_is_idempotent_per_cluster():
         "contextedge.services.episode_cluster_service.resolve_episode_cluster",
         AsyncMock(return_value=cluster),
     ):
-        result = await _reconstruct(db, str(seed), tenant_id)
+        # settle=False isolates the idempotency behavior under test.
+        result = await _reconstruct(db, str(seed), tenant_id, settle=False)
 
     assert result["status"] == "duplicate_cluster"
     assert result["episode_ids"] == [str(existing_draft_id)]
@@ -338,6 +339,7 @@ async def test_reconstruct_passes_real_source_types_and_supersedes_subset_drafts
         sensitivity_label=None,
     )
     old_draft = SimpleNamespace(
+        id=uuid4(),
         evidence_ids=[str(ticket_ev.id)], reviewer_state="pending_review",
         cluster_fingerprint="fp-old",
     )
@@ -382,8 +384,17 @@ async def test_reconstruct_passes_real_source_types_and_supersedes_subset_drafts
             "contextedge.services.episode_service.create_episodes_from_evidence",
             side_effect=fake_create,
         ),
+        patch(
+            "contextedge.services.event_log_service.append_operational_event",
+            AsyncMock(),
+        ) as lineage_mock,
     ):
-        result = await _reconstruct(db, str(ticket_ev.id), tenant_id)
+        result = await _reconstruct(db, str(ticket_ev.id), tenant_id, settle=False)
+
+    # Draft lineage is auditable: the superseded draft's event names both
+    # fingerprints.
+    assert lineage_mock.await_args.kwargs["event_type"] == "episode.draft_superseded"
+    assert lineage_mock.await_args.kwargs["payload"]["new_cluster_fingerprint"] == "fp-new"
 
     items = captured_items["evidence_items"]
     assert [i["source_type"] for i in items] == ["servicenow", "teams"]

@@ -3,7 +3,7 @@ import uuid
 from datetime import datetime
 
 import structlog
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -442,6 +442,18 @@ async def _classify(db: AsyncSession, evidence_id: str, tenant_id: uuid.UUID) ->
     return {"evidence_id": evidence_id, "classification": ev.relevance_state}
 
 
+# Reconstruction debounce: in a busy incident channel every message
+# grows the cluster; synthesizing per message would burn one LLM call
+# each and churn drafts. Dispatch is delayed by this window, and the
+# task re-checks settlement at run time — only the task that fires
+# after the cluster has been QUIET for the window proceeds; earlier
+# ones no-op on SQL alone. The starvation guard bounds the wait: a
+# never-quiet channel still gets its first synthesis within
+# MAX_SYNTHESIS_DELAY of the cluster's oldest evidence — a long live
+# incident is exactly when episodes matter most.
+RECONSTRUCT_DEBOUNCE_SECONDS = 180
+MAX_SYNTHESIS_DELAY_SECONDS = 1_800
+
 # source_type → the role synthesis should treat it as. Field-specific
 # authority is P4; the ROLE label is the P0 piece the extractor renders.
 SOURCE_ROLE_MAP = {
@@ -455,7 +467,11 @@ SOURCE_ROLE_MAP = {
 
 
 async def _reconstruct(
-    db: AsyncSession, cluster_id: str, tenant_id: uuid.UUID, domain_id: uuid.UUID | None = None
+    db: AsyncSession,
+    cluster_id: str,
+    tenant_id: uuid.UUID,
+    domain_id: uuid.UUID | None = None,
+    settle: bool = True,
 ) -> dict:
     """``cluster_id`` carries seed evidence UUIDs (comma-separated for
     caller compatibility). The FULL connected cluster — case links +
@@ -470,6 +486,43 @@ async def _reconstruct(
     cluster = await resolve_episode_cluster(db, tenant_id, seed_ids)
     if not cluster.evidence_ids:
         return {"error": "no_evidence_found"}
+
+    if settle:
+        # Debounce settlement check: if anything in this cluster was
+        # ingested within the window, a later-scheduled task (from that
+        # newer evidence) will handle synthesis — this one steps aside
+        # without spending an LLM call. Manual reviewer triggers pass
+        # settle=False to bypass.
+        from datetime import UTC, datetime, timedelta
+
+        bounds = (
+            await db.execute(
+                select(
+                    func.min(EvidenceItem.ingested_at),
+                    func.max(EvidenceItem.ingested_at),
+                ).where(EvidenceItem.id.in_(tuple(cluster.evidence_ids)))
+            )
+        ).first()
+        oldest_ingested, newest_ingested = (bounds or (None, None))
+        if newest_ingested is not None:
+            now = datetime.now(UTC)
+            if newest_ingested.tzinfo is None:
+                newest_ingested = newest_ingested.replace(tzinfo=UTC)
+            if oldest_ingested is not None and oldest_ingested.tzinfo is None:
+                oldest_ingested = oldest_ingested.replace(tzinfo=UTC)
+            unsettled = now - newest_ingested < timedelta(
+                seconds=RECONSTRUCT_DEBOUNCE_SECONDS
+            )
+            overdue = oldest_ingested is not None and (
+                now - oldest_ingested
+                >= timedelta(seconds=MAX_SYNTHESIS_DELAY_SECONDS)
+            )
+            if unsettled and not overdue:
+                return {
+                    "status": "deferred_unsettled",
+                    "cluster_fingerprint": cluster.fingerprint,
+                    "cluster_size": len(cluster.evidence_ids),
+                }
 
     # Draft idempotency: the same cluster re-processed must not create a
     # duplicate draft. Reviewers see one evolving draft, not four
@@ -549,6 +602,24 @@ async def _reconstruct(
         if draft_ids and draft_ids < cluster_id_strings:
             draft.reviewer_state = "superseded"
             superseded += 1
+            # Draft lineage: reviewers and audits can follow one evolving
+            # draft chain instead of guessing why an episode vanished.
+            from contextedge.services.event_log_service import (
+                append_operational_event,
+            )
+
+            await append_operational_event(
+                db,
+                tenant_id=tenant_id,
+                entity_type="episode",
+                entity_id=draft.id,
+                event_type="episode.draft_superseded",
+                payload={
+                    "old_cluster_fingerprint": draft.cluster_fingerprint,
+                    "new_cluster_fingerprint": cluster.fingerprint,
+                    "new_cluster_size": len(cluster.evidence_ids),
+                },
+            )
 
     from contextedge.services.episode_service import create_episodes_from_evidence
 
@@ -643,13 +714,17 @@ def classify_relevance_task(self, evidence_id: str, tenant_id: str):
     name="extraction.reconstruct_episode",
 )
 def reconstruct_episode_task(
-    self, correlation_cluster_id: str, tenant_id: str, domain_id: str | None = None
+    self,
+    correlation_cluster_id: str,
+    tenant_id: str,
+    domain_id: str | None = None,
+    settle: bool = True,
 ):
     tid = uuid.UUID(tenant_id)
     did = uuid.UUID(domain_id) if domain_id else None
 
     async def work(db):
-        return await _reconstruct(db, correlation_cluster_id, tid, did)
+        return await _reconstruct(db, correlation_cluster_id, tid, did, settle=settle)
 
     try:
         return run_async(work)
