@@ -174,6 +174,8 @@ celery_app = Celery(
         "contextedge.workers.playbook_tasks",
         # Demand-driven CMDB topology cache warming.
         "contextedge.workers.cmdb_tasks",
+        # Post-action verification sweep (0036).
+        "contextedge.workers.verification_tasks",
     ],
 )
 
@@ -256,6 +258,15 @@ celery_app.conf.update(
         "retention-purge-weekly": {
             "task": "evaluation.purge_archived",
             "schedule": 604800.0,
+            "args": ("all",),
+        },
+        # Post-action verification: re-check completed executions against
+        # operational reality (new incidents / alert activity on the
+        # session's CIs). 15-minute cadence — verdicts persist, so each
+        # run is swept at most a handful of times before leaving the queue.
+        "verify-executions-every-15m": {
+            "task": "evaluation.verify_executions",
+            "schedule": 900.0,
             "args": ("all",),
         },
     },
