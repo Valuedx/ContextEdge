@@ -962,3 +962,163 @@ async def test_cluster_never_pulls_negated_evidence_back_in():
     )
     assert severed not in cluster.evidence_ids
     assert cluster.evidence_ids == [ticket]
+
+
+# --- quoted / forwarded content (A5) ----------------------------------------
+
+
+def test_quoted_ranges_detects_markers():
+    from contextedge.services.ticket_bridge_service import quoted_ranges
+
+    text = "fresh line\n> quoted INC0010427\nmore fresh"
+    ranges = quoted_ranges(text)
+    assert len(ranges) == 1
+    start, end = ranges[0]
+    assert "quoted INC0010427" in text[start:end]
+
+    fwd = "see below\n---------- Forwarded message ----------\nINC0010455 stuff"
+    ranges = quoted_ranges(fwd)
+    assert any("INC0010455" in fwd[s:e] for s, e in ranges)
+
+    outlook = "my reply\nFrom: Alice <a@x.com>\nSent: Monday\nOld body INC0010460"
+    ranges = quoted_ranges(outlook)
+    assert any("INC0010460" in outlook[s:e] for s, e in ranges)
+
+    assert quoted_ranges("no quotes here") == []
+    assert quoted_ranges(None) == []
+
+
+def test_token_appearing_fresh_and_quoted_counts_as_fresh():
+    from contextedge.services.ticket_bridge_service import (
+        extract_ticket_tokens_with_spans,
+    )
+
+    text = "about INC0010427\n> earlier: INC0010427 and INC0010455"
+    pairs = dict(extract_ticket_tokens_with_spans(text))
+    assert pairs["INC0010427"] is False  # fresh occurrence wins
+    assert pairs["INC0010455"] is True
+
+
+@pytest.mark.asyncio
+async def test_quoted_digest_stays_mentioned_only_fresh_keeps_full():
+    """Acceptance: a reply quoting last week's digest gets
+    mentioned_only-at-most from the quoted block while the author's own
+    sentence keeps full confidence."""
+    from contextedge.services.ticket_bridge_service import (
+        bridge_conversational_mentions,
+    )
+
+    tenant_id = uuid4()
+    fresh_case = uuid4()
+    quoted_cases = {uuid4(), uuid4(), uuid4()}
+    case_by_token = {
+        "INC0010001": fresh_case,
+        "INC0010427": list(quoted_cases)[0],
+        "INC0010455": list(quoted_cases)[1],
+        "INC0010460": list(quoted_cases)[2],
+    }
+    added = []
+    body = (
+        "please prioritize INC0010001\n"
+        "> Weekly review of INC0010427, INC0010455 and INC0010460"
+    )
+    ev = SimpleNamespace(
+        id=uuid4(), title=None, body_text=body, thread_id=None,
+        message_function=None, message_function_confidence=None,
+    )
+    # Bound parameters are invisible in str(stmt); route identifier
+    # lookups by call order (the bridge resolves in `located` order).
+    order = ["INC0010001", "INC0010427", "INC0010455", "INC0010460"]
+    calls = {"i": 0}
+
+    async def execute_ordered(stmt):
+        text = str(stmt)
+        result = Mock()
+        if text.startswith("SELECT case_identifiers.canonical_case_id"):
+            token = order[calls["i"]]
+            calls["i"] += 1
+            result.scalars.return_value.all.return_value = [case_by_token[token]]
+            return result
+        if "JOIN evidence_items" in text and "canonical_case_id" in text:
+            result.scalars.return_value.all.return_value = []
+            return result
+        result.scalar_one_or_none.return_value = None
+        result.scalars.return_value.all.return_value = []
+        return result
+
+    db = SimpleNamespace(
+        execute=execute_ordered,
+        add=added.append,
+        flush=AsyncMock(),
+        begin_nested=Mock(return_value=_NestedTx()),
+    )
+
+    counts = await bridge_conversational_mentions(db, tenant_id, ev)
+
+    from contextedge.models.case_bridge import EvidenceCaseMembership
+
+    rows = [a for a in added if isinstance(a, EvidenceCaseMembership)]
+    by_case = {r.canonical_case_id: r for r in rows}
+    # Fresh sentence: full-confidence explicit reference (weighted digest
+    # count = 1 + 0.5*3 = 2.5 < 3, so no downgrade).
+    assert by_case[fresh_case].relationship_type == "explicit_reference"
+    # Quoted block: mentioned_only at reduced confidence.
+    for qc in quoted_cases:
+        assert by_case[qc].relationship_type == "mentioned_only"
+        assert by_case[qc].extraction_location == "quoted_body"
+    # Quoted mentions never anchor the thread topic.
+    assert counts.get("anchor_case_id") == str(fresh_case)
+    assert counts["digest_downgraded"] is False
+
+
+@pytest.mark.asyncio
+async def test_quoted_pending_mention_reconciles_as_mentioned_only():
+    from contextedge.services.ticket_bridge_service import register_ticket_identifier
+
+    tenant_id = uuid4()
+    case_id = uuid4()
+    mention = SimpleNamespace(
+        evidence_id=uuid4(),
+        extraction_location="quoted_body",
+        status="pending",
+        resolved_case_id=None,
+    )
+    added = []
+
+    async def execute(stmt):
+        text = str(stmt)
+        result = Mock()
+        if text.startswith("SELECT case_identifiers.id,"):
+            result.scalar_one_or_none.return_value = None
+            return result
+        if text.startswith("SELECT pending_identifier_mentions.id,"):
+            result.scalars.return_value.all.return_value = [mention]
+            return result
+        result.scalar_one_or_none.return_value = None
+        result.scalars.return_value.all.return_value = []
+        return result
+
+    db = SimpleNamespace(
+        execute=execute,
+        add=added.append,
+        flush=AsyncMock(),
+        begin_nested=Mock(return_value=_NestedTx()),
+    )
+    counts = await register_ticket_identifier(
+        db,
+        tenant_id,
+        evidence=SimpleNamespace(id=uuid4()),
+        source_type="servicenow",
+        payload={"number": "INC0010427"},
+        canonical_case_id=case_id,
+    )
+    assert counts["reconciled_mentions"] == 1
+    from contextedge.models.case_bridge import EvidenceCaseMembership
+
+    quoted_rows = [
+        a
+        for a in added
+        if isinstance(a, EvidenceCaseMembership)
+        and a.relationship_type == "mentioned_only"
+    ]
+    assert len(quoted_rows) == 1
