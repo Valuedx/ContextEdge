@@ -424,3 +424,113 @@ async def test_reverse_heal_survives_one_bad_sibling():
 
     assert healed == 1
     assert edge_mock.await_args_list[0].args[3] == good.id
+
+
+# --- normalized traits (B2) -------------------------------------------------
+
+
+def test_extract_ci_traits_only_present_values():
+    from contextedge.services.servicenow_reference_service import extract_ci_traits
+
+    payload = {
+        "cmdb_ci.manufacturer.name": "Dell",
+        "cmdb_ci.model_id.name": "Latitude 5420",
+        "cmdb_ci.os": "",  # empty upstream -> absent, never guessed
+    }
+    assert extract_ci_traits(payload) == {
+        "manufacturer": "Dell",
+        "model": "Latitude 5420",
+    }
+    # Topology detail rows have no cmdb_ci. prefix.
+    assert extract_ci_traits(
+        {"os": "Windows", "os_version": "11 23H2"}, prefix=""
+    ) == {"os_name": "Windows", "os_version": "11 23H2"}
+    assert extract_ci_traits({}) == {}
+
+
+def test_entity_reference_carries_traits():
+    from contextedge.services.servicenow_reference_service import (
+        extract_entity_references,
+    )
+
+    payload = {
+        "cmdb_ci": {"value": "a" * 32},
+        "cmdb_ci.name": "LPT001",
+        "cmdb_ci.sys_class_name": "cmdb_ci_computer",
+        "cmdb_ci.manufacturer.name": "Dell",
+        "cmdb_ci.model_id.name": "Latitude 5420",
+        "cmdb_ci.os": "Windows",
+        "cmdb_ci.os_version": "11 23H2",
+    }
+    refs = extract_entity_references(payload)
+    ci = next(r for r in refs if r.edge_type == "affects_ci")
+    assert ci.traits == {
+        "manufacturer": "Dell",
+        "model": "Latitude 5420",
+        "os_name": "Windows",
+        "os_version": "11 23H2",
+    }
+
+
+@pytest.mark.asyncio
+async def test_ensure_entity_writes_and_refreshes_traits():
+    from contextedge.services.servicenow_reference_service import (
+        EntityReference,
+        _ensure_entity,
+    )
+
+    tenant_id = uuid4()
+    added = []
+
+    async def execute_missing(stmt):
+        result = Mock()
+        result.scalar_one_or_none.return_value = None
+        return result
+
+    class _Tx:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+    db = SimpleNamespace(
+        execute=execute_missing,
+        add=added.append,
+        flush=AsyncMock(),
+        begin_nested=Mock(return_value=_Tx()),
+    )
+    ref = EntityReference(
+        sys_id="a" * 32,
+        name="LPT001",
+        entity_type="configuration_item",
+        edge_type="affects_ci",
+        traits={"manufacturer": "Dell", "model": "Latitude 5420"},
+    )
+    created = await _ensure_entity(db, tenant_id, ref)
+    assert created.manufacturer == "Dell"
+    assert created.model == "Latitude 5420"
+    assert created.os_name is None  # absent stays absent
+
+    # Existing row: present values refresh, absent ones never clear.
+    existing = SimpleNamespace(
+        name="LPT001", manufacturer="Dell", model=None, os_name="Windows"
+    )
+
+    async def execute_existing(stmt):
+        result = Mock()
+        result.scalar_one_or_none.return_value = existing
+        return result
+
+    db2 = SimpleNamespace(execute=execute_existing)
+    ref2 = EntityReference(
+        sys_id="a" * 32,
+        name="LPT001",
+        entity_type="configuration_item",
+        edge_type="affects_ci",
+        traits={"model": "Latitude 5420"},  # os absent this sync
+    )
+    out = await _ensure_entity(db2, tenant_id, ref2)
+    assert out is existing
+    assert existing.model == "Latitude 5420"  # refreshed in place
+    assert existing.os_name == "Windows"  # never cleared by absence
