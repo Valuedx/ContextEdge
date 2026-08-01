@@ -153,8 +153,49 @@ async def llm_complete(
     start = time.perf_counter()
     outcome = "ok"
     response = None
+
+    # E1 resilience: bounded call + per-model circuit breaker + one
+    # optional fallback attempt. Budget errors were raised above and
+    # never touch the breaker.
+    import asyncio as _asyncio
+
+    from contextedge.ai.resilience import (
+        LLM_CALL_TIMEOUT_SECONDS,
+        LlmCircuitOpenError,
+        breaker,
+    )
+
+    async def _attempt(attempt_model: str):
+        breaker.check(attempt_model)
+        try:
+            result = await _asyncio.wait_for(
+                litellm.acompletion(**{**kwargs, "model": attempt_model}),
+                timeout=LLM_CALL_TIMEOUT_SECONDS,
+            )
+            breaker.record_success(attempt_model)
+            return result
+        except LlmCircuitOpenError:
+            raise
+        except Exception:
+            breaker.record_failure(attempt_model)
+            raise
+
+    fallback_model = getattr(settings, "llm_fallback_model", None)
     try:
-        response = await litellm.acompletion(**kwargs)
+        try:
+            response = await _attempt(model)
+        except Exception as primary_exc:
+            if fallback_model and fallback_model != model:
+                logger.warning(
+                    "llm.falling_back",
+                    primary_model=model,
+                    fallback_model=fallback_model,
+                    error_type=type(primary_exc).__name__,
+                )
+                model = fallback_model  # usage records the serving model
+                response = await _attempt(fallback_model)
+            else:
+                raise
         return response.choices[0].message.content or ""
     except Exception:
         outcome = "error"

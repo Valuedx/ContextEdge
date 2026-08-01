@@ -385,7 +385,7 @@ responded, so operators verify mapping without reading logs.
 
 | ID | Item | Size | Notes |
 |---|---|---|---|
-| E1 | LLM provider resilience: per-call timeout, circuit breaker, fallback | M | budget gates/retries/validation exist; `ai/provider.py` |
+| E1 | LLM provider resilience: per-call timeout, circuit breaker, fallback — **SHIPPED 2026-08-03** | M | budget gates/retries/validation exist; `ai/provider.py` |
 | E2 | Prompt-injection fencing at ingest extractors | M | MAF provider fences; episode/decision/identity extractors concatenate raw evidence |
 | E3 | Ranking calibration + SLA priors | L | `quality_score=0.5` placeholder, no abstention threshold, N+1 playbook queries; SLA priors deferred from change-risk work |
 | E4 | Sync single-flight | M | advisory lock per source object; overlapping backfills currently race (dedup is DB-safe since 0026) |

@@ -81,7 +81,7 @@ Playbooks previously had no embedding, so the agent seed resolver could only rea
 
 - **Doubled braces in pre-existing system prompts** — `Prompt.system` is never `.format()`ed, so the `{{ }}` escaping in the `decision`, `episode`, `pattern`, and `playbook` v1 system prompts reaches the model as literal double braces (malformed JSON examples). The `identity` v2 and `identity_adjudication` v1 prompts were fixed on 2026-07-29; the pre-existing families should be corrected as new prompt versions (changing a released version's text silently would invalidate any eval baselines).
 
-- **LLM provider resilience** — per-call timeout, circuit breaker, and provider fallback are still absent from `ai/provider.py` (budget gates, retries, and schema validation exist).
+- **LLM provider resilience — RESOLVED 2026-08-03 (backlog E1)**: 120s per-call timeout, per-model in-process circuit breaker (5 consecutive failures → 60s open, single half-open probe), and optional one-shot fallback via `settings.llm_fallback_model` (usage recorded against the serving model). The breaker is per-worker by design — no cross-process coordination.
 - **Prompt-injection fencing at ingest extractors** — the MAF provider fences untrusted graph content, but episode/decision/identity extractors still concatenate evidence text into prompts without delimiters.
 - **Ranking calibration** — `quality_score = 0.5` placeholder, no abstention threshold, and N+1 per-playbook queries remain. (The chunk search-side rollup shipped 2026-08-01 — see the resolved entry.)
 - **Sync single-flight** — no advisory lock per source object for overlapping backfills/retries (evidence dedup at normalize is DB-enforced since `0026`).

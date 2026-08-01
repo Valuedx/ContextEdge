@@ -54,6 +54,9 @@ class Settings(BaseSettings):
     default_classification_model: str = "gpt-4o-mini"
     default_extraction_model: str = "gpt-4o"
     default_embedding_model: str = "text-embedding-3-small"
+    # E1 resilience: when set, a failed primary LLM call is retried once
+    # on this model (usage recorded against the model that served).
+    llm_fallback_model: str | None = None
 
     # Application
     app_env: str = "development"
