@@ -6,12 +6,14 @@ from contextedge.integrations.maf.client import (
     ChangeRiskClient,
     CmdbTopologyClient,
     ContextGraphClient,
+    FixApplicabilityClient,
 )
 from contextedge.integrations.maf.provider import ContextGraphProvider
 from contextedge.integrations.maf.tools import (
     ChangeRiskTools,
     CmdbTopologyTools,
     ContextGraphTools,
+    FixApplicabilityTools,
 )
 
 
@@ -24,6 +26,7 @@ class ContextGraphMAFPlugin:
         enable_tool: bool = True,
         cmdb_client: CmdbTopologyClient | None = None,
         change_risk_client: ChangeRiskClient | None = None,
+        fix_applicability_client: FixApplicabilityClient | None = None,
     ):
         self.provider = ContextGraphProvider(client) if enable_provider else None
         self.toolset = ContextGraphTools(client) if enable_tool else None
@@ -35,6 +38,11 @@ class ContextGraphMAFPlugin:
             if change_risk_client is not None
             else None
         )
+        self.fix_applicability_toolset = (
+            FixApplicabilityTools(fix_applicability_client)
+            if fix_applicability_client is not None
+            else None
+        )
         self.context_providers = [self.provider] if self.provider is not None else []
         self.tools = (
             [self.toolset.query_context_graph] if self.toolset is not None else []
@@ -43,3 +51,7 @@ class ContextGraphMAFPlugin:
             self.tools.append(self.cmdb_toolset.cmdb_topology)
         if self.change_risk_toolset is not None:
             self.tools.append(self.change_risk_toolset.assess_change_risk)
+        if self.fix_applicability_toolset is not None:
+            self.tools.append(
+                self.fix_applicability_toolset.assess_fix_applicability
+            )

@@ -54,6 +54,14 @@ class ChangeRiskClient(Protocol):
     async def assess(self, ci: str, window_days: int) -> dict: ...
 
 
+class FixApplicabilityClient(Protocol):
+    """Port for the assess_fix_applicability tool — deterministic
+    precondition matching of known fixes against a target CI
+    (read-only)."""
+
+    async def assess(self, ci: str) -> dict: ...
+
+
 class InProcessChangeRiskClient:
     def __init__(self, session_factory, tenant_id):
         self.session_factory = session_factory
@@ -67,6 +75,30 @@ class InProcessChangeRiskClient:
             return await assess_change_risk(
                 db, self.tenant_id, ci, window_days=window_days
             )
+
+
+class InProcessFixApplicabilityClient:
+    def __init__(self, session_factory, tenant_id):
+        self.session_factory = session_factory
+        self.tenant_id = tenant_id
+
+    async def assess(self, ci: str) -> dict:
+        from contextedge.services.cmdb_topology_service import resolve_ci_entity
+        from contextedge.services.fix_applicability_service import (
+            assess_fix_applicability,
+        )
+
+        async with self.session_factory() as db:
+            # Read-only — nothing to commit; rollback on exit is harmless.
+            entity = await resolve_ci_entity(db, self.tenant_id, ci)
+            if entity is None:
+                return {
+                    "error": {
+                        "code": "ci_not_found",
+                        "message": f"No CI matches {ci!r} for this tenant.",
+                    }
+                }
+            return await assess_fix_applicability(db, self.tenant_id, entity)
 
 
 class InProcessContextGraphClient:
