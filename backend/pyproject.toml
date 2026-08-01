@@ -29,6 +29,9 @@ dependencies = [
     "boto3>=1.35",
     "google-auth>=2.29",
     "litellm>=1.55",
+    # MMR similarity math in search/chunk_rollup.py (production search
+    # path) — declared explicitly; it was previously only transitive.
+    "numpy>=1.26",
     "structlog>=24.4",
     "prometheus-fastapi-instrumentator>=7.0",
 ]
