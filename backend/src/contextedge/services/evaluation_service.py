@@ -54,6 +54,49 @@ async def execute_evaluation_run(
         return evaluation_run_to_dict(run)
 
 
+async def _run_citation_case(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    case: dict,
+    prompt_version: str | None,
+) -> dict:
+    """C5: per-step gold citations vs the model's. Two rates:
+
+    - unsupported_step_rate — predicted steps citing nothing;
+    - wrong_attribution_rate — compared steps (by order, up to the
+      shorter of predicted/gold) whose citations are not a subset of
+      that step's gold set.
+    """
+    from contextedge.ai.extractors.episode_extractor import reconstruct_episode
+
+    evidence_items = case.get("evidence_items") or []
+    gold = [set(refs) for refs in (case.get("gold_step_citations") or [])]
+    episodes = await reconstruct_episode(
+        evidence_items,
+        tenant_id=tenant_id,
+        db=db,
+        prompt_version=prompt_version,
+    )
+    steps = episodes[0].get("steps", []) if episodes else []
+    unsupported = sum(1 for s in steps if not s.get("evidence_refs"))
+    compared = min(len(steps), len(gold))
+    wrong = 0
+    for i in range(compared):
+        refs = set(steps[i].get("evidence_refs") or [])
+        if refs and gold[i] and not refs.issubset(gold[i]):
+            wrong += 1
+    return {
+        "kind": "episode_citation",
+        "steps_predicted": len(steps),
+        "steps_gold": len(gold),
+        "unsupported_steps": unsupported,
+        "unsupported_step_rate": round(unsupported / len(steps), 3) if steps else None,
+        "compared_steps": compared,
+        "wrong_attribution": wrong,
+        "wrong_attribution_rate": round(wrong / compared, 3) if compared else None,
+    }
+
+
 async def _execute_evaluation_core(
     db: AsyncSession,
     run: EvaluationRun,
@@ -64,8 +107,15 @@ async def _execute_evaluation_core(
     cases_out: list[dict] = []
     correct_top1 = 0
     total = 0
+    citation_cases: list[dict] = []
+    prompt_version = (run.config or {}).get("episode_prompt_version")
 
     for case in ds.cases or []:
+        if case.get("kind") == "episode_citation":
+            result = await _run_citation_case(db, tenant_id, case, prompt_version)
+            citation_cases.append(result)
+            cases_out.append(result)
+            continue
         total += 1
         symptoms = case.get("symptoms") or []
         entities = case.get("entities") or []
@@ -96,11 +146,37 @@ async def _execute_evaluation_core(
         })
 
     accuracy = (correct_top1 / total) if total else 0.0
-    run.results = {
-        "case_count": total,
+    results: dict = {
+        "case_count": total + len(citation_cases),
         "top1_accuracy": accuracy,
         "cases": cases_out,
     }
+    if citation_cases:
+        rated_unsupported = [
+            c["unsupported_step_rate"]
+            for c in citation_cases
+            if c["unsupported_step_rate"] is not None
+        ]
+        rated_wrong = [
+            c["wrong_attribution_rate"]
+            for c in citation_cases
+            if c["wrong_attribution_rate"] is not None
+        ]
+        results["citation"] = {
+            "case_count": len(citation_cases),
+            "episode_prompt_version": prompt_version or "default",
+            "mean_unsupported_step_rate": (
+                round(sum(rated_unsupported) / len(rated_unsupported), 3)
+                if rated_unsupported
+                else None
+            ),
+            "mean_wrong_attribution_rate": (
+                round(sum(rated_wrong) / len(rated_wrong), 3)
+                if rated_wrong
+                else None
+            ),
+        }
+    run.results = results
     run.status = "completed"
     run.completed_at = datetime.now(UTC)
     await db.flush()

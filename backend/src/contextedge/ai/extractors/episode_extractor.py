@@ -90,8 +90,14 @@ async def _extract_from_chunk(
     *,
     tenant_id: _uuid.UUID | str | None = None,
     db: Any | None = None,
+    prompt_version: str | None = None,
 ) -> list[dict]:
-    prompt = get_prompt("episode", tenant_id)
+    if prompt_version is not None:
+        from contextedge.ai.prompts import get_prompt_version
+
+        prompt = get_prompt_version("episode", prompt_version)
+    else:
+        prompt = get_prompt("episode", tenant_id)
     user = prompt.format_user(evidence_text=_format_evidence_block(evidence_items))
     result = await llm_complete_json(
         user,
@@ -151,6 +157,7 @@ async def reconstruct_episode(
     *,
     tenant_id: _uuid.UUID | str | None = None,
     db: Any | None = None,
+    prompt_version: str | None = None,
 ) -> list[dict]:
     """Reconstruct structured episodes from evidence items.
 
@@ -170,7 +177,9 @@ async def reconstruct_episode(
         return []
 
     if len(evidence_items) <= MAX_ITEMS_PER_CALL:
-        return await _extract_from_chunk(evidence_items, tenant_id=tenant_id, db=db)
+        return await _extract_from_chunk(
+            evidence_items, tenant_id=tenant_id, db=db, prompt_version=prompt_version
+        )
 
     chunks = list(_chunk(evidence_items, MAX_ITEMS_PER_CALL))
     logger.info(
@@ -183,6 +192,8 @@ async def reconstruct_episode(
     all_episodes: list[dict] = []
     for chunk in chunks:
         all_episodes.extend(
-            await _extract_from_chunk(chunk, tenant_id=tenant_id, db=db)
+            await _extract_from_chunk(
+                chunk, tenant_id=tenant_id, db=db, prompt_version=prompt_version
+            )
         )
     return all_episodes
