@@ -497,6 +497,62 @@ async def correlate_evidence_item(
                     )
                 if ticket_bridge is not None:
                     ticket_bridge["correction"] = correction_result
+            # A3 thread topics: anchors set the topic, corrections
+            # re-seat it, anchorless threads get a provisional seed, and
+            # un-anchored messages inherit the anchored topic.
+            if getattr(evidence, "thread_id", None) is not None:
+                from contextedge.services.thread_topic_service import (
+                    apply_thread_topic,
+                    get_thread_topic,
+                    set_thread_topic,
+                )
+
+                topic_result: dict = {}
+                async with db.begin_nested():
+                    anchor_case = (ticket_bridge or {}).get("anchor_case_id")
+                    corrected_case = (
+                        (ticket_bridge or {}).get("correction") or {}
+                    ).get("corrected_case_id")
+                    if corrected_case is not None:
+                        topic_result["set"] = await set_thread_topic(
+                            db,
+                            tenant_id,
+                            evidence.thread_id,
+                            uuid.UUID(corrected_case),
+                            provisional=False,
+                            set_by="correction",
+                        )
+                    elif anchor_case is not None:
+                        topic_result["set"] = await set_thread_topic(
+                            db,
+                            tenant_id,
+                            evidence.thread_id,
+                            uuid.UUID(anchor_case),
+                            provisional=False,
+                            set_by="anchor",
+                        )
+                    elif (
+                        canonical_case_id is not None
+                        and await get_thread_topic(
+                            db, tenant_id, evidence.thread_id
+                        )
+                        is None
+                    ):
+                        # Pre-ticket thread: remember it is about an
+                        # incident, under its own (provisional) case.
+                        topic_result["set"] = await set_thread_topic(
+                            db,
+                            tenant_id,
+                            evidence.thread_id,
+                            canonical_case_id,
+                            provisional=True,
+                            set_by="thread_seed",
+                        )
+                    topic_result["applied"] = await apply_thread_topic(
+                        db, tenant_id, evidence
+                    )
+                if ticket_bridge is not None:
+                    ticket_bridge["thread_topic"] = topic_result
     except Exception as exc:
         logger.warning(
             "ticket_bridge.failed",

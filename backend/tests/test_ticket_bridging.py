@@ -530,7 +530,10 @@ async def test_correction_supersedes_and_propagates(monkeypatch):
         db, tenant_id, _correction_evidence(), {"reply_to_id": "msg-1"}
     )
 
-    assert counts == {"superseded": 1, "propagated": 1, "target_found": True}
+    assert counts["superseded"] == 1
+    assert counts["propagated"] == 1
+    assert counts["target_found"] is True
+    assert counts["corrected_case_id"] == str(new_case)
     assert wrong.status == "corrected"
     from contextedge.models.case_bridge import EvidenceCaseMembership
 
