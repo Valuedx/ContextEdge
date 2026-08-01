@@ -11,6 +11,7 @@ from __future__ import annotations
 import uuid as _uuid
 from typing import Any
 
+from contextedge.ai.fencing import fence_untrusted
 from contextedge.ai.prompts import get_prompt
 from contextedge.ai.provider import llm_complete_json
 
@@ -31,7 +32,7 @@ async def extract_identities(
         return []
 
     prompt = get_prompt("identity", tenant_id)
-    user = prompt.format_user(content=content[:4000])
+    user = prompt.format_user(content=fence_untrusted(content[:4000]))
     result = await llm_complete_json(
         user,
         task="classification",
