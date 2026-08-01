@@ -226,6 +226,23 @@ async def discover_pattern(
             "steps": [{"text": s.text} for s in ep.steps]
         })
 
+    # Pattern domain is derived from the SET of episode domains, not from
+    # episodes[0] (row order must never decide between success and 400):
+    # one distinct domain → that domain (tenant-global episodes may join);
+    # none → tenant-global pattern; several → actionable 400 before any
+    # LLM spend. The service guard re-enforces this as a second layer.
+    episode_domains = {ep.domain_id for ep in episodes if ep.domain_id is not None}
+    if len(episode_domains) > 1:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Selected episodes span multiple domains "
+                f"({len(episode_domains)}); a pattern must be built from "
+                "one domain (plus tenant-global episodes)."
+            ),
+        )
+    pattern_domain = next(iter(episode_domains), None)
+
     # 3. Call AI to synthesize pattern
     try:
         synthesis = await synthesize_pattern(ep_data, tenant_id=user.tenant_id, db=db)
@@ -234,7 +251,7 @@ async def discover_pattern(
         pattern = await create_pattern_from_episodes(
             db,
             user.tenant_id,
-            episodes[0].domain_id,
+            pattern_domain,
             synthesis["title"],
             [ep.id for ep in episodes],
             confidence=synthesis.get("confidence", 0.5),
@@ -249,7 +266,7 @@ async def discover_pattern(
         await db.flush()
 
         # 5. Build Graph Edges for visual clustering
-        domain_id = episodes[0].domain_id
+        domain_id = pattern_domain
         for ep in episodes:
             await build_episode_graph(
                 db,
@@ -264,13 +281,19 @@ async def discover_pattern(
         await db.refresh(pattern)
         return pattern
 
-    except Exception:
+    except Exception as exc:
+        from contextedge.services.pattern_service import DomainMismatchError
+
+        await db.rollback()
+        if isinstance(exc, DomainMismatchError):
+            # Second-layer guard fired (should be pre-empted by the set
+            # check above) — still an actionable 400, never a 500.
+            raise HTTPException(status_code=400, detail=str(exc))
         logger.exception(
             "pattern_discovery_failed",
             tenant_id=str(user.tenant_id),
             episode_ids=[str(episode_id) for episode_id in body.episode_ids],
         )
-        await db.rollback()
         raise HTTPException(status_code=500, detail="Pattern synthesis failed")
 @router.post("/cluster", status_code=202, response_model=TaskDispatchResponse)
 async def trigger_episode_clustering(
@@ -281,24 +304,35 @@ async def trigger_episode_clustering(
     """Trigger background clustering of approved episodes into patterns."""
     user.require_role("domain_admin")
 
-    if not domain_id:
-        # Fallback: Find the first available domain for the tenant
-        from contextedge.models.tenant import Domain
-        res = await db.execute(
-            select(Domain.id).where(Domain.tenant_id == user.tenant_id).limit(1)
-        )
-        domain_id = res.scalar_one_or_none()
-
-    if not domain_id:
-        raise HTTPException(
-            status_code=400,
-            detail="No domain found to scope pattern clustering."
+    if domain_id:
+        task = cluster_episodes.delay(str(domain_id), str(user.tenant_id))
+        return TaskDispatchResponse(
+            status="clustering_queued",
+            task_id=task.id,
+            detail={"domain_id": str(domain_id)},
         )
 
-    task = cluster_episodes.delay(str(domain_id), str(user.tenant_id))
+    # No domain given: one strictly-scoped pass per tenant domain, plus a
+    # global pass over tenant-global (NULL-domain) episodes. The previous
+    # fallback picked the FIRST domain and clustered tenant-wide under
+    # its tag — the exact cross-domain leak the miner no longer permits.
+    from contextedge.models.tenant import Domain
+
+    res = await db.execute(
+        select(Domain.id)
+        .where(Domain.tenant_id == user.tenant_id)
+        .order_by(Domain.id)
+    )
+    domain_ids = list(res.scalars().all())
+    dispatched = []
+    for tenant_domain_id in domain_ids:
+        task = cluster_episodes.delay(str(tenant_domain_id), str(user.tenant_id))
+        dispatched.append({"domain_id": str(tenant_domain_id), "task_id": task.id})
+    global_task = cluster_episodes.delay(None, str(user.tenant_id))
+    dispatched.append({"domain_id": None, "task_id": global_task.id})
 
     return TaskDispatchResponse(
         status="clustering_queued",
-        task_id=task.id,
-        detail={"domain_id": str(domain_id)},
+        task_id=global_task.id,
+        detail={"passes": dispatched},
     )

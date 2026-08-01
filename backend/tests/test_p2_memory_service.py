@@ -130,10 +130,14 @@ async def test_create_pattern_from_episodes_promotes_long_term_memory():
     tenant_id = uuid4()
     episode_ids = [uuid4(), uuid4()]
     added = []
-    # Service now (a) calls persist_pattern_enrichment_edges, (b) queries
-    # db.execute(select(Episode)…) to fetch episode entity_refs, then
-    # (c) calls build_episode_graph per episode. Mock each piece so the test
+    # Service now (a) runs the domain-safety membership check, (b) calls
+    # persist_pattern_enrichment_edges, (c) queries db.execute(
+    # select(Episode)…) to fetch episode entity_refs, then (d) calls
+    # build_episode_graph per episode. Mock each piece so the test
     # focuses on the memory-promotion contract it originally covered.
+    membership_result = SimpleNamespace(
+        all=lambda: [(episode_id, tenant_id, None) for episode_id in episode_ids],
+    )
     episodes_result = SimpleNamespace(
         scalars=lambda: SimpleNamespace(all=lambda: []),
     )
@@ -141,7 +145,7 @@ async def test_create_pattern_from_episodes_promotes_long_term_memory():
         add=lambda obj: added.append(obj),
         flush=AsyncMock(),
         refresh=AsyncMock(),
-        execute=AsyncMock(return_value=episodes_result),
+        execute=AsyncMock(side_effect=[membership_result, episodes_result]),
     )
 
     with (

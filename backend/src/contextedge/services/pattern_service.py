@@ -12,6 +12,53 @@ from contextedge.services.identity_service import identity_ids_from_refs
 from contextedge.services.memory_service import promote_pattern_memory
 
 
+class DomainMismatchError(ValueError):
+    """Raised when a pattern would mix episode content across domain
+    boundaries — a pattern is domain-visible knowledge, so its member
+    episodes must all be readable under the pattern's domain."""
+
+
+async def _assert_domain_safe_membership(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    domain_id: uuid.UUID | None,
+    episode_ids: list[uuid.UUID],
+) -> None:
+    """Defense in depth at the pattern-creation choke point.
+
+    Rules (pattern domain D, episode domain E):
+    - E == D is always fine.
+    - E is NULL into a domain-D pattern is fine — tenant-global episodes
+      are already visible to every domain; tagging narrows, never leaks.
+    - E == some domain into a NULL-domain pattern is NEVER fine — a NULL
+      pattern is visible to ALL domains, so domain-scoped content would
+      leak everywhere.
+    - Episodes from another tenant, or ids that don't exist, fail loud.
+    """
+    rows = (
+        await db.execute(
+            select(Episode.id, Episode.tenant_id, Episode.domain_id).where(
+                Episode.id.in_(episode_ids)
+            )
+        )
+    ).all()
+    found = {row[0]: (row[1], row[2]) for row in rows}
+    for episode_id in episode_ids:
+        if episode_id not in found:
+            raise DomainMismatchError(f"Episode {episode_id} does not exist.")
+        episode_tenant, episode_domain = found[episode_id]
+        if episode_tenant != tenant_id:
+            # Deliberately the same error/shape as "missing" — do not
+            # confirm the existence of another tenant's episode.
+            raise DomainMismatchError(f"Episode {episode_id} does not exist.")
+        if episode_domain is not None and episode_domain != domain_id:
+            raise DomainMismatchError(
+                f"Episode {episode_id} belongs to domain {episode_domain}; "
+                f"a pattern in domain {domain_id or 'GLOBAL'} may only "
+                "contain episodes from that domain or tenant-global ones."
+            )
+
+
 async def create_pattern_from_episodes(
     db: AsyncSession,
     tenant_id: uuid.UUID,
@@ -28,6 +75,7 @@ async def create_pattern_from_episodes(
     evidence_summary: dict | None = None,
 ) -> Pattern:
     """Create a pattern from a cluster of episodes."""
+    await _assert_domain_safe_membership(db, tenant_id, domain_id, episode_ids)
     pattern = Pattern(
         tenant_id=tenant_id,
         domain_id=domain_id,
