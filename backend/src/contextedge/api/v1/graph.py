@@ -50,6 +50,32 @@ async def cmdb_topology(
     return await lookup_topology(db, user.tenant_id, ci)
 
 
+@router.post("/fix-outcomes")
+async def record_fix_outcome_endpoint(
+    db: DbSession,
+    user: AuthUser,
+    fix_pattern_id: UUID,
+    ci: str = Query(..., min_length=1, max_length=500),
+    success: bool = Query(...),
+):
+    """Record a fix outcome against a CI (B5): updates per-cohort
+    counters and mints review-gated promotion candidates when the
+    ladder's thresholds are met. Scope only broadens via review."""
+    user.require_role("knowledge_manager")
+    from contextedge.services.cmdb_topology_service import resolve_ci_entity
+    from contextedge.services.fix_cohort_service import record_fix_outcome
+
+    entity = await resolve_ci_entity(db, user.tenant_id, ci)
+    if entity is None:
+        raise HTTPException(status_code=404, detail="CI not found")
+    result = await record_fix_outcome(
+        db, user.tenant_id, fix_pattern_id, entity, success
+    )
+    if result.get("error"):
+        raise HTTPException(status_code=404, detail=result["error"])
+    return result
+
+
 @router.get("/fix-applicability")
 async def fix_applicability(
     db: DbSession,
