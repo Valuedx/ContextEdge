@@ -233,6 +233,71 @@ class SapphireIMSConnector(BaseConnector):
                 ),
             )
 
+    async def probe_configuration(self, sample_limit: int = 5) -> dict:
+        """Config-mapping probe report (D4): which configured endpoints
+        respond and which configured FIELD names actually appear in this
+        instance's ticket payloads — so operators verify the mapped
+        contract without reading worker logs. Read-only; a handful of
+        sample rows per configured project."""
+        report: dict = {"endpoints": {}, "fields": {}, "type_kind_coverage": {}}
+
+        try:
+            await self._get(self.api["probe_path"])
+            report["endpoints"]["probe_path"] = {"path": self.api["probe_path"], "ok": True}
+        except Exception as exc:
+            report["endpoints"]["probe_path"] = {
+                "path": self.api["probe_path"],
+                "ok": False,
+                "error": f"{type(exc).__name__}",
+            }
+
+        projects = [
+            str(p)
+            for p in ((self.source_config or {}).get("projects") or [])
+            if str(p).strip()
+        ]
+        report["projects_configured"] = projects
+        samples: list[dict] = []
+        for project in projects[:3]:
+            try:
+                data = await self._get(
+                    self.api["tickets_path"].format(project=project),
+                    {self.api.get("limit_param", "limit"): str(sample_limit)},
+                )
+                rows = self._items(data)[:sample_limit]
+                samples.extend(rows)
+                report["endpoints"][f"tickets:{project}"] = {
+                    "ok": True,
+                    "rows_seen": len(rows),
+                }
+            except Exception as exc:
+                report["endpoints"][f"tickets:{project}"] = {
+                    "ok": False,
+                    "error": f"{type(exc).__name__}",
+                }
+
+        seen_keys: set[str] = set()
+        for row in samples:
+            seen_keys.update(str(k) for k in row.keys())
+        for logical, mapped in sorted(self.fields.items()):
+            report["fields"][logical] = {
+                "mapped_to": mapped,
+                "present_in_samples": mapped in seen_keys if samples else None,
+            }
+        if samples:
+            type_field = self.fields["type"]
+            raw_types = {
+                str(row.get(type_field) or "").strip().lower()
+                for row in samples
+                if row.get(type_field) not in (None, "")
+            }
+            report["type_kind_coverage"] = {
+                raw: self.type_kind_map.get(raw, "issue (unmapped fallback)")
+                for raw in sorted(raw_types)
+            }
+        report["sample_rows"] = len(samples)
+        return report
+
     async def discover_objects(self) -> list[DiscoveredObject]:
         # A public projects-list endpoint is not documented; projects are
         # declared explicitly in source_config["projects"].

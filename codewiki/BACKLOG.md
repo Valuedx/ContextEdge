@@ -370,11 +370,11 @@ entity population for workflow entities, `remediated_by` references. Doc-3 makes
 more valuable: AutomationEdge is the authoritative source for
 workflow/request status (P4 authority table) and a trait source for B2.
 
-### D3 · HTTP CmdbTopologyClient — S
+### D3 · HTTP CmdbTopologyClient — S — **SHIPPED 2026-08-03**
 The in-process client shipped with PR #11; the HTTPS deployment-neutral twin (same
 contract, token hygiene like the MAF client) is still open.
 
-### D4 · SapphireIMS instance verification tooling — S
+### D4 · SapphireIMS instance verification tooling — S — **SHIPPED 2026-08-03**
 Config-mapped contract ships with verify-per-instance defaults; add a
 `validate_credentials`-style probe report listing which configured fields/endpoints
 responded, so operators verify mapping without reading logs.

@@ -265,3 +265,64 @@ async def test_process_creates_related_edges_and_namespaced_entities():
     assert counts["entity_edges"] == 2  # CI + service
     assert ensure_entity_mock.await_args.kwargs["external_system"] == "sapphireims"
     assert edge_mock.await_args_list[0].args[6] == "related_ticket"
+
+
+# --- configuration probe (D4) -----------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_probe_reports_endpoints_fields_and_type_coverage():
+    conn = SapphireIMSConnector(
+        {
+            "projects": ["ITOPS"],
+            "fields": {"type": "ticketType"},
+            "type_kind_map": {"incident": "incident"},
+        },
+        {"base_url": "https://sapphire.local", "api_key": "k", "auth_token": "t"},
+    )
+    sample = {
+        "items": [
+            {
+                "ticketId": "4021",
+                "subject": "VPN down",
+                "ticketType": "Incident",
+                "status": "Open",
+            },
+            {
+                "ticketId": "4022",
+                "subject": "New laptop",
+                "ticketType": "ServiceRequest",
+            },
+        ]
+    }
+
+    async def fake_get(path, params=None):
+        return sample
+
+    conn._get = fake_get
+    report = await conn.probe_configuration()
+
+    assert report["endpoints"]["probe_path"]["ok"] is True
+    assert report["endpoints"]["tickets:ITOPS"]["ok"] is True
+    assert report["sample_rows"] == 2
+    assert report["fields"]["type"]["mapped_to"] == "ticketType"
+    assert report["fields"]["type"]["present_in_samples"] is True
+    assert report["type_kind_coverage"]["incident"] == "incident"
+    assert "unmapped" in report["type_kind_coverage"]["servicerequest"]
+
+
+@pytest.mark.asyncio
+async def test_probe_records_endpoint_failures_not_raises():
+    conn = SapphireIMSConnector(
+        {"projects": ["ITOPS"]},
+        {"base_url": "https://sapphire.local", "api_key": "k", "auth_token": "t"},
+    )
+
+    async def fail_get(path, params=None):
+        raise RuntimeError("boom")
+
+    conn._get = fail_get
+    report = await conn.probe_configuration()
+    assert report["endpoints"]["probe_path"]["ok"] is False
+    assert report["endpoints"]["tickets:ITOPS"]["ok"] is False
+    assert report["sample_rows"] == 0
