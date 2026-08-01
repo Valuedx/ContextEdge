@@ -80,6 +80,44 @@ _QUOTE_LINE_PREFIX = ">"
 _OUTLOOK_FROM_RE = re.compile(r"^from: .+", re.IGNORECASE)
 _OUTLOOK_SENT_RE = re.compile(r"^(sent|date): .+", re.IGNORECASE)
 
+# --- Bot messages (A6) ------------------------------------------------------
+
+# A recognized ticket card is the ticket system speaking through the
+# bot — near-identifier confidence, parsed structurally, no LLM. The
+# bot's own prose is second-hand narration: downweighted, and never a
+# thread-topic anchor.
+BOT_CARD_CONFIDENCE = 0.95
+BOT_TEXT_CONFIDENCE = 0.7
+BOT_REPLY_INHERITANCE_CONFIDENCE = 0.6
+
+
+def is_bot_message(payload: dict | None) -> bool:
+    p = payload or {}
+    return bool(p.get("is_bot") or p.get("from_application"))
+
+
+def extract_bot_card_tokens(payload: dict | None) -> list[str]:
+    """Ticket-shaped tokens inside card attachments, extracted from the
+    structured payload — never from prose. Order-preserving, deduped."""
+    import json
+
+    tokens: list[str] = []
+    for attachment in (payload or {}).get("attachments") or []:
+        if not isinstance(attachment, dict):
+            continue
+        content = attachment.get("content")
+        if isinstance(content, dict | list):
+            text = json.dumps(content)
+        elif isinstance(content, str):
+            text = content
+        else:
+            continue
+        for match in _TICKET_TOKEN_RE.finditer(text):
+            if match.group(0) not in tokens:
+                tokens.append(match.group(0))
+    return tokens
+
+
 QUOTED_MENTION_CONFIDENCE = 0.55
 # A case mentioned only inside quoted content counts half toward the
 # digest threshold: a quoted digest is second-hand reporting twice over.
@@ -355,24 +393,29 @@ async def bridge_conversational_mentions(
     db: AsyncSession,
     tenant_id: uuid.UUID,
     evidence: EvidenceItem,
+    payload: dict | None = None,
 ) -> dict:
     """Called when CONVERSATIONAL evidence correlates: extract quoted
     ticket numbers, resolve against registered identifiers, attach
     memberships (or store pending mentions). Never unions cases."""
     counts = {"memberships": 0, "pending": 0, "digest_downgraded": False}
 
+    bot = is_bot_message(payload)
+    card_tokens = extract_bot_card_tokens(payload) if bot else []
     subject_tokens = extract_ticket_tokens(evidence.title)
     body_pairs = [
         (t, quoted)
         for t, quoted in extract_ticket_tokens_with_spans(evidence.body_text)
-        if t not in subject_tokens
+        if t not in subject_tokens and t not in card_tokens
     ]
-    if not subject_tokens and not body_pairs:
+    if not subject_tokens and not body_pairs and not card_tokens:
         return counts
 
-    located = [("subject", t) for t in subject_tokens] + [
-        ("quoted_body" if quoted else "body", t) for t, quoted in body_pairs
-    ]
+    located = (
+        [("bot_card", t) for t in card_tokens]
+        + [("subject", t) for t in subject_tokens if t not in card_tokens]
+        + [("quoted_body" if quoted else "body", t) for t, quoted in body_pairs]
+    )
 
     resolved: list[tuple[str, str, uuid.UUID]] = []
     unresolved: list[tuple[str, str]] = []
@@ -480,6 +523,17 @@ async def bridge_conversational_mentions(
             # never anchor thread topics either.
             relationship = "mentioned_only"
             confidence = QUOTED_MENTION_CONFIDENCE
+        elif location == "bot_card":
+            # The ticket system speaking through the bot (A6): near-
+            # identifier confidence, and a single-case card CAN anchor
+            # the thread topic (the digest guard still applies).
+            confidence = BOT_CARD_CONFIDENCE
+            if not is_digest:
+                anchored_cases.add(case_id)
+        elif bot:
+            # A bot's own prose is second-hand narration: downweighted,
+            # and never a thread-topic anchor by itself.
+            confidence = BOT_TEXT_CONFIDENCE
         elif not is_digest:
             anchored_cases.add(case_id)
         if await _add_membership(
@@ -671,13 +725,18 @@ async def inherit_reply_membership(
         counts["blocked_by_negative"] = True
         return counts
 
+    inherit_confidence = (
+        BOT_REPLY_INHERITANCE_CONFIDENCE
+        if is_bot_message(payload)
+        else REPLY_INHERITANCE_CONFIDENCE
+    )
     if await _add_membership(
         db,
         tenant_id,
         evidence.id,
         case_id,
         "reply_inheritance",
-        REPLY_INHERITANCE_CONFIDENCE,
+        inherit_confidence,
         "reply_structure",
     ):
         counts["inherited"] = 1
