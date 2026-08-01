@@ -75,6 +75,7 @@ from contextedge.models.source import (
     SyncRun,
 )
 from contextedge.models.tenant import Domain, RoleBinding, Tenant, User, Workspace
+from contextedge.models.thread_topic import ThreadTopic
 
 __all__ = [
     "Base", "TenantScopedMixin",
@@ -86,7 +87,7 @@ __all__ = [
     "CanonicalIdentity", "IdentityAlias", "EvidenceIdentityLink", "CorrelationEdge",
     "Episode", "EpisodeStep",
     "CaseIdentifier", "EvidenceCaseMembership", "PendingIdentifierMention",
-    "CorrelationSuggestion",
+    "CorrelationSuggestion", "ThreadTopic",
     "Pattern", "PatternEvidenceLink", "NegativeKnowledgeItem", "Contradiction", "GraphEdge",
     "Playbook", "PlaybookVersion", "PlaybookEvidenceLink", "PlaybookApproval",
     "ResolutionSession", "DecisionTraceEvent", "CaseLink",

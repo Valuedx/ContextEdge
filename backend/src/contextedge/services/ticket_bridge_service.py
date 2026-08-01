@@ -363,6 +363,7 @@ async def bridge_conversational_mentions(
         if resolved
         else set()
     )
+    anchored_cases: set[uuid.UUID] = set()
     for location, _token, case_id in resolved:
         if case_id in negated_in_thread:
             # A message in this thread severed the case; automatic
@@ -374,10 +375,16 @@ async def bridge_conversational_mentions(
             0.5 if is_digest
             else (SUBJECT_CONFIDENCE if location == "subject" else BODY_CONFIDENCE)
         )
+        if not is_digest:
+            anchored_cases.add(case_id)
         if await _add_membership(
             db, tenant_id, evidence.id, case_id, relationship, confidence, location
         ):
             counts["memberships"] += 1
+    # A3 topic anchor: exactly one non-digest resolved case is an
+    # unambiguous anchor; anything else abstains.
+    if len(anchored_cases) == 1:
+        counts["anchor_case_id"] = str(next(iter(anchored_cases)))
 
     for location, token in unresolved:
         existing = (
@@ -707,4 +714,6 @@ async def apply_correction(
             superseded=counts["superseded"],
             propagated=counts["propagated"],
         )
+    if corrected_case_id is not None:
+        counts["corrected_case_id"] = str(corrected_case_id)
     return counts

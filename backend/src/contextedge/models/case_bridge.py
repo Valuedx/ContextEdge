@@ -23,6 +23,7 @@ MEMBERSHIP_RELATIONSHIPS = (
     "mentioned_only",      # multi-ticket digest guard: related, never merged
     "reply_inheritance",   # conversational tier (later phase)
     "dissociation",        # negative evidence: explicitly NOT this case (A7)
+    "thread_topic",        # inherited from the thread's anchored topic (A3)
 )
 
 

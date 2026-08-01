@@ -131,6 +131,9 @@ _EXPECTED_MARKERS: set[tuple[str, str]] = {
     ('correlation_suggestion.py', 'ForeignKey("evidence_items.id", ondelete="CASCADE"),'),
     ('correlation_suggestion.py',
      'UniqueConstraint( "evidence_id_low", "evidence_id_high", name="uq_correlation_suggestion_pair" ),'),
+    # thread_topic.py (migration 0044): per-thread topic state.
+    ('thread_topic.py', 'ForeignKey("threads.id", ondelete="CASCADE"),'),
+    ('thread_topic.py', 'UniqueConstraint("thread_id", name="uq_thread_topic"),'),
     # entity_class.py (migration 0042): global class taxonomy.
     ('entity_class.py',
      'UniqueConstraint("canonical_key", name="uq_entity_classes_key"),'),
