@@ -336,10 +336,40 @@ DISSOCIATION_PHRASES = (
 
 REPLY_INHERITANCE_CONFIDENCE = 0.85
 
+# Below this confidence a classifier label is treated as absent and the
+# phrase floor decides. At or above it the classifier's verdict stands
+# in BOTH directions: a "dissociation" label vetoes paraphrases the
+# phrase list can't see, and a confident non-dissociation label rescues
+# false phrase hits ("the outage is not related to load, it's certs").
+CLASSIFIER_TRUST_FLOOR = 0.6
+
 
 def has_dissociation_language(text: str | None) -> bool:
     lowered = (text or "").lower()
     return any(phrase in lowered for phrase in DISSOCIATION_PHRASES)
+
+
+def is_dissociative(evidence: EvidenceItem) -> bool:
+    """Dissociation verdict for the reply-inheritance veto (A1).
+
+    The message-function classifier decides when it produced a
+    confident label; the conservative phrase list is the deterministic
+    floor whenever the label is missing, out-of-vocabulary, or
+    low-confidence (LLM budget exhausted, pre-0041 rows, provider
+    down)."""
+    label = getattr(evidence, "message_function", None)
+    # A correction also abstains from inheritance: it changes or severs a
+    # link to earlier context, so inheriting the parent's (possibly
+    # wrong) case is premature — A2's supersession resolves what the
+    # correction actually establishes.
+    if label in ("dissociation", "correction"):
+        return True
+    confidence = getattr(evidence, "message_function_confidence", None) or 0.0
+    if label in (None, "unclassified") or confidence < CLASSIFIER_TRUST_FLOOR:
+        return has_dissociation_language(evidence.body_text) or has_dissociation_language(
+            evidence.title
+        )
+    return False
 
 
 async def inherit_reply_membership(
@@ -366,9 +396,7 @@ async def inherit_reply_membership(
     if not reply_to:
         return counts
 
-    if has_dissociation_language(evidence.body_text) or has_dissociation_language(
-        evidence.title
-    ):
+    if is_dissociative(evidence):
         counts["vetoed"] = True
         logger.info(
             "reply_inheritance.vetoed_by_dissociation",

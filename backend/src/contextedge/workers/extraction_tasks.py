@@ -7,6 +7,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from contextedge.ai.classifiers.message_function import classify_message_function
 from contextedge.ai.classifiers.relevance import classify_relevance as run_relevance_classifier
 from contextedge.ai.embeddings import embed_evidence
 from contextedge.config import settings
@@ -341,6 +342,31 @@ async def _normalize(db: AsyncSession, raw_object_id: str, tenant_id: uuid.UUID)
         and classification_confidence >= 0.75
     )
 
+    # Message function (A1): what a conversational message is DOING —
+    # feeds the dissociation veto, correction supersession, and the
+    # negative-evidence store. Conversational sources only, and only
+    # for items that passed the relevance gate (noise never earns a
+    # second LLM call). Fail-soft: an unlabeled message just means the
+    # downstream consumers use their deterministic floors.
+    if not skip_extraction and (ev.source_type or "") in MESSAGE_FUNCTION_SOURCE_TYPES:
+        try:
+            mf = await classify_message_function(
+                ev.title or "",
+                ev.body_text or "",
+                ev.source_type or "unknown",
+                tenant_id=tenant_id,
+                db=db,
+            )
+            ev.message_function = mf["function"]
+            ev.message_function_confidence = mf["confidence"]
+            await db.flush()
+        except Exception as mf_exc:
+            logger.warning(
+                "message_function_classification_failed",
+                evidence_id=str(ev.id),
+                error=str(mf_exc),
+            )
+
     identity_count = 0
     decision_count = 0
     embedded = False
@@ -453,6 +479,14 @@ async def _classify(db: AsyncSession, evidence_id: str, tenant_id: uuid.UUID) ->
 # incident is exactly when episodes matter most.
 RECONSTRUCT_DEBOUNCE_SECONDS = 180
 MAX_SYNTHESIS_DELAY_SECONDS = 1_800
+
+# Sources whose messages get a message-function classification during
+# normalize (A1): the same set the ticket bridge treats as
+# conversational — where "what is this message doing" carries linking
+# semantics (dissociation, correction).
+from contextedge.services.ticket_bridge_service import (  # noqa: E402
+    CONVERSATIONAL_SOURCE_TYPES as MESSAGE_FUNCTION_SOURCE_TYPES,
+)
 
 # source_type → the role synthesis should treat it as. The prompt's
 # field-authority rules (episode v3) key off these labels. A tenant can
