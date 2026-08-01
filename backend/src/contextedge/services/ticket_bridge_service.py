@@ -65,6 +65,82 @@ TICKET_SOURCE_TYPES = {"servicenow", "jira_sm", "sapphireims"}
 CONVERSATIONAL_SOURCE_TYPES = {"teams", "gmail", "local_file"}
 
 
+# --- Quoted / forwarded content (A5) ----------------------------------------
+
+# Deterministic quote markers. Everything from a block marker to the end
+# of the text is quoted (forwards and Outlook-style reply blocks embed
+# the older message below the marker); ">"-prefixed lines are quoted
+# individually.
+_QUOTE_BLOCK_MARKERS = (
+    "---------- forwarded message ----------",
+    "-----original message-----",
+    "________________________________",  # Outlook divider
+)
+_QUOTE_LINE_PREFIX = ">"
+_OUTLOOK_FROM_RE = re.compile(r"^from: .+", re.IGNORECASE)
+_OUTLOOK_SENT_RE = re.compile(r"^(sent|date): .+", re.IGNORECASE)
+
+QUOTED_MENTION_CONFIDENCE = 0.55
+# A case mentioned only inside quoted content counts half toward the
+# digest threshold: a quoted digest is second-hand reporting twice over.
+QUOTED_DIGEST_WEIGHT = 0.5
+
+
+def quoted_ranges(text: str | None) -> list[tuple[int, int]]:
+    """Character ranges of quoted/forwarded content. Conservative and
+    deterministic: block markers quote everything below them; ">" lines
+    quote themselves; a "From:" line followed shortly by "Sent:"/"Date:"
+    (Outlook reply header) quotes everything from the "From:" line on."""
+    if not text:
+        return []
+    lower = text.lower()
+    ranges: list[tuple[int, int]] = []
+    block_start = len(text)
+    for marker in _QUOTE_BLOCK_MARKERS:
+        idx = lower.find(marker)
+        if idx != -1:
+            block_start = min(block_start, idx)
+
+    offset = 0
+    lines = text.split("\n")
+    for i, line in enumerate(lines):
+        stripped = line.lstrip()
+        line_start = offset
+        offset += len(line) + 1
+        if line_start >= block_start:
+            break
+        if stripped.startswith(_QUOTE_LINE_PREFIX):
+            ranges.append((line_start, line_start + len(line)))
+            continue
+        if _OUTLOOK_FROM_RE.match(stripped):
+            following = [ln.strip() for ln in lines[i + 1 : i + 4]]
+            if any(_OUTLOOK_SENT_RE.match(ln) for ln in following):
+                block_start = min(block_start, line_start)
+                break
+    if block_start < len(text):
+        ranges.append((block_start, len(text)))
+    return ranges
+
+
+def _in_ranges(pos: int, ranges: list[tuple[int, int]]) -> bool:
+    return any(start <= pos < end for start, end in ranges)
+
+
+def extract_ticket_tokens_with_spans(text: str | None) -> list[tuple[str, bool]]:
+    """(token, is_quoted) pairs, deduped keeping the strongest form: a
+    token appearing BOTH in fresh text and a quote counts as fresh."""
+    if not text:
+        return []
+    ranges = quoted_ranges(text)
+    best: dict[str, bool] = {}
+    for match in _TICKET_TOKEN_RE.finditer(text):
+        token = match.group(0)
+        is_quoted = _in_ranges(match.start(), ranges)
+        if token not in best or (best[token] and not is_quoted):
+            best[token] = is_quoted
+    return list(best.items())
+
+
 def extract_ticket_tokens(text: str | None, cap: int = MAX_TOKENS_PER_EVIDENCE) -> list[str]:
     if not text:
         return []
@@ -222,6 +298,16 @@ async def register_ticket_identifier(
                 "dissociation",
                 status="negative",
             )
+        elif mention.extraction_location == "quoted_body":
+            added = await _add_membership(
+                db,
+                tenant_id,
+                mention.evidence_id,
+                canonical_case_id,
+                "mentioned_only",
+                QUOTED_MENTION_CONFIDENCE,
+                "quoted_body",
+            )
         else:
             added = await _add_membership(
                 db,
@@ -276,13 +362,17 @@ async def bridge_conversational_mentions(
     counts = {"memberships": 0, "pending": 0, "digest_downgraded": False}
 
     subject_tokens = extract_ticket_tokens(evidence.title)
-    body_tokens = [
-        t for t in extract_ticket_tokens(evidence.body_text) if t not in subject_tokens
+    body_pairs = [
+        (t, quoted)
+        for t, quoted in extract_ticket_tokens_with_spans(evidence.body_text)
+        if t not in subject_tokens
     ]
-    if not subject_tokens and not body_tokens:
+    if not subject_tokens and not body_pairs:
         return counts
 
-    located = [("subject", t) for t in subject_tokens] + [("body", t) for t in body_tokens]
+    located = [("subject", t) for t in subject_tokens] + [
+        ("quoted_body" if quoted else "body", t) for t, quoted in body_pairs
+    ]
 
     resolved: list[tuple[str, str, uuid.UUID]] = []
     unresolved: list[tuple[str, str]] = []
@@ -319,7 +409,11 @@ async def bridge_conversational_mentions(
     # become an explicit_reference. Resolved tokens become negative
     # rows; unresolved ones become dissociation-tagged pending mentions
     # so a late-arriving ticket reconciles to a negative row too.
+    # Quoted tokens are excluded entirely (A5): quoting someone else's
+    # dissociation is not the author dissociating.
     if states_dissociation(evidence):
+        resolved = [r for r in resolved if r[0] != "quoted_body"]
+        unresolved = [u for u in unresolved if u[0] != "quoted_body"]
         for location, _token, case_id in resolved:
             if await _add_membership(
                 db,
@@ -351,9 +445,14 @@ async def bridge_conversational_mentions(
         return counts
 
     # Multi-ticket digest guard: many distinct cases in one message is a
-    # status report, not an incident conversation.
-    distinct_cases = {case_id for _loc, _tok, case_id in resolved}
-    is_digest = len(distinct_cases) >= DIGEST_THRESHOLD
+    # status report, not an incident conversation. Quoted-only cases
+    # count half (A5) — a quoted digest is second-hand twice over.
+    fresh_cases = {c for loc, _t, c in resolved if loc != "quoted_body"}
+    quoted_only_cases = {
+        c for loc, _t, c in resolved if loc == "quoted_body"
+    } - fresh_cases
+    weighted = len(fresh_cases) + QUOTED_DIGEST_WEIGHT * len(quoted_only_cases)
+    is_digest = weighted >= DIGEST_THRESHOLD
     counts["digest_downgraded"] = is_digest
 
     negated_in_thread = (
@@ -375,7 +474,13 @@ async def bridge_conversational_mentions(
             0.5 if is_digest
             else (SUBJECT_CONFIDENCE if location == "subject" else BODY_CONFIDENCE)
         )
-        if not is_digest:
+        if location == "quoted_body":
+            # Quoted mentions are mentioned_only at most (A5): the
+            # author did not assert the link, the quoted text did. They
+            # never anchor thread topics either.
+            relationship = "mentioned_only"
+            confidence = QUOTED_MENTION_CONFIDENCE
+        elif not is_digest:
             anchored_cases.add(case_id)
         if await _add_membership(
             db, tenant_id, evidence.id, case_id, relationship, confidence, location
