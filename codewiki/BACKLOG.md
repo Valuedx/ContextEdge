@@ -359,12 +359,12 @@ One-off audited cleanup task: recompute memberships, flag violations for review.
 
 ## Epic D — Connectors & platform boundaries [Gap]
 
-### D1 · Jira platform-boundary features — L (each M standalone)
+### D1 · Jira platform-boundary features — L (each M standalone) — **PARTIAL 2026-08-03: customfield mapping + page-order guard shipped; Opsgenie/Assets/Confluence skipped (external access, see KNOWN_GAPS)**
 Opsgenie alerts connector (alert rollups at parity with em_alert), Assets topology
 (Premium API — config-gated), Confluence KB ingestion, request-type/change-window
 customfield mapping via `source_config`, sync page-order guard.
 
-### D2 · AutomationEdge connector — L
+### D2 · AutomationEdge connector — L — **SKIPPED 2026-08-03 (no AutomationEdge access, see KNOWN_GAPS)**
 The long-standing backlog item: workflow/request execution events as evidence,
 entity population for workflow entities, `remediated_by` references. Doc-3 makes it
 more valuable: AutomationEdge is the authoritative source for

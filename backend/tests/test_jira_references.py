@@ -422,3 +422,106 @@ def test_resolves_config_cannot_hijack_builtin_semantics():
     assert "causes" not in hijack
     assert "duplicate" not in hijack
     assert "fixes" in hijack
+
+
+# --- D1 boundary slice: customfields + page-order guard ---------------------
+
+
+def test_configured_customfields_validate_namespace():
+    from contextedge.connectors.jira_sm.connector import JiraSmConnector
+
+    conn = JiraSmConnector(
+        {
+            "request_type_field_id": "customfield_10010",
+            "change_start_field_id": "customfield_10020",
+            "change_end_field_id": "not_a_customfield",  # typo -> ignored
+        },
+        {"email": "e", "api_token": "t", "base_url": "https://x.atlassian.net"},
+    )
+    configured = conn._configured_customfields()
+    assert configured == {
+        "request_type_field_id": "customfield_10010",
+        "change_start_field_id": "customfield_10020",
+    }
+    assert "customfield_10010" in conn._issue_fields_param()
+    assert "not_a_customfield" not in conn._issue_fields_param()
+
+
+def test_issue_event_extracts_request_type_and_change_window():
+    from contextedge.connectors.jira_sm.connector import JiraSmConnector
+
+    conn = JiraSmConnector(
+        {
+            "request_type_field_id": "customfield_10010",
+            "change_start_field_id": "customfield_10020",
+            "change_end_field_id": "customfield_10021",
+        },
+        {"email": "e", "api_token": "t", "base_url": "https://x.atlassian.net"},
+    )
+    issue = {
+        "key": "ITOPS-101",
+        "fields": {
+            "summary": "Change the VPN cert",
+            "issuetype": {"name": "Change"},
+            "updated": "2026-08-03T10:00:00.000+0000",
+            "customfield_10010": {"requestType": {"name": "Standard change"}},
+            "customfield_10020": "2026-08-05T22:00:00.000+0000",
+            "customfield_10021": "2026-08-05T23:30:00.000+0000",
+        },
+    }
+    event = conn._issue_event(issue, "ITOPS")
+    assert event.content["request_type"] == "Standard change"
+    assert event.content["change_window"]["start"].startswith("2026-08-05T22")
+    assert event.content["change_window"]["end"].startswith("2026-08-05T23")
+
+
+@pytest.mark.asyncio
+async def test_page_order_mutation_clamps_cursor():
+    """A page sorting before the previous page's last row means the
+    snapshot shifted mid-pagination: stop and clamp the cursor so the
+    next tick re-reads instead of silently skipping."""
+    from contextedge.connectors.jira_sm.connector import JiraSmConnector
+
+    conn = JiraSmConnector(
+        {}, {"email": "e", "api_token": "t", "base_url": "https://x.atlassian.net"}
+    )
+    pages = [
+        {
+            "issues": [
+                {"key": f"A-{i}", "fields": {"summary": "s", "issuetype": {"name": "Incident"},
+                 "updated": f"2026-08-03T10:0{i}:00.000+0000"}}
+                for i in range(3)
+            ]
+        },
+        {
+            "issues": [
+                {"key": "A-9", "fields": {"summary": "s", "issuetype": {"name": "Incident"},
+                 "updated": "2026-08-03T09:00:00.000+0000"}}  # BEFORE page 1
+            ]
+        },
+    ]
+    calls = {"n": 0}
+
+    async def fake_get(path, params=None):
+        page = pages[min(calls["n"], len(pages) - 1)]
+        calls["n"] += 1
+        return page
+
+    import contextedge.connectors.jira_sm.connector as mod
+
+    conn._jira_get = fake_get
+    mod.INCREMENTAL_PAGE_SIZE_SAVED = mod.INCREMENTAL_PAGE_SIZE
+    try:
+        mod.INCREMENTAL_PAGE_SIZE = 3  # page 1 is "full" -> fetch page 2
+        from contextedge.connectors.base import Checkpoint
+
+        result = await conn.fetch_changes(
+            "ITOPS", "project", Checkpoint(data={"last_updated": "2026-08-03T09:30"})
+        )
+    finally:
+        mod.INCREMENTAL_PAGE_SIZE = mod.INCREMENTAL_PAGE_SIZE_SAVED
+
+    # Page 2's out-of-order row was NOT consumed; cursor clamped to the
+    # last consistent point (page 1's max).
+    assert len(result.events) == 3
+    assert result.new_checkpoint.data["last_updated"] == "2026-08-03T10:02:00.000+0000"
