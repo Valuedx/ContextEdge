@@ -59,6 +59,9 @@ def _suggestion_db(
         result = Mock()
         if text.startswith("SET LOCAL hnsw.ef_search"):
             return result
+        if text.startswith("SELECT count(correlation_suggestions.id)"):
+            result.scalar_one.return_value = 0
+            return result
         if text.startswith("SELECT correlation_suggestions.status"):
             result.all.return_value = []  # no decided suggestions yet
             return result
@@ -403,6 +406,9 @@ async def test_generator_filters_below_learned_floor():
             result = Mock()
             if text.startswith("SET LOCAL hnsw.ef_search"):
                 return result
+            if text.startswith("SELECT count(correlation_suggestions.id)"):
+                result.scalar_one.return_value = 0
+                return result
             if text.startswith("SELECT correlation_suggestions.status"):
                 result.all.return_value = decided
                 return result
@@ -450,3 +456,25 @@ async def test_generator_filters_below_learned_floor():
     assert counts["suggested"] == 0
     assert counts.get("floor_filtered") == 1
     assert added == []
+
+
+@pytest.mark.asyncio
+async def test_queue_cap_pauses_generation():
+    tenant_id = uuid4()
+    calls = []
+
+    async def execute(stmt):
+        text = str(stmt)
+        calls.append(text[:40])
+        result = Mock()
+        if text.startswith("SELECT count(correlation_suggestions.id)"):
+            result.scalar_one.return_value = 500  # at the cap
+            return result
+        raise AssertionError("nothing beyond the count may run when capped")
+
+    counts = await suggest_semantic_correlations(
+        SimpleNamespace(execute=execute), tenant_id, uuid4()
+    )
+    assert counts.get("queue_capped") is True
+    assert counts["suggested"] == 0
+    assert len(calls) == 1

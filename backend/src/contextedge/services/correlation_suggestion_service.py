@@ -53,6 +53,10 @@ LEARNING_MIN_DECIDED = 10
 LEARNING_LOW_ACCEPT_RATE = 0.2
 LEARNING_FLOOR_RAISE = 0.05
 LEARNING_FLOOR_CAP = 0.85
+# Per-tenant pending-queue cap (C4): a backfill storm must not bury
+# reviewers. Generation pauses while the queue is at the cap and
+# resumes as reviewers decide.
+SUGGESTION_QUEUE_CAP = 500
 # Confidence stamped on the edge a reviewer's accept creates — a human
 # confirmed it, but the signal source is still semantic.
 ACCEPTED_EDGE_CONFIDENCE = 0.6
@@ -297,6 +301,25 @@ async def suggest_semantic_correlations(
     pairs already suggested (any status — a rejection is permanent) or
     already correlated are skipped."""
     counts = {"suggested": 0, "candidates": 0, "uncorroborated": 0}
+    # C4: hard per-tenant queue cap — reviewers must never face an
+    # unbounded backlog. Cheap count first; generation resumes as the
+    # queue drains.
+    pending_count = (
+        await db.execute(
+            select(func.count(CorrelationSuggestion.id)).where(
+                CorrelationSuggestion.tenant_id == tenant_id,
+                CorrelationSuggestion.status == "pending",
+            )
+        )
+    ).scalar_one()
+    if pending_count >= SUGGESTION_QUEUE_CAP:
+        counts["queue_capped"] = True
+        logger.info(
+            "correlation_suggestions.queue_capped",
+            tenant_id=str(tenant_id),
+            pending=pending_count,
+        )
+        return counts
     # The seed must pass the same content fence as the targets: a
     # legal-hold or pending-redaction item must not surface via the
     # suggestion queue either.
