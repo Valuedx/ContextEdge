@@ -4,6 +4,7 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
+import structlog
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -162,20 +163,51 @@ async def _negative_penalty_for_playbook(
     return min(1.0, contradiction_count * 0.3 + nk_count * 0.1)
 
 
-async def _latest_published_version_id(
-    db: AsyncSession,
-    playbook_id: uuid.UUID,
-) -> uuid.UUID | None:
-    r = await db.execute(
-        select(PlaybookVersion.id)
-        .where(
-            PlaybookVersion.playbook_id == playbook_id,
-            PlaybookVersion.published_at.is_not(None),
+logger = structlog.get_logger()
+
+# E3: below this score a recommendation is noise — the ranker abstains
+# (drops the result) rather than surfacing a low-signal guess. Callers
+# already handle an empty list as "no recommendation".
+MIN_RECOMMENDATION_SCORE = 0.35
+
+
+def _quality_score(playbook_confidence: float, evidence_hits: int) -> float:
+    """E3: the 0.5 placeholder replaced with real signals — the
+    published version's reviewed confidence and how much evidence
+    actually supports the playbook for THIS query (capped at 5 hits).
+    Deterministic and visible in the breakdown."""
+    support = min(evidence_hits / 5.0, 1.0)
+    return min(max(0.6 * playbook_confidence + 0.4 * support, 0.0), 1.0)
+
+
+async def _latest_published_versions(
+    db: AsyncSession, playbook_ids: list[uuid.UUID]
+) -> dict[uuid.UUID, PlaybookVersion]:
+    """E3 N+1 fix: one query for every candidate's newest published
+    version instead of two queries per playbook."""
+    if not playbook_ids:
+        return {}
+    rows = (
+        (
+            await db.execute(
+                select(PlaybookVersion)
+                .where(
+                    PlaybookVersion.playbook_id.in_(tuple(playbook_ids)),
+                    PlaybookVersion.published_at.is_not(None),
+                )
+                .order_by(
+                    PlaybookVersion.playbook_id,
+                    PlaybookVersion.published_at.desc(),
+                )
+            )
         )
-        .order_by(PlaybookVersion.published_at.desc())
-        .limit(1)
+        .scalars()
+        .all()
     )
-    return r.scalar_one_or_none()
+    latest: dict[uuid.UUID, PlaybookVersion] = {}
+    for pv in rows:
+        latest.setdefault(pv.playbook_id, pv)
+    return latest
 
 
 async def rank_playbooks(
@@ -190,6 +222,7 @@ async def rank_playbooks(
     max_risk_tier: str | None = None,
     allowed_domain_ids: list[uuid.UUID] | None = None,
     caller_roles: list[str] | None = None,
+    min_score: float | None = None,
 ) -> list[RankedPlaybook]:
     """Rank approved playbooks using hybrid signals.
 
@@ -238,17 +271,25 @@ async def rank_playbooks(
     query_embedding: list[float] | None = None
     if query_text.strip():
         try:
-            query_embedding = await generate_embedding(query_text)
+            # Cost hardening: attributed + budget-gated — this call runs on
+            # every ranking query and every eval case; unattributed spend
+            # here was invisible to /admin/cost and the tenant budget.
+            query_embedding = await generate_embedding(
+                query_text, tenant_id=tenant_id, db=db
+            )
         except Exception:
             query_embedding = None
 
     ranked = []
     now = datetime.now(UTC)
+    latest_versions = await _latest_published_versions(
+        db, [pb.id for pb in approved_playbooks]
+    )
     for pb in approved_playbooks:
-        pv_id = await _latest_published_version_id(db, pb.id)
-        if pv_id is None:
+        pv = latest_versions.get(pb.id)
+        if pv is None:
             continue
-        pv = await db.get(PlaybookVersion, pv_id)
+        pv_id = pv.id
         keyword_score = fts_scores.get(pb.id, 0.0)
 
         sem_rows: list = []
@@ -287,10 +328,10 @@ async def rank_playbooks(
 
         semantic_score_pb, evidence_hits_pb = _semantic_corpus_score(sem_rows)
         semantic_score = min(1.0, semantic_score_pb * (0.6 + 0.4 * keyword_score))
-        quality_score = 0.5
+        playbook_confidence = float(pv.playbook_confidence) if pv is not None else 0.0
+        quality_score = _quality_score(playbook_confidence, evidence_hits_pb)
         freshness = _compute_freshness(pb, now)
         recency_score = freshness
-        playbook_confidence = float(pv.playbook_confidence) if pv is not None else 0.0
 
         total = (
             weights.keyword * keyword_score
@@ -325,7 +366,17 @@ async def rank_playbooks(
         ))
 
     ranked.sort(key=lambda r: r.score, reverse=True)
-    return ranked[:top_k]
+    threshold = MIN_RECOMMENDATION_SCORE if min_score is None else min_score
+    confident = [r for r in ranked if r.score >= threshold]
+    if ranked and not confident:
+        logger.info(
+            "ranking.abstained",
+            tenant_id=str(tenant_id),
+            candidates=len(ranked),
+            top_score=round(ranked[0].score, 3),
+            threshold=threshold,
+        )
+    return confident[:top_k]
 
 
 def _compute_freshness(playbook: Playbook, now: datetime) -> float:
