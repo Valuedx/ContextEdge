@@ -390,7 +390,7 @@ responded, so operators verify mapping without reading logs.
 | E3 | Ranking calibration + SLA priors — **PARTIAL 2026-08-03** (quality signal, abstention, version batching; SLA priors + per-candidate query batching open) | L | `quality_score=0.5` placeholder, no abstention threshold, N+1 playbook queries; SLA priors deferred from change-risk work |
 | E4 | Sync single-flight — **SHIPPED 2026-08-03** | M | advisory lock per source object; overlapping backfills currently race (dedup is DB-safe since 0026) |
 | E5 | Reviewer/admin consoles — **PARTIAL 2026-08-03** (suggestion + fleet + identity review queues live on /suggestions; admin-console CRUD remains) | L | identity `needs_review` queue, suggestion queue (C4), episode membership editing — all API-led today |
-| E6 | Execution engine depth | L | Release 2: tool registry, rollback execution, timeouts, resume; verification shipped (0036) |
+| E6 | Execution engine depth — **SAFETY SLICE 2026-08-03** (stale approval expiration on the verification beat; expiry never approves). Tool registry / rollback execution / cancellation / resume remain Release-2 scope per the plan | L | Release 2: tool registry, rollback execution, timeouts, resume; verification shipped (0036) |
 | E7 | Prompt-family doubled-brace fixes — **SHIPPED 2026-08-03** | S | `decision`/`pattern`/`playbook` v1 system prompts still carry literal `{{ }}`; ship v2s (episode + identity already fixed) |
 
 ---

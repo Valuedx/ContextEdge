@@ -82,6 +82,24 @@ async def _sweep(db, tenant_id: str, limit: int) -> dict:
                     error_type=type(exc).__name__,
                     error=str(exc),
                 )
+        # E6 safety slice: expire pending approvals nobody decided —
+        # the step stays blocked (expiry never approves); the requester
+        # re-raises with current context.
+        try:
+            from contextedge.services.approval_expiry_service import (
+                expire_stale_approvals,
+            )
+
+            expiry = await expire_stale_approvals(db, tid)
+            totals["approvals_expired"] = (
+                totals.get("approvals_expired", 0) + expiry["expired"]
+            )
+        except Exception as exc:
+            logger.warning(
+                "execution.approval_expiry_failed",
+                tenant_id=str(tid),
+                error=str(exc),
+            )
         await db.commit()
     logger.info("execution.verification_sweep_done", **totals)
     return totals
