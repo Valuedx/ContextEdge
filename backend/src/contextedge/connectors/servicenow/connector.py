@@ -11,6 +11,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 import httpx
+import structlog
 
 from contextedge.connectors.base import (
     BackfillResult,
@@ -88,6 +89,8 @@ TABLES = {
 # 5=info). Overridable per source via source_config["alert_severity_max"].
 DEFAULT_ALERT_SEVERITY_MAX = 3
 
+logger = structlog.get_logger()
+
 
 class ServiceNowConnector(BaseConnector):
     """Connector for ServiceNow REST Table API."""
@@ -102,20 +105,43 @@ class ServiceNowConnector(BaseConnector):
     def _table_extra_query(self, table_name: str) -> str:
         """Per-table server-side filter, appended to EVERY branch of a
         sysparm_query (a ^NQ branch is a fresh query — a filter appended
-        to only one branch silently leaks through the other)."""
-        if table_name != "em_alert":
-            return ""
-        try:
-            max_severity = int(
-                (self.source_config or {}).get(
-                    "alert_severity_max", DEFAULT_ALERT_SEVERITY_MAX
+        to only one branch silently leaks through the other).
+
+        Two sources of filter, combined:
+
+        - ``alert_severity_max`` bounds em_alert severity (default 3).
+        - ``table_filters`` scopes any table to a subset, as raw encoded-query
+          syntax keyed by table name, e.g.::
+
+              {"table_filters": {"incident": "priority<=2"}}
+
+          Syncing an entire ServiceNow instance is rarely what anyone wants —
+          most tenants care about a queue, a priority band, or an assignment
+          group. Filtering server-side means the records never leave
+          ServiceNow, so they cost no extraction and no storage. Applied to
+          both the backfill and the keyset-paged incremental query.
+        """
+        parts: list[str] = []
+
+        if table_name == "em_alert":
+            try:
+                max_severity = int(
+                    (self.source_config or {}).get(
+                        "alert_severity_max", DEFAULT_ALERT_SEVERITY_MAX
+                    )
                 )
-            )
-        except (TypeError, ValueError):
-            max_severity = DEFAULT_ALERT_SEVERITY_MAX
-        if not 1 <= max_severity <= 5:
-            max_severity = DEFAULT_ALERT_SEVERITY_MAX
-        return f"^severity<={max_severity}"
+            except (TypeError, ValueError):
+                max_severity = DEFAULT_ALERT_SEVERITY_MAX
+            if not 1 <= max_severity <= 5:
+                max_severity = DEFAULT_ALERT_SEVERITY_MAX
+            parts.append(f"^severity<={max_severity}")
+
+        custom = ((self.source_config or {}).get("table_filters") or {}).get(table_name)
+        if isinstance(custom, str) and custom.strip():
+            # Tolerate a leading ^ so both "priority=1" and "^priority=1" work.
+            parts.append("^" + custom.strip().lstrip("^"))
+
+        return "".join(parts)
 
     # Retry transient failures (429 / 5xx / transport errors) with capped
     # exponential backoff, honoring Retry-After on 429.
@@ -172,12 +198,36 @@ class ServiceNowConnector(BaseConnector):
             return CredentialStatus(valid=False, message=str(e))
 
     async def discover_objects(self) -> list[DiscoveredObject]:
+        """List the tables this instance actually exposes.
+
+        A table is skipped rather than fatal when the instance does not have
+        it. ``em_alert`` ships with ITOM Event Management, which is not
+        activated on a stock instance, and the Table API answers 400 for a
+        table that does not exist. Letting that abort discovery means an
+        instance missing one optional plugin can offer *no* objects at all —
+        incidents included — which is how a working ServiceNow source looks
+        completely broken. Verified against a PDI without ITOM: 4 tables
+        discovered, em_alert skipped.
+        """
         objects: list[DiscoveredObject] = []
         for table_name, meta in TABLES.items():
-            count_data = await self._snow_get(
-                f"/api/now/stats/{table_name}",
-                {"sysparm_count": "true"},
-            )
+            try:
+                count_data = await self._snow_get(
+                    f"/api/now/stats/{table_name}",
+                    {"sysparm_count": "true"},
+                )
+            except httpx.HTTPStatusError as exc:
+                # 400 = no such table, 403 = present but not readable by this
+                # account. Both mean "cannot sync it", and neither should cost
+                # the caller the tables that do work.
+                if exc.response.status_code in (400, 403, 404):
+                    logger.info(
+                        "servicenow.table_unavailable",
+                        table=table_name,
+                        status=exc.response.status_code,
+                    )
+                    continue
+                raise
             count = count_data.get("result", {}).get("stats", {}).get("count", "0")
             objects.append(
                 DiscoveredObject(

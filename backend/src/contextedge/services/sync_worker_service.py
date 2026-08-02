@@ -516,6 +516,32 @@ async def run_incremental_job(
 
     ck = Checkpoint(data=ck_row.checkpoint_data, captured_at=ck_row.captured_at) if ck_row else None
 
+    if ck is None:
+        # An incremental sync means "changes since the last cursor", and there
+        # is no cursor until a backfill establishes one. `fetch_changes` takes
+        # a non-optional Checkpoint (see connectors/base.py), so every
+        # connector dereferences it — passing None crashed the run with
+        # "'NoneType' object has no attribute 'data'". Approving an object for
+        # sync before its first backfill is the ordinary way to hit this.
+        #
+        # Skipping is the honest answer rather than treating it as a first
+        # full pull: that would quietly ingest the source's entire history —
+        # and pay to extract it — on a schedule nobody associated with a
+        # backfill.
+        run.items_processed = 0
+        run.status = "completed"
+        run.errors = {
+            "skipped": "no checkpoint yet — run a backfill for this object first"
+        }
+        run.completed_at = datetime.now(UTC)
+        await db.commit()
+        logger.info(
+            "sync.incremental_skipped_no_checkpoint",
+            source_object_id=str(so.id),
+            source_id=str(source.id),
+        )
+        return {"run_id": str(run.id), "status": "skipped_no_checkpoint"}
+
     try:
         result = await connector.fetch_changes(so.external_id, so.object_type, ck)
         events = list(result.events or [])
