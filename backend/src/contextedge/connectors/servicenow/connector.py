@@ -70,6 +70,38 @@ TABLES = {
         "label": "KB Articles",
         "fields": "number,short_description,text,workflow_state,author,sys_updated_on",
     },
+    # The request side of ITSM. Incidents record what broke; requests record
+    # what was provisioned and how — which is the answer to a large share of
+    # service-desk questions ("how do we set up a new starter's laptop").
+    #
+    # The chain is REQ -> RITM -> SCTASK. Only the last two are ingested: the
+    # REQ header is an envelope with no subject of its own — verified against a
+    # live instance, it normalises to "Untitled Evidence" — so ingesting it
+    # would pay to classify empty records. Each RITM carries `request.number`,
+    # so the request it belonged to is still recoverable without storing the
+    # envelope itself.
+    "sc_req_item": {
+        "label": "Requested Items",
+        # A RITM carries no short_description of its own — the catalog item is
+        # the subject ("Standard Laptop"), so cat_item.name is dot-walked in
+        # and promoted to the title below. Without that, every requested item
+        # lands as untitled evidence.
+        "fields": (
+            "number,short_description,description,state,stage,approval,priority,"
+            "opened_at,closed_at,close_notes,request,request.number,"
+            "cat_item,cat_item.name,requested_for,requested_for.name,"
+            "assignment_group,assignment_group.name,cmdb_ci,cmdb_ci.name,"
+            "sys_updated_on"
+        ),
+    },
+    "sc_task": {
+        "label": "Catalog Tasks",
+        "fields": (
+            "number,short_description,description,state,priority,opened_at,"
+            "closed_at,close_notes,request_item,request_item.number,"
+            "assigned_to,assignment_group,assignment_group.name,sys_updated_on"
+        ),
+    },
     # em_alert never produces per-record events — each sync invocation
     # rolls fetched alerts up per (CI, day) in alert_rollup.py. Severity
     # is filtered server-side (see _table_extra_query); the checkpoint
@@ -283,7 +315,7 @@ class ServiceNowConnector(BaseConnector):
                         external_id=sys_id,
                         source_type="servicenow",
                         object_type=table_name,
-                        content=record,
+                        content=_with_derived_title(record),
                         thread_id=f"{table_name}:{sys_id}",
                         timestamp=_parse_snow_datetime(record.get("sys_updated_on")),
                         metadata={"table": table_name},
@@ -402,7 +434,7 @@ class ServiceNowConnector(BaseConnector):
                         external_id=sys_id,
                         source_type="servicenow",
                         object_type=table_name,
-                        content=record,
+                        content=_with_derived_title(record),
                         thread_id=f"{table_name}:{sys_id}",
                         timestamp=_parse_snow_datetime(ts),
                         metadata={"table": table_name},
@@ -518,6 +550,29 @@ class ServiceNowConnector(BaseConnector):
 
     def rate_limit_config(self) -> RateLimitConfig:
         return RateLimitConfig(requests_per_second=10.0, burst_size=20)
+
+
+def _with_derived_title(record: dict) -> dict:
+    """Give a record a usable ``short_description`` when the table has none.
+
+    ``evidence_title_from_payload`` looks for title/subject/short_description
+    and then falls back to a body snippet. A requested item has an empty
+    ``short_description`` — its subject is the catalog item ("Standard
+    Laptop"), which arrives dot-walked as ``cat_item.name`` and so is invisible
+    to that helper. Untitled evidence is hard to review and hard to cite, so
+    the mapping is done here, where the ServiceNow-specific knowledge lives,
+    rather than teaching the generic normaliser about catalog items.
+
+    Returns the record unchanged when it already has a description.
+    """
+    if str(record.get("short_description") or "").strip():
+        return record
+    subject = str(record.get("cat_item.name") or "").strip()
+    if not subject:
+        return record
+    enriched = dict(record)
+    enriched["short_description"] = subject
+    return enriched
 
 
 def _parse_snow_datetime(value: str | None) -> datetime | None:
