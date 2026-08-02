@@ -750,10 +750,14 @@ export interface LlmUsageTotals {
   request_count: number;
   prompt_tokens: number;
   completion_tokens: number;
+  /** Thinking tokens. A subset of completion_tokens — never add the two. */
+  reasoning_tokens: number;
   cached_tokens: number;
   total_tokens: number;
   estimated_cost_usd: number;
   cache_hit_rate: number;
+  /** reasoning_tokens / completion_tokens. */
+  reasoning_share: number;
 }
 
 export interface LlmUsageBreakdownEntry {
@@ -762,6 +766,8 @@ export interface LlmUsageBreakdownEntry {
   request_count: number;
   prompt_tokens: number;
   completion_tokens: number;
+  /** Subset of completion_tokens. */
+  reasoning_tokens: number;
   cached_tokens: number;
   total_tokens: number;
   estimated_cost_usd: number;
@@ -781,6 +787,13 @@ export interface TenantBudgetStatus {
   current_cost_usd: number;
   allowed: boolean;
   reason: string;
+  /**
+   * What is actually enforced. A null `budget` does NOT mean uncapped —
+   * tenants without a row fall back to the deployment default caps.
+   */
+  effective_token_limit: number | null;
+  effective_cost_cap_usd: number | null;
+  limit_source: "tenant" | "default" | "none";
 }
 
 export interface TenantBudgetUpsert {

@@ -33,8 +33,11 @@ if settings.google_application_credentials:
 else:
     logger.debug("vertex_ai_credentials_not_found")
 
-# Enable retries for transient errors (e.g., 503 Service Unavailable)
-litellm.num_retries = 5
+# Retries for transient errors (e.g., 503 Service Unavailable). Every retry is
+# a fully billed call, so this number multiplies the worst-case cost of any
+# request — it is a cost knob as much as a resilience one. Configurable via
+# LLM_NUM_RETRIES; see config.py for why the default came down from 5.
+litellm.num_retries = settings.llm_num_retries
 
 MODEL_ROUTING = {
     "classification": settings.default_classification_model,
@@ -140,12 +143,24 @@ async def llm_complete(
             # models) don't derail the main path.
             pass
 
+    # Clamp generated tokens to the deployment ceiling. Callers pass whatever
+    # their prompt might need; this is the backstop that stops one caller (or
+    # one runaway prompt) from buying an 8k-token answer on every retry.
+    effective_max_tokens = min(max_tokens, settings.llm_max_output_tokens)
+    if effective_max_tokens < max_tokens:
+        logger.debug(
+            "llm.max_tokens_clamped",
+            requested=max_tokens,
+            allowed=effective_max_tokens,
+            task=task,
+        )
+
     messages = build_messages(system_prompt, prompt, cache_system=bool(system_prompt))
     kwargs: dict[str, Any] = {
         "model": model,
         "messages": messages,
         "temperature": temperature,
-        "max_tokens": max_tokens,
+        "max_tokens": effective_max_tokens,
     }
     if response_format:
         kwargs["response_format"] = response_format
@@ -567,8 +582,22 @@ async def generate_embedding(
 async def generate_embeddings_batch(
     texts: list[str], model: str | None = None
 ) -> list[list[float]]:
-    """Generate embeddings for a batch of texts. Returns 3072-dimensional vectors."""
+    """Generate embeddings for a batch of texts. Returns 3072-dimensional vectors.
+
+    Requests are split into chunks of ``settings.embedding_max_batch_size``.
+    Callers hand in a whole document's worth of chunks, so an uncapped call can
+    be arbitrarily large — and a provider-side size rejection arrives *after*
+    the tokens are spent. Splitting bounds the blast radius of any single
+    request; the token cost of the work itself is unchanged.
+    """
     model = model or get_model_for_task("embedding")
+
+    limit = settings.embedding_max_batch_size
+    if len(texts) > limit:
+        out: list[list[float]] = []
+        for start_idx in range(0, len(texts), limit):
+            out.extend(await generate_embeddings_batch(texts[start_idx : start_idx + limit], model))
+        return out
     # LiteLLM maps 'dimensions' -> outputDimensionality for Vertex AI
     # gemini-embedding-001 supports up to 3072
     kwargs = {"model": model, "input": texts}

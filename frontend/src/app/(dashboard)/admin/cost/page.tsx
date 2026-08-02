@@ -18,6 +18,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import {
   AlertTriangle,
+  Brain,
   DollarSign,
   Gauge,
   Layers,
@@ -131,27 +132,37 @@ function BreakdownBar({
   prompt,
   cached,
   completion,
+  reasoning = 0,
 }: {
   prompt: number;
   cached: number;
   completion: number;
+  /** Subset of `completion`, drawn as its own segment carved out of it. */
+  reasoning?: number;
 }) {
   const total = prompt + completion;
   if (total === 0) return null;
   const nonCachedPrompt = Math.max(prompt - cached, 0);
+  // Reasoning is already inside completion, so the answer segment is what is
+  // left after carving it out. Adding them would overstate the bar.
+  const answer = Math.max(completion - reasoning, 0);
   const pctCached = (cached / total) * 100;
   const pctPrompt = (nonCachedPrompt / total) * 100;
-  const pctCompletion = (completion / total) * 100;
+  const pctAnswer = (answer / total) * 100;
+  const pctReasoning = (reasoning / total) * 100;
   return (
     <div
       className="flex h-2 w-full rounded-sm overflow-hidden bg-muted"
       title={`Prompt (non-cached): ${formatNumber(
         nonCachedPrompt,
-      )} • Cached: ${formatNumber(cached)} • Completion: ${formatNumber(completion)}`}
+      )} • Cached: ${formatNumber(cached)} • Answer: ${formatNumber(
+        answer,
+      )} • Thinking: ${formatNumber(reasoning)}`}
     >
       <div className="bg-sky-500/70" style={{ width: `${pctPrompt}%` }} />
       <div className="bg-emerald-500/70" style={{ width: `${pctCached}%` }} />
-      <div className="bg-violet-500/70" style={{ width: `${pctCompletion}%` }} />
+      <div className="bg-violet-500/70" style={{ width: `${pctAnswer}%` }} />
+      <div className="bg-fuchsia-500/70" style={{ width: `${pctReasoning}%` }} />
     </div>
   );
 }
@@ -220,7 +231,16 @@ function BudgetPanel() {
     );
   }
 
-  const { budget, current_tokens, current_cost_usd, allowed, reason } = data;
+  const {
+    budget,
+    current_tokens,
+    current_cost_usd,
+    allowed,
+    reason,
+    effective_token_limit,
+    effective_cost_cap_usd,
+    limit_source,
+  } = data;
 
   if (isEditing) {
     return (
@@ -233,16 +253,18 @@ function BudgetPanel() {
     );
   }
 
-  // Derive progress ratios only when a cap is set; uncapped axes
-  // render as "no cap".
+  // Ratios come from the *effective* caps, not the row: a tenant with no row
+  // is still capped by the deployment defaults, and drawing it as uncapped
+  // would hide a limit that can actually block their calls.
   const tokenRatio =
-    budget?.daily_token_limit && budget.daily_token_limit > 0
-      ? Math.min(current_tokens / budget.daily_token_limit, 1)
+    effective_token_limit && effective_token_limit > 0
+      ? Math.min(current_tokens / effective_token_limit, 1)
       : null;
   const costRatio =
-    budget?.daily_cost_cap_usd && budget.daily_cost_cap_usd > 0
-      ? Math.min(current_cost_usd / budget.daily_cost_cap_usd, 1)
+    effective_cost_cap_usd && effective_cost_cap_usd > 0
+      ? Math.min(current_cost_usd / effective_cost_cap_usd, 1)
       : null;
+  const effectiveAction = budget?.action_on_exceed ?? "block";
 
   return (
     <Card>
@@ -250,19 +272,29 @@ function BudgetPanel() {
         <div className="flex items-center gap-2">
           <ShieldCheck className="h-4 w-4 text-muted-foreground" />
           <CardTitle className="text-sm">Daily budget</CardTitle>
-          {budget ? (
+          {limit_source !== "none" && (
             <Badge
               variant="outline"
               className={cn(
                 "text-[10px] font-mono",
-                budget.action_on_exceed === "block"
+                effectiveAction === "block"
                   ? "bg-rose-500/15 text-rose-300 border-rose-500/30"
                   : "bg-amber-500/15 text-amber-300 border-amber-500/30",
               )}
             >
-              on-exceed: {budget.action_on_exceed}
+              on-exceed: {effectiveAction}
             </Badge>
-          ) : (
+          )}
+          {limit_source === "default" && (
+            <Badge
+              variant="outline"
+              className="text-[10px] font-mono bg-sky-500/15 text-sky-300 border-sky-500/30"
+              title="No budget row for this tenant, so the deployment-wide default caps apply. Set a budget to override them."
+            >
+              deployment default
+            </Badge>
+          )}
+          {limit_source === "none" && (
             <Badge variant="secondary" className="text-[10px]">
               uncapped
             </Badge>
@@ -284,22 +316,24 @@ function BudgetPanel() {
         <BudgetAxis
           label="Tokens"
           current={current_tokens}
-          limit={budget?.daily_token_limit ?? null}
+          limit={effective_token_limit}
           ratio={tokenRatio}
           formatValue={formatNumber}
         />
         <BudgetAxis
           label="Cost"
           current={current_cost_usd}
-          limit={budget?.daily_cost_cap_usd ?? null}
+          limit={effective_cost_cap_usd}
           ratio={costRatio}
           formatValue={formatCurrency}
         />
         <div className="text-[11px] text-muted-foreground pt-1">
           Usage aggregates today&apos;s <code>llm.usage</code> events (UTC day).
-          {budget?.action_on_exceed === "warn" &&
+          {limit_source === "default" &&
+            " These are the deployment default caps, applied because this tenant has no budget row. Saving a budget here replaces them."}
+          {effectiveAction === "warn" &&
             " Warning mode: calls still go through, but each one emits an llm.budget_warning event."}
-          {budget?.action_on_exceed === "block" &&
+          {effectiveAction === "block" &&
             " Blocking mode: llm_complete raises TenantBudgetExceeded once the cap is reached — callers are expected to degrade gracefully."}
         </div>
       </CardContent>
@@ -592,7 +626,7 @@ export default function AdminCostPage() {
 
       {!error && (
         <>
-          <section className="grid gap-3 grid-cols-2 lg:grid-cols-4">
+          <section className="grid gap-3 grid-cols-2 lg:grid-cols-5">
             <KpiCard
               label="Estimated cost"
               value={formatCurrency(totals?.estimated_cost_usd ?? 0)}
@@ -634,6 +668,23 @@ export default function AdminCostPage() {
                       ? "text-amber-300"
                       : "text-rose-300"
                   : undefined
+              }
+            />
+            <KpiCard
+              label="Thinking tokens"
+              value={
+                totals && totals.completion_tokens > 0
+                  ? formatNumber(totals.reasoning_tokens ?? 0)
+                  : "—"
+              }
+              sub={
+                totals && totals.completion_tokens > 0
+                  ? `${((totals.reasoning_share ?? 0) * 100).toFixed(0)}% of generated output`
+                  : "No output tokens in window"
+              }
+              icon={Brain}
+              tone={
+                (totals?.reasoning_share ?? 0) >= 0.5 ? "text-fuchsia-300" : undefined
               }
             />
             <KpiCard
@@ -695,7 +746,11 @@ export default function AdminCostPage() {
                 </span>
                 <span className="flex items-center gap-1">
                   <span className="inline-block h-2 w-2 rounded-sm bg-violet-500/70" />
-                  completion
+                  answer
+                </span>
+                <span className="flex items-center gap-1">
+                  <span className="inline-block h-2 w-2 rounded-sm bg-fuchsia-500/70" />
+                  thinking
                 </span>
               </div>
             </div>
@@ -750,6 +805,7 @@ export default function AdminCostPage() {
                               prompt={row.prompt_tokens}
                               cached={row.cached_tokens}
                               completion={row.completion_tokens}
+                              reasoning={row.reasoning_tokens}
                             />
                           </td>
                           <td className="px-3 py-2 text-right font-mono font-semibold">
@@ -769,7 +825,9 @@ export default function AdminCostPage() {
             the LLM provider&apos;s billing dashboard for the authoritative
             invoice. Cache-hit rate reflects prompt tokens served from
             provider-side prompt caches (OpenAI automatic prefix cache or
-            Anthropic ephemeral blocks).
+            Anthropic ephemeral blocks). Thinking tokens are a subset of
+            generated output, not an extra charge on top — they are billed at
+            the output rate and are already inside the cost above.
           </div>
         </>
       )}

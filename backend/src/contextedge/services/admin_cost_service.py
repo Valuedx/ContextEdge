@@ -36,6 +36,14 @@ MODEL_COST_USD_PER_M_TOKENS: dict[str, dict[str, float]] = {
     "claude-haiku-4-5": {"input": 1.00, "output": 5.00, "cached_input": 0.10},
     "claude-sonnet-4-6": {"input": 3.00, "output": 15.00, "cached_input": 0.30},
     "claude-opus-4-7": {"input": 15.00, "output": 75.00, "cached_input": 1.50},
+    # Google. Model ids arrive LiteLLM-prefixed ("vertex_ai/gemini-2.5-flash"),
+    # and the lookup below is a substring match, so the bare name is the key.
+    # Thinking tokens are billed at the output rate and are already inside
+    # completion_tokens, so no separate reasoning rate is needed here.
+    "gemini-2.5-flash": {"input": 0.30, "output": 2.50, "cached_input": 0.075},
+    "gemini-2.5-pro": {"input": 1.25, "output": 10.00, "cached_input": 0.31},
+    "gemini-2.0-flash": {"input": 0.10, "output": 0.40, "cached_input": 0.025},
+    "gemini-embedding": {"input": 0.15, "output": 0.0, "cached_input": 0.0},
 }
 
 # Fallback rate if the model doesn't match any known entry.
@@ -93,6 +101,7 @@ async def get_llm_usage(
     total_requests = 0
     total_prompt = 0
     total_completion = 0
+    total_reasoning = 0
     total_cached = 0
     total_cost = 0.0
 
@@ -104,12 +113,17 @@ async def get_llm_usage(
         task = payload.get("task", "unknown")
         prompt = int(payload.get("prompt_tokens", 0) or 0)
         completion = int(payload.get("completion_tokens", 0) or 0)
+        # Subset of completion_tokens, never added to it — see
+        # ai/observability.extract_usage. Reported so operators can see how much
+        # of the output spend was the model thinking rather than answering.
+        reasoning = int(payload.get("reasoning_tokens", 0) or 0)
         cached = int(payload.get("cached_tokens", 0) or 0)
         cost = _estimate_cost(model, prompt, completion, cached)
 
         total_requests += 1
         total_prompt += prompt
         total_completion += completion
+        total_reasoning += reasoning
         total_cached += cached
         total_cost += cost
 
@@ -122,6 +136,7 @@ async def get_llm_usage(
                 "request_count": 0,
                 "prompt_tokens": 0,
                 "completion_tokens": 0,
+                "reasoning_tokens": 0,
                 "cached_tokens": 0,
                 "total_tokens": 0,
                 "estimated_cost_usd": 0.0,
@@ -130,11 +145,17 @@ async def get_llm_usage(
         agg["request_count"] += 1
         agg["prompt_tokens"] += prompt
         agg["completion_tokens"] += completion
+        agg["reasoning_tokens"] += reasoning
         agg["cached_tokens"] += cached
         agg["total_tokens"] += prompt + completion
         agg["estimated_cost_usd"] = round(agg["estimated_cost_usd"] + cost, 6)
 
     cache_hit_rate = 0.0 if total_prompt == 0 else round(total_cached / total_prompt, 4)
+    # What share of generated output was thinking rather than answer. On a
+    # reasoning model this is routinely the majority of the output bill.
+    reasoning_share = (
+        0.0 if total_completion == 0 else round(total_reasoning / total_completion, 4)
+    )
 
     by_model_task = sorted(
         breakdown.values(),
@@ -150,10 +171,12 @@ async def get_llm_usage(
             "request_count": total_requests,
             "prompt_tokens": total_prompt,
             "completion_tokens": total_completion,
+            "reasoning_tokens": total_reasoning,
             "cached_tokens": total_cached,
             "total_tokens": total_prompt + total_completion,
             "estimated_cost_usd": round(total_cost, 4),
             "cache_hit_rate": cache_hit_rate,
+            "reasoning_share": reasoning_share,
         },
         "by_model_task": by_model_task,
     }

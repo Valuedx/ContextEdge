@@ -48,6 +48,16 @@ LLM_REQUESTS_TOTAL = Counter(
     labelnames=("tenant_id", "model", "task", "outcome"),
 )
 
+# Deliberately a separate metric rather than another `token_type` label on
+# LLM_TOKENS_TOTAL: reasoning tokens are a *subset* of completion tokens, so
+# adding them as a label value would silently double-count any dashboard that
+# sums across token_type.
+LLM_REASONING_TOKENS_TOTAL = Counter(
+    "contextedge_llm_reasoning_tokens_total",
+    "Thinking tokens, a subset of completion tokens (not additive).",
+    labelnames=("tenant_id", "model", "task"),
+)
+
 
 # --- Helper to normalise usage from LiteLLM response -----------------------
 
@@ -63,20 +73,41 @@ def _safe_int(value: Any) -> int:
 
 
 def extract_usage(response: Any) -> dict[str, int]:
-    """Return ``{prompt_tokens, completion_tokens, cached_tokens, total_tokens}``
-    from a LiteLLM completion response, normalising across providers.
+    """Return ``{prompt_tokens, completion_tokens, reasoning_tokens,
+    cached_tokens, total_tokens}`` from a LiteLLM completion response,
+    normalising across providers.
 
     OpenAI exposes cached tokens under ``usage.prompt_tokens_details.cached_tokens``.
     Anthropic exposes them under ``usage.cache_read_input_tokens``.
     Missing fields → 0, never raise.
+
+    ``reasoning_tokens`` is a **breakdown of** ``completion_tokens``, not an
+    addition to it. Thinking models report it under
+    ``completion_tokens_details.reasoning_tokens``, and LiteLLM normalises every
+    provider onto the OpenAI convention where the thinking tokens are already
+    counted inside ``completion_tokens`` — verified against
+    ``vertex_ai/gemini-2.5-flash``: completion 362 = 110 text + 252 reasoning,
+    with ``total_tokens`` equal to prompt + completion. Cost must therefore
+    price ``completion_tokens`` once; reasoning is reported so operators can see
+    how much of the output spend was thinking rather than answer.
     """
     usage = getattr(response, "usage", None)
     if usage is None:
-        return {"prompt_tokens": 0, "completion_tokens": 0, "cached_tokens": 0, "total_tokens": 0}
+        return {
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "reasoning_tokens": 0,
+            "cached_tokens": 0,
+            "total_tokens": 0,
+        }
 
     prompt = _safe_int(getattr(usage, "prompt_tokens", 0))
     completion = _safe_int(getattr(usage, "completion_tokens", 0))
     cached = 0
+
+    # Thinking tokens, when the model reports them. Already inside `completion`.
+    completion_details = getattr(usage, "completion_tokens_details", None)
+    reasoning = _safe_int(getattr(completion_details, "reasoning_tokens", 0))
 
     # OpenAI path — usage.prompt_tokens_details.cached_tokens
     details = getattr(usage, "prompt_tokens_details", None)
@@ -90,6 +121,7 @@ def extract_usage(response: Any) -> dict[str, int]:
     return {
         "prompt_tokens": prompt,
         "completion_tokens": completion,
+        "reasoning_tokens": reasoning,
         "cached_tokens": cached,
         "total_tokens": prompt + completion,
     }
@@ -125,6 +157,9 @@ async def record_llm_usage(
     """
     if usage is None:
         usage = extract_usage(response)
+    # Callers may hand in a usage dict built before reasoning tokens were
+    # tracked, so read it defensively rather than assuming the key exists.
+    reasoning_tokens = int(usage.get("reasoning_tokens", 0) or 0)
     tenant_label = str(tenant_id) if tenant_id is not None else "unknown"
 
     # Prometheus — one Counter.inc per token type keeps the metric easy to
@@ -133,6 +168,8 @@ async def record_llm_usage(
     LLM_TOKENS_TOTAL.labels(tenant_label, model, task, "completion").inc(usage["completion_tokens"])
     LLM_TOKENS_TOTAL.labels(tenant_label, model, task, "cached").inc(usage["cached_tokens"])
     LLM_REQUESTS_TOTAL.labels(tenant_label, model, task, outcome).inc()
+    if reasoning_tokens:
+        LLM_REASONING_TOKENS_TOTAL.labels(tenant_label, model, task).inc(reasoning_tokens)
 
     # Structured log — one line per call with everything in one place.
     # Correlation IDs are pulled from the request-context ContextVar so the
@@ -149,6 +186,7 @@ async def record_llm_usage(
         "task": task,
         "prompt_tokens": usage["prompt_tokens"],
         "completion_tokens": usage["completion_tokens"],
+        "reasoning_tokens": reasoning_tokens,
         "cached_tokens": usage["cached_tokens"],
         "outcome": outcome,
     }
@@ -187,6 +225,8 @@ async def record_llm_usage(
                     "task": task,
                     "prompt_tokens": usage["prompt_tokens"],
                     "completion_tokens": usage["completion_tokens"],
+                    # Subset of completion_tokens — see extract_usage.
+                    "reasoning_tokens": reasoning_tokens,
                     "cached_tokens": usage["cached_tokens"],
                     "total_tokens": usage["total_tokens"],
                     "outcome": outcome,

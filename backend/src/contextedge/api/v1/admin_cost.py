@@ -116,10 +116,22 @@ async def get_tenant_budget_status(db: DbSession, user: AuthUser):
     user.require_role("tenant_admin")
     budget = await get_budget(db, user.tenant_id)
     result = await check_budget(db, user.tenant_id, use_cache=False)
+    # `result` already reflects whichever caps were enforced — the tenant's own
+    # row when it has one, otherwise the deployment defaults — so the effective
+    # limits come straight off it rather than being recomputed here.
+    if budget is not None:
+        limit_source = "tenant"
+    elif result.token_limit is not None or result.cost_cap_usd is not None:
+        limit_source = "default"
+    else:
+        limit_source = "none"
     return TenantBudgetStatus(
         budget=_serialise_budget(budget) if budget is not None else None,
         current_tokens=result.current_tokens,
         current_cost_usd=result.current_cost_usd,
         allowed=result.allowed,
         reason=result.reason,
+        effective_token_limit=result.token_limit,
+        effective_cost_cap_usd=result.cost_cap_usd,
+        limit_source=limit_source,
     )
