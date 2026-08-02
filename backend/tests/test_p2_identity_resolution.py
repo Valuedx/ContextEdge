@@ -285,14 +285,17 @@ async def test_rank_playbooks_identity_signal_boosts_score():
         expiry_at=None,
         last_validated_at=datetime.now(timezone.utc),
     )
-    version = SimpleNamespace(playbook_confidence=0.7)
+    version = SimpleNamespace(id=uuid4(), playbook_confidence=0.7)
     db = SimpleNamespace(
         execute=AsyncMock(return_value=_ScalarsResult([playbook])),
         get=AsyncMock(return_value=version),
     )
 
     with (
-        patch("contextedge.search.hybrid_ranker._latest_published_version_id", AsyncMock(return_value=uuid4())),
+        patch(
+            "contextedge.search.hybrid_ranker._latest_published_versions",
+            AsyncMock(return_value={playbook.id: version}),
+        ),
         patch("contextedge.search.hybrid_ranker._graph_score_for_playbook", AsyncMock(return_value=0.0)),
         patch("contextedge.search.hybrid_ranker._identity_score_for_playbook", AsyncMock(return_value=1.0)),
         patch("contextedge.search.hybrid_ranker._negative_penalty_for_playbook", AsyncMock(return_value=0.0)),
@@ -303,6 +306,7 @@ async def test_rank_playbooks_identity_signal_boosts_score():
             tenant_id=tenant_id,
             query_text="",
             entities=["sql-prod"],
+            min_score=0.0,  # this test isolates the identity signal
         )
 
     assert len(ranked) == 1

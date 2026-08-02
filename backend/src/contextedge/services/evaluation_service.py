@@ -109,9 +109,17 @@ async def _execute_evaluation_core(
     total = 0
     citation_cases: list[dict] = []
     prompt_version = (run.config or {}).get("episode_prompt_version")
+    # Cost hardening: each citation case is a real LLM reconstruction —
+    # cap per run so a huge dataset cannot burn unbounded tokens in one
+    # trigger. Truncation is reported, never silent.
+    max_llm_cases = int((run.config or {}).get("max_llm_cases", 100))
+    llm_cases_skipped = 0
 
     for case in ds.cases or []:
         if case.get("kind") == "episode_citation":
+            if len(citation_cases) >= max_llm_cases:
+                llm_cases_skipped += 1
+                continue
             result = await _run_citation_case(db, tenant_id, case, prompt_version)
             citation_cases.append(result)
             cases_out.append(result)
@@ -164,6 +172,7 @@ async def _execute_evaluation_core(
         ]
         results["citation"] = {
             "case_count": len(citation_cases),
+            "cases_skipped_by_llm_cap": llm_cases_skipped,
             "episode_prompt_version": prompt_version or "default",
             "mean_unsupported_step_rate": (
                 round(sum(rated_unsupported) / len(rated_unsupported), 3)
