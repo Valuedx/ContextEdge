@@ -191,12 +191,100 @@ function FleetQueue() {
   return <DataTable columns={columns} data={data} />;
 }
 
+type ReviewIdentity = {
+  id: string;
+  canonical_name: string;
+  entity_type: string;
+  resolution_state: string;
+  resolution_confidence: number | null;
+  resolution_method: string | null;
+};
+
+function IdentityQueue() {
+  const qc = useQueryClient();
+  const { data = [], isLoading } = useQuery<ReviewIdentity[]>({
+    queryKey: ["identities", "needs_review"],
+    queryFn: () => api.get("/identities", { resolution_state: "needs_review" }),
+  });
+
+  const decide = useMutation({
+    mutationFn: ({ id, action }: { id: string; action: "resolve" | "deactivate" }) =>
+      api.patch(
+        `/identities/${id}`,
+        action === "resolve" ? { resolution_state: "resolved" } : { is_active: false },
+      ),
+    onSuccess: (_data, vars) => {
+      qc.invalidateQueries({ queryKey: ["identities"] });
+      toast.success(vars.action === "resolve" ? "Identity marked resolved" : "Identity deactivated");
+    },
+    onError: (err: Error) => toast.error(err.message || "Update failed"),
+  });
+
+  const columns: ColumnDef<ReviewIdentity>[] = [
+    {
+      accessorKey: "canonical_name",
+      header: "Name",
+      cell: ({ row }) => <span className="text-sm">{row.getValue("canonical_name")}</span>,
+    },
+    {
+      accessorKey: "entity_type",
+      header: "Type",
+      cell: ({ row }) => (
+        <Badge variant="outline" className="text-xs">{row.getValue("entity_type")}</Badge>
+      ),
+    },
+    {
+      accessorKey: "resolution_confidence",
+      header: "Confidence",
+      cell: ({ row }) => {
+        const v = row.getValue("resolution_confidence") as number | null;
+        return <span className="text-sm">{v == null ? "—" : `${(v * 100).toFixed(0)}%`}</span>;
+      },
+    },
+    {
+      id: "actions",
+      header: "",
+      cell: ({ row }) => (
+        <div className="flex items-center gap-1">
+          <Button
+            variant="ghost"
+            size="icon"
+            title="Mark resolved — the identity becomes trusted for correlation"
+            disabled={decide.isPending}
+            onClick={() => decide.mutate({ id: row.original.id, action: "resolve" })}
+          >
+            <Check className="h-3.5 w-3.5 text-green-600" />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            title="Deactivate — a bad extraction, removed from matching"
+            disabled={decide.isPending}
+            onClick={() => decide.mutate({ id: row.original.id, action: "deactivate" })}
+          >
+            <X className="h-3.5 w-3.5 text-destructive" />
+          </Button>
+        </div>
+      ),
+    },
+  ];
+
+  if (isLoading) return <DataTableSkeleton columns={4} />;
+  if (data.length === 0)
+    return (
+      <div className="rounded-md border p-10 text-center text-sm text-muted-foreground">
+        No identities waiting for review.
+      </div>
+    );
+  return <DataTable columns={columns} data={data} />;
+}
+
 export default function SuggestionsPage() {
   return (
     <div className="space-y-6">
       <PageHeader
         title="Review queues"
-        description="Correlation decisions waiting on a human: semantically similar evidence pairs (accepting creates an edge; rejecting is permanent) and fleet incident groups (accepting mints a parent case)."
+        description="Human decision queues: semantic evidence pairs (accept creates an edge; reject is permanent), fleet incident groups (accept mints a parent case), and identities the resolver parked for review."
       />
       <section className="space-y-3">
         <h2 className="text-sm font-medium">Semantic suggestions</h2>
@@ -205,6 +293,10 @@ export default function SuggestionsPage() {
       <section className="space-y-3">
         <h2 className="text-sm font-medium">Fleet groups</h2>
         <FleetQueue />
+      </section>
+      <section className="space-y-3">
+        <h2 className="text-sm font-medium">Identities needing review</h2>
+        <IdentityQueue />
       </section>
     </div>
   );
