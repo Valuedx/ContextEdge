@@ -406,6 +406,26 @@ def generate_playbook_candidate(self, pattern_id: str, tenant_id: str):
             return {"status": "failed", "reason": "no_user_for_owner"}
 
         steps = llm.get("steps") or []
+        if not steps:
+            # A playbook with no steps is not a playbook. This was
+            # persisted as a candidate and reported {"status": "ok"} —
+            # a truncated response had lost the steps array, the repair
+            # path salvaged the complete prefix, and title/description/
+            # risk_tier all arrived intact, so nothing downstream had
+            # any reason to suspect the artifact was empty.
+            #
+            # Failing here rather than storing it: an empty playbook in
+            # the review queue costs a reviewer's time to discover it is
+            # worthless, and it looks like the generator's considered
+            # opinion rather than a dropped response.
+            logger.warning(
+                "playbook.no_steps_generated",
+                tenant_id=str(tid),
+                pattern_id=str(pid),
+                returned_keys=sorted(llm.keys()),
+            )
+            return {"status": "failed", "reason": "no_steps_generated"}
+
         risk_tier = _effective_risk_tier(llm.get("risk_tier"), steps)
 
         stable_key = f"pb-{uuid.uuid4().hex[:12]}"
