@@ -261,7 +261,9 @@ def _extract_structured_document(
         # whose pages are largely image-only has been read correctly and
         # still yields little. Downstream completeness assessment needs
         # to see that difference.
-        parser_confidence=_document_coverage(parsed.page_count, len(empty_pages)),
+        parser_confidence=_document_coverage(
+            parsed.page_count, len(empty_pages), len(parsed.elements)
+        ),
         text=text,
         parser_metadata={
             "mime_type": _clean_mime_type(mime_type),
@@ -296,9 +298,20 @@ def _extract_structured_document(
     )
 
 
-def _document_coverage(page_count: int, empty_page_count: int) -> float:
+def _document_coverage(
+    page_count: int, empty_page_count: int, element_count: int = 0
+) -> float:
+    """Fraction of the document that yielded text.
+
+    Page-less formats report ``page_count == 0`` — Word has no pages
+    before rendering — so a page ratio is undefined there. Falling
+    through to 0.0 would report a perfectly parsed DOCX as having been
+    read not at all, which downstream completeness assessment believes.
+    Coverage for those is "did we get elements", which is the only
+    question the format can answer.
+    """
     if page_count <= 0:
-        return 0.0
+        return 1.0 if element_count > 0 else 0.0
     return round(max(0.0, (page_count - empty_page_count) / page_count), 3)
 
 

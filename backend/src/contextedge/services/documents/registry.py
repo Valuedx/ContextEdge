@@ -24,6 +24,7 @@ def _register_parsers() -> None:
 
     loaders: list[tuple[str, callable]] = [
         ("pdf_native", _load_pdf),
+        ("docx_native", _load_docx),
     ]
     for key, loader in loaders:
         try:
@@ -43,6 +44,14 @@ def _load_pdf() -> DocumentParser:
     from contextedge.services.documents.pdf import PdfDocumentParser
 
     return PdfDocumentParser()
+
+
+def _load_docx() -> DocumentParser:
+    import docx  # noqa: F401 - fail here if the dep is absent
+
+    from contextedge.services.documents.docx import DocxDocumentParser
+
+    return DocxDocumentParser()
 
 
 def get_parser(
