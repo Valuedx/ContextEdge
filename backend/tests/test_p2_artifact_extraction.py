@@ -62,6 +62,12 @@ class _FakeArtifactDb:
         self.execute = AsyncMock(
             side_effect=[
                 _ScalarsListResult([artifact]),
+                # synchronize_evidence_artifacts now re-chunks against the
+                # merged body: attachment extraction runs after normalize,
+                # so without this the attachment's text never reached
+                # evidence_chunks at all. The call fails soft against this
+                # fake — what matters here is that it consumes a slot.
+                _ScalarsListResult([]),
                 _ScalarResult(0),
             ]
         )

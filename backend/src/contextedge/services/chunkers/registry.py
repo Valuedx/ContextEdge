@@ -68,6 +68,7 @@ def _register_chunkers() -> None:
     loaders: list[tuple[str, callable]] = [
         ("ticket", _load_ticket),
         ("thread", _load_thread),
+        ("document", _load_document),
         ("attachment", _load_attachment),
         ("fallback", _load_fallback),
     ]
@@ -94,6 +95,12 @@ def _load_thread() -> Chunker:
     return ThreadChunker()
 
 
+def _load_document() -> Chunker:
+    from contextedge.services.chunkers.document import DocumentChunker
+
+    return DocumentChunker()
+
+
 def _load_attachment() -> Chunker:
     from contextedge.services.chunkers.attachment import AttachmentChunker
 
@@ -118,6 +125,8 @@ def get_chunker(source_type: str | None, evidence_type: str | None = None) -> Ch
     if not chunkers:
         _register_chunkers()
 
+    if evidence_type in _DOCUMENT_EVIDENCE_TYPES and "document" in chunkers:
+        return chunkers["document"]
     if evidence_type in _DOCUMENT_EVIDENCE_TYPES and "attachment" in chunkers:
         return chunkers["attachment"]
     if source_type in _TICKET_SOURCE_TYPES and "ticket" in chunkers:
