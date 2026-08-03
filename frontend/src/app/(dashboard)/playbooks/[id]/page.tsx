@@ -38,19 +38,19 @@ import { Label } from "@/components/ui/label";
 import { api } from "@/lib/api";
 import type { Playbook, PlaybookVersion, PlaybookVersionDiff } from "@/lib/types";
 import { useAuthStore } from "@/lib/stores/auth-store";
-import { canTransitionPlaybook } from "@/lib/roles";
+import { canEditAutomationMode, canTransitionPlaybook } from "@/lib/roles";
 import { GitCompare, RotateCcw } from "lucide-react";
 
-// Allowed forward transitions per lifecycle state (mirrors backend VALID_TRANSITIONS)
-const TRANSITIONS: Record<string, string[]> = {
-  candidate: ["under_review", "retired"],
-  under_review: ["approved", "candidate", "retired"],
-  approved: ["deprecated", "expired", "retired"],
-  restricted: ["approved", "deprecated", "retired"],
-  deprecated: ["retired"],
-  expired: ["under_review", "retired"],
-  retired: [],
-};
+// Allowed transitions come from the API (`playbook.allowed_transitions`).
+//
+// This was a hand-maintained copy of the backend's VALID_TRANSITIONS,
+// under a comment saying it mirrored it, and it had drifted both ways:
+// it offered candidate -> retired and under_review -> retired, which the
+// backend rejects, and it omitted approved -> restricted, so the one
+// control for narrowing a live playbook was unreachable from the UI.
+//
+// Two copies of a rule is one copy too many when only one of them is
+// enforced.
 
 
 function TransitionDialog({
@@ -61,7 +61,7 @@ function TransitionDialog({
   onClose: () => void;
 }) {
   const qc = useQueryClient();
-  const available = TRANSITIONS[playbook.lifecycle_state] ?? [];
+  const available = playbook.allowed_transitions ?? [];
   const [newState, setNewState] = useState(available[0] ?? "");
   const [comment, setComment] = useState("");
 
@@ -193,6 +193,145 @@ function DiffDialog({
         <Button variant="outline" onClick={onClose}>Close</Button>
       </DialogFooter>
     </DialogContent>
+  );
+}
+
+/**
+ * What each automation mode actually permits, in the reviewer's terms
+ * rather than the enum's. Mirrors `models/playbook.AUTOMATION_MODES`.
+ *
+ * These are ordered by autonomy, and the order is the point: the list
+ * reads as a ladder so it is obvious that picking a lower rung is always
+ * the safer choice.
+ */
+const AUTOMATION_MODES: { value: string; label: string; detail: string }[] = [
+  {
+    value: "suggest_only",
+    label: "Suggest only",
+    detail:
+      "Nothing executes. Every caller is capped at read-only regardless of their role.",
+  },
+  {
+    value: "shadow",
+    label: "Shadow",
+    detail:
+      "Dry run. Steps are traced and approval requests are recorded for audit, but no tool actually runs.",
+  },
+  {
+    value: "human_confirmed",
+    label: "Human confirmed",
+    detail: "One step at a time, each with an explicit human approval.",
+  },
+  {
+    value: "supervised",
+    label: "Supervised",
+    detail:
+      "Runs with a human watching. Anything above low side effect still needs per-step approval.",
+  },
+  {
+    value: "full_auto",
+    label: "Full auto",
+    detail:
+      "Runs without approval for admin roles, up to and including destructive steps.",
+  },
+];
+
+/**
+ * Automation mode — the switch that decides whether this playbook may
+ * act on a real system.
+ *
+ * It was displayed in four places and editable in none, so every
+ * generated playbook stayed at `suggest_only` forever and the per-step
+ * approval machinery was unreachable in practice.
+ *
+ * Restricted to tenant_admin rather than the knowledge_manager who may
+ * edit everything else about the playbook: authoring a procedure and
+ * authorising it to take destructive action are different privileges.
+ */
+function AutomationModePanel({ playbook }: { playbook: Playbook }) {
+  const qc = useQueryClient();
+  const roles = useAuthStore((s) => s.roles);
+  const editable = canEditAutomationMode(roles);
+  const [pending, setPending] = useState<string | null>(null);
+
+  const current =
+    AUTOMATION_MODES.find((m) => m.value === playbook.automation_mode) ?? null;
+
+  const mut = useMutation({
+    mutationFn: (mode: string) =>
+      api.patch(`/playbooks/${playbook.id}`, { automation_mode: mode }),
+    onSuccess: (_data, mode) => {
+      qc.invalidateQueries({ queryKey: ["playbook", playbook.id] });
+      qc.invalidateQueries({ queryKey: ["playbooks"] });
+      toast.success(`Automation mode set to "${mode}"`);
+      setPending(null);
+    },
+    onError: (err: Error) => {
+      // A tenant approval policy can cap autonomy; the API rejects a mode
+      // above that ceiling. Surface its reason rather than a generic
+      // failure — "your policy caps this at supervised" is actionable,
+      // "update failed" is not.
+      toast.error(err.message || "Could not change automation mode");
+      setPending(null);
+    },
+  });
+
+  return (
+    <div className="rounded-lg border p-4 space-y-3">
+      <div>
+        <h3 className="text-sm font-semibold">Automation mode</h3>
+        <p className="mt-1 text-xs text-muted-foreground">
+          {editable
+            ? "Decides whether this playbook may act on a real system. Raising it is what makes the per-step approval gates apply."
+            : "Decides whether this playbook may act on a real system. Only a tenant administrator can change it."}
+        </p>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-2">
+        <StatusBadge status={playbook.automation_mode} />
+        {current && (
+          <span className="text-xs text-muted-foreground">{current.detail}</span>
+        )}
+      </div>
+
+      {editable && (
+        <div className="flex flex-wrap items-end gap-2">
+          <div className="min-w-[200px]">
+            <Label htmlFor="automation-mode">Change to</Label>
+            <Select
+              value={pending ?? playbook.automation_mode}
+              onValueChange={(v) => setPending(v ?? null)}
+            >
+              <SelectTrigger id="automation-mode" className="mt-1">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {AUTOMATION_MODES.map((mode) => (
+                  <SelectItem key={mode.value} value={mode.value}>
+                    {mode.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <Button
+            disabled={
+              mut.isPending || !pending || pending === playbook.automation_mode
+            }
+            onClick={() => pending && mut.mutate(pending)}
+          >
+            {mut.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+            Apply
+          </Button>
+        </div>
+      )}
+
+      {editable && pending && pending !== playbook.automation_mode && (
+        <p className="text-xs text-muted-foreground">
+          {AUTOMATION_MODES.find((m) => m.value === pending)?.detail}
+        </p>
+      )}
+    </div>
   );
 }
 
@@ -450,7 +589,7 @@ export default function PlaybookDetailPage() {
   }
 
   const latest = versions[0];
-  const hasTransitions = (TRANSITIONS[playbook.lifecycle_state] ?? []).length > 0;
+  const hasTransitions = (playbook.allowed_transitions ?? []).length > 0;
 
   return (
     <div className="space-y-6">
@@ -515,6 +654,7 @@ export default function PlaybookDetailPage() {
         )}
       </div>
 
+      <AutomationModePanel playbook={playbook} />
       {latest && <KnowledgeSourcesPanel version={latest} />}
       {latest && <ConflictsPanel version={latest} />}
 

@@ -239,6 +239,13 @@ export interface Playbook {
   lifecycle_state: string;
   risk_tier: string;
   automation_mode: string;
+  approval_policy_id?: string | null;
+  /**
+   * States this playbook may move to next, served by the API so the rule
+   * lives in one place. Optional for older cached responses; an absent
+   * value offers no transitions rather than guessing at them.
+   */
+  allowed_transitions?: string[];
   owner_user_id: string;
   reviewer_user_id: string | null;
   approver_user_id: string | null;

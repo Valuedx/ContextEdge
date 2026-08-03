@@ -29,6 +29,11 @@ from contextedge.services.playbook_service import (
     create_playbook_version,
     transition_playbook,
 )
+from contextedge.services.approval_policy_service import (
+    ApprovalPolicyViolation,
+    check_automation_mode,
+    load_approval_policy,
+)
 from contextedge.services.policy_assignment import assert_policy_assignment
 
 router = APIRouter()
@@ -146,6 +151,17 @@ async def update_playbook(playbook_id: UUID, body: PlaybookUpdate, db: DbSession
         raise HTTPException(status_code=404, detail="Playbook not found")
 
     update_data = body.model_dump(exclude_unset=True)
+
+    if "automation_mode" in update_data:
+        # Above knowledge_manager on purpose. Automation mode is the
+        # switch that decides whether this playbook may act on a real
+        # system at all: `suggest_only` caps every caller at read_only
+        # regardless of their role, so raising it is what makes every
+        # other approval gate load-bearing. Editing a playbook's text and
+        # authorising it to take destructive action are not the same
+        # privilege and should not share one.
+        user.require_role("tenant_admin")
+
     if "approval_policy_id" in update_data:
         await assert_policy_assignment(
             db,
@@ -153,6 +169,20 @@ async def update_playbook(playbook_id: UUID, body: PlaybookUpdate, db: DbSession
             update_data["approval_policy_id"],
             "approval",
         )
+
+    # A tenant's approval policy may cap autonomy (`max_automation_mode`).
+    # That ceiling was only enforced at execution time, so a mode above it
+    # could be saved happily and then fail at the moment someone tried to
+    # run the playbook — far from the screen where the choice was made,
+    # and looking like a broken run rather than a policy decision.
+    if "automation_mode" in update_data or "approval_policy_id" in update_data:
+        policy_id = update_data.get("approval_policy_id", playbook.approval_policy_id)
+        mode = update_data.get("automation_mode", playbook.automation_mode)
+        policy = await load_approval_policy(db, user.tenant_id, policy_id)
+        try:
+            check_automation_mode(policy, mode)
+        except ApprovalPolicyViolation as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
     for field, value in update_data.items():
         setattr(playbook, field, value)
     if "title" in update_data or "description" in update_data:

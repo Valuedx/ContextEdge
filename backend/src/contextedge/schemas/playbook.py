@@ -1,7 +1,13 @@
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    computed_field,
+    field_validator,
+)
 
 from contextedge.models.execution import SAFETY_CLASSES
 from contextedge.models.playbook import AUTOMATION_MODES
@@ -118,6 +124,26 @@ class PlaybookResponse(BaseModel):
     expiry_at: datetime | None
     created_at: datetime
     updated_at: datetime
+
+    @computed_field
+    @property
+    def allowed_transitions(self) -> list[str]:
+        """Lifecycle states this playbook may move to next.
+
+        Served rather than duplicated client-side. The UI previously kept
+        its own copy of ``VALID_TRANSITIONS`` under a comment claiming it
+        mirrored the backend, and it had drifted: it offered
+        ``candidate -> retired`` and ``under_review -> retired``, which
+        the backend rejects, and it omitted ``approved -> restricted``
+        and ``approved -> under_review``, which the backend allows.
+
+        The omission was the costly half. ``restricted`` is the lever for
+        narrowing a live playbook when something looks wrong, and it was
+        unreachable from the UI entirely.
+        """
+        from contextedge.services.playbook_service import VALID_TRANSITIONS
+
+        return sorted(VALID_TRANSITIONS.get(self.lifecycle_state, set()))
 
     model_config = {"from_attributes": True}
 
