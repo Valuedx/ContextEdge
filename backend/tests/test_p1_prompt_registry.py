@@ -157,7 +157,10 @@ def test_all_migrated_prompt_families_registered():
         "identity": "v2",
         "identity_adjudication": "v1",
         "pattern": "v2",
-        "playbook": "v2",
+        # v3 adds approved KB/SOP as a distinct input, step-level source
+        # citations, and the conflicts block. v1/v2 remain registered and
+        # immutable for eval baselines.
+        "playbook": "v3",
         "contradiction": "v1",
     }
     for name, default_version in expected_defaults.items():

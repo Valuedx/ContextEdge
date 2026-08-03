@@ -44,6 +44,9 @@ def _version_payload(version: PlaybookVersion) -> dict:
         "steps": version.steps or [],
         "rollback_notes": version.rollback_notes,
         "evidence_refs": version.evidence_refs,
+        # Surfaced to the reviewer console: these are the decisions the
+        # generator deliberately did not make.
+        "conflicts": version.conflicts,
         "playbook_confidence": version.playbook_confidence,
         "execution_confidence_guidance": version.execution_confidence_guidance,
     }

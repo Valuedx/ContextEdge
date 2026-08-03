@@ -151,6 +151,11 @@ class PlaybookVersion(Base):
     steps: Mapped[list] = mapped_column(JSONB, server_default="[]", nullable=False)
     rollback_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     evidence_refs: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    # Where the approved KB/SOP and observed practice disagree (0050).
+    # NULL means "not assessed" — versions generated before knowledge was
+    # an input carry NULL rather than an empty list, which would claim
+    # the comparison was made and found nothing.
+    conflicts: Mapped[list | None] = mapped_column(JSONB, nullable=True)
     playbook_confidence: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
     execution_confidence_guidance: Mapped[str | None] = mapped_column(Text, nullable=True)
     verification_policy: Mapped[dict | None] = mapped_column(JSONB, nullable=True)

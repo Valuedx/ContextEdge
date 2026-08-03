@@ -244,6 +244,7 @@ async def test_get_playbook_version_diff_reports_changed_fields():
         steps=[{"text": "restart"}],
         rollback_notes=None,
         evidence_refs=[],
+        conflicts=None,
         playbook_confidence=0.5,
         execution_confidence_guidance=None,
     )
@@ -258,6 +259,7 @@ async def test_get_playbook_version_diff_reports_changed_fields():
         steps=[{"text": "restart service safely"}],
         rollback_notes="undo",
         evidence_refs=[],
+        conflicts=None,
         playbook_confidence=0.8,
         execution_confidence_guidance="manual check",
     )
