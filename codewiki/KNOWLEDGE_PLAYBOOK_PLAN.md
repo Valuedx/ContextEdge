@@ -156,6 +156,117 @@ Today, if Acme's VPN certificate-renewal SOP is ingested from ServiceNow's `kb_k
 
 After phase 1 it is typed `kb_article`, carries knowledge authority, and is retrievable. After phase 2 the generator sees it, and a reviewer is shown "the SOP requires a backup step; no observed episode performed one" instead of a playbook that quietly drops it.
 
+## Phase 4 — multimodal document ingestion
+
+A follow-on review covered uploading batches of PDF/Word SOPs. Its claims
+were verified the same way; all hold.
+
+| Claim | Verdict | Evidence |
+| --- | --- | --- |
+| PDF/DOCX/images are unsupported | **Confirmed** | `_detect_parser` returns `None` for anything not JSON/transcript/log/`text/*` → `unsupported_artifact_type` |
+| 4,000-char per-attachment truncation | **Confirmed** | `MAX_ATTACHMENT_TEXT_CHARS = 4_000` |
+| 16,000-char merged body cap | **Confirmed** | `MAX_COMBINED_BODY_CHARS = 16_000` |
+| Chunk model is partly prepared | **Confirmed** | `chunk_kind` is free-text `String(40)`; `models/evidence.py:164` names `heading_section \| code_block \| ocr_text`, and nothing produces the last one |
+
+The review's central position — **build a document-ingestion abstraction
+producing structured elements, not a PDF-to-text bolt-on** — is correct
+and is the recommendation here. The current attachment path merges every
+file into one evidence body under a 16 KB cap; feeding a 60-page SOP
+through it loses page provenance, tables, and every screenshot, and
+there is no version handling to hang a citation on.
+
+### Direction: multimodal LLMs, not an OCR engine (decided)
+
+Confirmed as the approach. One distinction is load-bearing and worth
+stating explicitly, because conflating the two would make this pipeline
+both worse and far more expensive:
+
+**Native text extraction is not OCR.** Pulling the text layer, heading
+structure, and table cells out of a native PDF or a DOCX is *parsing* —
+deterministic, exact, and effectively free. A vision model asked to
+re-read a page that already has a text layer returns a paraphrase of
+text we could have had verbatim, at meaningful cost per page, and with a
+new failure mode (transcription drift) that the parser does not have.
+
+So the rule is **parse first, look second**:
+
+1. Native text + layout + tables from the document itself. No model.
+2. A multimodal LLM for what parsing cannot answer — screenshots,
+   diagrams, and pages with no text layer at all (scans).
+3. No OCR engine anywhere. Where a scanned page needs reading, the
+   multimodal model reads it, and its output is marked as
+   model-transcribed with a confidence, never as native text.
+
+*Why this matters for cost:* the repo just gained per-tenant LLM budgets
+and a 4096-token output cap (`656f89c`). A pipeline that sends every
+page of every uploaded SOP to a vision model will exhaust a tenant's
+daily budget on one folder upload. Every vision call must route through
+`ai/provider` with `tenant_id=` + `db=` — the repo's standing rule — so
+it is metered and gated like any other spend, and figure-level calls
+should be bounded per document with the cap logged when hit.
+
+*Tradeoff:* selective vision means some content is missed — a diagram
+inside an otherwise text-rich page is only interpreted if figure
+detection catches it. Better than the alternative: unbounded per-page
+vision spend that stops being affordable at exactly the corpus size
+where it starts being useful.
+
+### What Phase 1 already delivered
+
+The review's requirement that document kind be declared at upload time
+is **done**. The dialog offers KB article / SOP / runbook /
+documentation / post-mortem / transcript / document / message, validated
+server-side against `UPLOADABLE_EVIDENCE_TYPES`. That was previously
+inferred from the filename — "slack" meant message, everything else
+meant "log" — so an uploaded SOP was typed as a log.
+
+That is the foundation the rest of this phase needs: without a declared
+kind, a document pipeline cannot tell an SOP from a meeting transcript
+before it has spent money parsing it.
+
+### Recommended sequencing
+
+**4a. The abstraction and one adapter.** `DocumentElement` production
+behind a parser interface, with a native-PDF adapter only. Elements
+carry page number, section path, element type, and bounding box. This is
+the piece the review is right to insist on doing first — every later
+adapter is cheap once the shape is settled, and bolting PDF into the
+attachment merger now is the outcome it warns about.
+
+**4b. Lift the caps for document sources.** The 4 KB / 16 KB truncation
+is correct for a log attachment and wrong for an SOP. It should be
+per-source-kind rather than global, which is only expressible now that
+evidence type is populated (Phase 1).
+
+**4c. Structure-driven chunking.** Emit the `chunk_kind` vocabulary the
+model already anticipates (`heading_section`, `procedure_step`,
+`warning`, `table`, `figure_caption`). A procedure step and its
+screenshot retrieved as one unit is the specific outcome worth building
+toward — returning the step without its warning is unsafe, and the
+screenshot without the step is unusable.
+
+**4d. DOCX adapter, tracked changes handled explicitly.** The review's
+point is sharp and worth acting on: a naive extractor emits both the
+deleted "restart the database" and the inserted "reload without
+restarting", manufacturing a contradiction that does not exist in the
+document. Only accepted current text is normative.
+
+**4e. Figure interpretation.** Multimodal, bounded, budget-metered,
+attached to the nearest step and caption.
+
+**4f. Document versioning and duplicate resolution.** `VPN SOP.docx`,
+`VPN SOP Final.docx`, and `VPN SOP Final v2.pdf` must not all rank
+independently.
+
+### Scoping caution
+
+Phases 4a–4c are a coherent slice that makes uploaded SOPs genuinely
+useful. 4d–4f roughly triple the scope. The knowledge-quality model
+(Phase 3) and per-figure staleness signals compound on top of that
+again. Recommend committing to 4a–4c, measuring retrieval quality on a
+real SOP corpus, and re-scoping from evidence rather than from the
+design note.
+
 ## Further reading
 
 - [09-graph-and-correlation.md](./09-graph-and-correlation.md) — evidence links and correlation tiers
