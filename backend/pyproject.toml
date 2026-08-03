@@ -40,6 +40,20 @@ dependencies = [
 maf = [
     "agent-framework-core>=1.12,<2",
 ]
+# Structured parsing for uploaded SOPs / runbooks (services/documents).
+# Optional so a base install still ingests logs, JSON, and transcripts —
+# the parser registry degrades to "unsupported format" rather than
+# failing at import.
+#
+# pdfplumber (MIT, over pdfminer.six) is used INSTEAD OF PyMuPDF/fitz.
+# PyMuPDF is faster with better layout analysis and is licensed
+# "Dual Licensed - GNU AFFERO GPL 3.0 or Artifex Commercial License" —
+# AGPL obligations or a paid licence, neither of which this product
+# should take on for a parsing adapter. Do not add it.
+documents = [
+    "pdfplumber>=0.11",
+    "python-docx>=1.1",
+]
 dev = [
     "pytest>=8.3",
     "pytest-asyncio>=0.24",
@@ -50,6 +64,12 @@ dev = [
     # Keep the MAF adapter tests (test_maf_adapter.py importorskips
     # agent_framework) running in dev/CI instead of silently skipping.
     "agent-framework-core>=1.12,<2",
+    # Same reason for the document tests: they importorskip pdfplumber
+    # and reportlab, so without these the PDF suite goes green by
+    # skipping rather than by passing.
+    "pdfplumber>=0.11",
+    "python-docx>=1.1",
+    "reportlab>=4.0",
 ]
 
 [tool.hatch.build.targets.wheel]
