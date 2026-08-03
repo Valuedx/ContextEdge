@@ -25,8 +25,13 @@ from contextedge.services.identity_reconciliation_service import (
 )
 
 
-def _identity(name: str) -> SimpleNamespace:
-    return SimpleNamespace(id=uuid.uuid4(), canonical_name=name, metadata_extra=None)
+def _identity(name: str, entity_type: str = "application") -> SimpleNamespace:
+    return SimpleNamespace(
+        id=uuid.uuid4(),
+        canonical_name=name,
+        entity_type=entity_type,
+        metadata_extra=None,
+    )
 
 
 # --- turning the model's answer into pairs ------------------------------------
@@ -292,3 +297,120 @@ def test_the_adjudicator_is_told_numbered_siblings_are_distinct():
     system = prompt.system.lower()
     assert "number" in system
     assert "new_identity" in system
+
+
+# --- cross-type duplicates ----------------------------------------------------
+#
+# "JMX" existed in the live graph as both a service and an application.
+# Every match layer compared entity_type with `==`, and reconciliation
+# looped one type at a time, so nothing in the system could ever bring
+# those two rows together — the same blindness as per-mention
+# adjudication, one level up.
+
+
+def test_application_and_service_are_treated_as_one_kind():
+    """The extractor labels a named software component either way
+    depending on a document's wording, so the same thing forks on the
+    label rather than on the name."""
+    from contextedge.services.identity_service import compatible_entity_types
+
+    assert compatible_entity_types("application") == ["application", "service"]
+    assert compatible_entity_types("service") == ["application", "service"]
+
+
+@pytest.mark.parametrize("entity_type", ["person", "device", "version", "vendor"])
+def test_every_other_type_stays_alone(entity_type):
+    """The scoping exists so "Phoenix" the application never matches
+    "Phoenix" the person. Widening past the one confusable pair would
+    give back exactly that protection."""
+    from contextedge.services.identity_service import compatible_entity_types
+
+    assert compatible_entity_types(entity_type) == [entity_type]
+
+
+def test_confusable_types_are_reconciled_in_one_pass():
+    from contextedge.services.identity_reconciliation_service import _type_groups
+
+    assert _type_groups(["application", "device", "person", "service"]) == [
+        ["application", "service"],
+        ["device"],
+        ["person"],
+    ]
+
+
+def test_a_type_with_no_sibling_present_still_gets_a_pass():
+    """A tenant with applications but no services must not end up with an
+    empty group and no reconciliation."""
+    from contextedge.services.identity_reconciliation_service import _type_groups
+
+    assert _type_groups(["application"]) == [["application"]]
+    assert _type_groups(["service", "device"]) == [["service"], ["device"]]
+
+
+def test_all_match_layers_use_the_group_not_exact_equality():
+    """Alias matching and candidate generation both have to widen, or
+    resolution keeps creating the forks reconciliation then cleans up."""
+    import inspect
+
+    from contextedge.services import identity_service
+
+    for fn in (
+        identity_service._find_exact_alias_match,
+        identity_service._candidate_identities,
+    ):
+        source = inspect.getsource(fn)
+        assert "compatible_entity_types" in source
+        assert "entity_type == entity.entity_type" not in source
+
+
+def test_a_cross_type_merge_says_so_in_its_reason():
+    """It changes what KIND of thing the surviving record is. A reviewer
+    approving "fold X into Y" deserves to know that is part of it."""
+    from contextedge.services.identity_reconciliation_service import _parse_groups
+
+    keep = SimpleNamespace(
+        id=uuid.uuid4(), canonical_name="JMX", entity_type="application",
+        metadata_extra=None,
+    )
+    duplicate = SimpleNamespace(
+        id=uuid.uuid4(), canonical_name="JMX", entity_type="service",
+        metadata_extra=None,
+    )
+    proposals = _parse_groups(
+        [{"keep_id": 0, "merge_ids": [1], "confidence": 1.0, "reason": "same tool"}],
+        [keep, duplicate],
+    )
+    assert len(proposals) == 1
+    assert "recorded as service" in proposals[0].reason
+    assert "would become application" in proposals[0].reason
+    # The keeper's type survives the merge, so that is the proposal's type.
+    assert proposals[0].entity_type == "application"
+
+
+def test_a_same_type_merge_is_not_annotated():
+    from contextedge.services.identity_reconciliation_service import _parse_groups
+
+    a = SimpleNamespace(
+        id=uuid.uuid4(), canonical_name="Agents", entity_type="application",
+        metadata_extra=None,
+    )
+    b = SimpleNamespace(
+        id=uuid.uuid4(), canonical_name="agent", entity_type="application",
+        metadata_extra=None,
+    )
+    proposals = _parse_groups(
+        [{"keep_id": 0, "merge_ids": [1], "confidence": 1.0, "reason": "plural"}],
+        [a, b],
+    )
+    assert proposals[0].reason == "plural"
+
+
+def test_the_type_column_is_only_rendered_for_mixed_batches():
+    """A constant repeated on every line reads as a signal."""
+    from contextedge.services.identity_reconciliation_service import _render
+
+    identity = SimpleNamespace(
+        canonical_name="JMX", entity_type="service", metadata_extra=None
+    )
+    assert "recorded as" not in _render(identity, [], 0, show_type=False)
+    assert "recorded as: service" in _render(identity, [], 0, show_type=True)

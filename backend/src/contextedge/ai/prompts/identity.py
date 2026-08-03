@@ -355,8 +355,11 @@ DO NOT merge:
 - two things sharing a generic word ("gateway", "agent", "service", "monitoring") without further evidence that they are the same
 - different instances, sites, environments or numbered hosts — separate machines are separate entities however similar their names
 - a general name and the same name qualified by a host, site or instance ("X" and "X on HOST01"). These are not two names for one thing: the qualified record is ONE instance, and the general record may cover others. Folding the general into the instance silently narrows it to a single machine
+- a short name and a LONGER name that merely begins with it ("X" and "X reporting service", "X" and "X integration"). A shared prefix usually means the longer record is a COMPONENT OF or an INTEGRATION WITH the shorter one — a different thing that fails independently, and often the thing the short name depends on. Merge only when the extra words add nothing at all ("X" and "X service"), never when they name a further subject
 - different versions or releases of the same product
 - anything you are guessing about
+
+Some batches mix two record types, shown as "[recorded as: ...]" on each line. That is deliberate: whoever recorded these was labelling from the wording of one document, and the same component is routinely filed as an application in one and a service in another. A difference in recorded type is NOT by itself a reason to keep two records apart — judge the names. It is also not a reason to merge: two genuinely different things stay different however they were labelled.
 
 Choose as KEEPER the fullest, most identifiable name — usually the expansion rather than the acronym, since it is unambiguous when read later.
 

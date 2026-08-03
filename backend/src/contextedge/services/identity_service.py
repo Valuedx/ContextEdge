@@ -7,6 +7,11 @@ review; migration ``0033`` carries the schema):
    serial / external system id. Deterministic, confidence 1.0, no LLM.
 2. **Typed exact alias** — normalized alias text scoped to the entity
    type, so "Phoenix" the application never matches "Phoenix" the person.
+   Scoped to a compatible GROUP rather than exact equality: application
+   and service name the same kind of thing and the extractor labels one
+   either way depending on the document's wording, which forked "JMX"
+   into two identities in the live graph. See
+   ``compatible_entity_types``.
 3. **Candidate adjudication** — a small candidate list is scored by the
    LLM, which may abstain (``needs_review``). Auto-link only above a
    per-entity-type threshold.
@@ -60,6 +65,37 @@ MAX_ADJUDICATION_CANDIDATES = 5
 # adjudicator must recognise them as different hosts rather than
 # variants of one.
 TRIGRAM_SIMILARITY_THRESHOLD = 0.3
+
+# Entity types that name the SAME KIND of thing and are routinely
+# labelled either way.
+#
+# Type scoping exists so "Phoenix" the application never matches
+# "Phoenix" the person, and that reasoning is sound — but applied as
+# exact equality it also meant "JMX" the service could never match "JMX"
+# the application. Both rows are in the live graph. Whether a named
+# software component is called a service or an application is a
+# labelling judgement the extractor makes per document, from wording
+# that varies, so the same real thing forks on the label rather than on
+# the name.
+#
+# Only these two are grouped. A person is never a machine, a version is
+# never a site, and widening further would give back exactly the
+# protection the scoping was for.
+_CONFUSABLE_TYPE_GROUPS: tuple[frozenset[str], ...] = (
+    frozenset({"application", "service"}),
+)
+
+
+def compatible_entity_types(entity_type: str) -> list[str]:
+    """Types an identity of this type may legitimately match against.
+
+    Almost always just itself. Returned as a list so every call site can
+    use ``IN`` and stay one query.
+    """
+    for group in _CONFUSABLE_TYPE_GROUPS:
+        if entity_type in group:
+            return sorted(group)
+    return [entity_type]
 
 
 class AdjudicationResult(BaseModel):
@@ -154,7 +190,9 @@ async def _find_exact_alias_match(
         )
         .where(
             CanonicalIdentity.tenant_id == tenant_id,
-            CanonicalIdentity.entity_type == entity.entity_type,
+            CanonicalIdentity.entity_type.in_(
+                compatible_entity_types(entity.entity_type)
+            ),
             CanonicalIdentity.is_active.is_(True),
             or_(
                 IdentityAlias.normalized_alias == entity.normalized_name,
@@ -228,7 +266,9 @@ async def _candidate_identities(
                 select(CanonicalIdentity)
                 .where(
                     CanonicalIdentity.tenant_id == tenant_id,
-                    CanonicalIdentity.entity_type == entity.entity_type,
+                    CanonicalIdentity.entity_type.in_(
+                compatible_entity_types(entity.entity_type)
+            ),
                     CanonicalIdentity.is_active.is_(True),
                     or_(
                         substring_match,
@@ -259,7 +299,9 @@ async def _candidate_identities(
         select(CanonicalIdentity)
         .where(
             CanonicalIdentity.tenant_id == tenant_id,
-            CanonicalIdentity.entity_type == entity.entity_type,
+            CanonicalIdentity.entity_type.in_(
+                compatible_entity_types(entity.entity_type)
+            ),
             CanonicalIdentity.is_active.is_(True),
             substring_match,
         )
