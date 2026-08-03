@@ -29,6 +29,13 @@ import type { Source, SourceObject } from "@/lib/types";
 import { useAuthStore } from "@/lib/stores/auth-store";
 import { isTenantAdmin, canDiscoverSources } from "@/lib/roles";
 
+type BackfillResponse = {
+  status: string;
+  detail?: {
+    object_count?: number;
+  };
+};
+
 export default function DiscoveryPage() {
   const params = useParams<{ id: string }>();
   const sourceId = params.id;
@@ -81,13 +88,17 @@ export default function DiscoveryPage() {
 
   const backfillMut = useMutation({
     mutationFn: (objectIds: string[]) => 
-      api.post(`/sources/${sourceId}/backfill`, {
+      api.post<BackfillResponse>(`/sources/${sourceId}/backfill`, {
         source_object_ids: objectIds,
         window_days: windowDays,
       }),
-    onSuccess: (res: any) => {
-      toast.success(`Backfill started for ${res.object_count} objects.`);
+    onSuccess: (res, objectIds) => {
+      const objectCount = res.detail?.object_count ?? objectIds.length;
+      toast.success(
+        `Backfill started for ${objectCount} object${objectCount === 1 ? "" : "s"}.`
+      );
       setBackfillDialogOpen(false);
+      qc.invalidateQueries({ queryKey: ["sync-runs"] });
     },
     onError: (err: Error) => toast.error(`Failed to start backfill: ${err.message}`),
   });
@@ -98,7 +109,7 @@ export default function DiscoveryPage() {
       .map((o) => o.id);
     
     if (approvedIds.length === 0) {
-      toast.error("No objects are approved for backfill. Please approve at least one mailbox first.");
+      toast.error("No objects are approved for backfill. Please approve at least one object first.");
       return;
     }
     
@@ -344,7 +355,7 @@ export default function DiscoveryPage() {
           <DialogHeader>
             <DialogTitle>Configure Backfill</DialogTitle>
             <DialogDescription>
-              Choose how many days of history you want to fetch from the approved mailboxes.
+              Choose how many days of history you want to fetch from the approved objects.
             </DialogDescription>
           </DialogHeader>
           <div className="grid gap-4 py-4">
