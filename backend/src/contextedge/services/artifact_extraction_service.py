@@ -496,6 +496,104 @@ async def synchronize_evidence_artifacts(
     }
 
 
+async def _interpret_artifact_figures(
+    db: AsyncSession,
+    *,
+    tenant_id: uuid.UUID,
+    artifact: AttachmentArtifact,
+    data: bytes,
+) -> dict | None:
+    """Run the multimodal figure pass and fold results back into the text.
+
+    Only touches documents that produced figure elements needing vision,
+    so a log or a figure-free PDF costs nothing. Fail-soft: a document
+    keeps its parsed text and its figure placeholders when the pass
+    fails, which is strictly better than losing the extraction.
+    """
+    from contextedge.config import settings as _settings
+
+    if not getattr(_settings, "document_vision_enabled", True):
+        return None
+    if (artifact.parser_type or "") not in DOCUMENT_PARSER_TYPES:
+        return None
+
+    meta = artifact.parser_metadata or {}
+    raw_elements = meta.get("elements") or []
+    if not any(
+        isinstance(e, dict) and (e.get("structured") or {}).get("needs_vision")
+        for e in raw_elements
+    ):
+        return None
+
+    from contextedge.services.documents.base import DocumentElement
+    from contextedge.services.documents.vision import interpret_document_figures
+
+    # Rebuild elements as dataclasses for the vision pass, then write the
+    # interpreted text back onto the persisted dicts by position.
+    rebuilt: list[DocumentElement] = []
+    for index, raw in enumerate(raw_elements):
+        if not isinstance(raw, dict):
+            continue
+        bbox = raw.get("bbox")
+        rebuilt.append(
+            DocumentElement(
+                element_type=raw.get("type") or "paragraph",
+                text=raw.get("text") or "",
+                sequence=index,
+                page_number=raw.get("page"),
+                section_path=list(raw.get("section") or []),
+                bounding_box=tuple(bbox) if bbox and len(bbox) == 4 else None,
+                extraction_method=raw.get("method") or "native",
+                structured_content=raw.get("structured") or {},
+            )
+        )
+
+    try:
+        counts = await interpret_document_figures(
+            rebuilt, data, tenant_id=tenant_id, db=db
+        )
+    except Exception as exc:  # noqa: BLE001
+        import structlog
+
+        structlog.get_logger().warning(
+            "document.figure_pass_failed",
+            artifact_id=str(artifact.id),
+            error_type=type(exc).__name__,
+        )
+        return None
+
+    if not counts.get("interpreted"):
+        return counts
+
+    for element in rebuilt:
+        raw = raw_elements[element.sequence]
+        if isinstance(raw, dict):
+            raw["text"] = element.text[:2000]
+            raw["method"] = element.extraction_method
+            raw["structured"] = element.structured_content
+
+    from contextedge.services.documents import render_elements_to_text
+
+    artifact.parser_metadata = {
+        **meta,
+        "elements": raw_elements,
+        "vision": counts,
+    }
+    artifact.extracted_text = render_elements_to_text(
+        rebuilt, max_chars=MAX_DOCUMENT_TEXT_CHARS
+    )
+    await db.flush()
+
+    import structlog
+
+    structlog.get_logger().info(
+        "document.figures_interpreted",
+        artifact_id=str(artifact.id),
+        **counts,
+    )
+    return counts
+
+
 async def _rechunk_with_documents(
     db: AsyncSession,
     *,
@@ -596,6 +694,15 @@ async def process_attachment_artifact(
     }
     artifact.extracted_at = datetime.now(UTC)
     await db.flush()
+
+    # Interpret figures before the body is merged downstream, so the
+    # rendered text carries what the screenshots say. Verified on the KB
+    # corpus: an article whose resolution reads "output similar to the
+    # image below" has its actual config values only in the image.
+    if extraction.status == "completed":
+        await _interpret_artifact_figures(
+            db, tenant_id=tenant_id, artifact=artifact, data=data
+        )
 
     merged_summary = None
     if extraction.status == "completed" and evidence.raw_object_ref:

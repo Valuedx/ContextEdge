@@ -249,6 +249,7 @@ def build_messages(
     system_prompt: str | None,
     user_prompt: str,
     cache_system: bool = True,
+    images: list[bytes] | None = None,
 ) -> list[dict[str, Any]]:
     """Build a LiteLLM-compatible messages list with an explicit system/user
     split, optionally marking the system block for prompt caching.
@@ -283,5 +284,25 @@ def build_messages(
             )
         else:
             messages.append({"role": "system", "content": system_prompt})
+
+    if images:
+        # Multimodal user turn. Images follow the text so the instruction
+        # is read first, and are sent as data URIs rather than links —
+        # the source document is tenant data and must not be fetched from
+        # a URL the provider resolves.
+        import base64
+
+        blocks: list[dict[str, Any]] = [{"type": "text", "text": user_prompt}]
+        for image in images:
+            encoded = base64.b64encode(image).decode("ascii")
+            blocks.append(
+                {
+                    "type": "image_url",
+                    "image_url": {"url": f"data:image/png;base64,{encoded}"},
+                }
+            )
+        messages.append({"role": "user", "content": blocks})
+        return messages
+
     messages.append({"role": "user", "content": user_prompt})
     return messages
