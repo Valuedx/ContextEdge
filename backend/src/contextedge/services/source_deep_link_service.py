@@ -9,9 +9,9 @@ Resolution order:
    `{thread_id}` variables. Wins when present, which means admins can
    point at any URL shape without code changes.
 2. Built-in defaults for known `source_type` values — `jira_sm`,
-   `servicenow`, `gmail`. Teams deep links are intentionally skipped;
-   they require tenant + team + channel context that isn't on the
-   Source row.
+   `servicenow`, `gmail`, `zoho_desk`. Teams deep links are
+   intentionally skipped; they require tenant + team + channel context
+   that isn't on the Source row.
 3. `None` when neither path resolves — the UI degrades gracefully to
    a non-clickable card.
 """
@@ -81,8 +81,50 @@ def _default_link(
             return None
         return f"https://mail.google.com/mail/u/0/#all/{ref}"
 
+    if source_type == "zoho_desk":
+        return _zoho_desk_link(source_config, external_id, thread_id)
+
     # teams and anything else — admin must supply a template.
     return None
+
+
+def _zoho_desk_link(
+    source_config: dict[str, Any],
+    external_id: str | None,
+    thread_id: str | None,
+) -> str | None:
+    """Agent-console link for a Zoho Desk ticket or KB article.
+
+    Zoho's console URL is ``<portal>/support/<org-slug>/ShowHomePage.do``
+    plus a fragment naming the module and the record id — verified from
+    the ``webUrl`` a live article returns:
+    ``…/support/automationedge/ShowHomePage.do#Solutions/dv/<id>/en``.
+    Tickets use the ``Cases`` module in the same shape.
+
+    Both the portal base and the org slug are per-portal values that
+    aren't derivable from credentials, so this returns ``None`` unless
+    the admin supplied them — the UI degrades to a non-clickable card
+    rather than emitting a URL that 404s. Two escape hatches exist: the
+    generic ``deep_link_template`` config key, and the connector's own
+    payload, which carries the exact ``web_url``/``permalink`` Zoho
+    generated for each record.
+
+    ``thread_id`` disambiguates the module (``zoho_ticket:`` vs
+    ``zoho_article:``); without it the link defaults to Cases, since a
+    Zoho source with no article module is the common configuration.
+    """
+    if not external_id:
+        return None
+    base = _clean_base_url(
+        source_config.get("portal_url")
+        or source_config.get("base_url")
+        or source_config.get("instance_url")
+    )
+    org_slug = source_config.get("org_slug")
+    if not base or not org_slug:
+        return None
+    module = "Solutions" if str(thread_id or "").startswith("zoho_article:") else "Cases"
+    return f"{base}/support/{org_slug}/ShowHomePage.do#{module}/dv/{external_id}"
 
 
 def build_source_deep_link(

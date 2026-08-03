@@ -38,6 +38,7 @@ Start with the system architecture, then follow the numbered deep dives:
 | [EDITORIAL-GUIDE.md](./EDITORIAL-GUIDE.md) | Voice, template, vocabulary, example format, and the Acme VPN scenario |
 | [KNOWN_GAPS.md](./KNOWN_GAPS.md) | Implementation caveats, UI gaps, and operational footnotes |
 | [PLAN.md](./PLAN.md) | Scope table, cross-links, maintenance, and article ordering |
+| [ZOHO_DESK_CONNECTOR.md](./ZOHO_DESK_CONNECTOR.md) | Zoho Desk connector: tickets + KB articles, the live-verified API findings, and why its sync strategy differs from ServiceNow's |
 | [01-end-to-end-pipeline.md](./01-end-to-end-pipeline.md) | Full journey from sync to evidence to search to playbooks to audit |
 | [02-api-and-request-lifecycle.md](./02-api-and-request-lifecycle.md) | FastAPI, middleware, JWTs, service tokens, and request audit |
 | [03-ingestion-connectors-and-sync.md](./03-ingestion-connectors-and-sync.md) | Connectors, sync jobs, discovery, and handoff to normalization |

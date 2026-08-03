@@ -49,7 +49,7 @@ INLINE_CHUNK_BUDGET_BYTES = 16 * 1024
 # parser cannot stall ingest. Add a key here once the corresponding
 # chunker has been load-tested at typical body sizes.
 INLINE_CHUNK_SOURCE_ALLOWLIST = frozenset(
-    {"jira_sm", "servicenow", "gmail", "teams", "sapphireims"}
+    {"jira_sm", "servicenow", "gmail", "teams", "sapphireims", "zoho_desk"}
 )
 
 
@@ -500,6 +500,7 @@ SOURCE_ROLE_MAP = {
     "servicenow": "ticket",
     "jira_sm": "ticket",
     "sapphireims": "ticket",
+    "zoho_desk": "ticket",
     "teams": "working_discussion",
     "gmail": "external_communication",
     "local_file": "document",
@@ -512,11 +513,28 @@ SYNTHESIS_ROLES = (
     "document",
 )
 
+# evidence_type → role, checked before the source-type default. Needed
+# because a single source can emit more than one kind of record: a Zoho
+# Desk source produces both tickets and KB articles, and a knowledge
+# article carries *document* authority, not ticket authority. Treating a
+# KB article as a ticket would let a general "here is how the VPN works"
+# page outrank the actual incident record on incident-specific fields.
+EVIDENCE_TYPE_ROLE_MAP = {
+    "kb_article": "document",
+    "ticket": "ticket",
+}
 
-def resolve_synthesis_role(source_type: str, source_config: dict | None) -> str:
+
+def resolve_synthesis_role(
+    source_type: str,
+    source_config: dict | None,
+    evidence_type: str | None = None,
+) -> str:
     override = (source_config or {}).get("synthesis_role")
     if isinstance(override, str) and override in SYNTHESIS_ROLES:
         return override
+    if evidence_type and evidence_type in EVIDENCE_TYPE_ROLE_MAP:
+        return EVIDENCE_TYPE_ROLE_MAP[evidence_type]
     return SOURCE_ROLE_MAP.get(source_type, "evidence")
 
 
@@ -704,7 +722,12 @@ async def _reconstruct(
     source_roles: dict[uuid.UUID, str] = {}
     rows = (
         await db.execute(
-            select(EvidenceItem.id, Source.source_type, Source.config)
+            select(
+                EvidenceItem.id,
+                Source.source_type,
+                Source.config,
+                EvidenceItem.evidence_type,
+            )
             .join(Source, EvidenceItem.source_id == Source.id)
             .where(EvidenceItem.id.in_(tuple(cluster.evidence_ids)))
         )
@@ -712,7 +735,9 @@ async def _reconstruct(
     for row in rows:
         source_types[row[0]] = row[1] or "unknown"
         source_roles[row[0]] = resolve_synthesis_role(
-            row[1] or "unknown", row[2] if isinstance(row[2], dict) else None
+            row[1] or "unknown",
+            row[2] if isinstance(row[2], dict) else None,
+            row[3],
         )
 
     items = []

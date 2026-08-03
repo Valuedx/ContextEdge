@@ -50,6 +50,23 @@ logger = structlog.get_logger()
 # PRB0004031, CHG0003321, RITM0012345) and Jira-style keys (ITOPS-101).
 # Deliberately conservative — a missed mention is a pending gap, a false
 # hit is noise in the membership table.
+#
+# KNOWN GAP (zoho_desk): Zoho Desk ticket numbers are bare integers with
+# no system prefix, so no pattern here matches a conversational mention
+# of one. Zoho tickets still register their number as a CaseIdentifier
+# and get their primary_case membership — only the *conversational*
+# direction (a Teams or email message quoting "#4021" attaching to the
+# ticket's case) is unavailable.
+#
+# Admitting hash-prefixed bare numbers would close it, but it also
+# matches order numbers and six-digit hex colors — the counterexample
+# "order #12345 is unrelated" is an explicit assertion in
+# test_ticket_bridging.py, so widening this is a product decision rather
+# than a connector one. The narrower fix, if it is wanted, is to resolve
+# numeric candidates against registered identifiers inside
+# ``bridge_conversational_mentions`` (which has db + tenant_id) instead
+# of widening this shared regex, so an unregistered number never even
+# becomes a pending mention.
 _TICKET_TOKEN_RE = re.compile(
     r"\b(?:(?:INC|PRB|CHG|RITM|REQ|TASK|CS)\d{6,9}|[A-Z][A-Z0-9]{1,9}-\d{1,10})\b"
 )
@@ -61,7 +78,7 @@ BODY_CONFIDENCE = 0.9
 
 # Sources whose evidence is a ticket record (membership = primary_case,
 # identifier registration) vs conversational sources that quote numbers.
-TICKET_SOURCE_TYPES = {"servicenow", "jira_sm", "sapphireims"}
+TICKET_SOURCE_TYPES = {"servicenow", "jira_sm", "sapphireims", "zoho_desk"}
 CONVERSATIONAL_SOURCE_TYPES = {"teams", "gmail", "local_file"}
 
 
@@ -247,6 +264,11 @@ def ticket_display_number(source_type: str, payload: dict | None) -> str | None:
         value = p.get("key")
     elif source_type == "sapphireims":
         value = p.get("ticket_id")
+    elif source_type == "zoho_desk":
+        # ``ticket_number`` is what agents quote ("#4021"); ``ticket_id``
+        # is the opaque 18-digit row id nobody types into chat. A KB
+        # article has neither and correctly registers nothing.
+        value = p.get("ticket_number")
     else:
         value = None
     if isinstance(value, str) and value.strip():

@@ -12,7 +12,7 @@ You connect each of your existing tools—Jira, ServiceNow, Teams, Gmail, or sim
 
 1. **Connector contract** — `BaseConnector` in `connectors/base.py` defines the adapter surface: `validate_credentials`, `discover_objects`, `backfill`, `fetch_changes`, and `hydrate_thread`, plus shared types (`IngestionEvent`, `Checkpoint`, `BackfillResult`, `ChangeResult`, `HydratedThread`). Concrete implementations live under `connectors/<vendor>/connector.py`. Each connector must emit `IngestionEvent.thread_id` values in the compound format that its own `hydrate_thread(thread_ref)` can parse — this ensures the normalization pipeline creates `Thread` rows with an `external_thread_id` that hydration can later resolve.
 
-2. **Registry** — `get_connector(source_type, source_config, credentials)` in `connectors/registry.py` maps a string `source_type` to a class. `_register_connectors()` lazily imports and registers `teams`, `gmail`, `servicenow`, and `jira_sm`. New connector types need a module plus an entry in `CONNECTOR_CLASSES`.
+2. **Registry** — `get_connector(source_type, source_config, credentials)` in `connectors/registry.py` maps a string `source_type` to a class. `_register_connectors()` lazily imports and registers `teams`, `gmail`, `servicenow`, `jira_sm`, `sapphireims`, and `zoho_desk`. New connector types need a module plus an entry in `CONNECTOR_CLASSES` — and a matching entry in the `SourceCreate.source_type` pattern in `schemas/source.py`, or the API rejects the source before the registry is ever consulted.
 
 3. **Credentials and discovery** — `sync_worker_service` loads the active `SourceCredential`, decrypts payload via `source_service.decrypt_credentials`, and builds a connector. `run_discovery_job` creates a `SyncRun`, calls `discover_source_objects`, and records status. `run_backfill_job` and `run_incremental_job` drive `backfill` / `fetch_changes` over date windows and checkpoints.
 
@@ -32,6 +32,8 @@ You connect each of your existing tools—Jira, ServiceNow, Teams, Gmail, or sim
    | Teams | `teamId:channelId:messageId` | `team-001:chan-002:msg-003` |
    | ServiceNow | `tableName:sys_id` | `incident:abc123def456` |
    | Jira SM | `issueKey` | `PROJ-123` |
+   | SapphireIMS | `recordKind:ticketId` | `incident:INC-4021` |
+   | Zoho Desk | `zoho_ticket:id` / `zoho_article:id` | `zoho_ticket:1892000000123456` |
 
    The normalization worker uses `_thread_id` from the raw payload to create `Thread` rows (via `ensure_thread_for_evidence` in `evidence_normalization.py`), and the hydration worker passes `Thread.external_thread_id` directly to `connector.hydrate_thread()`.
 
@@ -40,8 +42,11 @@ You connect each of your existing tools—Jira, ServiceNow, Teams, Gmail, or sim
    - **Teams**: fetches a fresh delta link via `/messages/delta` and stores `delta_link`
    - **ServiceNow**: records the latest `sys_updated_on` timestamp as `last_updated`
    - **Jira SM**: records the latest issue `updated` timestamp as `last_updated`
+   - **Zoho Desk**: records the newest `modifiedTime` **seen** (not the newest kept) plus the ids sharing it, as `last_updated` + `last_ids`
 
    Without this bridging, incremental sync would fail with no checkpoint after a completed backfill.
+
+10. **Checkpoint shapes are per-connector, and not interchangeable.** The compound `(timestamp, id)` keyset the ServiceNow connector uses is correct *because* ServiceNow honors `ORDERBY` across both columns. Zoho Desk does not: it sorts by `modifiedTime` descending and returns tied records id-**ascending**, so the same pattern would skip the tail of a bulk edit. Zoho's checkpoint is therefore a timestamp plus the id set at that timestamp. Before copying a checkpoint strategy into a new connector, verify the vendor's actual ordering guarantee against a live instance — see [ZOHO_DESK_CONNECTOR.md](./ZOHO_DESK_CONNECTOR.md) for the full worked example.
 
 Residual caveats (sync queue in prod, dedupe): see [KNOWN_GAPS.md](./KNOWN_GAPS.md).
 
