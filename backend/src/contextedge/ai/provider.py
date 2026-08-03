@@ -50,6 +50,41 @@ def get_model_for_task(task: str) -> str:
     return MODEL_ROUTING.get(task, settings.default_extraction_model)
 
 
+def resolve_thinking_budget(prompt_name: str | None, model: str | None) -> int | None:
+    """Configured thinking budget for a prompt, or ``None`` for dynamic.
+
+    ``None`` means "send nothing" — the provider keeps deciding, which is
+    the behaviour that shipped. A budget is only returned when the prompt
+    is configured *and* the model actually supports reasoning: sending
+    the parameter to a non-reasoning model is a 400, and the model can
+    change under a prompt via routing or the fallback.
+
+    Keyed on ``prompt_name`` rather than ``task`` because task is coarse
+    — classification covers relevance, identity, and adjudication, and
+    those have very different tolerances for cutting reasoning.
+    """
+    if not prompt_name:
+        return None
+    budgets = getattr(settings, "llm_thinking_budgets", None) or {}
+    if prompt_name not in budgets:
+        return None
+    try:
+        budget = int(budgets[prompt_name])
+    except (TypeError, ValueError):
+        return None
+    if budget < 0:
+        return None
+
+    try:
+        import litellm
+
+        if not litellm.supports_reasoning(model=model or ""):
+            return None
+    except Exception:  # noqa: BLE001 - never fail a call over a capability probe
+        return None
+    return budget
+
+
 async def llm_complete(
     prompt: str,
     task: str = "extraction",
@@ -175,6 +210,12 @@ async def llm_complete(
     if response_format:
         kwargs["response_format"] = response_format
 
+    # NOTE: the thinking budget is resolved per ATTEMPT, not here. The
+    # fallback model is a different model and may not support reasoning
+    # at all; carrying a `thinking` kwarg computed for the primary model
+    # into the fallback would turn the resilience path into a hard 400 —
+    # a failure that only appears when the primary is already down.
+
     start = time.perf_counter()
     outcome = "ok"
     response = None
@@ -192,9 +233,20 @@ async def llm_complete(
 
     async def _attempt(attempt_model: str):
         breaker.check(attempt_model)
+        attempt_kwargs = {**kwargs, "model": attempt_model}
+        budget = resolve_thinking_budget(prompt_name, attempt_model)
+        if budget is not None:
+            # LiteLLM maps this onto the provider's native control
+            # (Gemini thinking_config.thinking_budget, Anthropic
+            # thinking). Sent only when this specific model supports
+            # reasoning.
+            attempt_kwargs["thinking"] = {
+                "type": "enabled",
+                "budget_tokens": budget,
+            }
         try:
             result = await _asyncio.wait_for(
-                litellm.acompletion(**{**kwargs, "model": attempt_model}),
+                litellm.acompletion(**attempt_kwargs),
                 timeout=LLM_CALL_TIMEOUT_SECONDS,
             )
             breaker.record_success(attempt_model)
