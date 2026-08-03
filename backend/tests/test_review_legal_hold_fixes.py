@@ -82,7 +82,8 @@ async def test_episode_reconstruct_skips_legal_hold_evidence():
             result.scalars.return_value.all.return_value = []
             return result
         if "sources" in text:
-            result.all.return_value = [(normal.id, "servicenow", {})]
+            # (evidence_id, source_type, source_config, evidence_type)
+            result.all.return_value = [(normal.id, "servicenow", {}, "incident")]
             return result
         if "correlation_edges" in text or "case_links" in text:
             result.all.return_value = []

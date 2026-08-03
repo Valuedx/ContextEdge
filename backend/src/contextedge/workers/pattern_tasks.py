@@ -8,7 +8,7 @@ from contextedge.ai.extractors.pattern_extractor import synthesize_pattern
 from contextedge.ai.generators import playbook_generator
 from contextedge.ai.provider import generate_embedding
 from contextedge.graph.builder import ensure_edge, link_node_to_identities
-from contextedge.models.episode import Episode
+from contextedge.models.episode import Episode, EpisodeEvidenceLink
 from contextedge.models.pattern import NegativeKnowledgeItem, Pattern, PatternEvidenceLink
 from contextedge.models.playbook import Playbook
 from contextedge.models.tenant import User
@@ -52,6 +52,43 @@ def _effective_risk_tier(llm_risk_tier, steps) -> str:
     if RISK_TIERS.index(suggested) > RISK_TIERS.index(floor):
         return suggested
     return floor
+
+
+async def _evidence_ids_for_episodes(
+    db, tenant_id: uuid.UUID, episode_ids: list[uuid.UUID]
+) -> list[str]:
+    """Evidence grounding a set of episodes, via the 0037 link table.
+
+    Returns sorted string ids so the generated ``evidence_refs`` blob is
+    deterministic across runs — a regenerated playbook version should
+    differ because the evidence changed, not because a set iterated in a
+    different order.
+
+    Falls back to the episodes' JSONB ``evidence_ids`` for episodes
+    written before 0037, which have no link rows: the normalized table is
+    the source of truth going forward, but a pre-0037 episode still has
+    real grounding and dropping it would silently narrow provenance.
+    """
+    if not episode_ids:
+        return []
+
+    rows = await db.execute(
+        select(EpisodeEvidenceLink.evidence_id).where(
+            EpisodeEvidenceLink.tenant_id == tenant_id,
+            EpisodeEvidenceLink.episode_id.in_(episode_ids),
+        )
+    )
+    found = {str(eid) for eid in rows.scalars().all() if eid}
+
+    if not found:
+        legacy = await db.execute(
+            select(Episode.evidence_ids).where(Episode.id.in_(episode_ids))
+        )
+        for blob in legacy.scalars().all():
+            if isinstance(blob, list):
+                found.update(str(v) for v in blob if v)
+
+    return sorted(found)
 
 
 async def _linked_episode_ids(db, tenant_id: uuid.UUID) -> set[uuid.UUID]:
@@ -290,9 +327,15 @@ def generate_playbook_candidate(self, pattern_id: str, tenant_id: str):
         # Evidence provenance for the generated version: every evidence item
         # the pattern was clustered from. Without these refs a generated
         # playbook has no traceable grounding.
-        evidence_ref_ids = sorted(
-            {str(ln.evidence_id) for ln in links if ln.evidence_id}
-        )
+        #
+        # Resolved through episode_evidence_links (migration 0037), NOT
+        # through PatternEvidenceLink.evidence_id. That column exists but
+        # create_pattern_from_episodes never populates it — it writes
+        # episode membership only — so this set was silently empty for
+        # every auto-generated pattern, which is every pattern the
+        # clustering worker produces. The 0037 table is the maintained
+        # per-episode grounding and is the correct source of truth.
+        evidence_ref_ids = await _evidence_ids_for_episodes(db, tid, ep_ids)
 
         er = await db.execute(select(Episode).where(Episode.id.in_(ep_ids)))
         episodes = list(er.scalars().all())

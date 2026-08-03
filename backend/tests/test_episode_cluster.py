@@ -366,8 +366,15 @@ async def test_reconstruct_passes_real_source_types_and_supersedes_subset_drafts
         if "domains" in text:
             return _scalar_one(None)
         if "sources" in text:
+            # (evidence_id, source_type, source_config, evidence_type) —
+            # evidence_type joined the select so a source emitting more
+            # than one record shape resolves its synthesis role per
+            # record (see resolve_synthesis_role).
             return _rows_result(
-                [(ticket_ev.id, "servicenow", {}), (teams_ev.id, "teams", None)]
+                [
+                    (ticket_ev.id, "servicenow", {}, "incident"),
+                    (teams_ev.id, "teams", None, "chat_message"),
+                ]
             )
         if "reviewer_state" in text:
             return _scalars_result([old_draft])

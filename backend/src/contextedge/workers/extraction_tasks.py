@@ -27,6 +27,7 @@ from contextedge.services.evidence_normalization import (
     evidence_content_hash_from_payload,
     evidence_title_from_payload,
 )
+from contextedge.services.evidence_typing import derive_evidence_type
 from contextedge.services.identity_service import link_evidence_identities
 from contextedge.services.redaction_service import redact, redact_evidence_fields
 from contextedge.workers.asyncio_runner import run_async
@@ -248,7 +249,12 @@ async def _normalize(db: AsyncSession, raw_object_id: str, tenant_id: uuid.UUID)
         source_id=raw.source_id,
         source_object_id=raw.source_object_id,
         raw_object_ref=raw.id,
-        evidence_type=payload.get("evidence_type", "message"),
+        # Derived from what the connector actually fetched, not read off
+        # the payload with a "message" default — no connector but
+        # zoho_desk ever set the field, so a ServiceNow KB article and a
+        # Teams line were indistinguishable downstream. See
+        # services/evidence_typing.py for why this is central.
+        evidence_type=derive_evidence_type(payload),
         title=title[:500],
         body_text=body,
         content_hash=h,
@@ -513,10 +519,30 @@ SYNTHESIS_ROLES = (
 )
 
 
-def resolve_synthesis_role(source_type: str, source_config: dict | None) -> str:
+# evidence_type → role, checked before the source-type default. A single
+# source emits more than one kind of record: ServiceNow serves incidents
+# and the KB from the same connector, and a knowledge article carries
+# *document* authority, not ticket authority. Without this, a general
+# "how the VPN works" page outranks the actual incident record on
+# incident-specific fields during synthesis.
+EVIDENCE_TYPE_ROLE_MAP = {
+    "kb_article": "document",
+    "sop": "document",
+    "documentation": "document",
+    "alert": "monitoring",
+}
+
+
+def resolve_synthesis_role(
+    source_type: str,
+    source_config: dict | None,
+    evidence_type: str | None = None,
+) -> str:
     override = (source_config or {}).get("synthesis_role")
     if isinstance(override, str) and override in SYNTHESIS_ROLES:
         return override
+    if evidence_type and evidence_type in EVIDENCE_TYPE_ROLE_MAP:
+        return EVIDENCE_TYPE_ROLE_MAP[evidence_type]
     return SOURCE_ROLE_MAP.get(source_type, "evidence")
 
 
@@ -704,7 +730,12 @@ async def _reconstruct(
     source_roles: dict[uuid.UUID, str] = {}
     rows = (
         await db.execute(
-            select(EvidenceItem.id, Source.source_type, Source.config)
+            select(
+                EvidenceItem.id,
+                Source.source_type,
+                Source.config,
+                EvidenceItem.evidence_type,
+            )
             .join(Source, EvidenceItem.source_id == Source.id)
             .where(EvidenceItem.id.in_(tuple(cluster.evidence_ids)))
         )
@@ -712,7 +743,9 @@ async def _reconstruct(
     for row in rows:
         source_types[row[0]] = row[1] or "unknown"
         source_roles[row[0]] = resolve_synthesis_role(
-            row[1] or "unknown", row[2] if isinstance(row[2], dict) else None
+            row[1] or "unknown",
+            row[2] if isinstance(row[2], dict) else None,
+            row[3],
         )
 
     items = []

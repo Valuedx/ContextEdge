@@ -37,6 +37,8 @@ const sourceSchema = z.object({
   mailbox_email: z.string().email("Invalid email address").optional().or(z.literal("")),
   service_account_json: z.string().optional().or(z.literal("")),
   token_json: z.string().optional().or(z.literal("")),
+  // What kind of content a local upload contains
+  local_content_type: z.string().optional().or(z.literal("")),
   // ServiceNow specific fields
   servicenow_instance_url: z.string().optional().or(z.literal("")),
   servicenow_username: z.string().optional().or(z.literal("")),
@@ -81,6 +83,7 @@ export function AddSourceDialog({ open, onOpenChange }: AddSourceDialogProps) {
       relevance_keywords: "error, issue, ticket, bug, support, failed, incident",
       service_account_json: "",
       gmail_auth_method: "service_account",
+      local_content_type: "document",
       token_json: "",
       servicenow_instance_url: "",
       servicenow_username: "",
@@ -91,6 +94,7 @@ export function AddSourceDialog({ open, onOpenChange }: AddSourceDialogProps) {
   });
 
   const sourceType = useWatch({ control, name: "source_type" });
+  const localContentType = useWatch({ control, name: "local_content_type" });
   const gmailAuthMethod = useWatch({ control, name: "gmail_auth_method" });
   const [selectedFiles, setSelectedFiles] = useState<{ filename: string; content: string }[]>([]);
   const [isReading, setIsReading] = useState(false);
@@ -254,12 +258,19 @@ export function AddSourceDialog({ open, onOpenChange }: AddSourceDialogProps) {
       
       if (values.source_type === "local_file" && selectedFiles.length > 0) {
         toast.info(`Ingesting ${selectedFiles.length} files...`);
+        // The content kind is declared, not guessed. This previously
+        // inferred it from the filename ("slack" → message, everything
+        // else → log), so an uploaded SOP was typed as a log — which
+        // costs it knowledge authority in the reranker and keeps it out
+        // of long-term memory. The uploader is present at ingest time
+        // and knows what these files are; ask them.
         await api.post("/sources/local-ingest", {
           source_id: source.id,
+          evidence_type: values.local_content_type || "document",
           files: selectedFiles.map(f => ({
             filename: f.filename,
             content: f.content,
-            metadata: { evidence_type: f.filename.includes("slack") ? "message" : "log" }
+            metadata: {},
           }))
         });
         toast.success("Local ingestion started successfully");
@@ -457,6 +468,35 @@ export function AddSourceDialog({ open, onOpenChange }: AddSourceDialogProps) {
 
             {sourceType === "local_file" && (
               <div className="space-y-3 rounded-lg border border-dashed p-4">
+                <div className="space-y-2">
+                  <Label htmlFor="local_content_type">Content Type</Label>
+                  <Select
+                    value={localContentType || "document"}
+                    onValueChange={(value) =>
+                      setValue("local_content_type", value ?? "document")
+                    }
+                  >
+                    <SelectTrigger id="local_content_type" className="w-full">
+                      <SelectValue placeholder="What kind of files are these?" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="kb_article">Knowledge Base Articles</SelectItem>
+                      <SelectItem value="sop">SOPs / Standard Procedures</SelectItem>
+                      <SelectItem value="runbook">Runbooks</SelectItem>
+                      <SelectItem value="documentation">Product Documentation</SelectItem>
+                      <SelectItem value="postmortem">Post-mortems</SelectItem>
+                      <SelectItem value="transcript">Transcripts</SelectItem>
+                      <SelectItem value="document">Other Documents</SelectItem>
+                      <SelectItem value="message">Chat / Message Logs</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-muted-foreground">
+                    Knowledge types (KB articles, SOPs, documentation) are held as
+                    long-term memory and carry knowledge authority rather than
+                    ticket authority when ranked.
+                  </p>
+                </div>
+
                 <div className="flex items-center justify-between">
                   <div className="space-y-0.5">
                     <Label className="text-sm font-medium">Reconstruction Data</Label>

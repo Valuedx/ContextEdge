@@ -16,6 +16,7 @@ matching passage instead of the whole parent body.
 
 import uuid
 
+import structlog
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -28,6 +29,8 @@ from contextedge.search.chunk_rollup import (
     rollup_best_chunk_per_evidence,
 )
 from contextedge.search.vector_ops import halfvec_cosine_distance, tune_ann_recall
+
+logger = structlog.get_logger()
 
 # Oversample bounds for the chunk pass: the ANN returns this many chunks,
 # MMR + rollup compress them down to `limit` parents. §6 recommends
@@ -113,6 +116,34 @@ async def _chunk_candidates(
         )
 
     rows = (await db.execute(stmt)).all()
+
+    if playbook_id is not None and not rows:
+        # The playbook scope is an INNER join through
+        # playbook_evidence_links. An empty result here is ambiguous: it
+        # means either "no chunk matched" or "this version has no
+        # provenance rows at all" — and for a long time it was always the
+        # second, because nothing in the codebase wrote that table, so
+        # every playbook-scoped search returned nothing and looked like a
+        # legitimate miss. Say which it is rather than returning [] and
+        # letting the caller guess.
+        link_count = (
+            await db.execute(
+                select(func.count())
+                .select_from(PlaybookEvidenceLink)
+                .where(PlaybookEvidenceLink.playbook_version_id == playbook_version_id)
+            )
+        ).scalar_one()
+        if not link_count:
+            logger.warning(
+                "search.playbook_scope_has_no_evidence_links",
+                playbook_id=str(playbook_id),
+                playbook_version_id=str(playbook_version_id),
+                hint=(
+                    "version has no playbook_evidence_links rows; "
+                    "playbook-scoped semantic search cannot match anything"
+                ),
+            )
+
     return [
         ChunkCandidate(
             chunk_id=row[0],
