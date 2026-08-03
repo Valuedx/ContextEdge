@@ -238,6 +238,22 @@ def _extract_structured_document(
     text = render_elements_to_text(parsed.elements, max_chars=MAX_DOCUMENT_TEXT_CHARS)
     empty_pages = parsed.metadata.get("empty_pages") or []
 
+    # Elements past the persistence cap are absent from both the figure
+    # pass and structure-aware chunking, so the tail of a very long
+    # document degrades to plain text. Announced rather than silently
+    # sliced — a truncation nobody logs reads as "the document was short".
+    dropped = max(0, len(parsed.elements) - MAX_PERSISTED_ELEMENTS)
+    if dropped:
+        import structlog
+
+        structlog.get_logger().warning(
+            "document.elements_truncated",
+            filename=filename,
+            total=len(parsed.elements),
+            kept=MAX_PERSISTED_ELEMENTS,
+            dropped=dropped,
+        )
+
     return ArtifactExtractionResult(
         status="completed",
         parser_type=parser.name,
@@ -257,6 +273,7 @@ def _extract_structured_document(
             # for the later multimodal pass — recorded, never guessed at.
             "pages_without_text": empty_pages[:100],
             "warnings": parsed.warnings[:20],
+            "elements_dropped": dropped,
             "elements": [
                 {
                     "type": e.element_type,
@@ -265,6 +282,13 @@ def _extract_structured_document(
                     "bbox": list(e.bounding_box) if e.bounding_box else None,
                     "method": e.extraction_method,
                     "text": e.text[:2000],
+                    # Required, not decorative: the figure pass selects on
+                    # structured["needs_vision"], and the chunker reads
+                    # it for has_figure/needs_vision metadata. Omitting it
+                    # made the vision pass unreachable — it ran on real
+                    # documents and interpreted nothing, because every
+                    # figure looked like it needed no interpretation.
+                    "structured": e.structured_content or {},
                 }
                 for e in parsed.elements[:MAX_PERSISTED_ELEMENTS]
             ],
@@ -439,6 +463,35 @@ async def synchronize_evidence_artifacts(
 
     evidence.title = evidence_title_from_payload(payload)[:500]
     combined_body = build_combined_evidence_body(evidence_body_from_payload(payload), attachments)
+
+    # Redact the merged body.
+    #
+    # This was a hole, and a wide one. `_normalize` redacts title and body
+    # *before* attachments are extracted, and nothing redacted afterwards
+    # — so every byte of attachment-derived text reached the database,
+    # the embedder, and the extractors unredacted. Logs carry tokens and
+    # connection strings; a screenshot read by the vision pass can carry
+    # a username, a hostname, or a credential straight out of a UI.
+    #
+    # Applied here rather than at parse time because this is the last
+    # point before the text is persisted and embedded, and it covers
+    # every parser at once rather than one adapter at a time.
+    from contextedge.config import settings as _settings
+    from contextedge.services.redaction_service import redact
+
+    combined_body, redaction_counts = redact(
+        combined_body, enabled=_settings.redaction_enabled
+    )
+    if redaction_counts:
+        import structlog
+
+        structlog.get_logger().info(
+            "evidence.attachment_body_redacted",
+            tenant_id=str(tenant_id),
+            evidence_id=str(evidence.id),
+            counts=redaction_counts,
+        )
+
     evidence.body_text = combined_body
     evidence.body_summary = combined_body[:500] if combined_body else None
     evidence.embedding = await embed_evidence(evidence.title, evidence.body_text)
@@ -494,6 +547,54 @@ async def synchronize_evidence_artifacts(
         "attachment_count": len(attachments),
         "completed_attachment_count": completed_count,
     }
+
+
+def redact_artifact_content(artifact: AttachmentArtifact) -> dict[str, int]:
+    """Redact everything an artifact persists that downstream code reads.
+
+    Two surfaces, and missing either one leaks:
+
+    - ``extracted_text`` — merged into ``evidence.body_text``, embedded,
+      and shown in the UI.
+    - ``parser_metadata["elements"][].text`` — what the **document
+      chunker** builds chunks from. Redacting only the body would leave
+      every chunk unredacted, which is the surface search actually
+      returns.
+
+    Called at each write point (after extraction, and again after the
+    figure pass rewrites element text) rather than once at the end, so
+    no path can persist raw content and be read before the sweep.
+    """
+    from contextedge.config import settings as _settings
+    from contextedge.services.redaction_service import redact
+
+    if not _settings.redaction_enabled:
+        return {}
+
+    totals: dict[str, int] = {}
+
+    def _merge(counts: dict[str, int]) -> None:
+        for kind, n in (counts or {}).items():
+            totals[kind] = totals.get(kind, 0) + n
+
+    if artifact.extracted_text:
+        artifact.extracted_text, counts = redact(artifact.extracted_text)
+        _merge(counts)
+
+    meta = artifact.parser_metadata or {}
+    elements = meta.get("elements")
+    if isinstance(elements, list):
+        changed = False
+        for element in elements:
+            if isinstance(element, dict) and element.get("text"):
+                element["text"], counts = redact(element["text"])
+                _merge(counts)
+                changed = True
+        if changed:
+            # Reassign so SQLAlchemy sees the JSONB mutation.
+            artifact.parser_metadata = {**meta, "elements": elements}
+
+    return totals
 
 
 async def _interpret_artifact_figures(
@@ -582,6 +683,12 @@ async def _interpret_artifact_figures(
     artifact.extracted_text = render_elements_to_text(
         rebuilt, max_chars=MAX_DOCUMENT_TEXT_CHARS
     )
+
+    # Re-redact: the figure pass just replaced element text with content
+    # a model read out of screenshots, which is the single most likely
+    # place for a visible credential or hostname to enter the system.
+    vision_redactions = redact_artifact_content(artifact)
+
     await db.flush()
 
     import structlog
@@ -589,6 +696,7 @@ async def _interpret_artifact_figures(
     structlog.get_logger().info(
         "document.figures_interpreted",
         artifact_id=str(artifact.id),
+        redactions=sum(vision_redactions.values()),
         **counts,
     )
     return counts
@@ -693,6 +801,20 @@ async def process_attachment_artifact(
         **(extraction.parser_metadata or {}),
     }
     artifact.extracted_at = datetime.now(UTC)
+
+    # Redact before anything reads this row. Attachment text reaches the
+    # body, the embedder, and the chunker; logs carry tokens and
+    # connection strings.
+    redaction_counts = redact_artifact_content(artifact)
+    if redaction_counts:
+        import structlog
+
+        structlog.get_logger().info(
+            "artifact.redacted",
+            artifact_id=str(artifact.id),
+            counts=redaction_counts,
+        )
+
     await db.flush()
 
     # Interpret figures before the body is merged downstream, so the
