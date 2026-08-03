@@ -13,10 +13,20 @@ land independently.
 
 Resolution order:
 
-1. ``source_type in {"jira_sm", "servicenow"}`` -> ``ticket``
-2. ``source_type in {"gmail", "teams"}`` -> ``thread``
-3. ``evidence_type == "attachment"`` -> ``attachment``
-4. otherwise -> ``fallback``
+1. ``evidence_type in _DOCUMENT_EVIDENCE_TYPES`` -> ``attachment``
+2. ``source_type in {"jira_sm", "servicenow", "sapphireims",
+   "zoho_desk"}`` -> ``ticket``
+3. ``source_type in {"gmail", "teams"}`` -> ``thread``
+4. ``evidence_type == "attachment"`` -> ``attachment``
+5. otherwise -> ``fallback``
+
+Rule 1 exists because one source can emit more than one shape of
+record: a Zoho Desk source produces both tickets and KB articles, and
+an article is a structured document whose headings are the meaningful
+split boundaries, not a ticket. It is checked ahead of source type so
+the record's own shape wins. Rule 4 keeps its original position so
+attachment resolution for the existing ticket and thread sources is
+unchanged.
 """
 
 from __future__ import annotations
@@ -27,8 +37,17 @@ from contextedge.services.chunkers.base import Chunker
 chunkers: dict[str, Chunker] = {}
 
 
-_TICKET_SOURCE_TYPES = frozenset({"jira_sm", "servicenow"})
+_TICKET_SOURCE_TYPES = frozenset(
+    {"jira_sm", "servicenow", "sapphireims", "zoho_desk"}
+)
 _THREAD_SOURCE_TYPES = frozenset({"gmail", "teams"})
+
+# Evidence types routed to the ``attachment`` chunker on their own
+# authority, before source type is consulted. That chunker is really the
+# *document-structure* chunker (markdown heading hierarchy, log-event
+# boundaries), and a knowledge-base article is exactly that shape —
+# authored sections whose boundaries beat a character-count split.
+_DOCUMENT_EVIDENCE_TYPES = frozenset({"kb_article"})
 
 
 def _register_chunkers() -> None:
@@ -99,6 +118,8 @@ def get_chunker(source_type: str | None, evidence_type: str | None = None) -> Ch
     if not chunkers:
         _register_chunkers()
 
+    if evidence_type in _DOCUMENT_EVIDENCE_TYPES and "attachment" in chunkers:
+        return chunkers["attachment"]
     if source_type in _TICKET_SOURCE_TYPES and "ticket" in chunkers:
         return chunkers["ticket"]
     if source_type in _THREAD_SOURCE_TYPES and "thread" in chunkers:

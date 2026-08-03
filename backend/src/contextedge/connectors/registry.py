@@ -11,6 +11,7 @@ def _register_connectors():
     from contextedge.connectors.sapphireims.connector import SapphireIMSConnector
     from contextedge.connectors.servicenow.connector import ServiceNowConnector
     from contextedge.connectors.teams.connector import TeamsConnector
+    from contextedge.connectors.zoho_desk.connector import ZohoDeskConnector
 
     CONNECTOR_CLASSES.update(
         {
@@ -19,6 +20,7 @@ def _register_connectors():
             "servicenow": ServiceNowConnector,
             "jira_sm": JiraSmConnector,
             "sapphireims": SapphireIMSConnector,
+            "zoho_desk": ZohoDeskConnector,
         }
     )
 
