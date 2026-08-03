@@ -34,6 +34,53 @@ _PLACEHOLDER = "[REDACTED:{kind}]"
 # Kind names are used as both telemetry keys and the token substitution
 # so they must stay stable once a tenant relies on them in reports.
 _RULES: tuple[tuple[str, re.Pattern[str]], ...] = (
+    # --- Secrets first ------------------------------------------------
+    #
+    # ORDER IS LOAD-BEARING. These run before PHONE and CREDIT_CARD
+    # because a numeric rule that fires *inside* a secret leaves the rest
+    # of it in place: a GitHub token was being rewritten to
+    # "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ[REDACTED:PHONE]", which reads as
+    # redacted and is not. A partly-redacted secret is worse than an
+    # obviously-unredacted one, because it passes review.
+    #
+    # These were added when validating redaction over image-derived text:
+    # the figure pass reads config files and terminals out of
+    # screenshots, and logs carry the same content. Tokens and
+    # password assignments are precisely what lives there, and nothing
+    # matched them.
+    (
+        "API_TOKEN",
+        re.compile(
+            r"\b("
+            r"gh[pousr]_[A-Za-z0-9]{16,255}"          # GitHub
+            r"|xox[baprs]-[A-Za-z0-9\-]{10,}"          # Slack
+            r"|sk-[A-Za-z0-9_\-]{16,}"                 # OpenAI-style
+            r"|glpat-[A-Za-z0-9_\-]{16,}"              # GitLab
+            r"|AIza[A-Za-z0-9_\-]{20,}"                # Google API key
+            r"|ya29\.[A-Za-z0-9_\-]{20,}"              # Google OAuth
+            r")\b"
+        ),
+    ),
+    (
+        "JWT",
+        re.compile(r"\beyJ[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\b"),
+    ),
+    (
+        "BEARER_TOKEN",
+        re.compile(r"(?i)\b(?:bearer|authorization:\s*bearer)\s+[A-Za-z0-9._\-+/=]{12,}"),
+    ),
+    # key=value secrets in config files, connection strings, and CLI
+    # lines — the dominant shape in a screenshotted config. The key name
+    # is kept so the reader still knows what was removed.
+    (
+        "SECRET_ASSIGNMENT",
+        re.compile(
+            r"(?i)\b(password|passwd|pwd|secret|api[_\-]?key|access[_\-]?token"
+            r"|auth[_\-]?token|client[_\-]?secret|private[_\-]?key)"
+            r"\s*[:=]\s*"
+            r"[\"']?([^\s\"'&;,)]{4,})[\"']?"
+        ),
+    ),
     (
         "EMAIL",
         re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}"),
