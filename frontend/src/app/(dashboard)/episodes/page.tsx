@@ -14,13 +14,11 @@ import Link from "next/link";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
-import { useRouter } from "next/navigation";
 import { usePagination } from "@/lib/hooks/use-pagination";
 import { PaginationControls } from "@/components/common/pagination-controls";
 
 function EpisodeActions({ episodeId, title }: { episodeId: string; title: string }) {
   const queryClient = useQueryClient();
-  const router = useRouter();
 
   const deleteMutation = useMutation({
     mutationFn: () => api.delete(`/episodes/${episodeId}`),
@@ -113,8 +111,9 @@ export default function EpisodesPage() {
       setIsReconstructing(true);
       const res = await api.post<EpisodeReconstructQueuedResponse>("/episodes/reconstruct", {});
       const tid = res.task_id ? `${res.task_id.slice(0, 8)}…` : "unknown";
+      const evidenceCount = res.detail?.evidence_count ?? 0;
       toast.success(
-        `Reconstruction queued for ${res.evidence_count} evidence item(s). Celery task ${tid} — refresh episodes after the worker finishes.`,
+        `Reconstruction queued for ${evidenceCount} evidence item${evidenceCount === 1 ? "" : "s"}. Celery task ${tid} — refresh episodes after the worker finishes.`,
       );
     } catch (err) {
       toast.error((err as Error).message || "Failed to trigger reconstruction");

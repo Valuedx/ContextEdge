@@ -352,8 +352,11 @@ export interface RuntimeMatchResponse {
 /** POST /episodes/reconstruct — 202 Accepted */
 export interface EpisodeReconstructQueuedResponse {
   status: string;
-  evidence_count: number;
   task_id: string;
+  detail?: {
+    evidence_count?: number;
+    domain_id?: string | null;
+  };
 }
 
 /** GET /runtime/explain/{match_id} */
