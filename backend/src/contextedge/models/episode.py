@@ -313,3 +313,68 @@ class EpisodeEvidenceLink(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+
+
+class IdentityMergeProposal(Base, TenantScopedMixin):
+    """A pair of identities a reconciliation pass believes are the same.
+
+    Per-mention adjudication cannot produce these. It only sees
+    candidates sharing a substring with the incoming name, so "SFA" and
+    "Sales Force Automation" were never presented together and forked
+    into two rows — as did "HP UPD" and "HP Universal Print Driver". A
+    pass reading the whole provisional set at once sees both.
+
+    Proposed, never applied: merging re-points aliases and deactivates an
+    identity, which is not something to do on a model's word alone.
+
+    Stored rather than recomputed so a reviewer's rejection is durable —
+    without it a scheduled run re-raises every rejected pair forever.
+    """
+
+    __tablename__ = "identity_merge_proposals"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "primary_identity_id",
+            "duplicate_identity_id",
+            name="uq_identity_merge_proposal_pair",
+        ),
+        Index(
+            "ix_identity_merge_proposals_pending",
+            "tenant_id",
+            "status",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=False, index=True
+    )
+    # The identity to KEEP, and the one folded into it.
+    primary_identity_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("canonical_identities.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    duplicate_identity_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("canonical_identities.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    entity_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    confidence: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # pending | accepted | rejected
+    status: Mapped[str] = mapped_column(String(20), default="pending", nullable=False)
+    proposed_by: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    decided_by: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), nullable=True
+    )
+    decided_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )

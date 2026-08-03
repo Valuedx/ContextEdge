@@ -925,11 +925,70 @@ async def merge_canonical_identities(
             ),
         )
     )
+    # Re-pointing an edge can collide with one the primary already has,
+    # and `uq_graph_edges_active_logical` is unique over the logical key
+    # among live edges. The evidence-link loop above already guards for
+    # this; the edge loop did not, and blindly UPDATEd.
+    #
+    # That made merging a GENUINE duplicate fail: a document reading
+    # "Sales Force Automation (SFA)" produces a mentions_identity edge to
+    # each identity, so folding one into the other is exactly the case
+    # that collides. The manual merge endpoint hit it too — the closer
+    # two identities were to being the same thing, the more certainly the
+    # merge 500'd.
+    primary_edge_keys = {
+        (
+            edge.domain_id,
+            edge.source_node_type,
+            edge.source_node_id,
+            edge.target_node_type,
+            edge.target_node_id,
+            edge.edge_type,
+        )
+        for edge in (
+            await db.execute(
+                select(GraphEdge).where(
+                    GraphEdge.tenant_id == tenant_id,
+                    GraphEdge.valid_to.is_(None),
+                    or_(
+                        (GraphEdge.source_node_type == "identity")
+                        & (GraphEdge.source_node_id == primary.id),
+                        (GraphEdge.target_node_type == "identity")
+                        & (GraphEdge.target_node_id == primary.id),
+                    ),
+                )
+            )
+        )
+        .scalars()
+        .all()
+    }
+
     for edge in edges_result.scalars().all():
-        if edge.source_node_type == "identity" and edge.source_node_id == duplicate.id:
-            edge.source_node_id = primary.id
-        if edge.target_node_type == "identity" and edge.target_node_id == duplicate.id:
-            edge.target_node_id = primary.id
+        source_id = edge.source_node_id
+        target_id = edge.target_node_id
+        if edge.source_node_type == "identity" and source_id == duplicate.id:
+            source_id = primary.id
+        if edge.target_node_type == "identity" and target_id == duplicate.id:
+            target_id = primary.id
+
+        key = (
+            edge.domain_id,
+            edge.source_node_type,
+            source_id,
+            edge.target_node_type,
+            target_id,
+            edge.edge_type,
+        )
+        # Only live edges contend for the constraint; a superseded one
+        # can be re-pointed freely and keeps the history intact.
+        if edge.valid_to is None and key in primary_edge_keys:
+            await db.delete(edge)
+            continue
+
+        edge.source_node_id = source_id
+        edge.target_node_id = target_id
+        if edge.valid_to is None:
+            primary_edge_keys.add(key)
 
     duplicate.is_active = False
     merged_metadata = dict(duplicate.metadata_extra or {})

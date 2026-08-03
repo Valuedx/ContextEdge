@@ -216,3 +216,35 @@ class PolicyAssignmentResponse(BaseModel):
     resource_id: UUID
     policy_type: str
     policy_id: UUID
+
+
+class IdentityMergeProposalResponse(BaseModel):
+    """A pair a reconciliation pass believes is one thing.
+
+    Carries both names inline: a reviewer deciding a merge needs to read
+    what is being folded into what, and a list of bare UUIDs would make
+    them look each one up before they could judge anything.
+    """
+
+    id: UUID
+    entity_type: str
+    primary_identity_id: UUID
+    primary_name: str | None = None
+    duplicate_identity_id: UUID
+    duplicate_name: str | None = None
+    confidence: float
+    reason: str | None = None
+    status: str
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class IdentityMergeProposalDecision(BaseModel):
+    accept: bool = Field(
+        ...,
+        description=(
+            "True merges the duplicate into the primary; false records a "
+            "rejection so the pair is never proposed again."
+        ),
+    )

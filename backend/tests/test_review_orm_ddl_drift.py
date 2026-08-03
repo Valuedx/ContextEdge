@@ -161,6 +161,13 @@ _EXPECTED_MARKERS: set[tuple[str, str]] = {
     ('episode.py', 'ForeignKey("episodes.id", ondelete="CASCADE"),'),
     ('episode.py',
      'UniqueConstraint("episode_id", "evidence_id", name="uq_episode_evidence"),'),
+    # identity_merge_proposals (migration 0052): a brand-new table, so
+    # the constraint arrives with its CREATE TABLE rather than an ALTER.
+    # It is what makes a reviewer's rejection durable — without it a
+    # scheduled reconciliation re-raises every rejected pair forever.
+    ('episode.py',
+     'UniqueConstraint( "tenant_id", "primary_identity_id", '
+     '"duplicate_identity_id", name="uq_identity_merge_proposal_pair", ),'),
     # The CorrelationEdge source/target FK lines were re-wrapped in the
     # 2026-08 lint-debt cleanup: multi-line mapped_column style puts the
     # ForeignKey on its own line, whose fingerprint matches the generic
