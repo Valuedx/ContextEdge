@@ -26,7 +26,6 @@ import {
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
-import { ScrollArea } from "@/components/ui/scroll-area";
 
 const sourceSchema = z.object({
   display_name: z.string().min(1, "Display name is required").max(255),
@@ -38,9 +37,24 @@ const sourceSchema = z.object({
   mailbox_email: z.string().email("Invalid email address").optional().or(z.literal("")),
   service_account_json: z.string().optional().or(z.literal("")),
   token_json: z.string().optional().or(z.literal("")),
+  // ServiceNow specific fields
+  servicenow_instance_url: z.string().optional().or(z.literal("")),
+  servicenow_username: z.string().optional().or(z.literal("")),
+  servicenow_password: z.string().optional().or(z.literal("")),
+  servicenow_table_filters: z.string().optional().or(z.literal("")),
+  servicenow_alert_severity_max: z.string().optional().or(z.literal("")),
 });
 
 type SourceFormValues = z.infer<typeof sourceSchema>;
+
+type SourceCreatePayload = {
+  display_name: string;
+  source_type: string;
+  purpose?: string;
+  auth_type: string;
+  config: Record<string, unknown>;
+  credentials: Record<string, unknown>;
+};
 
 interface AddSourceDialogProps {
   open: boolean;
@@ -68,6 +82,11 @@ export function AddSourceDialog({ open, onOpenChange }: AddSourceDialogProps) {
       service_account_json: "",
       gmail_auth_method: "service_account",
       token_json: "",
+      servicenow_instance_url: "",
+      servicenow_username: "",
+      servicenow_password: "",
+      servicenow_table_filters: "",
+      servicenow_alert_severity_max: "3",
     },
   });
 
@@ -114,7 +133,7 @@ export function AddSourceDialog({ open, onOpenChange }: AddSourceDialogProps) {
   };
 
   const mutation = useMutation({
-    mutationFn: (payload: any) => api.post("/sources", payload),
+    mutationFn: (payload: SourceCreatePayload) => api.post<{ id: string }>("/sources", payload),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["sources"] });
       onOpenChange(false);
@@ -130,7 +149,7 @@ export function AddSourceDialog({ open, onOpenChange }: AddSourceDialogProps) {
   const onSubmit = async (values: SourceFormValues) => {
     try {
       // Prepare the payload for the backend
-      const payload: any = {
+      const payload: SourceCreatePayload = {
         display_name: values.display_name,
         source_type: values.source_type,
         purpose: values.purpose,
@@ -138,6 +157,62 @@ export function AddSourceDialog({ open, onOpenChange }: AddSourceDialogProps) {
         config: {},
         credentials: {},
       };
+
+      if (values.source_type === "servicenow") {
+        const instanceUrl = values.servicenow_instance_url?.trim().replace(/\/+$/, "");
+        const username = values.servicenow_username?.trim();
+        const password = values.servicenow_password;
+        const severityText = values.servicenow_alert_severity_max?.trim() || "3";
+        const alertSeverityMax = Number(severityText);
+
+        if (!instanceUrl || !username || !password) {
+          toast.error("ServiceNow URL, username, and password are required.");
+          return;
+        }
+
+        if (!/^https?:\/\//i.test(instanceUrl)) {
+          toast.error("ServiceNow URL must start with http:// or https://.");
+          return;
+        }
+
+        if (!Number.isInteger(alertSeverityMax) || alertSeverityMax < 1 || alertSeverityMax > 5) {
+          toast.error("Alert severity must be a whole number from 1 to 5.");
+          return;
+        }
+
+        let tableFilters: Record<string, string> = {};
+        const tableFilterText = values.servicenow_table_filters?.trim();
+        if (tableFilterText) {
+          try {
+            const parsed: unknown = JSON.parse(tableFilterText);
+            if (
+              !parsed ||
+              typeof parsed !== "object" ||
+              Array.isArray(parsed) ||
+              !Object.values(parsed).every((value) => typeof value === "string")
+            ) {
+              toast.error("ServiceNow table filters must be a JSON object with string values.");
+              return;
+            }
+            tableFilters = parsed as Record<string, string>;
+          } catch {
+            toast.error("ServiceNow table filters must be valid JSON.");
+            return;
+          }
+        }
+
+        payload.auth_type = "basic";
+        payload.config = {
+          instance_url: instanceUrl,
+          alert_severity_max: alertSeverityMax,
+          table_filters: tableFilters,
+        };
+        payload.credentials = {
+          instance_url: instanceUrl,
+          username,
+          password,
+        };
+      }
 
       if (values.source_type === "gmail") {
         const authMethod = values.gmail_auth_method || "service_account";
@@ -175,7 +250,7 @@ export function AddSourceDialog({ open, onOpenChange }: AddSourceDialogProps) {
         }
       }
 
-      const source = (await mutation.mutateAsync(payload)) as { id: string };
+      const source = await mutation.mutateAsync(payload);
       
       if (values.source_type === "local_file" && selectedFiles.length > 0) {
         toast.info(`Ingesting ${selectedFiles.length} files...`);
@@ -189,9 +264,9 @@ export function AddSourceDialog({ open, onOpenChange }: AddSourceDialogProps) {
         });
         toast.success("Local ingestion started successfully");
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
       // Re-throw or handle if not a mutation error
-      if (!err.message?.includes("Failed to fetch")) {
+      if (!(err instanceof Error) || !err.message.includes("Failed to fetch")) {
         console.error("Submission error:", err);
       }
     }
@@ -252,7 +327,11 @@ export function AddSourceDialog({ open, onOpenChange }: AddSourceDialogProps) {
                   <Label>Authentication Method</Label>
                   <Select
                     value={gmailAuthMethod}
-                    onValueChange={(v) => setValue("gmail_auth_method", v as any)}
+                    onValueChange={(v) => {
+                      if (v === "service_account" || v === "personal") {
+                        setValue("gmail_auth_method", v);
+                      }
+                    }}
                   >
                     <SelectTrigger className="w-full bg-slate-950/30">
                       <SelectValue placeholder="Select auth method" />
@@ -312,10 +391,67 @@ export function AddSourceDialog({ open, onOpenChange }: AddSourceDialogProps) {
                       {...register("token_json")}
                     />
                     <p className="text-[10px] text-muted-foreground">
-                      This JSON should contain "client_id", "client_secret", and "refresh_token".
+                      This JSON should contain <code>client_id</code>, <code>client_secret</code>, and <code>refresh_token</code>.
                     </p>
                   </div>
                 )}
+              </div>
+            )}
+
+            {sourceType === "servicenow" && (
+              <div className="space-y-4 p-4 border rounded-lg bg-slate-900/50">
+                <div className="space-y-2">
+                  <Label htmlFor="servicenow_instance_url">Instance URL</Label>
+                  <Input
+                    id="servicenow_instance_url"
+                    placeholder="https://example.service-now.com"
+                    {...register("servicenow_instance_url")}
+                  />
+                </div>
+
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <div className="space-y-2">
+                    <Label htmlFor="servicenow_username">Username</Label>
+                    <Input
+                      id="servicenow_username"
+                      placeholder="integration.user"
+                      autoComplete="username"
+                      {...register("servicenow_username")}
+                    />
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label htmlFor="servicenow_password">Password</Label>
+                    <Input
+                      id="servicenow_password"
+                      type="password"
+                      autoComplete="current-password"
+                      {...register("servicenow_password")}
+                    />
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="servicenow_alert_severity_max">Alert Severity Max</Label>
+                  <Input
+                    id="servicenow_alert_severity_max"
+                    type="number"
+                    min={1}
+                    max={5}
+                    step={1}
+                    {...register("servicenow_alert_severity_max")}
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="servicenow_table_filters">Table Filters JSON</Label>
+                  <Textarea
+                    id="servicenow_table_filters"
+                    className="font-mono text-xs min-h-28 bg-slate-950/50"
+                    placeholder='{"incident":"priority<=2","change_request":"state=3"}'
+                    {...register("servicenow_table_filters")}
+                  />
+                </div>
               </div>
             )}
 
