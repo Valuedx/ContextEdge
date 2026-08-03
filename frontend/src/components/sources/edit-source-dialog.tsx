@@ -107,7 +107,13 @@ export function EditSourceDialog({
 
             <div className="space-y-2">
               <Label>Sync Mode</Label>
-              <Select value={syncMode} onValueChange={setSyncMode}>
+              {/* Select can emit null on clear; the state is a plain
+                  string. Passing the setter directly fails the type
+                  check and blocks `next build` entirely. */}
+              <Select
+                value={syncMode}
+                onValueChange={(value) => setSyncMode(value ?? "")}
+              >
                 <SelectTrigger>
                   <SelectValue />
                 </SelectTrigger>
