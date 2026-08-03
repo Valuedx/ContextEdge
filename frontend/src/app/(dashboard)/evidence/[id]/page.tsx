@@ -11,6 +11,10 @@ import {
   DetailPageSkeleton,
   DetailWideCardSkeleton,
 } from "@/components/common/detail-page-skeleton";
+import {
+  ApplicabilityPanel,
+  KNOWLEDGE_EVIDENCE_TYPES,
+} from "@/components/common/applicability";
 import { StatusBadge } from "@/components/common/status-badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -269,6 +273,15 @@ export default function EvidenceDetailPage() {
           </CardContent>
         </Card>
       </div>
+
+      {/* Where this article applies. Knowledge only — a ticket does not
+          have an applicability, it has an environment. */}
+      {KNOWLEDGE_EVIDENCE_TYPES.has(item.evidence_type) && (
+        <ApplicabilityPanel
+          applicability={item.applicability}
+          className="rounded-xl border border-slate-800 bg-slate-900/80 p-4 text-slate-200"
+        />
+      )}
 
       {/* Main Ticket Body / Raw Payload Container */}
       <Card className="bg-slate-900/90 border-slate-800 shadow-2xl">
