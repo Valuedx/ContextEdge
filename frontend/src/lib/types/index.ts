@@ -220,6 +220,21 @@ export interface Playbook {
   updated_at: string;
 }
 
+export interface PlaybookSourceRef {
+  label: string;
+  kind: "knowledge" | "episode";
+  id: string;
+  title?: string;
+}
+
+export interface PlaybookConflict {
+  topic?: string;
+  documented?: string;
+  observed?: string;
+  recommendation?: string;
+  source_refs?: PlaybookSourceRef[];
+}
+
 export interface PlaybookVersion {
   id: string;
   playbook_id: string;
@@ -231,6 +246,10 @@ export interface PlaybookVersion {
   steps: unknown[];
   rollback_notes: string | null;
   evidence_refs: unknown[] | null;
+  // Where the approved KB/SOP and observed practice disagree. null means
+  // "not assessed" — versions generated before knowledge became an input
+  // carry null, which is not the same as an empty list.
+  conflicts: PlaybookConflict[] | null;
   playbook_confidence: number;
   execution_confidence_guidance: string | null;
   published_at: string | null;
