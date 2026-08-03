@@ -75,6 +75,14 @@ class Settings(BaseSettings):
     # Callers hand in whole documents' worth of chunks; without a cap a single
     # call can be arbitrarily large and fail late, after paying for it.
     embedding_max_batch_size: int = Field(default=64, ge=1, le=512)
+    # Multimodal interpretation of figures in uploaded documents. On by
+    # default because a support screenshot routinely carries values that
+    # appear nowhere in the prose, and without this those articles cannot
+    # answer the question they exist to answer. Set false to disable
+    # entirely; per-document volume is bounded separately in
+    # services/documents/vision.py, and spend is still gated by the
+    # per-tenant budget like any other LLM call.
+    document_vision_enabled: bool = True
     # Default daily caps applied to any tenant with no `tenant_llm_budgets`
     # row. Before this, "no row" meant "no limit", so a fresh tenant — the
     # normal state — was the only one running uncapped. None restores that.

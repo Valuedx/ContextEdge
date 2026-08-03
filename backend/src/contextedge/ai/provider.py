@@ -63,8 +63,16 @@ async def llm_complete(
     db: Any | None = None,
     prompt_name: str | None = None,
     prompt_version: str | None = None,
+    images: list[bytes] | None = None,
 ) -> str:
     """Call LLM with the appropriate model for the task type.
+
+    ``images`` sends PNG bytes alongside the prompt as a multimodal turn.
+    It is a parameter on this function rather than a separate vision
+    client on purpose: budget enforcement, usage recording, the circuit
+    breaker, the timeout, and the fallback model all live here, and
+    vision calls are the *most* expensive per request — a parallel path
+    would be the one kind of call that escaped the spend controls.
 
     New parameters vs. earlier signature:
 
@@ -155,7 +163,9 @@ async def llm_complete(
             task=task,
         )
 
-    messages = build_messages(system_prompt, prompt, cache_system=bool(system_prompt))
+    messages = build_messages(
+        system_prompt, prompt, cache_system=bool(system_prompt), images=images
+    )
     kwargs: dict[str, Any] = {
         "model": model,
         "messages": messages,
