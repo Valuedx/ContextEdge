@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 from decimal import Decimal
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
 import pytest
@@ -60,10 +60,39 @@ def _clean_cache():
 
 
 @pytest.mark.asyncio
-async def test_no_budget_row_means_unlimited():
+async def test_no_budget_row_falls_back_to_deployment_defaults():
+    """An unconfigured tenant is capped by the deployment default.
+
+    This deliberately reverses the original contract. "No row" used to
+    mean "no cap", which made the normal case — a tenant nobody has got
+    around to configuring — the *only* uncapped one, and therefore the
+    only one that could run up an unbounded LLM bill.
+    """
+    from contextedge.config import settings
+
     tenant_id = uuid4()
     db = _db_with(budget=None)
     result = await check_budget(db, tenant_id)
+    assert result.allowed is True
+    assert result.reason == "ok"
+    assert result.token_limit == settings.default_daily_token_limit
+    assert result.cost_cap_usd == settings.default_daily_cost_cap_usd
+
+
+@pytest.mark.asyncio
+async def test_deployment_defaults_can_be_disabled_for_unlimited():
+    """The documented escape hatch, which was otherwise untested: set
+    both deployment defaults to None to restore genuinely unlimited
+    spend for unconfigured tenants."""
+    from contextedge.config import settings
+
+    tenant_id = uuid4()
+    db = _db_with(budget=None)
+    with (
+        patch.object(settings, "default_daily_token_limit", None),
+        patch.object(settings, "default_daily_cost_cap_usd", None),
+    ):
+        result = await check_budget(db, tenant_id)
     assert result.allowed is True
     assert result.reason == "no_budget"
     assert result.token_limit is None

@@ -74,6 +74,7 @@ def test_extract_usage_openai_cached():
     assert usage == {
         "prompt_tokens": 100,
         "completion_tokens": 50,
+        "reasoning_tokens": 0,
         "cached_tokens": 75,
         "total_tokens": 150,
     }
@@ -99,6 +100,7 @@ def test_extract_usage_no_cache_fields_returns_zero():
     assert usage == {
         "prompt_tokens": 10,
         "completion_tokens": 5,
+        "reasoning_tokens": 0,
         "cached_tokens": 0,
         "total_tokens": 15,
     }
@@ -110,9 +112,51 @@ def test_extract_usage_no_usage_attr_returns_all_zero():
     assert extract_usage(response) == {
         "prompt_tokens": 0,
         "completion_tokens": 0,
+        "reasoning_tokens": 0,
         "cached_tokens": 0,
         "total_tokens": 0,
     }
+
+
+def test_extract_usage_reasoning_tokens():
+    """Reasoning tokens are reported separately from completion tokens.
+
+    Thinking-model spend is invisible without this: providers bill
+    reasoning tokens as output, so a cost dashboard that only reads
+    ``completion_tokens`` under-reports the expensive part of the call.
+    """
+    response = SimpleNamespace(
+        usage=SimpleNamespace(
+            prompt_tokens=100,
+            completion_tokens=50,
+            completion_tokens_details=SimpleNamespace(reasoning_tokens=30),
+        )
+    )
+    assert extract_usage(response)["reasoning_tokens"] == 30
+
+
+def test_extract_usage_reasoning_tokens_absent_is_zero():
+    """A non-thinking model reports no reasoning detail — never None."""
+    response = SimpleNamespace(
+        usage=SimpleNamespace(prompt_tokens=10, completion_tokens=5)
+    )
+    assert extract_usage(response)["reasoning_tokens"] == 0
+
+
+def test_extract_usage_reasoning_does_not_inflate_total():
+    """Reasoning tokens are a *segment of* completion tokens, not an
+    addition to them — the dashboard draws them inside the output bar for
+    this reason. Adding them to the total would double-count the spend."""
+    response = SimpleNamespace(
+        usage=SimpleNamespace(
+            prompt_tokens=100,
+            completion_tokens=50,
+            completion_tokens_details=SimpleNamespace(reasoning_tokens=30),
+        )
+    )
+    usage = extract_usage(response)
+    assert usage["total_tokens"] == 150
+    assert usage["reasoning_tokens"] <= usage["completion_tokens"]
 
 
 def test_extract_usage_coerces_non_int_values():

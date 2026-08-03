@@ -1,6 +1,6 @@
 "use client";
 import { useState } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useForm, useWatch } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
@@ -45,7 +45,43 @@ const sourceSchema = z.object({
   servicenow_password: z.string().optional().or(z.literal("")),
   servicenow_table_filters: z.string().optional().or(z.literal("")),
   servicenow_alert_severity_max: z.string().optional().or(z.literal("")),
+  // Zoho Desk specific fields
+  zoho_client_id: z.string().optional().or(z.literal("")),
+  zoho_client_secret: z.string().optional().or(z.literal("")),
+  zoho_refresh_token: z.string().optional().or(z.literal("")),
+  zoho_org_id: z.string().optional().or(z.literal("")),
+  zoho_data_center: z.string().optional().or(z.literal("")),
+  zoho_modules: z.string().optional().or(z.literal("")),
+  zoho_per_department: z.boolean().optional(),
+  // SapphireIMS specific fields
+  sapphire_base_url: z.string().optional().or(z.literal("")),
+  sapphire_api_key: z.string().optional().or(z.literal("")),
+  sapphire_auth_token: z.string().optional().or(z.literal("")),
+  sapphire_projects: z.string().optional().or(z.literal("")),
 });
+
+// Zoho pins each account to the data center it was created in; the
+// accounts host that issues the token and the Desk host that accepts it
+// must match, so a wrong choice fails authentication rather than
+// degrading. Mirrors DATA_CENTERS in the connector.
+const ZOHO_DATA_CENTERS = [
+  { value: "com", label: "com — United States (desk.zoho.com)" },
+  { value: "in", label: "in — India (desk.zoho.in)" },
+  { value: "eu", label: "eu — Europe (desk.zoho.eu)" },
+  { value: "au", label: "au — Australia (desk.zoho.com.au)" },
+  { value: "jp", label: "jp — Japan (desk.zoho.jp)" },
+  { value: "ca", label: "ca — Canada (desk.zohocloud.ca)" },
+  { value: "sa", label: "sa — Saudi Arabia (desk.zoho.sa)" },
+  { value: "uk", label: "uk — United Kingdom (desk.zoho.uk)" },
+];
+
+type SourceTypeOption = {
+  source_type: string;
+  label: string;
+  connector_available: boolean;
+  status: string;
+  description?: string;
+};
 
 type SourceFormValues = z.infer<typeof sourceSchema>;
 
@@ -90,12 +126,39 @@ export function AddSourceDialog({ open, onOpenChange }: AddSourceDialogProps) {
       servicenow_password: "",
       servicenow_table_filters: "",
       servicenow_alert_severity_max: "3",
+      zoho_client_id: "",
+      zoho_client_secret: "",
+      zoho_refresh_token: "",
+      zoho_org_id: "",
+      zoho_data_center: "com",
+      zoho_modules: "",
+      zoho_per_department: false,
+      sapphire_base_url: "",
+      sapphire_api_key: "",
+      sapphire_auth_token: "",
+      sapphire_projects: "",
     },
+  });
+
+  // The selectable types come from the backend connector registry, not a
+  // hardcoded list. The two had drifted in both directions: the picker
+  // offered Confluence, SharePoint, and Exchange (no connector — the
+  // source created fine, then died at sync with "Unknown source type"),
+  // and omitted SapphireIMS and Zoho Desk, which worked but could not be
+  // selected. A client-side list makes that invisible until a user hits
+  // it; deriving it means a newly registered connector shows up here on
+  // its own.
+  const { data: sourceTypes, isLoading: typesLoading } = useQuery<SourceTypeOption[]>({
+    queryKey: ["source-types"],
+    // api.get prepends /api/v1 — passing it here would double the prefix.
+    queryFn: () => api.get<SourceTypeOption[]>("/sources/types"),
+    staleTime: 5 * 60 * 1000,
   });
 
   const sourceType = useWatch({ control, name: "source_type" });
   const localContentType = useWatch({ control, name: "local_content_type" });
   const gmailAuthMethod = useWatch({ control, name: "gmail_auth_method" });
+  const zohoDataCenter = useWatch({ control, name: "zoho_data_center" });
   const [selectedFiles, setSelectedFiles] = useState<{ filename: string; content: string }[]>([]);
   const [isReading, setIsReading] = useState(false);
 
@@ -218,6 +281,83 @@ export function AddSourceDialog({ open, onOpenChange }: AddSourceDialogProps) {
         };
       }
 
+      if (values.source_type === "zoho_desk") {
+        const clientId = values.zoho_client_id?.trim();
+        const clientSecret = values.zoho_client_secret?.trim();
+        const refreshToken = values.zoho_refresh_token?.trim();
+        const orgId = values.zoho_org_id?.trim();
+        const dataCenter = (values.zoho_data_center || "com").trim();
+
+        if (!clientId || !clientSecret || !refreshToken || !orgId) {
+          toast.error(
+            "Zoho client ID, client secret, refresh token, and org ID are all required.",
+          );
+          return;
+        }
+        if (!ZOHO_DATA_CENTERS.some((dc) => dc.value === dataCenter)) {
+          toast.error("Select a valid Zoho data center.");
+          return;
+        }
+
+        // Empty means "sync every module the token can read", which is
+        // what discovery already does — so an empty list is omitted
+        // rather than sent as [], which would sync nothing.
+        const modules = (values.zoho_modules || "")
+          .split(",")
+          .map((m) => m.trim())
+          .filter(Boolean);
+
+        payload.auth_type = "oauth2";
+        payload.config = {
+          ...(modules.length > 0 ? { modules } : {}),
+          ...(values.zoho_per_department ? { per_department: true } : {}),
+        };
+        payload.credentials = {
+          client_id: clientId,
+          client_secret: clientSecret,
+          refresh_token: refreshToken,
+          org_id: orgId,
+          data_center: dataCenter,
+        };
+      }
+
+      if (values.source_type === "sapphireims") {
+        const baseUrl = values.sapphire_base_url?.trim().replace(/\/+$/, "");
+        const apiKey = values.sapphire_api_key?.trim();
+        const authToken = values.sapphire_auth_token?.trim();
+
+        if (!baseUrl || !apiKey || !authToken) {
+          toast.error("SapphireIMS base URL, API key, and auth token are required.");
+          return;
+        }
+        if (!/^https?:\/\//i.test(baseUrl)) {
+          toast.error("SapphireIMS base URL must start with http:// or https://.");
+          return;
+        }
+
+        // SapphireIMS has no public projects-list endpoint, so discovery
+        // enumerates exactly what is declared here — an empty list
+        // discovers nothing, which is worth saying out loud.
+        const projects = (values.sapphire_projects || "")
+          .split(",")
+          .map((p) => p.trim())
+          .filter(Boolean);
+        if (projects.length === 0) {
+          toast.error(
+            "List at least one SapphireIMS project — discovery has no way to enumerate them.",
+          );
+          return;
+        }
+
+        payload.auth_type = "api_key";
+        payload.config = { projects };
+        payload.credentials = {
+          base_url: baseUrl,
+          api_key: apiKey,
+          auth_token: authToken,
+        };
+      }
+
       if (values.source_type === "gmail") {
         const authMethod = values.gmail_auth_method || "service_account";
         payload.auth_type = authMethod;
@@ -317,14 +457,31 @@ export function AddSourceDialog({ open, onOpenChange }: AddSourceDialogProps) {
                   <SelectValue placeholder="Select a source type" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="local_file">Local Directory / Files</SelectItem>
-                  <SelectItem value="gmail">Gmail</SelectItem>
-                  <SelectItem value="teams">MS Teams</SelectItem>
-                  <SelectItem value="servicenow">ServiceNow</SelectItem>
-                  <SelectItem value="jira_sm">Jira Service Management</SelectItem>
-                  <SelectItem value="confluence">Confluence</SelectItem>
-                  <SelectItem value="sharepoint">SharePoint</SelectItem>
-                  <SelectItem value="exchange">Exchange</SelectItem>
+                  {typesLoading && (
+                    <SelectItem value="local_file" disabled>
+                      Loading source types…
+                    </SelectItem>
+                  )}
+                  {(sourceTypes ?? []).map((option) => {
+                    // local_file has no connector by design — it is an
+                    // upload path, so it stays selectable. Everything
+                    // else without a connector is disabled rather than
+                    // hidden: hiding it loses the roadmap signal, but
+                    // leaving it selectable creates a source that fails
+                    // later, in a worker log, in front of nobody.
+                    const selectable =
+                      option.connector_available || option.status === "manual";
+                    return (
+                      <SelectItem
+                        key={option.source_type}
+                        value={option.source_type}
+                        disabled={!selectable}
+                      >
+                        {option.label}
+                        {!selectable ? " — coming soon" : ""}
+                      </SelectItem>
+                    );
+                  })}
                 </SelectContent>
               </Select>
               {errors.source_type && (
@@ -462,6 +619,171 @@ export function AddSourceDialog({ open, onOpenChange }: AddSourceDialogProps) {
                     placeholder='{"incident":"priority<=2","change_request":"state=3"}'
                     {...register("servicenow_table_filters")}
                   />
+                </div>
+              </div>
+            )}
+
+            {sourceType === "zoho_desk" && (
+              <div className="space-y-4 p-4 border rounded-lg bg-slate-900/50">
+                <p className="text-xs text-muted-foreground">
+                  Scopes are fixed when the refresh token is issued and cannot be
+                  added later. Grant <code>Desk.tickets.READ</code> for tickets and{" "}
+                  <code>Desk.articles.READ</code> for the knowledge base — a partial
+                  grant syncs what it can and reports the rest.
+                </p>
+
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <div className="space-y-2">
+                    <Label htmlFor="zoho_client_id">Client ID</Label>
+                    <Input
+                      id="zoho_client_id"
+                      placeholder="1000.XXXXXXXXXXXXXXXXXXXX"
+                      {...register("zoho_client_id")}
+                    />
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label htmlFor="zoho_client_secret">Client Secret</Label>
+                    <Input
+                      id="zoho_client_secret"
+                      type="password"
+                      autoComplete="off"
+                      {...register("zoho_client_secret")}
+                    />
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="zoho_refresh_token">Refresh Token</Label>
+                  <Input
+                    id="zoho_refresh_token"
+                    type="password"
+                    autoComplete="off"
+                    {...register("zoho_refresh_token")}
+                  />
+                </div>
+
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <div className="space-y-2">
+                    <Label htmlFor="zoho_org_id">Org ID</Label>
+                    <Input
+                      id="zoho_org_id"
+                      placeholder="60001911841"
+                      {...register("zoho_org_id")}
+                    />
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label htmlFor="zoho_data_center">Data Center</Label>
+                    <Select
+                      value={zohoDataCenter || "com"}
+                      onValueChange={(value) =>
+                        setValue("zoho_data_center", value ?? "com")
+                      }
+                    >
+                      <SelectTrigger id="zoho_data_center" className="w-full">
+                        <SelectValue placeholder="Select a data center" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {ZOHO_DATA_CENTERS.map((dc) => (
+                          <SelectItem key={dc.value} value={dc.value}>
+                            {dc.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <p className="text-xs text-muted-foreground">
+                      Must match your portal&apos;s domain — a cross-region call
+                      fails authentication.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="zoho_modules">Modules (optional)</Label>
+                  <Input
+                    id="zoho_modules"
+                    placeholder="tickets, articles"
+                    {...register("zoho_modules")}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Leave empty to sync every module the token can read.
+                  </p>
+                </div>
+
+                <div className="flex items-start gap-2">
+                  <input
+                    id="zoho_per_department"
+                    type="checkbox"
+                    className="mt-1"
+                    {...register("zoho_per_department")}
+                  />
+                  <Label
+                    htmlFor="zoho_per_department"
+                    className="text-sm font-normal leading-snug"
+                  >
+                    Sync tickets per department
+                    <span className="block text-xs text-muted-foreground">
+                      Offers one approvable object per department instead of one
+                      for all tickets. Needs <code>Desk.settings.READ</code>.
+                    </span>
+                  </Label>
+                </div>
+              </div>
+            )}
+
+            {sourceType === "sapphireims" && (
+              <div className="space-y-4 p-4 border rounded-lg bg-slate-900/50">
+                <p className="text-xs text-muted-foreground">
+                  SapphireIMS endpoint paths and payload field names are
+                  instance-specific. The defaults are a starting point — verify
+                  them against your instance&apos;s API guide, then use
+                  Probe Config on the source to confirm the mapping before the
+                  first sync.
+                </p>
+
+                <div className="space-y-2">
+                  <Label htmlFor="sapphire_base_url">Base URL</Label>
+                  <Input
+                    id="sapphire_base_url"
+                    placeholder="https://itsm.example.com"
+                    {...register("sapphire_base_url")}
+                  />
+                </div>
+
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <div className="space-y-2">
+                    <Label htmlFor="sapphire_api_key">API Key</Label>
+                    <Input
+                      id="sapphire_api_key"
+                      type="password"
+                      autoComplete="off"
+                      {...register("sapphire_api_key")}
+                    />
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label htmlFor="sapphire_auth_token">Auth Token</Label>
+                    <Input
+                      id="sapphire_auth_token"
+                      type="password"
+                      autoComplete="off"
+                      {...register("sapphire_auth_token")}
+                    />
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="sapphire_projects">Projects</Label>
+                  <Input
+                    id="sapphire_projects"
+                    placeholder="ACME-IT, ACME-OPS"
+                    {...register("sapphire_projects")}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Comma-separated. Required — there is no public endpoint to
+                    enumerate projects, so discovery only sees what you list.
+                  </p>
                 </div>
               </div>
             )}

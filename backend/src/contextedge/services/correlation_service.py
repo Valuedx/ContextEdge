@@ -174,6 +174,21 @@ def extract_case_link_candidates(
 
             for ticket_id in extract_ticket_references(payload):
                 add(source_type, ticket_id)
+        if source_type == "zoho_desk":
+            # Related-ticket ids join the namespace symmetrically — same
+            # contract, fourth system. The human-readable ticket number
+            # is added alongside the row id because they are different
+            # values in Zoho (an opaque 18-digit id vs "4021"), and a
+            # conversational mention can only ever quote the number.
+            # Product / team / account / category are NOT keys
+            # (mass-merge guard) — they go through the entity path.
+            from contextedge.services.zoho_desk_reference_service import (
+                extract_ticket_references as extract_zoho_ticket_references,
+            )
+
+            add(source_type, payload.get("ticket_number"))
+            for ticket_id in extract_zoho_ticket_references(payload):
+                add(source_type, ticket_id)
 
     add(f"{source_type}:thread", thread_external_id)
     return candidates
@@ -691,6 +706,28 @@ async def correlate_evidence_item(
                 error=str(exc),
             )
 
+    # Zoho Desk reference enrichment — same SAVEPOINT containment and
+    # fail-soft contract as the branches above.
+    zoho_references: dict | None = None
+    if (source.source_type or "") == "zoho_desk" and isinstance(raw_payload, dict):
+        try:
+            from contextedge.services.zoho_desk_reference_service import (
+                process_zoho_desk_references,
+            )
+
+            async with db.begin_nested():
+                zoho_references = await process_zoho_desk_references(
+                    db, tenant_id, evidence, raw_payload
+                )
+        except Exception as exc:
+            logger.warning(
+                "zoho_desk_reference.enrichment_failed",
+                tenant_id=str(tenant_id),
+                evidence_id=str(evidence.id),
+                error_type=type(exc).__name__,
+                error=str(exc),
+            )
+
     # Jira SM reference enrichment — same SAVEPOINT containment and
     # fail-soft contract as the ServiceNow branch above.
     jira_references: dict | None = None
@@ -735,6 +772,7 @@ async def correlate_evidence_item(
             "servicenow_references": snow_references,
             "jira_references": jira_references,
             "sapphireims_references": sapphire_references,
+            "zoho_desk_references": zoho_references,
         },
     )
     return {
@@ -748,5 +786,6 @@ async def correlate_evidence_item(
         "servicenow_references": snow_references,
         "jira_references": jira_references,
         "sapphireims_references": sapphire_references,
+        "zoho_desk_references": zoho_references,
         "ticket_bridge": ticket_bridge,
     }

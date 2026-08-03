@@ -155,6 +155,9 @@ code.
 | --- | --- | --- | --- | --- | --- |
 | Jira ticket | `jira_sm` | `ticket` | `comment` | title+description as chunk 0; each comment as its own chunk | Author + ts in `metadata`. Long single comments fall through to recursive split. |
 | ServiceNow incident | `servicenow` | `ticket` | `comment` | same | `metadata.priority`, `metadata.severity` from payload. |
+| SapphireIMS ticket | `sapphireims` | `ticket` | `body` | title+description as chunk 0 | No hydration endpoint, so there are no comment chunks. |
+| Zoho Desk ticket | `zoho_desk`, `evidence_type=ticket` | `ticket` | `comment` | title + description+resolution as chunk 0; each hydrated thread/comment as its own chunk | Zoho splits the conversation across `/threads` (customer email) and `/comments` (internal agent notes); both hydrate. |
+| Zoho Desk KB article | `evidence_type=kb_article` | `attachment` | `heading_section` | split on heading boundaries — the article's own `<h1>`–`<h6>` survive HTML→text conversion as `#` markers | **Resolved by evidence type, ahead of source type**: one Zoho source emits both tickets and articles, and an article's author-written sections beat a character-count split. See `ZOHO_DESK_CONNECTOR.md`. |
 | Gmail thread | `gmail` | `thread` | `message` | one chunk per reply; **strip quoted prior-reply blocks** before persisting | Quote blocks inflate similarity garbage. Keep `metadata.replies_to` instead of embedding the quote. |
 | Teams thread | `teams` | `thread` | `message` | one chunk per message; `parent_section` = thread title | Cluster by ≤5 min gap into "conversation chunks" for retrieval-time return only — single-message rows for embedding, joined cluster for the LLM context. |
 | Runbook / post-mortem (markdown attachment) | `evidence_type=attachment`, mime `text/markdown` | `attachment` | `heading_section` | split on heading boundaries; chunks ~300–500 tokens | `parent_section` = breadcrumb of headings, e.g. `"Postmortem > Timeline > 14:32"`. |
@@ -166,10 +169,17 @@ The registry resolution policy is captured in
 `services/chunkers/registry.py:get_chunker` and is in resolution
 order:
 
-1. `source_type` in `{"jira_sm", "servicenow"}` → `ticket`
-2. `source_type` in `{"gmail", "teams"}` → `thread`
-3. `evidence_type == "attachment"` → `attachment`
-4. otherwise → `fallback`
+1. `evidence_type` in `_DOCUMENT_EVIDENCE_TYPES` (`{"kb_article"}`) → `attachment`
+2. `source_type` in `{"jira_sm", "servicenow", "sapphireims", "zoho_desk"}` → `ticket`
+3. `source_type` in `{"gmail", "teams"}` → `thread`
+4. `evidence_type == "attachment"` → `attachment`
+5. otherwise → `fallback`
+
+Rule 1 was added with the Zoho Desk connector, the first source to emit
+more than one record shape. It is checked ahead of source type so a
+record's own shape wins; rule 4 keeps its original position so
+attachment resolution for the existing ticket and thread sources is
+unchanged.
 
 Adding a new chunker family = new module under
 `services/chunkers/`, register it in `_register_chunkers`, add the

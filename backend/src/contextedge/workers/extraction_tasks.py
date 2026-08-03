@@ -50,7 +50,7 @@ INLINE_CHUNK_BUDGET_BYTES = 16 * 1024
 # parser cannot stall ingest. Add a key here once the corresponding
 # chunker has been load-tested at typical body sizes.
 INLINE_CHUNK_SOURCE_ALLOWLIST = frozenset(
-    {"jira_sm", "servicenow", "gmail", "teams", "sapphireims"}
+    {"jira_sm", "servicenow", "gmail", "teams", "sapphireims", "zoho_desk"}
 )
 
 
@@ -506,6 +506,7 @@ SOURCE_ROLE_MAP = {
     "servicenow": "ticket",
     "jira_sm": "ticket",
     "sapphireims": "ticket",
+    "zoho_desk": "ticket",
     "teams": "working_discussion",
     "gmail": "external_communication",
     "local_file": "document",
@@ -518,18 +519,21 @@ SYNTHESIS_ROLES = (
     "document",
 )
 
-
 # evidence_type → role, checked before the source-type default. A single
 # source emits more than one kind of record: ServiceNow serves incidents
-# and the KB from the same connector, and a knowledge article carries
-# *document* authority, not ticket authority. Without this, a general
-# "how the VPN works" page outranks the actual incident record on
-# incident-specific fields during synthesis.
+# and the KB from the same connector, and a Zoho Desk source produces
+# both tickets and articles. A knowledge article carries *document*
+# authority, not ticket authority — without this, a general "how the VPN
+# works" page outranks the actual incident record on incident-specific
+# fields during synthesis.
 EVIDENCE_TYPE_ROLE_MAP = {
     "kb_article": "document",
     "sop": "document",
     "documentation": "document",
     "alert": "monitoring",
+    # Explicit so a ticket from a source with no SOURCE_ROLE_MAP entry
+    # still resolves to ticket rather than the generic "evidence".
+    "ticket": "ticket",
 }
 
 
