@@ -34,6 +34,7 @@ async def test_transition_to_approved_publishes_current_version():
         playbook_id=playbook_id,
         published_at=None,
         published_by=None,
+        steps=[{"order": 1, "text": "Check service status", "safety_class": "read_only"}],
     )
     db = SimpleNamespace(
         get=AsyncMock(return_value=version),
@@ -79,6 +80,7 @@ async def test_transition_to_approved_skips_embed_when_already_present():
         playbook_id=playbook.id,
         published_at=None,
         published_by=None,
+        steps=[{"order": 1, "text": "Check service status", "safety_class": "read_only"}],
     )
     db = SimpleNamespace(
         get=AsyncMock(return_value=version),
@@ -272,7 +274,7 @@ async def test_transition_invalidates_runtime_match_cache_for_same_tenant():
     )
     version = SimpleNamespace(
         id=playbook.current_version_id, playbook_id=playbook.id,
-        published_at=None, published_by=None,
+        published_at=None, published_by=None, steps=[{"order": 1, "text": "Check service status", "safety_class": "read_only"}],
     )
     db = SimpleNamespace(
         get=AsyncMock(return_value=version),
@@ -315,7 +317,7 @@ async def test_transition_without_redis_still_works():
     )
     version = SimpleNamespace(
         id=playbook.current_version_id, playbook_id=playbook.id,
-        published_at=None, published_by=None,
+        published_at=None, published_by=None, steps=[{"order": 1, "text": "Check service status", "safety_class": "read_only"}],
     )
     db = SimpleNamespace(
         get=AsyncMock(return_value=version),

@@ -533,7 +533,7 @@ async def test_start_execution_creates_executed_playbook_edge():
     )
     version = SimpleNamespace(
         id=version_id, playbook_id=playbook_id,
-        published_at="2026-01-01T00:00:00Z", steps=[],
+        published_at="2026-01-01T00:00:00Z", steps=[{"order": 1, "text": "Check service status", "safety_class": "read_only"}],
         semantic_version="1.0.0",
     )
 
@@ -589,7 +589,7 @@ async def test_start_execution_no_edge_without_session():
     )
     version = SimpleNamespace(
         id=version_id, playbook_id=playbook_id,
-        published_at="2026-01-01T00:00:00Z", steps=[],
+        published_at="2026-01-01T00:00:00Z", steps=[{"order": 1, "text": "Check service status", "safety_class": "read_only"}],
         semantic_version="1.0.0",
     )
 

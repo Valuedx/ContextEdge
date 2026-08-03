@@ -156,6 +156,17 @@ async def start_execution(
     await db.flush()
 
     steps = version.steps or []
+    if not steps:
+        # Belt to the transition guard's braces, and the one that covers
+        # rows approved before that guard existed. Without it a stepless
+        # version starts a run, creates no step_runs, requests no
+        # approvals and reports success — an execution record that
+        # attests to work nobody did, which is worse than an error.
+        raise ExecutionPolicyError(
+            f"Playbook version {version.semantic_version} has no steps; "
+            "there is nothing to execute"
+        )
+
     step_runs: list[ExecutionStepRun] = []
     for idx, step_data in enumerate(steps):
         step_safety = "read_only"
