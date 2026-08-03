@@ -98,8 +98,17 @@ def _batches(items: list, size: int, overlap: int) -> list[list]:
     return [items[start : start + size] for start in range(0, len(items), step)]
 
 
-def _render(identity: CanonicalIdentity, aliases: list[str], index: int) -> str:
+def _render(
+    identity: CanonicalIdentity,
+    aliases: list[str],
+    index: int,
+    show_type: bool = False,
+) -> str:
     line = f"{index}. {identity.canonical_name}"
+    if show_type:
+        # Only when the batch spans types. Otherwise it is noise on every
+        # line, and a constant repeated per record reads as a signal.
+        line += f"  [recorded as: {identity.entity_type}]"
     if aliases:
         line += f"  (also known as: {', '.join(aliases[:MAX_ALIASES_SHOWN])})"
     context = (identity.metadata_extra or {}).get("context")
@@ -109,7 +118,7 @@ def _render(identity: CanonicalIdentity, aliases: list[str], index: int) -> str:
 
 
 async def _load_candidates(
-    db: AsyncSession, tenant_id: uuid.UUID, entity_type: str
+    db: AsyncSession, tenant_id: uuid.UUID, entity_types: list[str]
 ) -> tuple[list[CanonicalIdentity], dict[uuid.UUID, list[str]]]:
     identities = (
         (
@@ -117,7 +126,7 @@ async def _load_candidates(
                 select(CanonicalIdentity)
                 .where(
                     CanonicalIdentity.tenant_id == tenant_id,
-                    CanonicalIdentity.entity_type == entity_type,
+                    CanonicalIdentity.entity_type.in_(entity_types),
                     CanonicalIdentity.is_active.is_(True),
                     CanonicalIdentity.resolution_state.in_(ELIGIBLE_STATES),
                 )
@@ -157,8 +166,9 @@ async def _ask(
     from contextedge.ai.provider import llm_complete_json
 
     prompt = get_prompt("identity_reconciliation", tenant_id)
+    mixed = len({identity.entity_type for identity in identities}) > 1
     listing = "\n".join(
-        _render(identity, aliases.get(identity.id, []), index)
+        _render(identity, aliases.get(identity.id, []), index, show_type=mixed)
         for index, identity in enumerate(identities)
     )
     try:
@@ -184,8 +194,33 @@ async def _ask(
     return groups if isinstance(groups, list) else []
 
 
+def _type_groups(entity_types: list[str]) -> list[list[str]]:
+    """Collapse confusable types into shared passes.
+
+    ``["application", "device", "service"]`` becomes
+    ``[["application", "service"], ["device"]]`` — so the two types the
+    extractor labels interchangeably are compared against each other,
+    and everything else keeps its own pass.
+    """
+    from contextedge.services.identity_service import compatible_entity_types
+
+    groups: list[list[str]] = []
+    placed: set[str] = set()
+    for entity_type in entity_types:
+        if entity_type in placed:
+            continue
+        # Only types this tenant actually has; an empty sibling would
+        # just widen the query for nothing.
+        group = [t for t in compatible_entity_types(entity_type) if t in entity_types]
+        placed.update(group)
+        groups.append(group or [entity_type])
+    return groups
+
+
 def _parse_groups(
-    groups: list[dict], identities: list[CanonicalIdentity], entity_type: str
+    groups: list[dict],
+    identities: list[CanonicalIdentity],
+    entity_type: str | None = None,
 ) -> list[ProposedMerge]:
     """Turn the model's index references into pairs, dropping anything
     that does not survive checking.
@@ -217,13 +252,26 @@ def _parse_groups(
                 continue
             if duplicate.id == keep.id:
                 continue
+            reason = str(group.get("reason") or "")[:500]
+            if keep.entity_type != duplicate.entity_type:
+                # Say so in the proposal. A cross-type merge changes what
+                # KIND of thing the surviving record is recorded as, and a
+                # reviewer approving "fold X into Y" deserves to know that
+                # is part of what they are approving.
+                reason = (
+                    f"{reason} (recorded as {duplicate.entity_type}; would "
+                    f"become {keep.entity_type})"
+                ).strip()
+
             proposals.append(
                 ProposedMerge(
                     keep_id=keep.id,
                     merge_id=duplicate.id,
-                    entity_type=entity_type,
+                    # The keeper's type survives the merge, so that is the
+                    # type this proposal is about.
+                    entity_type=entity_type or keep.entity_type,
                     confidence=confidence,
-                    reason=str(group.get("reason") or "")[:500],
+                    reason=reason,
                 )
             )
     return proposals
@@ -288,16 +336,21 @@ async def reconcile_identities(
     seen = await _existing_pairs(db, tenant_id) if persist else set()
     all_proposals: list[ProposedMerge] = []
 
-    for entity_type in entity_types:
-        identities, aliases = await _load_candidates(db, tenant_id, entity_type)
+    # Confusable types are reconciled TOGETHER, in one pass over their
+    # union. Reconciling each type separately is why "JMX" the service
+    # and "JMX" the application could sit side by side in the graph
+    # indefinitely: the two were never in the same batch, so nothing ever
+    # looked at them at once. Same failure as per-mention adjudication,
+    # one level up.
+    for group in _type_groups(entity_types):
+        identities, aliases = await _load_candidates(db, tenant_id, group)
         if len(identities) < 2:
             continue
 
+        label = " + ".join(group)
         for batch in _batches(identities, BATCH_SIZE, BATCH_OVERLAP):
-            groups = await _ask(
-                entity_type, batch, aliases, tenant_id=tenant_id, db=db
-            )
-            for proposal in _parse_groups(groups, batch, entity_type):
+            groups = await _ask(label, batch, aliases, tenant_id=tenant_id, db=db)
+            for proposal in _parse_groups(groups, batch, None):
                 pair = (proposal.keep_id, proposal.merge_id)
                 if pair in seen:
                     continue
@@ -310,7 +363,7 @@ async def reconcile_identities(
                             tenant_id=tenant_id,
                             primary_identity_id=proposal.keep_id,
                             duplicate_identity_id=proposal.merge_id,
-                            entity_type=entity_type,
+                            entity_type=proposal.entity_type,
                             confidence=proposal.confidence,
                             reason=proposal.reason,
                             status="pending",
