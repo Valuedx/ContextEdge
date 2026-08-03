@@ -130,6 +130,14 @@ class EvidenceItem(Base, TenantScopedMixin):
     chunked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     chunk_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
+    # Where a knowledge article applies — component, deployment model,
+    # environment, version range — read once at ingest by
+    # ``services.knowledge_applicability_service`` and kept, because
+    # re-reading it per retrieval would be a model call per candidate
+    # article per playbook. NULL means not-yet-extracted (or not
+    # knowledge), and retrieval falls back to lexical extraction.
+    applicability: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+
 
 class EvidenceChunk(Base, TenantScopedMixin):
     """High-recall sibling of ``EvidenceItem``.

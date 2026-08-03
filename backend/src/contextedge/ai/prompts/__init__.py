@@ -187,6 +187,7 @@ def get_prompt(
 # package import time. Adding a new prompt family = adding a new
 # submodule here.
 from contextedge.ai.prompts import (  # noqa: E402, F401
+    applicability,
     contradiction,
     decision,
     episode,

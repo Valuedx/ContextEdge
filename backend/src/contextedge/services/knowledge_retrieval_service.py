@@ -59,6 +59,19 @@ MAX_SECTIONS_PER_DOC = 6
 # onboarding checklist. A weak match is worse than none: it gives the
 # generator normative-sounding text about the wrong procedure.
 MAX_DISTANCE = 0.55
+# How much of an article to scan for applicability facets.
+#
+# This was 6000 and that number was invented rather than measured. On the
+# live corpus the SHORTEST article is 8.3k characters and the longest is
+# 29k, so a 6k window ended before the end of every single document — and
+# the version statements, which sit in the "Applies to" or environment
+# section partway down, fell outside it on all of them. The facet
+# reported 0% coverage and looked like a corpus that never states a
+# version, when it was a window that never reached one.
+#
+# It is a plain regex scan over text already in memory, so the cost of
+# being generous here is negligible next to being wrong.
+APPLICABILITY_SCAN_CHARS = 40_000
 
 
 @dataclass(slots=True)
@@ -83,9 +96,21 @@ class KnowledgeDocument:
     evidence_type: str
     sections: list[KnowledgeSection] = field(default_factory=list)
     best_distance: float = 1.0
+    # How this article's stated environment lines up with the incident's.
+    # Carried into the prompt so a step citing an article written for a
+    # different release is reviewable as such.
+    applicability_notes: list[str] = field(default_factory=list)
+    applicability_verdict: str = "unknown"
 
     def to_prompt_block(self, index: int) -> str:
-        lines = [f"[kb-{index}] {self.title} ({self.evidence_type})"]
+        header = f"[kb-{index}] {self.title} ({self.evidence_type})"
+        if self.applicability_verdict == "mismatch":
+            header += " — APPLICABILITY WARNING: " + "; ".join(
+                self.applicability_notes
+            )
+        elif self.applicability_notes:
+            header += " — " + "; ".join(self.applicability_notes)
+        lines = [header]
         for section in self.sections:
             location = section.section_ref or "—"
             marker = " (read from an image)" if section.model_derived else ""
@@ -128,6 +153,10 @@ async def retrieve_knowledge_for_pattern(
     pattern_description: str | None = None,
     episode_summaries: list[dict] | None = None,
     limit: int = MAX_KNOWLEDGE_DOCS,
+    custom_fields: dict | None = None,
+    version_field: str | None = None,
+    environment_field: str | None = None,
+    ci_traits: dict | None = None,
 ) -> list[KnowledgeDocument]:
     """Knowledge documents matching a pattern, best first.
 
@@ -143,8 +172,35 @@ async def retrieve_knowledge_for_pattern(
     if not query.strip():
         return []
 
+    from contextedge.services.knowledge_applicability_service import (
+        describe_target,
+        tenant_environment_inventory,
+        tenant_vocabulary,
+    )
+
+    # Both come from this tenant's own entity graph, so applicability
+    # works for whatever they actually run rather than for one hardcoded
+    # product, and against the release in the environment the incident
+    # occurred in rather than a single tenant-wide "our version". Empty
+    # values degrade to version/platform matching on prose alone —
+    # today's behaviour, not wrong answers.
+    vocabulary = await tenant_vocabulary(db, tenant_id)
+    inventory = await tenant_environment_inventory(db, tenant_id)
+
+    target = describe_target(
+        pattern_title=pattern_title,
+        pattern_description=pattern_description,
+        episode_summaries=episode_summaries,
+        ci_traits=ci_traits,
+        custom_fields=custom_fields,
+        version_field=version_field,
+        environment_field=environment_field,
+        vocabulary=vocabulary,
+        environment_inventory=inventory,
+    )
+
     try:
-        return await _retrieve(db, tenant_id, query, limit)
+        return await _retrieve(db, tenant_id, query, limit, target, vocabulary)
     except Exception as exc:  # noqa: BLE001
         logger.warning(
             "knowledge_retrieval.failed",
@@ -155,7 +211,12 @@ async def retrieve_knowledge_for_pattern(
 
 
 async def _retrieve(
-    db: AsyncSession, tenant_id: uuid.UUID, query: str, limit: int
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    query: str,
+    limit: int,
+    target=None,
+    vocabulary: set[str] | None = None,
 ) -> list[KnowledgeDocument]:
     from contextedge.search.vector_search import search_evidence_semantic
 
@@ -167,6 +228,12 @@ async def _retrieve(
         db, tenant_id, query, limit=max(limit * 6, 30)
     )
 
+    from contextedge.services.knowledge_applicability_service import (
+        applicability_from_payload,
+        compare,
+        extract_applicability,
+    )
+
     documents: list[KnowledgeDocument] = []
     for row in rows:
         evidence = row[0]
@@ -175,16 +242,59 @@ async def _retrieve(
             continue
         if distance > MAX_DISTANCE:
             continue
-        documents.append(
-            KnowledgeDocument(
-                evidence_id=evidence.id,
-                title=(evidence.title or "Untitled")[:300],
-                evidence_type=evidence.evidence_type,
-                best_distance=distance,
-            )
+
+        document = KnowledgeDocument(
+            evidence_id=evidence.id,
+            title=(evidence.title or "Untitled")[:300],
+            evidence_type=evidence.evidence_type,
+            best_distance=distance,
         )
-        if len(documents) >= limit:
-            break
+
+        # Applicability RE-RANKS; it never filters. An article written for
+        # an older release is often the only guidance that exists for a
+        # problem, and dropping it leaves the reviewer with nothing and no
+        # indication anything was withheld. A mismatch pushes it down and
+        # travels with it as a warning.
+        if target is not None:
+            # getattr, because the search may hand back a partial
+            # projection. Reading an absent column threw, and the outer
+            # handler turned that into an empty result — a knowledge
+            # retrieval that silently returns nothing is the one failure
+            # mode this whole module exists to prevent.
+            try:
+                # The stored extraction is a model's reading of the whole
+                # article, done once at ingest. The lexical path is the
+                # fallback for anything ingested before extraction
+                # existed, or whose extraction failed — measurably worse
+                # (it read licence versions and IP addresses as product
+                # versions) but far better than ranking blind.
+                stored = getattr(evidence, "applicability", None)
+                if isinstance(stored, dict) and stored:
+                    article = applicability_from_payload(stored)
+                else:
+                    body = getattr(evidence, "body_text", None) or ""
+                    article = extract_applicability(
+                        f"{evidence.title or ''}\n{body[:APPLICABILITY_SCAN_CHARS]}",
+                        vocabulary,
+                    )
+                match = compare(article, target)
+                document.best_distance = distance * match.rank_penalty
+                document.applicability_verdict = match.verdict
+                document.applicability_notes = match.notes()
+            except Exception as exc:  # noqa: BLE001
+                # One awkward document must not cost the caller the whole
+                # result set. It keeps its semantic rank and simply
+                # carries no applicability opinion.
+                logger.warning(
+                    "knowledge_retrieval.applicability_failed",
+                    evidence_id=str(evidence.id),
+                    error_type=type(exc).__name__,
+                )
+
+        documents.append(document)
+
+    documents.sort(key=lambda d: d.best_distance)
+    documents = documents[:limit]
 
     if not documents:
         return []
