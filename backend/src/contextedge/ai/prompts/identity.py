@@ -48,6 +48,9 @@ Extract entities in these categories:
 
 For each entity also capture any structured identifiers that appear in the
 content. Never invent identifiers that are not present.
+Return at most 20 entities. When the content contains a repetitive list of
+similar hostnames/devices, include the most important examples instead of
+listing every item.
 
 Respond in JSON with key "entities" containing a list of objects:
 {"entities": [{

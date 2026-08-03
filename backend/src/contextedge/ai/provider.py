@@ -282,6 +282,56 @@ def repair_truncated_json(s: str) -> str:
     return s
 
 
+def _salvage_truncated_entities_json(s: str) -> dict[str, list[dict]] | None:
+    """Recover complete objects from a truncated ``{"entities": [...]}`` payload."""
+    match = re.search(r'"entities"\s*:\s*\[', s)
+    if not match:
+        return None
+
+    entities: list[dict] = []
+    depth = 0
+    start: int | None = None
+    in_string = False
+    escaped = False
+
+    for idx in range(match.end(), len(s)):
+        char = s[idx]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            continue
+
+        if char == '"':
+            in_string = True
+            continue
+        if char == "{":
+            if depth == 0:
+                start = idx
+            depth += 1
+            continue
+        if char != "}":
+            continue
+
+        if depth == 0:
+            continue
+        depth -= 1
+        if depth == 0 and start is not None:
+            try:
+                entity = json.loads(s[start : idx + 1])
+            except json.JSONDecodeError:
+                start = None
+                continue
+            if isinstance(entity, dict):
+                entities.append(entity)
+            start = None
+
+    return {"entities": entities} if entities else None
+
+
 async def llm_complete_json(
     prompt: str,
     task: str = "extraction",
@@ -347,6 +397,15 @@ async def llm_complete_json(
                 repaired = repair_truncated_json(cleaned[start:])
                 return json.loads(repaired)
             except (json.JSONDecodeError, Exception) as exc2:
+                salvaged = _salvage_truncated_entities_json(cleaned[start:])
+                if salvaged is not None:
+                    logger.warning(
+                        "llm_json_salvaged_truncated_entities",
+                        task=task,
+                        model=model or get_model_for_task(task),
+                        entity_count=len(salvaged["entities"]),
+                    )
+                    return salvaged
                 logger.error(
                     "llm_json_repair_failed",
                     task=task,

@@ -42,6 +42,39 @@ async def test_llm_json_parse_error():
             await provider.llm_complete_json("prompt", task="extraction")
 
 
+@pytest.mark.asyncio
+async def test_llm_json_salvages_truncated_entities_array():
+    truncated = (
+        '{"entities": ['
+        '{"entity_type": "device", "display_name": "lnux100", '
+        '"context": "server requiring name server update", "email": null, '
+        '"username": null, "hostname": "lnux100", "fqdn": null, '
+        '"serial_number": null, "ip_addresses": [], "source_identifiers": {}},'
+        '{"entity_type": "device", "display_name": "lnux101", '
+        '"context": "server requiring name server update", "email":'
+    )
+
+    with patch.object(provider, "llm_complete", AsyncMock(return_value=truncated)):
+        result = await provider.llm_complete_json("prompt", task="classification")
+
+    assert result == {
+        "entities": [
+            {
+                "entity_type": "device",
+                "display_name": "lnux100",
+                "context": "server requiring name server update",
+                "email": None,
+                "username": None,
+                "hostname": "lnux100",
+                "fqdn": None,
+                "serial_number": None,
+                "ip_addresses": [],
+                "source_identifiers": {},
+            }
+        ]
+    }
+
+
 def test_config_rejects_default_jwt_secret_in_non_development(monkeypatch):
     import contextedge.config as config_module
 
