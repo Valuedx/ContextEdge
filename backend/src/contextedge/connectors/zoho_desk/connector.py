@@ -1008,6 +1008,85 @@ class ZohoDeskConnector(BaseConnector):
 
     # --- operator diagnostics ---------------------------------------------
 
+    # Attachment download is opt-in. Bytes cost bandwidth on every sync
+    # and land in object storage under the tenant's retention policy, so
+    # it is the operator's call, not a connector default. Enable with
+    # ``source_config["download_attachments"] = true``.
+    MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024
+    MAX_ATTACHMENTS_PER_RECORD = 10
+
+    async def fetch_attachments(
+        self, module: str, record_id: str, refs: list[dict]
+    ) -> list[dict]:
+        """Download attachment bytes for one record, base64 for ingest.
+
+        Returns entries in the shape ``register_attachment_artifacts``
+        consumes (``filename`` / ``mime_type`` / ``content_base64``) —
+        the metadata-only ``attachment_refs`` shape is deliberately NOT
+        that shape, because an entry without content is silently skipped
+        by the registrar and would look like attachment support while
+        registering nothing.
+
+        Fail-soft per attachment: one oversized or unreadable file must
+        not cost the record its other attachments.
+        """
+        import base64
+
+        if not (self.source_config or {}).get("download_attachments"):
+            return []
+
+        meta = MODULES.get(module)
+        if meta is None:
+            return []
+
+        out: list[dict] = []
+        for ref in refs[: self.MAX_ATTACHMENTS_PER_RECORD]:
+            attachment_id = ref.get("id")
+            if not attachment_id:
+                continue
+            size = ref.get("size")
+            if isinstance(size, int) and size > self.MAX_ATTACHMENT_BYTES:
+                logger.info(
+                    "zoho_desk.attachment_too_large",
+                    record_id=record_id,
+                    name=ref.get("name"),
+                    size=size,
+                )
+                continue
+            try:
+                content = await self._get_bytes(
+                    f"{meta['list_path']}/{record_id}/attachments/"
+                    f"{attachment_id}/content"
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "zoho_desk.attachment_download_failed",
+                    record_id=record_id,
+                    attachment_id=str(attachment_id),
+                    error_type=type(exc).__name__,
+                )
+                continue
+            if not content or len(content) > self.MAX_ATTACHMENT_BYTES:
+                continue
+            out.append(
+                {
+                    "filename": ref.get("name") or f"attachment-{attachment_id}",
+                    "mime_type": _guess_mime(ref.get("name")),
+                    "content_base64": base64.b64encode(content).decode("ascii"),
+                }
+            )
+        return out
+
+    async def _get_bytes(self, path: str) -> bytes:
+        """Binary GET. Separate from ``_get`` because attachment content
+        is not JSON and must not be parsed as such."""
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            resp = await client.get(
+                f"{self.api_base_url}{path}", headers=await self._headers()
+            )
+        resp.raise_for_status()
+        return resp.content
+
     async def probe_configuration(self, sample_limit: int = 3) -> dict:
         """Read-only setup report: which modules this token can read, what
         the granted scope string is, and whether detail calls return a
@@ -1204,6 +1283,33 @@ def _attachment_refs(value: object, limit: int = 25) -> list[dict]:
             }
         )
     return out
+
+
+_MIME_BY_SUFFIX = {
+    "pdf": "application/pdf",
+    "png": "image/png",
+    "jpg": "image/jpeg",
+    "jpeg": "image/jpeg",
+    "gif": "image/gif",
+    "txt": "text/plain",
+    "log": "text/plain",
+    "csv": "text/csv",
+    "json": "application/json",
+    "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+}
+
+
+def _guess_mime(filename: object) -> str:
+    """Extension-based content type.
+
+    Zoho's attachment list does not carry a MIME type, and the artifact
+    parser dispatches on it — an ``application/octet-stream`` default
+    would send every PDF down the unsupported path.
+    """
+    name = str(filename or "").lower()
+    suffix = name.rsplit(".", 1)[-1] if "." in name else ""
+    return _MIME_BY_SUFFIX.get(suffix, "application/octet-stream")
 
 
 def _custom_fields(value: object, limit: int = 40) -> dict:
