@@ -14,7 +14,10 @@ right, AND an empty result must never again be storable as a success.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import patch
+
+import pytest
 
 from contextedge.config import settings
 
@@ -70,6 +73,71 @@ def test_the_json_task_budget_covers_playbook():
 
     source = inspect.getsource(provider.llm_complete_json)
     assert '"playbook"' in source
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("target_state", ["under_review", "approved"])
+async def test_a_stepless_playbook_cannot_enter_the_governance_path(target_state):
+    """The creation guard does not cover what is already stored.
+
+    Versions authored directly through the API default `steps` to an
+    empty list, and rows predating the guard are still there. Sending an
+    empty draft to review costs a reviewer their time to discover there
+    is nothing to read; approving one produces something that looks like
+    a certified procedure and executes as a no-op.
+    """
+    from unittest.mock import AsyncMock, Mock
+    from uuid import uuid4
+
+    from contextedge.services.playbook_service import (
+        InvalidTransitionError,
+        transition_playbook,
+    )
+
+    version_id = uuid4()
+    playbook = SimpleNamespace(
+        id=uuid4(),
+        tenant_id=uuid4(),
+        lifecycle_state="candidate" if target_state == "under_review" else "under_review",
+        current_version_id=version_id,
+        approver_user_id=None,
+        last_validated_at=None,
+        embedding=None,
+    )
+    version = SimpleNamespace(
+        id=version_id,
+        playbook_id=playbook.id,
+        semantic_version="0.1.0",
+        steps=[],
+        published_at=None,
+        published_by=None,
+    )
+    db = SimpleNamespace(
+        get=AsyncMock(return_value=version), add=Mock(), flush=AsyncMock()
+    )
+
+    with pytest.raises(InvalidTransitionError, match="no steps"):
+        await transition_playbook(db, playbook, target_state, uuid4())
+
+    # And it did not half-apply the transition on the way out.
+    assert playbook.lifecycle_state != target_state
+
+
+def test_a_stepless_version_cannot_be_executed():
+    """Covers rows approved before the transition guard existed.
+
+    Without this a stepless version starts a run, creates no step_runs,
+    requests no approvals and reports success — an execution record
+    attesting to work nobody did, which is worse than an error.
+    """
+    import inspect
+
+    from contextedge.services import execution_service
+
+    source = inspect.getsource(execution_service.start_execution)
+    guard = source.index("there is nothing to execute")
+    loop = source.index("for idx, step_data in enumerate(steps)")
+    assert guard < loop
 
 
 def test_a_stepless_result_is_a_failure_not_a_candidate():

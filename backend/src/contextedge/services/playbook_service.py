@@ -235,6 +235,27 @@ async def transition_playbook(
             f"Cannot transition from '{current}' to '{new_state}'. Allowed: {allowed}"
         )
 
+    # A playbook with no steps is not a procedure, and must not enter the
+    # governance path as if it were.
+    #
+    # The generator can no longer emit one, but that guard is at creation
+    # and does not cover what is already stored, versions authored
+    # directly through the API (``steps`` defaults to an empty list), or
+    # rows that predate it. Checking here covers all three, and does it at
+    # the moment the claim is actually made: sending an empty draft to
+    # review costs a reviewer their time to discover there is nothing to
+    # read, and approving one produces something that looks like a
+    # certified procedure and executes as a no-op.
+    if new_state in ("under_review", "approved"):
+        candidate_version = await _current_playbook_version(db, playbook)
+        if not (candidate_version.steps or []):
+            raise InvalidTransitionError(
+                f"Cannot move playbook to '{new_state}': version "
+                f"{candidate_version.semantic_version} has no steps. A "
+                "playbook with no steps has nothing to review or execute — "
+                "generation likely returned a truncated response."
+            )
+
     playbook.lifecycle_state = new_state
 
     if new_state == "approved":
