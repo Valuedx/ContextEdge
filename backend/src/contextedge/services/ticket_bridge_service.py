@@ -51,25 +51,70 @@ logger = structlog.get_logger()
 # Deliberately conservative — a missed mention is a pending gap, a false
 # hit is noise in the membership table.
 #
-# KNOWN GAP (zoho_desk): Zoho Desk ticket numbers are bare integers with
-# no system prefix, so no pattern here matches a conversational mention
-# of one. Zoho tickets still register their number as a CaseIdentifier
-# and get their primary_case membership — only the *conversational*
-# direction (a Teams or email message quoting "#4021" attaching to the
-# ticket's case) is unavailable.
-#
-# Admitting hash-prefixed bare numbers would close it, but it also
-# matches order numbers and six-digit hex colors — the counterexample
-# "order #12345 is unrelated" is an explicit assertion in
-# test_ticket_bridging.py, so widening this is a product decision rather
-# than a connector one. The narrower fix, if it is wanted, is to resolve
-# numeric candidates against registered identifiers inside
-# ``bridge_conversational_mentions`` (which has db + tenant_id) instead
-# of widening this shared regex, so an unregistered number never even
-# becomes a pending mention.
 _TICKET_TOKEN_RE = re.compile(
     r"\b(?:(?:INC|PRB|CHG|RITM|REQ|TASK|CS)\d{6,9}|[A-Z][A-Z0-9]{1,9}-\d{1,10})\b"
 )
+
+# Bare-integer ticket numbers (Zoho Desk), which carry no system prefix
+# and so cannot be recognised by shape alone. These are extracted as
+# CANDIDATES ONLY and are resolved against registered identifiers before
+# they are allowed to mean anything.
+#
+# That distinction is the whole design. The reason bare numbers were
+# excluded is real — "order #12345 is unrelated" is an explicit
+# assertion in test_ticket_bridging.py, and a six-digit hex colour has
+# the same shape. So a numeric candidate that does NOT match a
+# registered ticket number is discarded outright: it never becomes a
+# membership and, unlike prefixed tokens, never becomes a pending
+# mention either. An unmatched "#12345" leaves no trace.
+#
+# Two forms, both requiring a deliberate marker so ordinary numbers in
+# prose are untouched: a "#" prefix, or a ticket cue word immediately
+# before the digits.
+#
+# The cue must be a WHOLE WORD followed by a separator. Without the
+# trailing \b, "inc" matched the prefix of "INC0010427" and produced
+# "0010427" as a second candidate for every ServiceNow ticket already
+# captured by the shaped pattern — double-counting each mention.
+_NUMERIC_CANDIDATE_RES = (
+    re.compile(r"#(\d{2,10})\b"),
+    re.compile(
+        r"\b(?:ticket|case|incident|request|sr)\b"
+        r"[\s:.#]*(?:no\.?|number|num\.?)?[\s:.#]*"
+        r"(\d{2,10})\b",
+        re.IGNORECASE,
+    ),
+)
+
+# Weaker than a prefixed token in the subject (0.98) or body (0.9): the
+# token shape carries no information, so all the evidence comes from the
+# number matching a registered ticket in this tenant.
+NUMERIC_CANDIDATE_CONFIDENCE = 0.8
+MAX_NUMERIC_CANDIDATES = 10
+
+
+def extract_numeric_ticket_candidates(
+    text: str | None, cap: int = MAX_NUMERIC_CANDIDATES
+) -> list[str]:
+    """Bare numbers that are *plausibly* ticket references.
+
+    Deliberately permissive, because the filter is resolution rather
+    than shape — see the note on ``_NUMERIC_CANDIDATE_RES``. Callers MUST
+    resolve these against ``CaseIdentifier`` and discard what does not
+    match; treating them as identifiers directly would link an order
+    number to an incident.
+    """
+    if not text:
+        return []
+    seen: list[str] = []
+    for pattern in _NUMERIC_CANDIDATE_RES:
+        for match in pattern.finditer(text):
+            token = match.group(1)
+            if token not in seen:
+                seen.append(token)
+                if len(seen) >= cap:
+                    return seen
+    return seen
 
 MAX_TOKENS_PER_EVIDENCE = 20
 DIGEST_THRESHOLD = 3
@@ -499,11 +544,24 @@ async def bridge_conversational_mentions(
         for t in extract_ticket_tokens(normalize_transcript_text(evidence.body_text))
         if t not in already
     ]
+    # Bare-integer candidates (Zoho Desk). Resolve-only: anything that
+    # does not match a registered ticket number is dropped below rather
+    # than stored as a pending mention, so an order number leaves no
+    # trace. Excludes anything already captured by the shaped patterns.
+    numeric_candidates = [
+        t
+        for t in extract_numeric_ticket_candidates(
+            f"{evidence.title or ''}\n{evidence.body_text or ''}"
+        )
+        if t not in already
+    ]
+
     if (
         not subject_tokens
         and not body_pairs
         and not card_tokens
         and not transcript_tokens
+        and not numeric_candidates
     ):
         return counts
 
@@ -512,6 +570,7 @@ async def bridge_conversational_mentions(
         + [("subject", t) for t in subject_tokens if t not in card_tokens]
         + [("quoted_body" if quoted else "body", t) for t, quoted in body_pairs]
         + [("transcript_normalized", t) for t in transcript_tokens]
+        + [("numeric_candidate", t) for t in numeric_candidates]
     )
 
     resolved: list[tuple[str, str, uuid.UUID]] = []
@@ -541,6 +600,14 @@ async def bridge_conversational_mentions(
                 token=token,
                 case_count=len(distinct),
             )
+        elif location == "numeric_candidate":
+            # Resolve-only. A bare number that matches no registered
+            # ticket is an order number, a hex colour, or a quantity —
+            # storing it as a pending mention would fill that table with
+            # exactly the noise the shaped-token rule exists to avoid,
+            # and would link retroactively the moment some unrelated
+            # ticket happened to be numbered the same.
+            counts["numeric_discarded"] = counts.get("numeric_discarded", 0) + 1
         else:
             unresolved.append((location, token))
 
@@ -635,6 +702,14 @@ async def bridge_conversational_mentions(
             # ASR-recovered token (A9): reduced confidence, and it never
             # anchors a thread topic — speech transcription is lossy.
             confidence = TRANSCRIPT_CONFIDENCE
+        elif location == "numeric_candidate":
+            # A bare number that resolved to a registered ticket. All the
+            # evidence is in the resolution — the token shape carries
+            # none — so it links at reduced confidence and never anchors
+            # a thread topic. "#4021" could still be a coincidence with
+            # a real ticket number; a topic anchor would propagate that
+            # coincidence to every other message in the thread.
+            confidence = NUMERIC_CANDIDATE_CONFIDENCE
         elif not is_digest:
             anchored_cases.add(case_id)
         if await _add_membership(
