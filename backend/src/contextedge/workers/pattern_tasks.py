@@ -463,6 +463,28 @@ def generate_playbook_candidate(self, pattern_id: str, tenant_id: str):
                 # distinction preserved rather than flattened into one
                 # evidence list.
                 "knowledge_ids": [str(k.evidence_id) for k in knowledge],
+                # The applicability verdict as it stood when this version
+                # was generated. Persisted rather than recomputed on
+                # read, for two reasons: the estate moves (an article
+                # that matched production's release stops matching after
+                # an upgrade), and a reviewer auditing THIS version needs
+                # what the generator was actually told, not what the
+                # comparison would say today.
+                #
+                # Without it the reviewer sees which SOPs a playbook
+                # cites but not that one of them was flagged as written
+                # for a release they do not run — a warning that was
+                # computed, shown to the model, and then discarded.
+                "knowledge": [
+                    {
+                        "evidence_id": str(k.evidence_id),
+                        "title": k.title,
+                        "evidence_type": k.evidence_type,
+                        "applicability_verdict": k.applicability_verdict,
+                        "applicability_notes": k.applicability_notes,
+                    }
+                    for k in knowledge
+                ],
             },
             # Where the documented procedure and observed practice
             # disagree. Persisted rather than resolved: preferring the

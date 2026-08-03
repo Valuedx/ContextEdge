@@ -121,6 +121,29 @@ export interface EvidenceItem {
   created_at?: string;
 }
 
+/**
+ * Where a knowledge article applies.
+ *
+ * Read once from the article at ingest. Every field is optional and an
+ * empty one means the article said nothing on that axis — which is
+ * treated as "applies broadly", not as "applies nowhere". Two thirds of
+ * real articles state no version.
+ */
+export interface EvidenceApplicability {
+  components?: string[];
+  platforms?: string[];
+  environments?: string[];
+  /** "cloud" | "onprem" | "unknown". "both" is stored as "unknown" — no constraint. */
+  deployment?: string;
+  product_versions?: Record<string, string>;
+  /** "applies to X and later" — a range, not a point version. */
+  version_floor?: Record<string, string>;
+  /** "removed in X" / "up to X". */
+  version_ceiling?: Record<string, string>;
+  /** "llm" when a model read the article, "rules" for the lexical fallback. */
+  extracted_by?: string;
+}
+
 export interface EvidenceItemDetail extends EvidenceItem {
   body_text: string | null;
   workspace_id: string | null;
@@ -130,6 +153,12 @@ export interface EvidenceItemDetail extends EvidenceItem {
   sensitivity_label: string | null;
   access_policy_id?: string | null;
   canonical_entity_refs: Record<string, unknown> | null;
+  /**
+   * Null means nobody looked — either this is not knowledge, or it was
+   * ingested before extraction existed. Distinct from an empty object,
+   * which means it was read and stated no constraints.
+   */
+  applicability?: EvidenceApplicability | null;
 }
 
 export interface Episode {
@@ -227,6 +256,32 @@ export interface PlaybookSourceRef {
   title?: string;
 }
 
+/**
+ * A knowledge document a playbook version was generated from, with the
+ * applicability verdict AS IT STOOD at generation time.
+ *
+ * Not recomputed on read: the estate moves, and a reviewer auditing this
+ * version needs what the generator was told rather than what the
+ * comparison would say today.
+ */
+export interface PlaybookKnowledgeRef {
+  evidence_id: string;
+  title?: string | null;
+  evidence_type?: string | null;
+  /** "applies" | "unknown" | "mismatch" */
+  applicability_verdict?: string;
+  applicability_notes?: string[];
+}
+
+export interface PlaybookEvidenceRefs {
+  evidence_ids?: string[];
+  episode_ids?: string[];
+  pattern_id?: string;
+  knowledge_ids?: string[];
+  /** Absent on versions generated before applicability was recorded. */
+  knowledge?: PlaybookKnowledgeRef[];
+}
+
 export interface PlaybookConflict {
   topic?: string;
   documented?: string;
@@ -245,7 +300,9 @@ export interface PlaybookVersion {
   outputs: unknown;
   steps: unknown[];
   rollback_notes: string | null;
-  evidence_refs: unknown[] | null;
+  // An object, not a list — it separates episode evidence from the
+  // knowledge that grounds the playbook normatively.
+  evidence_refs: PlaybookEvidenceRefs | null;
   // Where the approved KB/SOP and observed practice disagree. null means
   // "not assessed" — versions generated before knowledge became an input
   // carry null, which is not the same as an empty list.

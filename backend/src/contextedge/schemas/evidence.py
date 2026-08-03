@@ -33,6 +33,12 @@ class EvidenceItemDetail(EvidenceItemResponse):
     canonical_entity_refs: dict | None
     baseline_ref: dict | None = None
     delta_signal: str | None = None
+    # Where a knowledge article applies: component, deployment model,
+    # environment, version range. Null for non-knowledge evidence and
+    # for articles ingested before extraction existed — the UI has to
+    # distinguish "does not apply anywhere in particular" from "nobody
+    # ever looked", so this stays nullable rather than defaulting to {}.
+    applicability: dict | None = None
 
 
 class EvidenceAccessPolicyUpdate(BaseModel):
