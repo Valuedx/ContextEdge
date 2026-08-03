@@ -195,6 +195,99 @@ function DiffDialog({
   );
 }
 
+function ConflictsPanel({ version }: { version: PlaybookVersion }) {
+  const conflicts = version.conflicts;
+
+  // null and [] mean different things and must read differently.
+  // null: this version predates knowledge being an input, so the
+  // comparison never ran. Rendering "no conflicts" there would claim a
+  // check was performed and passed.
+  if (conflicts === null || conflicts === undefined) {
+    return (
+      <div className="rounded-lg border border-dashed p-4">
+        <h3 className="text-sm font-semibold">Documented vs. observed</h3>
+        <p className="mt-1 text-xs text-muted-foreground">
+          Not assessed — this version was generated before approved
+          knowledge was compared against observed practice.
+        </p>
+      </div>
+    );
+  }
+
+  if (conflicts.length === 0) {
+    return (
+      <div className="rounded-lg border p-4">
+        <h3 className="text-sm font-semibold">Documented vs. observed</h3>
+        <p className="mt-1 text-xs text-muted-foreground">
+          No disagreement found between the approved procedure and what
+          engineers actually did.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="rounded-lg border border-amber-500/40 bg-amber-500/5 p-4 space-y-3">
+      <div>
+        <h3 className="text-sm font-semibold">
+          Documented vs. observed
+          <span className="ml-2 rounded-full bg-amber-500/20 px-2 py-0.5 text-[10px] font-medium">
+            {conflicts.length} to review
+          </span>
+        </h3>
+        <p className="mt-1 text-xs text-muted-foreground">
+          The generator did not choose between these. Preferring the SOP
+          ignores runs that succeeded doing something else; preferring
+          practice deletes a safeguard.
+        </p>
+      </div>
+
+      <div className="space-y-3">
+        {conflicts.map((conflict, index) => (
+          <div key={index} className="rounded-md border bg-background p-3 space-y-2">
+            {conflict.topic && (
+              <p className="text-sm font-medium">{conflict.topic}</p>
+            )}
+            <div className="grid gap-2 sm:grid-cols-2 text-xs">
+              <div>
+                <span className="text-muted-foreground">Documented procedure</span>
+                <p className="mt-0.5 whitespace-pre-wrap">
+                  {conflict.documented || "—"}
+                </p>
+              </div>
+              <div>
+                <span className="text-muted-foreground">Observed practice</span>
+                <p className="mt-0.5 whitespace-pre-wrap">
+                  {conflict.observed || "—"}
+                </p>
+              </div>
+            </div>
+            {conflict.recommendation && (
+              <p className="text-xs">
+                <span className="text-muted-foreground">Recommended check: </span>
+                {conflict.recommendation}
+              </p>
+            )}
+            {conflict.source_refs && conflict.source_refs.length > 0 && (
+              <div className="flex flex-wrap gap-1 pt-1">
+                {conflict.source_refs.map((ref) => (
+                  <span
+                    key={ref.id}
+                    title={ref.title || ref.id}
+                    className="rounded border px-1.5 py-0.5 text-[10px] font-mono"
+                  >
+                    {ref.kind === "knowledge" ? "KB" : "EP"} {ref.title || ref.label}
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export default function PlaybookDetailPage() {
   const params = useParams<{ id: string }>();
   const playbookId = params.id;
@@ -319,6 +412,8 @@ export default function PlaybookDetailPage() {
           </div>
         )}
       </div>
+
+      {latest && <ConflictsPanel version={latest} />}
 
       <Separator />
 
