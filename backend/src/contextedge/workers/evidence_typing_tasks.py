@@ -68,9 +68,14 @@ async def _backfill(db, tenant_id: str, limit: int) -> dict:
 
         for evidence, raw in rows:
             totals["scanned"] += 1
-            payload = raw.payload if isinstance(raw.payload, dict) else None
-            if not payload:
-                # Offloaded to object storage, or never stored inline.
+            payload = raw.raw_payload if isinstance(raw.raw_payload, dict) else None
+            # An offloaded row stores {"_offloaded": true} inline and the
+            # real payload in object storage. That stub is a dict, so
+            # deriving from it would return "message" and OVERWRITE a
+            # correct type with a wrong one — the opposite of the repair.
+            # Skipped rather than fetched: this is a cheap metadata pass,
+            # not a re-read of every blob ever ingested.
+            if not payload or payload.get("_offloaded"):
                 totals["skipped_no_raw"] += 1
                 continue
 
@@ -95,15 +100,13 @@ async def _backfill(db, tenant_id: str, limit: int) -> dict:
     name="extraction.backfill_evidence_types",
 )
 def backfill_evidence_types(self, tenant_id: str = "all", limit: int = DEFAULT_LIMIT):
-    async def work():
-        from contextedge.db.session import get_session_context
-
-        async with get_session_context() as db:
-            result = await _backfill(db, tenant_id, int(limit))
-            await db.commit()
-            return result
-
     try:
-        return run_async(work())
+        # run_async supplies the session and owns commit/rollback — the
+        # same contract every other worker uses. An earlier version here
+        # opened its own session and passed a coroutine instead of a
+        # callable, which failed at the first real invocation with
+        # "'coroutine' object is not callable". It had unit tests; none
+        # of them called the Celery task.
+        return run_async(lambda db: _backfill(db, tenant_id, int(limit)))
     except Exception as exc:
         raise self.retry(exc=exc) from exc

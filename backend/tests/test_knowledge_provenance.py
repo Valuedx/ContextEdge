@@ -359,3 +359,79 @@ async def test_playbook_scoped_search_logs_when_the_version_has_no_links():
     assert out == []
     assert warn.called
     assert warn.call_args.args[0] == "search.playbook_scope_has_no_evidence_links"
+
+
+# --- backfill task wrapper ---------------------------------------------------
+
+
+def test_backfill_task_uses_the_shared_session_runner():
+    """Covers the wrapper, not just the derivation.
+
+    Two bugs shipped here because every test called `_backfill` directly
+    and none invoked the task: it passed a coroutine to `run_async`
+    (which wants a callable) and read `raw.payload` instead of
+    `raw.raw_payload`. Both failed on the first real invocation.
+    """
+    from unittest.mock import patch as _patch
+
+    from contextedge.workers import evidence_typing_tasks as mod
+
+    captured = {}
+
+    def fake_run_async(fn):
+        captured["callable"] = callable(fn)
+        return {"scanned": 0, "updated": 0}
+
+    with _patch.object(mod, "run_async", side_effect=fake_run_async):
+        result = mod.backfill_evidence_types.apply(kwargs={"tenant_id": "all"})
+
+    assert result.state == "SUCCESS"
+    assert captured["callable"] is True
+
+
+@pytest.mark.asyncio
+async def test_backfill_reads_raw_payload_and_skips_offloaded():
+    """An offloaded row stores {"_offloaded": true} inline. That stub is
+    a dict, so deriving from it returns "message" — which would OVERWRITE
+    a correct type with a wrong one, the opposite of the repair."""
+    from contextedge.workers.evidence_typing_tasks import _backfill
+
+    inline = SimpleNamespace(
+        evidence_type="message",
+        raw_object_ref=uuid.uuid4(),
+    )
+    inline_raw = SimpleNamespace(
+        raw_payload={
+            "_connector_source_type": "servicenow",
+            "_connector_object_type": "kb_knowledge",
+        }
+    )
+    offloaded = SimpleNamespace(evidence_type="incident", raw_object_ref=uuid.uuid4())
+    offloaded_raw = SimpleNamespace(raw_payload={"_offloaded": True})
+
+    class _Rows:
+        def __init__(self, rows):
+            self._rows = rows
+
+        def all(self):
+            return self._rows
+
+        def scalars(self):
+            return SimpleNamespace(all=lambda: [])
+
+    calls = {"n": 0}
+
+    async def execute(stmt):
+        calls["n"] += 1
+        if calls["n"] == 1:  # tenant list
+            return _Rows([(uuid.uuid4(),)])
+        return _Rows([(inline, inline_raw), (offloaded, offloaded_raw)])
+
+    db = SimpleNamespace(execute=execute, flush=AsyncMock())
+    totals = await _backfill(db, "all", 100)
+
+    assert inline.evidence_type == "kb_article"
+    # Untouched: the offloaded stub must not be derived from.
+    assert offloaded.evidence_type == "incident"
+    assert totals["updated"] == 1
+    assert totals["skipped_no_raw"] == 1
