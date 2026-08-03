@@ -91,7 +91,6 @@ register_prompt(
         system=_V2_SYSTEM,
         user_template=_V1_USER,
     ),
-    default=True,
 )
 
 # v3 addresses two problems measured on a live tenant's 181 extracted
@@ -202,26 +201,33 @@ Note what is absent, and why: qsvc.exe (a binary — the service it implements i
 
 Only extract clearly identifiable entities. Returning fewer entities is better than returning noise: a wrong entity pollutes the graph permanently and is read back as fact."""
 
-# NOT default yet, deliberately.
+# Default since the extraction eval harness existed to decide it.
 #
-# Measured against v2 on the six evidence items that produced the junk
-# entities now in the graph: junk 4 -> 0 on every run, and the alias
-# capture works (HP UPD folded into HP Universal Print Driver in three
-# separate documents, which is one of the two forked pairs the graph
-# actually contains).
+# It shipped opt-in first, because six documents at one sample each
+# showed entity counts falling from 63 to somewhere between 44 and 53 and
+# could not say whether that was junk being removed or real entities
+# being lost. Guessing at that from raw counts was the whole problem:
+# a prompt that removes junk by removing entities looks identical in the
+# only number that is easy to measure.
 #
-# But total entities fell from 63 to between 44 and 53 depending on the
-# run, and one run dropped a product v3 had captured in the run before.
-# Some of that fall is correct — ticket IDs are now excluded, and name
-# variants that used to fork are folded into aliases — and some of it is
-# real recall loss. Six documents at one sample each cannot tell those
-# apart, and tuning further on that sample is fitting noise.
+# Scored against ``evals/datasets/entity_extraction.jsonl``, 19 labelled
+# cases at 3 samples each:
 #
-# So it registers here and ships behind `tenant_prompt_variants_json`,
-# which is precisely what per-tenant variant routing exists for: flip one
-# tenant, compare against the eval baseline, promote on evidence. A
-# prompt that removes junk by removing entities would look like a win in
-# the only number that is easy to measure.
+#                     v2        v3
+#   entities          74        42
+#   junk (by shape)    7 (9.5%)  0 (0%)
+#   MISSING labels     0         0
+#   forbidden         23         3
+#   stability (J)      0.96      1.00
+#
+# `missing = 0` is the number that settled it: v3 dropped no labelled
+# entity at all. The count fell because the junk fell. And v3 is more
+# stable than v2, not less — the variance that looked like a risk was an
+# artefact of counting unlabelled output.
+#
+# Residual: v3 still names an unnamed category noun when it is the
+# subject of the incident ("Defect tracking tool", "payroll interface").
+# Narrow, and far smaller than what v2 emits. Cases are in the dataset.
 register_prompt(
     Prompt(
         name="identity",
@@ -229,6 +235,7 @@ register_prompt(
         system=_V3_SYSTEM,
         user_template=_V1_USER,
     ),
+    default=True,
 )
 
 # Candidate adjudication: the LLM judges between a small candidate list and
