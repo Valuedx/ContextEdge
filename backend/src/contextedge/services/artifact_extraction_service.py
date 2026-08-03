@@ -443,6 +443,24 @@ async def synchronize_evidence_artifacts(
     evidence.body_summary = combined_body[:500] if combined_body else None
     evidence.embedding = await embed_evidence(evidence.title, evidence.body_text)
 
+    # Re-chunk against the merged body.
+    #
+    # Attachment extraction runs AFTER normalize, so the chunks written
+    # during normalize were built from the body *before* any attachment
+    # text existed. Nothing re-chunked afterwards, which meant an
+    # uploaded document's content reached the parent embedding and the
+    # body column but never reached evidence_chunks at all — invisible to
+    # every chunk-level retrieval path, which for a long document is the
+    # only one that works.
+    #
+    # Structured elements are passed through on a payload COPY so the
+    # chunker stays a pure function of its arguments instead of reaching
+    # into the database for them.
+    await _rechunk_with_documents(
+        db, tenant_id=tenant_id, evidence=evidence, payload=payload,
+        attachments=attachments,
+    )
+
     identity_content = "\n".join(
         part for part in [evidence.title or "", evidence.body_text or ""] if part
     )
@@ -476,6 +494,57 @@ async def synchronize_evidence_artifacts(
         "attachment_count": len(attachments),
         "completed_attachment_count": completed_count,
     }
+
+
+async def _rechunk_with_documents(
+    db: AsyncSession,
+    *,
+    tenant_id: uuid.UUID,
+    evidence: EvidenceItem,
+    payload: dict,
+    attachments: list[AttachmentArtifact],
+) -> int:
+    """Rebuild chunks after attachment text has been merged in.
+
+    Fail-soft: chunking is an optimisation over the parent embedding,
+    which has already been refreshed by the caller. Losing a re-chunk
+    degrades retrieval granularity; raising here would roll back the
+    body and embedding updates too, which is strictly worse.
+    """
+    elements: list[dict] = []
+    for artifact in attachments:
+        if artifact.extraction_status != "completed":
+            continue
+        meta = artifact.parser_metadata or {}
+        for element in meta.get("elements") or []:
+            if isinstance(element, dict):
+                elements.append({**element, "artifact": artifact.filename})
+
+    chunk_payload = dict(payload)
+    if elements:
+        chunk_payload["_document_elements"] = elements
+
+    try:
+        from contextedge.services.evidence_chunk_service import write_chunks
+
+        chunks = await write_chunks(
+            db,
+            tenant_id=tenant_id,
+            evidence=evidence,
+            payload=chunk_payload,
+            source_type=evidence.source_type,
+        )
+        return len(chunks)
+    except Exception as exc:  # noqa: BLE001
+        import structlog
+
+        structlog.get_logger().warning(
+            "artifact.rechunk_failed",
+            tenant_id=str(tenant_id),
+            evidence_id=str(evidence.id),
+            error_type=type(exc).__name__,
+        )
+        return 0
 
 
 async def process_attachment_artifact(

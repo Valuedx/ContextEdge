@@ -164,7 +164,18 @@ class PdfDocumentParser:
                 continue
             bbox = tuple(table.bbox)
             table_boxes.append(bbox)
-            staged.append((bbox[1], bbox[0], "table", (bbox, rows)))
+            # A one-cell box holding a short label is a section header
+            # drawn as a table, not tabular data. Measured on a 318-doc
+            # KB corpus: 199 of ~213 detected "tables" were exactly this
+            # — "Issue:", "Error:", "Solution:", "Steps To Reproduce:".
+            # Left as tables, the document's real section structure is
+            # invisible: everything collapses under the title and no
+            # procedure step is ever attributable to a section.
+            label = _single_cell_label(rows)
+            if label is not None:
+                staged.append((bbox[1], bbox[0], "label_heading", label))
+            else:
+                staged.append((bbox[1], bbox[0], "table", (bbox, rows)))
 
         for line in _lines(page):
             # A table's cell text is excluded from the prose pass — a
@@ -194,7 +205,21 @@ class PdfDocumentParser:
 
         elements: list[DocumentElement] = []
         for _top, _x0, kind, payload in staged:
-            if kind == "table":
+            if kind == "label_heading":
+                _push_section(section_path, payload)
+                elements.append(
+                    DocumentElement(
+                        element_type=ELEMENT_HEADING,
+                        text=payload,
+                        sequence=sequence,
+                        page_number=page_number,
+                        section_path=list(section_path),
+                        extraction_method=EXTRACTION_NATIVE,
+                        structured_content={"from_table_cell": True},
+                    )
+                )
+                sequence += 1
+            elif kind == "table":
                 bbox, rows = payload
                 elements.append(
                     DocumentElement(
@@ -302,6 +327,13 @@ def _lines(page: Any) -> list[dict]:
 def _is_heading(text: str, size: float, body_size: float) -> bool:
     if len(text) > MAX_HEADING_CHARS:
         return False
+    # A sentence is prose, whatever size it is set in. KB authors
+    # routinely emphasise an instruction ("Make username of more than 15
+    # character.") at heading size; treating it as a section invents a
+    # section named after one instruction, and every following chunk then
+    # cites that as its section path.
+    if text.rstrip().endswith((".", "!", "?")) and not _NUMBERED_HEADING_RE.match(text):
+        return False
     if size >= body_size * HEADING_SIZE_RATIO:
         return True
     # A numbered section is a heading even at body size — plenty of SOPs
@@ -325,6 +357,36 @@ def _push_section(section_path: list[str], heading: str) -> None:
         depth = len(section_path) or 1
     del section_path[depth - 1 :]
     section_path.append(heading.strip())
+
+
+# A label box is short. Anything longer is a one-row data table, or a
+# paragraph that happens to sit inside a bordered box.
+MAX_LABEL_HEADING_CHARS = 80
+
+
+def _single_cell_label(rows: list[list]) -> str | None:
+    """The heading text of a one-cell label box, or ``None``.
+
+    Requires a single row with exactly one populated cell — a genuine
+    one-row table (``["401", "Expired credential", "Rotate"]``) has
+    several, and must stay a table.
+    """
+    if len(rows) != 1:
+        return None
+    populated = [(cell or "").strip() for cell in rows[0] if (cell or "").strip()]
+    if len(populated) != 1:
+        return None
+    text = " ".join(populated[0].split())
+    if not text or len(text) > MAX_LABEL_HEADING_CHARS:
+        return None
+    # A sentence in a bordered box is content, not a section label.
+    # Observed in the corpus: "Make username of more than 15 character."
+    # sits in the same box style as "Resolution:", and promoting it to a
+    # heading invents a section named after one instruction — which then
+    # becomes the section path every following chunk cites.
+    if text.endswith((".", "!", "?")) and not text.endswith(".."):
+        return None
+    return text
 
 
 _BULLET_PREFIX_RE = re.compile(r"^\s*(?:[-•*●]|\(?[a-z0-9]{1,3}[.)])\s+")

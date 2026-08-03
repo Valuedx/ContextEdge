@@ -1111,7 +1111,11 @@ def test_kb_articles_resolve_to_the_document_chunker():
     tickets."""
     from contextedge.services.chunkers import get_chunker
 
-    assert get_chunker("zoho_desk", "kb_article").name == "attachment"
+    # Routes to the structure-driven document chunker (phase 4c). It was
+    # the attachment chunker before that existed — the attachment
+    # chunker's markdown-heading path remains the fallback when no
+    # structured elements are available.
+    assert get_chunker("zoho_desk", "kb_article").name == "document"
     assert get_chunker("zoho_desk", "ticket").name == "ticket"
     # Existing resolutions are unchanged.
     assert get_chunker("jira_sm", "issue").name == "ticket"
