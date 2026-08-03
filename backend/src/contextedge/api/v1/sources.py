@@ -16,6 +16,7 @@ from contextedge.schemas.source import (
     SourceObjectApproval,
     SourceObjectResponse,
     SourceResponse,
+    SourceTypeResponse,
     SourceUpdate,
     SyncRunResponse,
 )
@@ -46,6 +47,32 @@ async def list_sources(
     q = q.limit(limit).offset(offset).order_by(Source.created_at.desc())
     result = await db.execute(q)
     return result.scalars().all()
+
+
+# MUST stay above `GET /{source_id}`: that route parses its path segment
+# as a UUID, so a later-registered `/types` would never be reached — the
+# request would 422 on "types" instead.
+@router.get("/types", response_model=list[SourceTypeResponse])
+async def list_source_types(user: AuthUser):
+    """Selectable source types and whether each one can actually sync.
+
+    The source picker renders from this instead of a hardcoded list. The
+    two had drifted apart in both directions — the UI offered three types
+    with no connector behind them, and hid two that worked — which is a
+    drift that a client-side list makes invisible until a user hits it.
+    """
+    from contextedge.connectors.registry import source_type_catalog
+
+    return [
+        SourceTypeResponse(
+            source_type=info.source_type,
+            label=info.label,
+            connector_available=info.connector_available,
+            status=info.status,
+            description=info.description,
+        )
+        for info in source_type_catalog()
+    ]
 
 
 @router.post("", response_model=SourceResponse, status_code=status.HTTP_201_CREATED)

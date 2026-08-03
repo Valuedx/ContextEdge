@@ -24,6 +24,21 @@ class SourceCreate(BaseModel):
     retention_policy_id: UUID | None = None
 
 
+class SourceTypeResponse(BaseModel):
+    """One selectable source type, and whether it can actually sync.
+
+    ``connector_available`` is the field the picker must gate on. A type
+    with ``false`` is accepted by ``SourceCreate`` but has no connector,
+    so a source created against it fails at discovery, not at creation.
+    """
+
+    source_type: str
+    label: str
+    connector_available: bool
+    status: str
+    description: str = ""
+
+
 class SourceUpdate(BaseModel):
     display_name: str | None = Field(None, min_length=1, max_length=255)
     purpose: str | None = None
