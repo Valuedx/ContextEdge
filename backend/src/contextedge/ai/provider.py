@@ -85,6 +85,31 @@ def resolve_thinking_budget(prompt_name: str | None, model: str | None) -> int |
     return budget
 
 
+# Providers whose caching is EXPLICIT — the caller marks a block with
+# `cache_control` and the provider honours it. Anthropic is the case the
+# marker was written for; OpenAI ignores it harmlessly and caches long
+# prefixes automatically.
+#
+# Vertex/Gemini does neither. Above roughly 3k characters of system
+# prompt, LiteLLM translates `cache_control` into a Vertex *context
+# cache* resource, and creating it 404s on this deployment — so the call
+# does not degrade, it fails outright, and the error arrives as
+# `NotFoundError` with an HTML body that reads like a provider outage
+# rather than anything to do with the prompt.
+#
+# Found when an extraction prompt grew from 2.8k to 4.5k characters and
+# every call started failing. Nothing about the prompt was wrong. Gemini
+# caches repeated prefixes implicitly anyway, so dropping the marker
+# there costs nothing.
+_EXPLICIT_CACHE_PREFIXES = ("anthropic/", "claude-", "openai/", "gpt-", "azure/")
+
+
+def supports_explicit_cache_control(model: str | None) -> bool:
+    """Whether ``cache_control`` markers are safe to send to this model."""
+    name = (model or "").lower()
+    return any(name.startswith(prefix) for prefix in _EXPLICIT_CACHE_PREFIXES)
+
+
 async def llm_complete(
     prompt: str,
     task: str = "extraction",
@@ -202,7 +227,10 @@ async def llm_complete(
         )
 
     messages = build_messages(
-        system_prompt, prompt, cache_system=bool(system_prompt), images=images
+        system_prompt,
+        prompt,
+        cache_system=bool(system_prompt) and supports_explicit_cache_control(model),
+        images=images,
     )
     kwargs: dict[str, Any] = {
         "model": model,
