@@ -132,6 +132,19 @@ class LocalFilePayload(BaseModel):
 class LocalIngestRequest(BaseModel):
     source_id: UUID
     files: list[LocalFilePayload]
+    # What kind of content this batch is. Uploads are the one ingestion
+    # path with a human present, so the document kind is asked rather
+    # than guessed — an SOP PDF looks like any other file from its name,
+    # and mistyping it costs knowledge authority and long-term memory
+    # placement. Per-file `metadata.evidence_type` overrides this.
+    evidence_type: str | None = Field(
+        None,
+        description=(
+            "Content kind for the whole batch: kb_article, sop, "
+            "documentation, runbook, postmortem, transcript, document, "
+            "or message."
+        ),
+    )
 
 
 class CredentialRotateRequest(BaseModel):

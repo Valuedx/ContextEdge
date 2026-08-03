@@ -25,6 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from contextedge.models.evidence import EvidenceChunk, EvidenceItem
 from contextedge.services.chunkers import ChunkSpec, get_chunker
+from contextedge.services.evidence_typing import KNOWLEDGE_EVIDENCE_TYPES
 
 logger = structlog.get_logger()
 
@@ -89,7 +90,10 @@ async def write_chunks(
         # Source authority defaults from the chunker's own knowledge of
         # its source family unless the spec already set it.
         meta = dict(spec.metadata)
-        meta.setdefault("source_authority", _default_authority(source_type))
+        meta.setdefault(
+            "source_authority",
+            _default_authority(source_type, evidence.evidence_type),
+        )
 
         row = EvidenceChunk(
             id=uuid.uuid4(),
@@ -128,8 +132,10 @@ async def write_chunks(
     return rows
 
 
-def _default_authority(source_type: str | None) -> str:
-    """Default ``source_authority`` tag from the source type.
+def _default_authority(
+    source_type: str | None, evidence_type: str | None = None
+) -> str:
+    """Default ``source_authority`` tag for a chunk.
 
     The reranker uses this as a feature when scoring chunks. Admins
     can override per-source later via a settings table; this is the
@@ -137,13 +143,24 @@ def _default_authority(source_type: str | None) -> str:
 
     Mapping rationale:
 
+    - ``knowledge_article`` — KB articles and SOPs: what *should* be done
     - ``runbook``  — internal SOPs, post-mortems uploaded as such
     - ``ticket``   — ITSM systems with formal lifecycle (Jira, ServiceNow)
     - ``email``    — ground-truth-ish but lower than ITSM
     - ``chat``     — high noise, low authority
     - ``gist``     — wikis, pasted snippets, ad-hoc docs
+
+    **Evidence type is checked before source type.** One connector serves
+    more than one kind of record — ServiceNow's ``kb_knowledge`` table
+    arrives through the same source as its incidents — so keying on the
+    source alone stamped ``ticket`` on knowledge articles and fed the
+    reranker a claim about lifecycle authority that the record does not
+    have. A KB article is normative, not a record of events, and the two
+    should not compete as if they were the same kind of thing.
     """
-    if source_type in {"jira_sm", "servicenow"}:
+    if evidence_type in KNOWLEDGE_EVIDENCE_TYPES:
+        return "knowledge_article"
+    if source_type in {"jira_sm", "servicenow", "sapphireims", "zoho_desk"}:
         return "ticket"
     if source_type == "gmail":
         return "email"

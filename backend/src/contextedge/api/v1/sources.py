@@ -21,6 +21,7 @@ from contextedge.schemas.source import (
     SyncRunResponse,
 )
 from contextedge.services.evidence_normalization import evidence_content_hash_from_payload
+from contextedge.services.evidence_typing import UPLOADABLE_EVIDENCE_TYPES
 from contextedge.services.policy_assignment import assert_policy_assignment
 from contextedge.services.source_service import (
     discover_source_objects,
@@ -390,15 +391,39 @@ async def local_ingest(body: LocalIngestRequest, db: DbSession, user: AuthUser):
     from contextedge.services.artifact_extraction_service import process_attachment_artifact
     from contextedge.workers.extraction_tasks import _normalize
 
+    # Batch-level content kind, validated against the known set so a typo
+    # cannot silently miss KNOWLEDGE_EVIDENCE_TYPES — a "kb-article"
+    # upload that lands as unrecognized text is precisely the failure the
+    # evidence-typing work exists to end. An unknown value is rejected
+    # rather than ignored: the uploader stated an intent, and quietly
+    # discarding it would file their SOPs as chat messages.
+    batch_evidence_type = (body.evidence_type or "").strip() or None
+    if batch_evidence_type and batch_evidence_type not in UPLOADABLE_EVIDENCE_TYPES:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Unknown evidence_type '{batch_evidence_type}'. "
+                f"Expected one of: {', '.join(sorted(UPLOADABLE_EVIDENCE_TYPES))}"
+            ),
+        )
+
     created_ids = []
     for file in body.files:
         payload = {
             "filename": file.filename,
             "content": file.content,
             "content_type": file.content_type,
-            "evidence_type": file.metadata.get("evidence_type", "message"),
+            # Stamped so derive_evidence_type resolves local uploads to
+            # "document" rather than "message" when nothing is declared.
+            "_connector_source_type": "local_file",
+            "_connector_object_type": "upload",
             **file.metadata,
         }
+        # Per-file metadata wins over the batch declaration; the batch
+        # declaration wins over the source default.
+        declared = file.metadata.get("evidence_type") or batch_evidence_type
+        if declared:
+            payload["evidence_type"] = declared
 
         # Generate hash and external ID
         c_hash = evidence_content_hash_from_payload(payload)

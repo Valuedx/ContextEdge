@@ -373,7 +373,7 @@ async def test_reconstruct_passes_real_source_types_and_supersedes_subset_drafts
             return _rows_result(
                 [
                     (ticket_ev.id, "servicenow", {}, "incident"),
-                    (teams_ev.id, "teams", None, "message"),
+                    (teams_ev.id, "teams", None, "chat_message"),
                 ]
             )
         if "reviewer_state" in text:

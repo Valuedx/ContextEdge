@@ -8,7 +8,12 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from contextedge.models.playbook import Playbook, PlaybookApproval, PlaybookVersion
+from contextedge.models.playbook import (
+    Playbook,
+    PlaybookApproval,
+    PlaybookEvidenceLink,
+    PlaybookVersion,
+)
 from contextedge.services.event_log_service import append_operational_event
 from contextedge.services.memory_service import promote_playbook_memory
 
@@ -79,6 +84,88 @@ async def _existing_semantic_versions(
         )
     )
     return list(result.scalars().all())
+
+
+# Link types written from the generated evidence_refs blob. Richer,
+# purpose-specific types (based_on_sop, supports_rollback, …) belong to
+# the knowledge-provenance work; these two are what the current
+# generation path actually knows.
+EVIDENCE_LINK_TYPE = "derived_from_evidence"
+EPISODE_LINK_TYPE = "derived_from_episode"
+
+MAX_EVIDENCE_LINKS = 500
+
+
+def _coerce_uuid(value: object) -> uuid.UUID | None:
+    if isinstance(value, uuid.UUID):
+        return value
+    try:
+        return uuid.UUID(str(value))
+    except (ValueError, AttributeError, TypeError):
+        return None
+
+
+def _materialize_evidence_links(
+    db: AsyncSession, version: PlaybookVersion, evidence_refs: object
+) -> int:
+    """Write normalized provenance rows from the ``evidence_refs`` JSON.
+
+    Tolerant by design: ``evidence_refs`` is model-authored and has been
+    seen as a dict of id lists, and a bare list. Anything unparseable is
+    skipped rather than raised — losing a provenance row is recoverable,
+    failing version creation is not.
+
+    Bounded at ``MAX_EVIDENCE_LINKS`` so a runaway generation cannot
+    write an unbounded number of rows for one version.
+    """
+    if not evidence_refs:
+        return 0
+
+    evidence_ids: list[object] = []
+    episode_ids: list[object] = []
+
+    if isinstance(evidence_refs, dict):
+        raw_evidence = evidence_refs.get("evidence_ids")
+        raw_episodes = evidence_refs.get("episode_ids")
+        if isinstance(raw_evidence, list):
+            evidence_ids = raw_evidence
+        if isinstance(raw_episodes, list):
+            episode_ids = raw_episodes
+    elif isinstance(evidence_refs, list):
+        evidence_ids = evidence_refs
+
+    written = 0
+    seen: set[tuple[str, str]] = set()
+
+    for raw_id in evidence_ids[:MAX_EVIDENCE_LINKS]:
+        parsed = _coerce_uuid(raw_id)
+        if parsed is None or ("e", str(parsed)) in seen:
+            continue
+        seen.add(("e", str(parsed)))
+        db.add(
+            PlaybookEvidenceLink(
+                playbook_version_id=version.id,
+                evidence_id=parsed,
+                link_type=EVIDENCE_LINK_TYPE,
+            )
+        )
+        written += 1
+
+    for raw_id in episode_ids[:MAX_EVIDENCE_LINKS]:
+        parsed = _coerce_uuid(raw_id)
+        if parsed is None or ("p", str(parsed)) in seen:
+            continue
+        seen.add(("p", str(parsed)))
+        db.add(
+            PlaybookEvidenceLink(
+                playbook_version_id=version.id,
+                episode_id=parsed,
+                link_type=EPISODE_LINK_TYPE,
+            )
+        )
+        written += 1
+
+    return written
 
 
 def _duplicate_version_message(semantic_version: str) -> str:
@@ -255,6 +342,17 @@ async def create_playbook_version(
                     verification_policy=version_data.get("verification_policy"),
                 )
                 db.add(version)
+                await db.flush()
+
+                # Materialize the JSON evidence_refs into normalized link
+                # rows. Until this existed, PlaybookEvidenceLink was READ
+                # in two search paths and WRITTEN nowhere in the codebase
+                # — and vector_search inner-joins it when a query is
+                # scoped to a playbook, so playbook-scoped semantic search
+                # returned zero rows every time, silently. The JSON blob
+                # stays as the cheap read; these rows are the queryable
+                # provenance the ranker actually needs.
+                _materialize_evidence_links(db, version, version_data.get("evidence_refs"))
                 await db.flush()
 
                 playbook.current_version_id = version.id
