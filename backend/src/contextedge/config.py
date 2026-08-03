@@ -83,6 +83,26 @@ class Settings(BaseSettings):
     # services/documents/vision.py, and spend is still gated by the
     # per-tenant budget like any other LLM call.
     document_vision_enabled: bool = True
+    # Per-prompt thinking budget, in output tokens: {"relevance": 0}.
+    # 0 disables thinking for that prompt; a prompt absent from the map
+    # keeps the provider's dynamic default, so this changes nothing until
+    # it is set.
+    #
+    # Measured before choosing defaults: on gemini-2.5-flash, 72% of all
+    # output tokens across recorded traffic were reasoning, and output
+    # bills at ~8x input. Capping is therefore the largest available cost
+    # lever — but it is NOT uniformly safe. A controlled comparison on
+    # identity adjudication returned the same verdict at every budget
+    # while its *confidence* moved 0.95 -> 0.80, and
+    # identity_service.AUTO_LINK_THRESHOLDS["person"] is 0.95. Capping
+    # there silently converts auto-links into review queue items.
+    #
+    # So: `relevance` ships at 0 (binary classifier, verdict unchanged,
+    # ~70% fewer output tokens), and everything else keeps dynamic
+    # thinking until it has been A/B'd against the eval baseline.
+    llm_thinking_budgets: dict[str, int] = Field(
+        default_factory=lambda: {"relevance": 0}
+    )
     # Default daily caps applied to any tenant with no `tenant_llm_budgets`
     # row. Before this, "no row" meant "no limit", so a fresh tenant — the
     # normal state — was the only one running uncapped. None restores that.
