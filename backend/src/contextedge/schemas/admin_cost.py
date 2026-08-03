@@ -13,6 +13,14 @@ class LlmUsageTotals(BaseModel):
     request_count: int
     prompt_tokens: int
     completion_tokens: int
+    reasoning_tokens: int = Field(
+        0,
+        description=(
+            "Thinking tokens. A subset of completion_tokens, never added to "
+            "them — LiteLLM normalises every provider onto the convention "
+            "where thinking is already counted inside completion_tokens."
+        ),
+    )
     cached_tokens: int
     total_tokens: int
     estimated_cost_usd: float = Field(
@@ -31,6 +39,14 @@ class LlmUsageTotals(BaseModel):
             "Target is > 0.5 after the first worker warm-up period."
         ),
     )
+    reasoning_share: float = Field(
+        0.0,
+        description=(
+            "reasoning_tokens / completion_tokens. On a thinking model this is "
+            "routinely the majority of the output bill, so a rising share "
+            "explains cost growth that request counts alone do not."
+        ),
+    )
 
 
 class LlmUsageBreakdownEntry(BaseModel):
@@ -41,6 +57,7 @@ class LlmUsageBreakdownEntry(BaseModel):
     request_count: int
     prompt_tokens: int
     completion_tokens: int
+    reasoning_tokens: int = 0
     cached_tokens: int
     total_tokens: int
     estimated_cost_usd: float
@@ -108,3 +125,17 @@ class TenantBudgetStatus(BaseModel):
     current_cost_usd: float
     allowed: bool
     reason: str
+    # A null `budget` no longer means "uncapped": a tenant with no row falls
+    # back to the deployment default caps. These three fields say what is
+    # actually being enforced, so a dashboard never has to infer it from the
+    # presence of a row.
+    effective_token_limit: int | None = None
+    effective_cost_cap_usd: float | None = None
+    limit_source: str = Field(
+        "none",
+        description=(
+            "'tenant' — this tenant's own budget row. 'default' — the "
+            "deployment-wide fallback caps. 'none' — genuinely uncapped "
+            "(both defaults disabled and no row)."
+        ),
+    )

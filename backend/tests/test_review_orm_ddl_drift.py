@@ -117,13 +117,54 @@ _EXPECTED_MARKERS: set[tuple[str, str]] = {
     # uq_identity_aliases_tenant_strong — partial unique index created in
     # migration 0033; mirrored into IdentityAlias.__table_args__ so
     # metadata-built schemas enforce strong-alias tenant uniqueness too.
+    # case_bridge.py (migration 0038): ticket-number bridging membership
+    # model — identifiers, memberships, pending mentions.
+    ('case_bridge.py', 'ForeignKey("evidence_items.id", ondelete="CASCADE"),'),
+    ('case_bridge.py',
+     'UniqueConstraint( "evidence_id", "canonical_case_id", name="uq_evidence_case_membership" ),'),
+    ('case_bridge.py',
+     'UniqueConstraint( "evidence_id", "normalized_value", name="uq_pending_mention" ),'),
+    ('case_bridge.py',
+     'UniqueConstraint( "tenant_id", "source_system", "normalized_value", name="uq_case_identifiers_tenant_system_value", ),'),
+    # correlation_suggestion.py (migration 0039): gated semantic
+    # suggestions — normalized evidence pair, reviewer decision.
+    ('correlation_suggestion.py', 'ForeignKey("evidence_items.id", ondelete="CASCADE"),'),
+    ('correlation_suggestion.py',
+     'UniqueConstraint( "evidence_id_low", "evidence_id_high", name="uq_correlation_suggestion_pair" ),'),
+    # fleet_group.py (migration 0048): fleet grouping suggestions.
+    ('fleet_group.py', 'ForeignKey("evidence_items.id", ondelete="SET NULL"),'),
+    ('fleet_group.py',
+     'UniqueConstraint("tenant_id", "change_ref", name="uq_fleet_group_change"),'),
+    # fix_cohort.py (migration 0047): per-cohort outcome counters.
+    ('fix_cohort.py', 'ForeignKey("fix_patterns.id", ondelete="CASCADE"),'),
+    ('fix_cohort.py',
+     'UniqueConstraint( "fix_pattern_id", "cohort_type", "cohort_key", name="uq_fix_cohort" ),'),
+    # fix_applicability.py (migration 0046): applicability rules.
+    ('fix_applicability.py', 'ForeignKey("fix_patterns.id", ondelete="CASCADE"),'),
+    # issue_signature.py (migration 0045): problem fingerprints.
+    ('issue_signature.py', 'ForeignKey("error_signatures.id", ondelete="SET NULL"),'),
+    ('issue_signature.py', 'ForeignKey("episodes.id", ondelete="CASCADE"),'),
+    ('issue_signature.py', 'ForeignKey("issue_signatures.id", ondelete="CASCADE"),'),
+    ('issue_signature.py',
+     'UniqueConstraint("tenant_id", "signature_key", name="uq_issue_signature_key"),'),
+    ('issue_signature.py',
+     'UniqueConstraint( "episode_id", "issue_signature_id", name="uq_episode_issue_signature" ),'),
+    # thread_topic.py (migration 0044): per-thread topic state.
+    ('thread_topic.py', 'ForeignKey("threads.id", ondelete="CASCADE"),'),
+    ('thread_topic.py', 'UniqueConstraint("thread_id", name="uq_thread_topic"),'),
+    # entity_class.py (migration 0042): global class taxonomy.
+    ('entity_class.py',
+     'UniqueConstraint("canonical_key", name="uq_entity_classes_key"),'),
     ('episode.py', 'unique=True,'),
+    # episode_evidence_links (migration 0037): normalized episode↔evidence
+    # provenance added in the P0 cluster-materialization work.
+    ('episode.py', 'ForeignKey("episodes.id", ondelete="CASCADE"),'),
     ('episode.py',
-     'source_evidence_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), '
-     'ForeignKey("evidence_items.id", ondelete="CASCADE"), nullable=False)'),
-    ('episode.py',
-     'target_evidence_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), '
-     'ForeignKey("evidence_items.id", ondelete="CASCADE"), nullable=False)'),
+     'UniqueConstraint("episode_id", "evidence_id", name="uq_episode_evidence"),'),
+    # The CorrelationEdge source/target FK lines were re-wrapped in the
+    # 2026-08 lint-debt cleanup: multi-line mapped_column style puts the
+    # ForeignKey on its own line, whose fingerprint matches the generic
+    # episode.py entry above. No constraint change — pure reformatting.
     ('error_signature.py', 'ForeignKey("entities.id", ondelete="SET NULL"),'),
     ('error_signature.py',
      'ForeignKey("error_signatures.id", ondelete="SET NULL"),'),

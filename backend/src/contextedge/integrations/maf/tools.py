@@ -9,7 +9,12 @@ from pydantic import Field, ValidationError
 
 from contextedge.graph.agent.contracts import AgentGraphRequest, GraphNodeRef
 from contextedge.integrations.maf._compat import FunctionInvocationContext, tool
-from contextedge.integrations.maf.client import ContextGraphClient
+from contextedge.integrations.maf.client import (
+    ChangeRiskClient,
+    CmdbTopologyClient,
+    ContextGraphClient,
+    FixApplicabilityClient,
+)
 
 
 def _tool_error(code: str, message: str) -> dict[str, Any]:
@@ -81,10 +86,147 @@ class ContextGraphTools:
         except ValidationError as exc:
             # Must precede (TypeError, ValueError): pydantic's
             # ValidationError subclasses ValueError.
-            return _tool_error("invalid_request", f"Request rejected: {exc.error_count()} invalid field(s).")
+            return _tool_error(
+                "invalid_request", f"Request rejected: {exc.error_count()} invalid field(s)."
+            )
         except (TypeError, ValueError) as exc:
             # int("unlimited") etc. — model-supplied garbage, not a crash.
-            return _tool_error("invalid_request", f"max_depth must be an integer 1-3 ({type(exc).__name__}).")
+            return _tool_error(
+                "invalid_request", f"max_depth must be an integer 1-3 ({type(exc).__name__})."
+            )
 
         subset = await self.client.get_agent_subset(request)
         return subset.model_dump(mode="json")
+
+
+class CmdbTopologyTools:
+    def __init__(self, client: CmdbTopologyClient):
+        self.client = client
+
+    @tool(
+        name="cmdb_topology",
+        description=(
+            "Look up a configuration item's direct CMDB neighborhood from "
+            "ServiceNow (a lookup made within the last few minutes serves "
+            "the identical cached view; if ServiceNow is unreachable the "
+            "last cached view is returned marked stale with its as_of "
+            "time). Accepts a CI display name (e.g. 'vpn-gw-east-01') or a "
+            "32-hex sys_id. Each neighbor's center_role says which side "
+            "the queried CI is on: center_role 'parent' with relationship "
+            "'depends_on' means the queried CI depends on that neighbor."
+        ),
+    )
+    async def cmdb_topology(
+        self,
+        ci: Annotated[
+            str,
+            Field(description="CI display name or ServiceNow sys_id (32 hex chars)."),
+        ],
+        context: FunctionInvocationContext | None = None,
+    ) -> dict[str, Any]:
+        del context
+        term = " ".join(str(ci or "").split())[:500]
+        if not term:
+            return {"error": {"code": "invalid_ci", "message": "Provide a CI name or sys_id."}}
+        try:
+            return await self.client.lookup(term)
+        except Exception as exc:
+            # Structured, model-actionable — never a raw traceback.
+            return {
+                "error": {
+                    "code": "topology_unavailable",
+                    "message": f"Topology lookup failed ({type(exc).__name__}).",
+                }
+            }
+
+
+class ChangeRiskTools:
+    def __init__(self, client: ChangeRiskClient):
+        self.client = client
+
+    @tool(
+        name="assess_change_risk",
+        description=(
+            "Deterministic change-risk profile for a configuration item "
+            "from ingested operational history: how often past changes on "
+            "it were blamed for incidents (caused_by references), incident "
+            "pressure and alert activity in the window, and the cached "
+            "blast radius (dependents). Returns risk_level low/medium/high "
+            "with a factors list explaining every contributing signal. Use "
+            "BEFORE recommending or approving a change to a CI. Accepts a "
+            "CI display name or 32-hex sys_id."
+        ),
+    )
+    async def assess_change_risk(
+        self,
+        ci: Annotated[
+            str,
+            Field(description="CI display name or ServiceNow sys_id (32 hex chars)."),
+        ],
+        window_days: Annotated[
+            int,
+            Field(ge=1, le=730, description="History window in days (default 180)."),
+        ] = 180,
+        context: FunctionInvocationContext | None = None,
+    ) -> dict[str, Any]:
+        del context
+        term = " ".join(str(ci or "").split())[:500]
+        if not term:
+            return {"error": {"code": "invalid_ci", "message": "Provide a CI name or sys_id."}}
+        try:
+            window = min(max(int(window_days), 1), 730)
+        except (TypeError, ValueError):
+            window = 180
+        try:
+            return await self.client.assess(term, window)
+        except Exception as exc:
+            return {
+                "error": {
+                    "code": "risk_assessment_unavailable",
+                    "message": f"Change-risk assessment failed ({type(exc).__name__}).",
+                }
+            }
+
+
+class FixApplicabilityTools:
+    def __init__(self, client: FixApplicabilityClient):
+        self.client = client
+
+    @tool(
+        name="assess_fix_applicability",
+        description=(
+            "Deterministic check of which KNOWN fixes apply to a "
+            "configuration item, by validating each fix's required "
+            "preconditions (model, component, driver/software version, "
+            "OS, class) against the CI's recorded traits. Returns the "
+            "explicit applicability level (exact_ci / "
+            "same_model_and_configuration / same_component_or_version / "
+            "same_ci_class / related_ci_class / cross_class_capability / "
+            "semantic_only), matching factors, differences, and whether "
+            "human review is required before acting. An empty "
+            "'applicable' list means no validated precedent - do NOT "
+            "stretch a fix across unvalidated preconditions. Accepts a "
+            "CI display name or 32-hex sys_id."
+        ),
+    )
+    async def assess_fix_applicability(
+        self,
+        ci: Annotated[
+            str,
+            Field(description="CI display name or ServiceNow sys_id (32 hex chars)."),
+        ],
+        context: FunctionInvocationContext | None = None,
+    ) -> dict[str, Any]:
+        del context
+        term = " ".join(str(ci or "").split())[:500]
+        if not term:
+            return {"error": {"code": "invalid_ci", "message": "Provide a CI name or sys_id."}}
+        try:
+            return await self.client.assess(term)
+        except Exception as exc:
+            return {
+                "error": {
+                    "code": "fix_applicability_unavailable",
+                    "message": f"Fix-applicability assessment failed ({type(exc).__name__}).",
+                }
+            }

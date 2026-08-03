@@ -30,6 +30,11 @@ class _AllResult:
     def all(self):
         return self._values
 
+    def scalars(self):
+        # Scalar projection of the first column, for .scalars().all().
+        first = [v[0] if isinstance(v, tuple) else v for v in self._values]
+        return _AllResult(first)
+
 
 class _ScalarOneOrNoneResult:
     def __init__(self, value):
@@ -107,7 +112,10 @@ async def test_create_episodes_from_evidence_aggregates_identity_refs():
         execute=AsyncMock(
             return_value=_AllResult(
                 [
+                    # (evidence_id, canonical_entity_refs) — the P0 per-episode
+                    # membership work made the entity-refs query id-keyed.
                     (
+                        evidence_id,
                         {
                             "identities": [
                                 {
@@ -171,7 +179,7 @@ def _correlation_fixtures(tenant_id):
         thread_id=None,
         ingested_at=datetime.now(timezone.utc),
     )
-    source = SimpleNamespace(id=source_id, tenant_id=tenant_id, source_type="servicenow")
+    source = SimpleNamespace(id=source_id, tenant_id=tenant_id, source_type="servicenow", config={})
     raw = SimpleNamespace(external_id=None, raw_payload={})
     return evidence, source, raw
 
@@ -187,8 +195,10 @@ async def test_correlation_links_shared_device_identity_within_window():
         evidence, source, raw,
         [
             _AllResult([(identity_id, "device")]),  # trusted identity types
+            _AllResult([(identity_id, 12)]),  # identity degrees
             _AllResult([(other_evidence_id, identity_id)]),  # shared links
             _AllResult([(other_evidence_id, evidence.ingested_at)]),  # times
+            _AllResult([]),  # seed case anchors (C3 veto: none -> skip)
             _ScalarOneOrNoneResult(None),  # correlation-edge dedupe
         ],
     )
@@ -218,6 +228,7 @@ async def test_correlation_ignores_person_only_single_identity():
         evidence, source, raw,
         [
             _AllResult([(identity_id, "person")]),
+            _AllResult([(identity_id, 12)]),
             _AllResult([(other_evidence_id, identity_id)]),
             _AllResult([(other_evidence_id, evidence.ingested_at)]),
         ],
@@ -245,6 +256,7 @@ async def test_correlation_ignores_identity_outside_time_window():
         evidence, source, raw,
         [
             _AllResult([(identity_id, "device")]),
+            _AllResult([(identity_id, 12)]),
             _AllResult([(other_evidence_id, identity_id)]),
             _AllResult([(other_evidence_id, six_months_ago)]),
         ],
@@ -273,14 +285,17 @@ async def test_rank_playbooks_identity_signal_boosts_score():
         expiry_at=None,
         last_validated_at=datetime.now(timezone.utc),
     )
-    version = SimpleNamespace(playbook_confidence=0.7)
+    version = SimpleNamespace(id=uuid4(), playbook_confidence=0.7)
     db = SimpleNamespace(
         execute=AsyncMock(return_value=_ScalarsResult([playbook])),
         get=AsyncMock(return_value=version),
     )
 
     with (
-        patch("contextedge.search.hybrid_ranker._latest_published_version_id", AsyncMock(return_value=uuid4())),
+        patch(
+            "contextedge.search.hybrid_ranker._latest_published_versions",
+            AsyncMock(return_value={playbook.id: version}),
+        ),
         patch("contextedge.search.hybrid_ranker._graph_score_for_playbook", AsyncMock(return_value=0.0)),
         patch("contextedge.search.hybrid_ranker._identity_score_for_playbook", AsyncMock(return_value=1.0)),
         patch("contextedge.search.hybrid_ranker._negative_penalty_for_playbook", AsyncMock(return_value=0.0)),
@@ -291,8 +306,167 @@ async def test_rank_playbooks_identity_signal_boosts_score():
             tenant_id=tenant_id,
             query_text="",
             entities=["sql-prod"],
+            min_score=0.0,  # this test isolates the identity signal
         )
 
     assert len(ranked) == 1
     assert ranked[0].breakdown["identity"] == 1.0
     assert ranked[0].score > 0.0
+
+
+@pytest.mark.asyncio
+async def test_correlation_rare_entity_scores_higher():
+    """A rarely-seen operational entity is a stronger signal than the flat tier."""
+    tenant_id = uuid4()
+    identity_id = uuid4()
+    other_evidence_id = uuid4()
+    evidence, source, raw = _correlation_fixtures(tenant_id)
+
+    db, added = _correlation_db(
+        evidence, source, raw,
+        [
+            _AllResult([(identity_id, "device")]),
+            _AllResult([(identity_id, 4)]),  # rare: 4 linked evidence items
+            _AllResult([(other_evidence_id, identity_id)]),
+            _AllResult([(other_evidence_id, evidence.ingested_at)]),
+            _AllResult([]),  # seed case anchors (C3 veto: none -> skip)
+            _ScalarOneOrNoneResult(None),
+        ],
+    )
+
+    with patch(
+        "contextedge.services.correlation_service.get_identity_ids_for_evidence",
+        AsyncMock(return_value={identity_id}),
+    ):
+        result = await correlate_evidence_item(db, tenant_id, evidence.id)
+
+    assert result["correlations_created"] == 1
+    edges = [obj for obj in added if isinstance(obj, CorrelationEdge)]
+    assert edges[0].confidence == 0.75
+    assert "rare operational entity" in edges[0].explanation
+
+
+@pytest.mark.asyncio
+async def test_correlation_hub_entity_carries_no_signal():
+    """An identity linked to hundreds of evidence items must not correlate
+    them (mass-merge guard applied to the identity tier)."""
+    tenant_id = uuid4()
+    identity_id = uuid4()
+    other_evidence_id = uuid4()
+    evidence, source, raw = _correlation_fixtures(tenant_id)
+
+    db, added = _correlation_db(
+        evidence, source, raw,
+        [
+            _AllResult([(identity_id, "service")]),
+            _AllResult([(identity_id, 350)]),  # hub: link fetch is skipped
+        ],
+    )
+
+    with patch(
+        "contextedge.services.correlation_service.get_identity_ids_for_evidence",
+        AsyncMock(return_value={identity_id}),
+    ):
+        result = await correlate_evidence_item(db, tenant_id, evidence.id)
+
+    assert not [obj for obj in added if isinstance(obj, CorrelationEdge)]
+    assert result.get("correlations_created", 0) == 0
+
+
+# --- negative signals (C3) --------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_conflicting_ticket_anchors_veto_identity_edge():
+    """Two evidence items firmly attached to DIFFERENT cases sharing a
+    rare device: the identity tier must not glue them (hard veto)."""
+    tenant_id = uuid4()
+    identity_id = uuid4()
+    other_evidence_id = uuid4()
+    evidence, source, raw = _correlation_fixtures(tenant_id)
+    seed_case, other_case = uuid4(), uuid4()
+
+    db, added = _correlation_db(
+        evidence, source, raw,
+        [
+            _AllResult([(identity_id, "device")]),
+            _AllResult([(identity_id, 4)]),  # rare device
+            _AllResult([(other_evidence_id, identity_id)]),
+            _AllResult([(other_evidence_id, evidence.ingested_at)]),
+            _AllResult([(seed_case,)]),  # seed anchored to case A
+            _AllResult([(other_evidence_id, other_case)]),  # other -> case B
+        ],
+    )
+
+    with patch(
+        "contextedge.services.correlation_service.get_identity_ids_for_evidence",
+        AsyncMock(return_value={identity_id}),
+    ):
+        result = await correlate_evidence_item(db, tenant_id, evidence.id)
+
+    assert not [obj for obj in added if isinstance(obj, CorrelationEdge)]
+    assert result.get("correlations_created", 0) == 0
+
+
+@pytest.mark.asyncio
+async def test_shared_case_anchor_survives_veto():
+    """Overlapping anchors are the opposite of a conflict: the edge is
+    created as before."""
+    tenant_id = uuid4()
+    identity_id = uuid4()
+    other_evidence_id = uuid4()
+    evidence, source, raw = _correlation_fixtures(tenant_id)
+    shared_case = uuid4()
+
+    db, added = _correlation_db(
+        evidence, source, raw,
+        [
+            _AllResult([(identity_id, "device")]),
+            _AllResult([(identity_id, 4)]),
+            _AllResult([(other_evidence_id, identity_id)]),
+            _AllResult([(other_evidence_id, evidence.ingested_at)]),
+            _AllResult([(shared_case,)]),  # seed anchor
+            _AllResult([(other_evidence_id, shared_case)]),  # same case
+            _ScalarOneOrNoneResult(None),  # edge dedupe
+        ],
+    )
+
+    with patch(
+        "contextedge.services.correlation_service.get_identity_ids_for_evidence",
+        AsyncMock(return_value={identity_id}),
+    ):
+        result = await correlate_evidence_item(db, tenant_id, evidence.id)
+
+    edges = [obj for obj in added if isinstance(obj, CorrelationEdge)]
+    assert len(edges) == 1
+    assert result["correlations_created"] == 1
+
+
+@pytest.mark.asyncio
+async def test_unanchored_pair_is_not_vetoed():
+    """Either side without ticket anchors: no conflict exists — the
+    identity tier behaves exactly as before C3."""
+    tenant_id = uuid4()
+    identity_id = uuid4()
+    other_evidence_id = uuid4()
+    evidence, source, raw = _correlation_fixtures(tenant_id)
+
+    db, added = _correlation_db(
+        evidence, source, raw,
+        [
+            _AllResult([(identity_id, "device")]),
+            _AllResult([(identity_id, 4)]),
+            _AllResult([(other_evidence_id, identity_id)]),
+            _AllResult([(other_evidence_id, evidence.ingested_at)]),
+            _AllResult([]),  # seed has no anchors -> veto skipped
+            _ScalarOneOrNoneResult(None),  # edge dedupe
+        ],
+    )
+
+    with patch(
+        "contextedge.services.correlation_service.get_identity_ids_for_evidence",
+        AsyncMock(return_value={identity_id}),
+    ):
+        result = await correlate_evidence_item(db, tenant_id, evidence.id)
+
+    assert result["correlations_created"] == 1

@@ -68,7 +68,10 @@ class VerificationPolicy(BaseModel):
     recheck_metric: str | None = None
     recheck_source: str | None = Field(
         default=None,
-        description="Connector or tool reference that performs the recheck (e.g. 'intune', 'crowdstrike')",
+        description=(
+            "Connector or tool reference that performs the recheck "
+            "(e.g. 'intune', 'crowdstrike')"
+        ),
     )
 
 

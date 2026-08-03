@@ -162,6 +162,13 @@ celery_app = Celery(
         # Tasks register under ``evaluation.*`` names so they hit the
         # evaluation queue via the routing rule below.
         "contextedge.workers.decision_tasks",
+        # Gated semantic correlation suggestions (evaluation.* name →
+        # evaluation queue via the routing rule below).
+        "contextedge.workers.suggestion_tasks",
+        # Issue-signature extraction on episode approval (B3).
+        "contextedge.workers.signature_tasks",
+        # Fleet-group detection sweep (B6).
+        "contextedge.workers.fleet_tasks",
         # Post-hard-delete orphan sweeps (review F-18 / F-20).
         "contextedge.workers.cleanup_tasks",
         # Relational-to-graph edge reconciliation for post-0031 rows.
@@ -170,6 +177,12 @@ celery_app = Celery(
         "contextedge.workers.identity_tasks",
         # Scheduled retention archive + purge.
         "contextedge.workers.retention_tasks",
+        # Ad-hoc playbook embedding backfill (0035).
+        "contextedge.workers.playbook_tasks",
+        # Demand-driven CMDB topology cache warming.
+        "contextedge.workers.cmdb_tasks",
+        # Post-action verification sweep (0036).
+        "contextedge.workers.verification_tasks",
     ],
 )
 
@@ -253,6 +266,19 @@ celery_app.conf.update(
             "task": "evaluation.purge_archived",
             "schedule": 604800.0,
             "args": ("all",),
+        },
+        # Post-action verification: re-check completed executions against
+        # operational reality (new incidents / alert activity on the
+        # session's CIs). 15-minute cadence — verdicts persist, so each
+        # run is swept at most a handful of times before leaving the queue.
+        "verify-executions-every-15m": {
+            "task": "evaluation.verify_executions",
+            "schedule": 900.0,
+            "args": ("all",),
+        },
+        "detect-fleet-groups": {
+            "task": "evaluation.detect_fleet_groups",
+            "schedule": 1800.0,
         },
     },
 )

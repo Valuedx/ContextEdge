@@ -162,6 +162,15 @@ def resolve_version(
     return default
 
 
+def get_prompt_version(name: str, version: str) -> Prompt:
+    """Exact registered version — the evaluation harness pins versions
+    to compare them; tenant variant routing does not apply here."""
+    try:
+        return _REGISTRY[name][version]
+    except KeyError as exc:
+        raise KeyError(f"prompt {name!r} version {version!r} not registered") from exc
+
+
 def get_prompt(
     name: str,
     tenant_id: _uuid.UUID | str | None = None,
@@ -182,6 +191,8 @@ from contextedge.ai.prompts import (  # noqa: E402, F401
     decision,
     episode,
     identity,
+    issue_signature,
+    message_function,
     pattern,
     playbook,
     relevance,

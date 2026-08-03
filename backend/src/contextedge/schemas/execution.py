@@ -12,7 +12,10 @@ class StartExecutionRequest(BaseModel):
     session_id: UUID | None = None
     max_safety_class: str = Field(
         "read_only",
-        description="Maximum safety class the caller authorises: read_only, low_side_effect, high_side_effect, destructive",
+        description=(
+            "Maximum safety class the caller authorises: read_only, "
+            "low_side_effect, high_side_effect, destructive"
+        ),
     )
 
 
@@ -124,6 +127,11 @@ class ExecutionRunResponse(BaseModel):
     completed_at: datetime | None
     outcome: str | None
     outcome_summary: str | None
+    # Post-action verification (0036): did the fix hold? NULL until the
+    # sweep has re-checked operational reality on the session's CIs.
+    verification_status: str | None = None
+    verified_at: datetime | None = None
+    verification_details: dict | None = None
     created_at: datetime
     step_runs: list[ExecutionStepRunResponse] = Field(default_factory=list)
     approval_requests: list[ApprovalRequestResponse] = Field(default_factory=list)

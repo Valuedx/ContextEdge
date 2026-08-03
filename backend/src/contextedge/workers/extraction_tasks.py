@@ -3,22 +3,23 @@ import uuid
 from datetime import datetime
 
 import structlog
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from contextedge.ai.classifiers.message_function import classify_message_function
 from contextedge.ai.classifiers.relevance import classify_relevance as run_relevance_classifier
 from contextedge.ai.embeddings import embed_evidence
 from contextedge.config import settings
-from contextedge.models.episode import EpisodeStep
+from contextedge.models.episode import Episode, EpisodeStep
 from contextedge.models.evidence import EvidenceItem, RawEvidenceObject
 from contextedge.models.source import Source
 from contextedge.models.tenant import Domain
-from contextedge.workers.chunk_tasks import chunk_evidence_task, embed_chunks_batch_task
 from contextedge.services.artifact_extraction_service import (
     load_raw_payload,
     register_attachment_artifacts,
 )
+from contextedge.services.decision_service import link_evidence_decisions
 from contextedge.services.evidence_chunk_service import write_chunks
 from contextedge.services.evidence_normalization import (
     ensure_thread_for_evidence,
@@ -26,11 +27,11 @@ from contextedge.services.evidence_normalization import (
     evidence_content_hash_from_payload,
     evidence_title_from_payload,
 )
-from contextedge.services.decision_service import link_evidence_decisions
 from contextedge.services.identity_service import link_evidence_identities
 from contextedge.services.redaction_service import redact, redact_evidence_fields
 from contextedge.workers.asyncio_runner import run_async
 from contextedge.workers.celery_app import celery_app
+from contextedge.workers.chunk_tasks import chunk_evidence_task, embed_chunks_batch_task
 from contextedge.workers.correlation_tasks import correlate_evidence
 
 logger = structlog.get_logger()
@@ -47,7 +48,9 @@ INLINE_CHUNK_BUDGET_BYTES = 16 * 1024
 # from sources outside this set always go async so a slow / unfamiliar
 # parser cannot stall ingest. Add a key here once the corresponding
 # chunker has been load-tested at typical body sizes.
-INLINE_CHUNK_SOURCE_ALLOWLIST = frozenset({"jira_sm", "servicenow", "gmail", "teams"})
+INLINE_CHUNK_SOURCE_ALLOWLIST = frozenset(
+    {"jira_sm", "servicenow", "gmail", "teams", "sapphireims"}
+)
 
 
 async def _ensure_embedding(db: AsyncSession, evidence: EvidenceItem) -> bool:
@@ -184,7 +187,8 @@ async def _normalize(db: AsyncSession, raw_object_id: str, tenant_id: uuid.UUID)
             logger.warning("embedding_failed", evidence_id=str(existing.id), error=str(embed_exc))
             embedded = False
         identity_count = None
-        if not ((existing.canonical_entity_refs or {}).get("identities")) and identity_content.strip():
+        has_identities = (existing.canonical_entity_refs or {}).get("identities")
+        if not has_identities and identity_content.strip():
             try:
                 refs = await link_evidence_identities(
                     db,
@@ -204,7 +208,8 @@ async def _normalize(db: AsyncSession, raw_object_id: str, tenant_id: uuid.UUID)
                     error=str(exc),
                 )
         decision_count = None
-        if not ((existing.canonical_entity_refs or {}).get("decisions")) and identity_content.strip():
+        has_decisions = (existing.canonical_entity_refs or {}).get("decisions")
+        if not has_decisions and identity_content.strip():
             try:
                 decision_refs = await link_evidence_decisions(
                     db,
@@ -337,6 +342,31 @@ async def _normalize(db: AsyncSession, raw_object_id: str, tenant_id: uuid.UUID)
         and classification_confidence >= 0.75
     )
 
+    # Message function (A1): what a conversational message is DOING —
+    # feeds the dissociation veto, correction supersession, and the
+    # negative-evidence store. Conversational sources only, and only
+    # for items that passed the relevance gate (noise never earns a
+    # second LLM call). Fail-soft: an unlabeled message just means the
+    # downstream consumers use their deterministic floors.
+    if not skip_extraction and (ev.source_type or "") in MESSAGE_FUNCTION_SOURCE_TYPES:
+        try:
+            mf = await classify_message_function(
+                ev.title or "",
+                ev.body_text or "",
+                ev.source_type or "unknown",
+                tenant_id=tenant_id,
+                db=db,
+            )
+            ev.message_function = mf["function"]
+            ev.message_function_confidence = mf["confidence"]
+            await db.flush()
+        except Exception as mf_exc:
+            logger.warning(
+                "message_function_classification_failed",
+                evidence_id=str(ev.id),
+                error=str(mf_exc),
+            )
+
     identity_count = 0
     decision_count = 0
     embedded = False
@@ -438,38 +468,318 @@ async def _classify(db: AsyncSession, evidence_id: str, tenant_id: uuid.UUID) ->
     return {"evidence_id": evidence_id, "classification": ev.relevance_state}
 
 
-async def _reconstruct(db: AsyncSession, cluster_id: str, tenant_id: uuid.UUID, domain_id: uuid.UUID | None = None) -> dict:
-    """`cluster_id` is treated as a comma-separated list of evidence UUIDs for MVP wiring."""
-    ids = [uuid.UUID(x.strip()) for x in cluster_id.split(",") if x.strip()]
-    if len(ids) < 1:
+# Reconstruction debounce: in a busy incident channel every message
+# grows the cluster; synthesizing per message would burn one LLM call
+# each and churn drafts. Dispatch is delayed by this window, and the
+# task re-checks settlement at run time — only the task that fires
+# after the cluster has been QUIET for the window proceeds; earlier
+# ones no-op on SQL alone. The starvation guard bounds the wait: a
+# never-quiet channel still gets its first synthesis within
+# MAX_SYNTHESIS_DELAY of the cluster's oldest evidence — a long live
+# incident is exactly when episodes matter most.
+RECONSTRUCT_DEBOUNCE_SECONDS = 180
+MAX_SYNTHESIS_DELAY_SECONDS = 1_800
+
+# Sources whose messages get a message-function classification during
+# normalize (A1): the same set the ticket bridge treats as
+# conversational — where "what is this message doing" carries linking
+# semantics (dissociation, correction).
+from contextedge.services.ticket_bridge_service import (  # noqa: E402
+    CONVERSATIONAL_SOURCE_TYPES as MESSAGE_FUNCTION_SOURCE_TYPES,
+)
+
+# source_type → the role synthesis should treat it as. The prompt's
+# field-authority rules (episode v3) key off these labels. A tenant can
+# override the role per SOURCE via Source.config["synthesis_role"] —
+# e.g. a Teams channel that receives alert webhooks is really a
+# "monitoring" feed, and an ops mailbox may be a ticket intake. Unknown
+# override values are ignored (fall back to the type default) so a
+# config typo degrades to today's behavior instead of poisoning
+# authority resolution.
+SOURCE_ROLE_MAP = {
+    "servicenow": "ticket",
+    "jira_sm": "ticket",
+    "sapphireims": "ticket",
+    "teams": "working_discussion",
+    "gmail": "external_communication",
+    "local_file": "document",
+}
+SYNTHESIS_ROLES = (
+    "ticket",
+    "working_discussion",
+    "external_communication",
+    "monitoring",
+    "document",
+)
+
+
+def resolve_synthesis_role(source_type: str, source_config: dict | None) -> str:
+    override = (source_config or {}).get("synthesis_role")
+    if isinstance(override, str) and override in SYNTHESIS_ROLES:
+        return override
+    return SOURCE_ROLE_MAP.get(source_type, "evidence")
+
+
+async def _reconcile_reply_inheritance(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    cluster_evidence_ids: list[uuid.UUID],
+    source_types: dict[uuid.UUID, str],
+    loaded_evidence: dict[uuid.UUID, "EvidenceItem"],
+) -> dict:
+    """A10: replies that correlated before their parent gained a case
+    membership never retried inheritance. Reconstruction is the natural
+    retry point — it fires after a burst settles, and the cluster
+    already names every message in the conversation. For each teams
+    member with no active non-mentioned membership, re-attempt
+    inheritance through the shared ``inherit_reply_membership`` (which
+    carries all the shipped guards: single-case parent, dissociation
+    veto, thread negation). Fail-soft: reconciliation must never break
+    reconstruction."""
+    counts = {"attempted": 0, "inherited": 0}
+    teams_ids = [
+        eid for eid in cluster_evidence_ids if source_types.get(eid) == "teams"
+    ]
+    if not teams_ids:
+        return counts
+    try:
+        from contextedge.models.case_bridge import EvidenceCaseMembership
+        from contextedge.services.ticket_bridge_service import (
+            inherit_reply_membership,
+        )
+
+        anchored = set(
+            (
+                await db.execute(
+                    select(EvidenceCaseMembership.evidence_id).where(
+                        EvidenceCaseMembership.tenant_id == tenant_id,
+                        EvidenceCaseMembership.evidence_id.in_(tuple(teams_ids)),
+                        EvidenceCaseMembership.status == "active",
+                        EvidenceCaseMembership.relationship_type != "mentioned_only",
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        unanchored = [eid for eid in teams_ids if eid not in anchored]
+        if not unanchored:
+            return counts
+
+        # reply_to_id straight from the stored payload in SQL — loading
+        # full payloads (possibly offloaded to object storage) for a
+        # reconciliation sweep would be disproportionate. Offloaded rows
+        # have a NULL inline payload and are simply skipped.
+        reply_rows = (
+            await db.execute(
+                select(
+                    EvidenceItem.id,
+                    RawEvidenceObject.raw_payload["reply_to_id"].astext,
+                    RawEvidenceObject.raw_payload["is_bot"].astext,
+                )
+                .join(
+                    RawEvidenceObject,
+                    EvidenceItem.raw_object_ref == RawEvidenceObject.id,
+                )
+                .where(
+                    EvidenceItem.tenant_id == tenant_id,
+                    RawEvidenceObject.tenant_id == tenant_id,
+                    EvidenceItem.id.in_(tuple(unanchored)),
+                )
+            )
+        ).all()
+        for evidence_id, reply_to, is_bot in reply_rows:
+            ev = loaded_evidence.get(evidence_id)
+            if ev is None or not reply_to:
+                continue
+            counts["attempted"] += 1
+            result = await inherit_reply_membership(
+                db,
+                tenant_id,
+                ev,
+                {"reply_to_id": reply_to, "is_bot": is_bot == "true"},
+            )
+            counts["inherited"] += result.get("inherited", 0)
+        if counts["inherited"]:
+            logger.info(
+                "reply_reconciliation.applied",
+                tenant_id=str(tenant_id),
+                **counts,
+            )
+    except Exception as exc:
+        logger.warning(
+            "reply_reconciliation_failed",
+            tenant_id=str(tenant_id),
+            error=str(exc),
+        )
+    return counts
+
+
+async def _reconstruct(
+    db: AsyncSession,
+    cluster_id: str,
+    tenant_id: uuid.UUID,
+    domain_id: uuid.UUID | None = None,
+    settle: bool = True,
+) -> dict:
+    """``cluster_id`` carries seed evidence UUIDs (comma-separated for
+    caller compatibility). The FULL connected cluster — case links +
+    correlation edges, visibility- and time-fenced — is resolved before
+    reconstruction; the seeds are only the entry point."""
+    seed_ids = [uuid.UUID(x.strip()) for x in cluster_id.split(",") if x.strip()]
+    if len(seed_ids) < 1:
         return {"error": "no_evidence_ids"}
+
+    from contextedge.services.episode_cluster_service import resolve_episode_cluster
+
+    cluster = await resolve_episode_cluster(db, tenant_id, seed_ids)
+    if not cluster.evidence_ids:
+        return {"error": "no_evidence_found"}
+
+    if settle:
+        # Debounce settlement check: if anything in this cluster was
+        # ingested within the window, a later-scheduled task (from that
+        # newer evidence) will handle synthesis — this one steps aside
+        # without spending an LLM call. Manual reviewer triggers pass
+        # settle=False to bypass.
+        from datetime import UTC, datetime, timedelta
+
+        bounds = (
+            await db.execute(
+                select(
+                    func.min(EvidenceItem.ingested_at),
+                    func.max(EvidenceItem.ingested_at),
+                ).where(EvidenceItem.id.in_(tuple(cluster.evidence_ids)))
+            )
+        ).first()
+        oldest_ingested, newest_ingested = (bounds or (None, None))
+        if newest_ingested is not None:
+            now = datetime.now(UTC)
+            if newest_ingested.tzinfo is None:
+                newest_ingested = newest_ingested.replace(tzinfo=UTC)
+            if oldest_ingested is not None and oldest_ingested.tzinfo is None:
+                oldest_ingested = oldest_ingested.replace(tzinfo=UTC)
+            unsettled = now - newest_ingested < timedelta(
+                seconds=RECONSTRUCT_DEBOUNCE_SECONDS
+            )
+            overdue = oldest_ingested is not None and (
+                now - oldest_ingested
+                >= timedelta(seconds=MAX_SYNTHESIS_DELAY_SECONDS)
+            )
+            if unsettled and not overdue:
+                return {
+                    "status": "deferred_unsettled",
+                    "cluster_fingerprint": cluster.fingerprint,
+                    "cluster_size": len(cluster.evidence_ids),
+                }
+
+    # Draft idempotency: the same cluster re-processed must not create a
+    # duplicate draft. Reviewers see one evolving draft, not four
+    # near-duplicates as sources trickle in.
+    existing_draft = (
+        await db.execute(
+            select(Episode.id).where(
+                Episode.tenant_id == tenant_id,
+                Episode.cluster_fingerprint == cluster.fingerprint,
+                Episode.reviewer_state == "pending_review",
+            ).limit(1)
+        )
+    ).scalar_one_or_none()
+    if existing_draft is not None:
+        return {
+            "status": "duplicate_cluster",
+            "cluster_fingerprint": cluster.fingerprint,
+            "episode_ids": [str(existing_draft)],
+        }
 
     if domain_id is None:
         # Resolve a default domain for the tenant if not provided
         dr = await db.execute(select(Domain.id).where(Domain.tenant_id == tenant_id).limit(1))
         domain_id = dr.scalar_one_or_none()
 
+    # Real source types + roles: join each evidence to its Source. The
+    # flattened "source_type": "evidence" this replaces made a ticket, a
+    # chat, and a transcript indistinguishable to synthesis.
+    source_types: dict[uuid.UUID, str] = {}
+    source_roles: dict[uuid.UUID, str] = {}
+    rows = (
+        await db.execute(
+            select(EvidenceItem.id, Source.source_type, Source.config)
+            .join(Source, EvidenceItem.source_id == Source.id)
+            .where(EvidenceItem.id.in_(tuple(cluster.evidence_ids)))
+        )
+    ).all()
+    for row in rows:
+        source_types[row[0]] = row[1] or "unknown"
+        source_roles[row[0]] = resolve_synthesis_role(
+            row[1] or "unknown", row[2] if isinstance(row[2], dict) else None
+        )
+
     items = []
-    for eid in ids:
+    loaded_evidence: dict[uuid.UUID, EvidenceItem] = {}
+    for eid in cluster.evidence_ids:
         ev = await db.get(EvidenceItem, eid)
-        # Legal-hold items must never reach the LLM — see review F-04.
-        # Mirrors the SQL WHERE used by retention + contradiction paths
-        # (``services.evidence_filters.exclude_legal_hold``).
-        if (
-            ev is not None
-            and ev.tenant_id == tenant_id
-            and ev.sensitivity_label != "legal_hold"
-        ):
-            items.append({
-                "title": ev.title,
-                "body": ev.body_text,
-                "source_type": "evidence",
-                "timestamp": str(ev.created_at_source or ev.ingested_at),
-                "evidence_id": str(ev.id),
-            })
+        # Cluster membership is tenant-verified upstream; this is belt-
+        # and-braces against a resolver regression.
+        if ev is None or ev.tenant_id != tenant_id:
+            continue
+        loaded_evidence[ev.id] = ev
+        source_type = source_types.get(ev.id, "unknown")
+        items.append({
+            "title": ev.title,
+            "body": ev.body_text,
+            "source_type": source_type,
+            "source_role": source_roles.get(ev.id, "evidence"),
+            "timestamp": str(ev.created_at_source or ev.ingested_at),
+            "evidence_id": str(ev.id),
+        })
+    items.sort(key=lambda item: item["timestamp"])
 
     if not items:
         return {"error": "no_evidence_found"}
+
+    reply_reconciliation = await _reconcile_reply_inheritance(
+        db, tenant_id, cluster.evidence_ids, source_types, loaded_evidence
+    )
+
+    # Supersede-on-growth: a pending draft built from a SUBSET of this
+    # cluster is an older view of the same incident. Mark it superseded
+    # (invisible to the agent surface, which requires "approved") so the
+    # reviewer sees one current draft.
+    superseded = 0
+    pending = (
+        await db.execute(
+            select(Episode).where(
+                Episode.tenant_id == tenant_id,
+                Episode.reviewer_state == "pending_review",
+                Episode.cluster_fingerprint.is_not(None),
+            ).limit(50)
+        )
+    ).scalars().all()
+    cluster_id_strings = {str(eid) for eid in cluster.evidence_ids}
+    for draft in pending:
+        draft_ids = set(draft.evidence_ids or [])
+        if draft_ids and draft_ids < cluster_id_strings:
+            draft.reviewer_state = "superseded"
+            superseded += 1
+            # Draft lineage: reviewers and audits can follow one evolving
+            # draft chain instead of guessing why an episode vanished.
+            from contextedge.services.event_log_service import (
+                append_operational_event,
+            )
+
+            await append_operational_event(
+                db,
+                tenant_id=tenant_id,
+                entity_type="episode",
+                entity_id=draft.id,
+                event_type="episode.draft_superseded",
+                payload={
+                    "old_cluster_fingerprint": draft.cluster_fingerprint,
+                    "new_cluster_fingerprint": cluster.fingerprint,
+                    "new_cluster_size": len(cluster.evidence_ids),
+                },
+            )
 
     from contextedge.services.episode_service import create_episodes_from_evidence
 
@@ -479,9 +789,11 @@ async def _reconstruct(db: AsyncSession, cluster_id: str, tenant_id: uuid.UUID, 
         domain_id=domain_id,
         evidence_items=items,
         evidence_ids=[uuid.UUID(i["evidence_id"]) for i in items],
+        cluster_fingerprint=cluster.fingerprint,
+        cluster_reasons=cluster.reasons,
     )
     await db.flush()
-    
+
     total_steps = 0
     for episode in created_episodes:
         res = await db.execute(select(EpisodeStep).where(EpisodeStep.episode_id == episode.id))
@@ -490,7 +802,11 @@ async def _reconstruct(db: AsyncSession, cluster_id: str, tenant_id: uuid.UUID, 
     return {
         "episode_ids": [str(ep.id) for ep in created_episodes],
         "count": len(created_episodes),
-        "total_steps": total_steps
+        "total_steps": total_steps,
+        "cluster_size": len(cluster.evidence_ids),
+        "cluster_fingerprint": cluster.fingerprint,
+        "superseded_drafts": superseded,
+        "reply_reconciliation": reply_reconciliation,
     }
 
 
@@ -509,7 +825,9 @@ def normalize_evidence(self, raw_object_id: str, tenant_id: str):
     try:
         res = run_async(work)
         if res and "evidence_id" in res:
-            attachment_ids = [artifact_id for artifact_id in (res.get("attachment_ids") or []) if artifact_id]
+            attachment_ids = [
+                artifact_id for artifact_id in (res.get("attachment_ids") or []) if artifact_id
+            ]
             if attachment_ids:
                 from contextedge.workers.artifact_tasks import extract_attachment_artifact
 
@@ -556,12 +874,18 @@ def classify_relevance_task(self, evidence_id: str, tenant_id: str):
     default_retry_delay=60,
     name="extraction.reconstruct_episode",
 )
-def reconstruct_episode_task(self, correlation_cluster_id: str, tenant_id: str, domain_id: str | None = None):
+def reconstruct_episode_task(
+    self,
+    correlation_cluster_id: str,
+    tenant_id: str,
+    domain_id: str | None = None,
+    settle: bool = True,
+):
     tid = uuid.UUID(tenant_id)
     did = uuid.UUID(domain_id) if domain_id else None
 
     async def work(db):
-        return await _reconstruct(db, correlation_cluster_id, tid, did)
+        return await _reconstruct(db, correlation_cluster_id, tid, did, settle=settle)
 
     try:
         return run_async(work)

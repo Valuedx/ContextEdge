@@ -32,18 +32,21 @@ def _evidence_stub(legal_hold: bool = False, ev_type: str = "ticket"):
 
 @pytest.mark.asyncio
 async def test_episode_reconstruct_skips_legal_hold_evidence():
-    """Review F-04: _reconstruct filters out legal_hold evidence from the
-    items list before it reaches reconstruct_episode."""
+    """Review F-04, updated for P0 cluster materialization: legal-hold
+    exclusion now happens in resolve_episode_cluster's visibility query
+    (SQL predicate), so held evidence never enters a cluster and
+    therefore never reaches the items list."""
     from contextedge.workers.extraction_tasks import _reconstruct
 
     tenant_id = uuid4()
 
     normal = _evidence_stub(legal_hold=False)
     normal.tenant_id = tenant_id
+    normal.source_id = uuid4()
     held = _evidence_stub(legal_hold=True)
     held.tenant_id = tenant_id
+    held.source_id = uuid4()
 
-    # Round-robin the db.get responses in the order _reconstruct requests them.
     gets = {normal.id: normal, held.id: held}
 
     async def fake_get(model, pk):
@@ -51,18 +54,48 @@ async def test_episode_reconstruct_skips_legal_hold_evidence():
 
     captured_items: dict = {}
 
-    async def fake_create_episodes(db, *, tenant_id, domain_id, evidence_items, evidence_ids):
+    async def fake_create_episodes(db, *, tenant_id, domain_id, evidence_items, evidence_ids, **kw):
         captured_items["items"] = evidence_items
         captured_items["ids"] = evidence_ids
         return []
 
-    # Domain lookup returns None for simplicity.
-    domain_result = Mock()
-    domain_result.scalar_one_or_none.return_value = None
+    visibility_sql: list[str] = []
+
+    async def execute(stmt):
+        text = str(stmt)
+        result = Mock()
+        if "min(evidence_items.ingested_at)" in text:
+            # Settlement bounds: long-settled cluster → synthesis proceeds.
+            from datetime import UTC, datetime, timedelta
+
+            settled = datetime.now(UTC) - timedelta(hours=2)
+            result.first.return_value = (settled, settled)
+            return result
+        if "coalesce(evidence_items.created_at_source" in text:
+            # The cluster resolver's visibility query: the SQL itself
+            # excludes legal_hold; the fake returns only the visible row.
+            visibility_sql.append(text)
+            result.all.return_value = [(normal.id, None)]
+            return result
+        if "cluster_fingerprint" in text and "scalar" not in text:
+            result.scalar_one_or_none.return_value = None
+            result.scalars.return_value.all.return_value = []
+            return result
+        if "sources" in text:
+            result.all.return_value = [(normal.id, "servicenow", {})]
+            return result
+        if "correlation_edges" in text or "case_links" in text:
+            result.all.return_value = []
+            result.scalars.return_value.all.return_value = []
+            return result
+        result.scalar_one_or_none.return_value = None
+        result.scalars.return_value.all.return_value = []
+        result.all.return_value = []
+        return result
 
     db = SimpleNamespace(
         get=AsyncMock(side_effect=fake_get),
-        execute=AsyncMock(return_value=domain_result),
+        execute=execute,
         flush=AsyncMock(),
     )
 
@@ -74,7 +107,9 @@ async def test_episode_reconstruct_skips_legal_hold_evidence():
     ):
         result = await _reconstruct(db, cluster_id, tenant_id)
 
-    # The held evidence must not appear in the items list or evidence_ids.
+    # The SQL predicate carries the F-04 guarantee...
+    assert visibility_sql and "sensitivity_label" in visibility_sql[0]
+    # ...and the held evidence never reaches the items list.
     assert "items" in captured_items, f"create_episodes not called: {result}"
     ids_in_items = {item["evidence_id"] for item in captured_items["items"]}
     assert str(normal.id) in ids_in_items

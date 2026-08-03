@@ -152,7 +152,9 @@ async def transition_playbook(
         payload={
             "from_state": current,
             "to_state": new_state,
-            "current_version_id": str(playbook.current_version_id) if playbook.current_version_id else None,
+            "current_version_id": (
+                str(playbook.current_version_id) if playbook.current_version_id else None
+            ),
             "approval_id": str(approval.id),
             "comments": comments,
         },
@@ -164,6 +166,17 @@ async def transition_playbook(
             version=approved_version,
             actor_id=actor_id,
         )
+        if playbook.embedding is None:
+            # "approved" is exactly the state the agent seed resolver's
+            # semantic layer filters on (migration 0035), so repair the
+            # fingerprint here: pre-0035 rows and playbooks whose embed
+            # failed transiently at version creation become semantically
+            # matchable the moment a reviewer approves them. Best-effort —
+            # a provider failure leaves FTS-only matching, never blocks
+            # the transition.
+            from contextedge.services.playbook_embedding import embed_playbook
+
+            await embed_playbook(db, playbook, approved_version)
 
     # Invalidate any runtime-match cache for this tenant. The cached
     # payload may reference this playbook's old lifecycle_state; a

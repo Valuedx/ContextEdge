@@ -19,6 +19,88 @@ class ContextGraphClient(Protocol):
     async def get_agent_subset(self, request: AgentGraphRequest) -> AgentGraphSubset: ...
 
 
+class CmdbTopologyClient(Protocol):
+    """Port for the cmdb_topology tool — live CI neighborhood lookups
+    (ServiceNow as source of truth, ContextEdge as write-through cache)."""
+
+    async def lookup(self, term: str) -> dict: ...
+
+
+class InProcessCmdbTopologyClient:
+    """Server-side implementation: opens its own session per lookup so the
+    tool call commits (or discards) independently of any request session."""
+
+    def __init__(self, session_factory, tenant_id):
+        self.session_factory = session_factory
+        self.tenant_id = tenant_id
+
+    async def lookup(self, term: str) -> dict:
+        from contextedge.services.cmdb_topology_service import lookup_topology
+
+        async with self.session_factory() as db:
+            try:
+                result = await lookup_topology(db, self.tenant_id, term)
+                await db.commit()
+                return result
+            except Exception:
+                await db.rollback()
+                raise
+
+
+class ChangeRiskClient(Protocol):
+    """Port for the assess_change_risk tool — deterministic risk profile
+    for a CI from ingested operational history (read-only)."""
+
+    async def assess(self, ci: str, window_days: int) -> dict: ...
+
+
+class FixApplicabilityClient(Protocol):
+    """Port for the assess_fix_applicability tool — deterministic
+    precondition matching of known fixes against a target CI
+    (read-only)."""
+
+    async def assess(self, ci: str) -> dict: ...
+
+
+class InProcessChangeRiskClient:
+    def __init__(self, session_factory, tenant_id):
+        self.session_factory = session_factory
+        self.tenant_id = tenant_id
+
+    async def assess(self, ci: str, window_days: int) -> dict:
+        from contextedge.services.change_risk_service import assess_change_risk
+
+        async with self.session_factory() as db:
+            # Read-only — nothing to commit; rollback on exit is harmless.
+            return await assess_change_risk(
+                db, self.tenant_id, ci, window_days=window_days
+            )
+
+
+class InProcessFixApplicabilityClient:
+    def __init__(self, session_factory, tenant_id):
+        self.session_factory = session_factory
+        self.tenant_id = tenant_id
+
+    async def assess(self, ci: str) -> dict:
+        from contextedge.services.cmdb_topology_service import resolve_ci_entity
+        from contextedge.services.fix_applicability_service import (
+            assess_fix_applicability,
+        )
+
+        async with self.session_factory() as db:
+            # Read-only — nothing to commit; rollback on exit is harmless.
+            entity = await resolve_ci_entity(db, self.tenant_id, ci)
+            if entity is None:
+                return {
+                    "error": {
+                        "code": "ci_not_found",
+                        "message": f"No CI matches {ci!r} for this tenant.",
+                    }
+                }
+            return await assess_fix_applicability(db, self.tenant_id, entity)
+
+
 class InProcessContextGraphClient:
     def __init__(
         self,
@@ -85,6 +167,57 @@ class HttpContextGraphClient:
             )
             response.raise_for_status()
             return AgentGraphSubset.model_validate(response.json())
+        finally:
+            if owns_client:
+                await client.aclose()
+
+
+class HttpCmdbTopologyClient:
+    """Deployment-neutral twin of InProcessCmdbTopologyClient (D3): the
+    same ``lookup`` contract over HTTPS against
+    ``GET /api/v1/graph/cmdb-topology``. Token hygiene mirrors
+    HttpContextGraphClient — headers carry credentials, so plain HTTP is
+    refused unless local development opts in.
+    """
+
+    def __init__(
+        self,
+        base_url: str,
+        *,
+        bearer_token: str | None = None,
+        service_token: str | None = None,
+        timeout: float = 15.0,
+        client: httpx.AsyncClient | None = None,
+        allow_insecure_http: bool = False,
+    ):
+        self.base_url = base_url.rstrip("/")
+        scheme = self.base_url.split("://", 1)[0].lower() if "://" in self.base_url else ""
+        if scheme != "https" and not (allow_insecure_http and scheme == "http"):
+            raise ValueError(
+                "HttpCmdbTopologyClient requires an https:// base_url; pass "
+                "allow_insecure_http=True to use http:// in local development."
+            )
+        self.bearer_token = bearer_token
+        self.service_token = service_token
+        self.timeout = timeout
+        self.client = client
+
+    async def lookup(self, term: str) -> dict:
+        headers: dict[str, str] = {}
+        if self.bearer_token:
+            headers["Authorization"] = f"Bearer {self.bearer_token}"
+        if self.service_token:
+            headers["X-Service-Token"] = self.service_token
+        owns_client = self.client is None
+        client = self.client or httpx.AsyncClient(timeout=self.timeout)
+        try:
+            response = await client.get(
+                f"{self.base_url}/api/v1/graph/cmdb-topology",
+                params={"ci": term},
+                headers=headers,
+            )
+            response.raise_for_status()
+            return response.json()
         finally:
             if owns_client:
                 await client.aclose()

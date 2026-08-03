@@ -5,6 +5,7 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime, timedelta
 
+import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -28,6 +29,8 @@ from contextedge.services.sync_ingestion_queue import (
     NormalizeEnqueueError,
     queue_normalize_raw_objects,
 )
+
+logger = structlog.get_logger()
 
 
 async def run_discovery_job(db: AsyncSession, source_id: uuid.UUID, tenant_id: uuid.UUID) -> dict:
@@ -357,6 +360,25 @@ async def _commit_and_queue_normalization(
         raise
 
 
+async def acquire_sync_lock(
+    db: AsyncSession, source_object_id: uuid.UUID
+) -> bool:
+    """Single-flight per source object (backlog E4): a transaction-
+    scoped Postgres advisory lock. A second worker starting a sync for
+    the same object gets ``False`` and skips instead of racing —
+    overlapping backfills/retries previously interleaved checkpoint
+    writes. Transaction-scoped means the lock releases automatically at
+    commit/rollback; a crashed worker cannot leak it."""
+    from sqlalchemy import text as sa_text
+
+    result = await db.execute(
+        sa_text(
+            "SELECT pg_try_advisory_xact_lock(hashtext(:key))"
+        ).bindparams(key=f"sync:{source_object_id}")
+    )
+    return bool(result.scalar_one())
+
+
 async def run_backfill_job(
     db: AsyncSession,
     source_id: uuid.UUID,
@@ -364,6 +386,13 @@ async def run_backfill_job(
     tenant_id: uuid.UUID,
     window_days: int = 90,
 ) -> dict:
+    if not await acquire_sync_lock(db, source_object_id):
+        logger.info(
+            "sync.skipped_locked",
+            source_object_id=str(source_object_id),
+            mode="backfill",
+        )
+        return {"status": "skipped_locked"}
     r = await db.execute(
         select(SourceObject).where(
             SourceObject.id == source_object_id,
@@ -448,6 +477,13 @@ async def run_incremental_job(
     source_object_id: uuid.UUID,
     tenant_id: uuid.UUID,
 ) -> dict:
+    if not await acquire_sync_lock(db, source_object_id):
+        logger.info(
+            "sync.skipped_locked",
+            source_object_id=str(source_object_id),
+            mode="incremental",
+        )
+        return {"status": "skipped_locked"}
     r = await db.execute(
         select(SourceObject).where(
             SourceObject.id == source_object_id,
@@ -477,8 +513,34 @@ async def run_incremental_job(
             .limit(1)
         )
     ).scalar_one_or_none()
-    
+
     ck = Checkpoint(data=ck_row.checkpoint_data, captured_at=ck_row.captured_at) if ck_row else None
+
+    if ck is None:
+        # An incremental sync means "changes since the last cursor", and there
+        # is no cursor until a backfill establishes one. `fetch_changes` takes
+        # a non-optional Checkpoint (see connectors/base.py), so every
+        # connector dereferences it — passing None crashed the run with
+        # "'NoneType' object has no attribute 'data'". Approving an object for
+        # sync before its first backfill is the ordinary way to hit this.
+        #
+        # Skipping is the honest answer rather than treating it as a first
+        # full pull: that would quietly ingest the source's entire history —
+        # and pay to extract it — on a schedule nobody associated with a
+        # backfill.
+        run.items_processed = 0
+        run.status = "completed"
+        run.errors = {
+            "skipped": "no checkpoint yet — run a backfill for this object first"
+        }
+        run.completed_at = datetime.now(UTC)
+        await db.commit()
+        logger.info(
+            "sync.incremental_skipped_no_checkpoint",
+            source_object_id=str(so.id),
+            source_id=str(source.id),
+        )
+        return {"run_id": str(run.id), "status": "skipped_no_checkpoint"}
 
     try:
         result = await connector.fetch_changes(so.external_id, so.object_type, ck)

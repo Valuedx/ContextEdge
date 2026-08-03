@@ -5,7 +5,7 @@ import os
 import re
 import time
 import uuid as _uuid
-from typing import Any, TypeVar
+from typing import Any
 
 import litellm
 import structlog
@@ -33,8 +33,11 @@ if settings.google_application_credentials:
 else:
     logger.debug("vertex_ai_credentials_not_found")
 
-# Enable retries for transient errors (e.g., 503 Service Unavailable)
-litellm.num_retries = 5
+# Retries for transient errors (e.g., 503 Service Unavailable). Every retry is
+# a fully billed call, so this number multiplies the worst-case cost of any
+# request — it is a cost knob as much as a resilience one. Configurable via
+# LLM_NUM_RETRIES; see config.py for why the default came down from 5.
+litellm.num_retries = settings.llm_num_retries
 
 MODEL_ROUTING = {
     "classification": settings.default_classification_model,
@@ -140,12 +143,24 @@ async def llm_complete(
             # models) don't derail the main path.
             pass
 
+    # Clamp generated tokens to the deployment ceiling. Callers pass whatever
+    # their prompt might need; this is the backstop that stops one caller (or
+    # one runaway prompt) from buying an 8k-token answer on every retry.
+    effective_max_tokens = min(max_tokens, settings.llm_max_output_tokens)
+    if effective_max_tokens < max_tokens:
+        logger.debug(
+            "llm.max_tokens_clamped",
+            requested=max_tokens,
+            allowed=effective_max_tokens,
+            task=task,
+        )
+
     messages = build_messages(system_prompt, prompt, cache_system=bool(system_prompt))
     kwargs: dict[str, Any] = {
         "model": model,
         "messages": messages,
         "temperature": temperature,
-        "max_tokens": max_tokens,
+        "max_tokens": effective_max_tokens,
     }
     if response_format:
         kwargs["response_format"] = response_format
@@ -153,8 +168,49 @@ async def llm_complete(
     start = time.perf_counter()
     outcome = "ok"
     response = None
+
+    # E1 resilience: bounded call + per-model circuit breaker + one
+    # optional fallback attempt. Budget errors were raised above and
+    # never touch the breaker.
+    import asyncio as _asyncio
+
+    from contextedge.ai.resilience import (
+        LLM_CALL_TIMEOUT_SECONDS,
+        LlmCircuitOpenError,
+        breaker,
+    )
+
+    async def _attempt(attempt_model: str):
+        breaker.check(attempt_model)
+        try:
+            result = await _asyncio.wait_for(
+                litellm.acompletion(**{**kwargs, "model": attempt_model}),
+                timeout=LLM_CALL_TIMEOUT_SECONDS,
+            )
+            breaker.record_success(attempt_model)
+            return result
+        except LlmCircuitOpenError:
+            raise
+        except Exception:
+            breaker.record_failure(attempt_model)
+            raise
+
+    fallback_model = getattr(settings, "llm_fallback_model", None)
     try:
-        response = await litellm.acompletion(**kwargs)
+        try:
+            response = await _attempt(model)
+        except Exception as primary_exc:
+            if fallback_model and fallback_model != model:
+                logger.warning(
+                    "llm.falling_back",
+                    primary_model=model,
+                    fallback_model=fallback_model,
+                    error_type=type(primary_exc).__name__,
+                )
+                model = fallback_model  # usage records the serving model
+                response = await _attempt(fallback_model)
+            else:
+                raise
         return response.choices[0].message.content or ""
     except Exception:
         outcome = "error"
@@ -185,14 +241,14 @@ def repair_truncated_json(s: str) -> str:
     s = s.strip()
     if not s:
         return s
-    
+
     # Remove trailing commas which frequently appear in truncated JSON
     s = re.sub(r',\s*$', '', s)
-    
+
     stack = []
     is_in_string = False
     escaped = False
-    
+
     for char in s:
         if is_in_string:
             if escaped:
@@ -214,15 +270,15 @@ def repair_truncated_json(s: str) -> str:
             elif char == "]":
                 if stack and stack[-1] == "]":
                     stack.pop()
-    
+
     # Close unclosed string
     if is_in_string:
         s += '"'
-    
+
     # Close unclosed objects/arrays in reverse order
     while stack:
         s += stack.pop()
-        
+
     return s
 
 
@@ -270,12 +326,12 @@ async def llm_complete_json(
         # Remove markdown wrappers
         cleaned = re.sub(r"```(?:json)?\s*", "", cleaned)
         cleaned = re.sub(r"```\s*", "", cleaned)
-        
+
         # Locate the JSON content start
         start = cleaned.find("{")
         if start == -1:
             start = cleaned.find("[")
-            
+
         if start != -1:
             # First try finding the last closing delimiter
             end = max(cleaned.rfind("}"), cleaned.rfind("]"))
@@ -285,7 +341,7 @@ async def llm_complete_json(
                     return json.loads(candidate)
                 except json.JSONDecodeError:
                     pass
-            
+
             # If that failed, it's likely truncated. Try to repair it.
             try:
                 repaired = repair_truncated_json(cleaned[start:])
@@ -309,7 +365,6 @@ async def llm_complete_json(
         raise ValueError(f"LLM returned invalid JSON for task '{task}'")
 
 
-T_Schema = TypeVar("T_Schema", bound=BaseModel)
 
 
 def _format_validation_errors(err: ValidationError, limit: int = 5) -> str:
@@ -361,9 +416,9 @@ def _build_repair_prompt(
     )
 
 
-async def llm_complete_json_validated(
+async def llm_complete_json_validated[T: BaseModel](
     prompt: str,
-    schema: type[T_Schema],
+    schema: type[T],
     task: str = "extraction",
     model: str | None = None,
     temperature: float = 0.0,
@@ -374,7 +429,7 @@ async def llm_complete_json_validated(
     max_retries: int = 1,
     prompt_name: str | None = None,
     prompt_version: str | None = None,
-) -> T_Schema:
+) -> T:
     """Parse LLM output against a Pydantic schema, with a bounded repair retry.
 
     Drops into place for callers of ``llm_complete_json`` that want
@@ -524,9 +579,25 @@ async def generate_embedding(
             logger.warning("embedding.usage_record_failed", error=str(exc))
 
 
-async def generate_embeddings_batch(texts: list[str], model: str | None = None) -> list[list[float]]:
-    """Generate embeddings for a batch of texts. Returns 3072-dimensional vectors."""
+async def generate_embeddings_batch(
+    texts: list[str], model: str | None = None
+) -> list[list[float]]:
+    """Generate embeddings for a batch of texts. Returns 3072-dimensional vectors.
+
+    Requests are split into chunks of ``settings.embedding_max_batch_size``.
+    Callers hand in a whole document's worth of chunks, so an uncapped call can
+    be arbitrarily large — and a provider-side size rejection arrives *after*
+    the tokens are spent. Splitting bounds the blast radius of any single
+    request; the token cost of the work itself is unchanged.
+    """
     model = model or get_model_for_task("embedding")
+
+    limit = settings.embedding_max_batch_size
+    if len(texts) > limit:
+        out: list[list[float]] = []
+        for start_idx in range(0, len(texts), limit):
+            out.extend(await generate_embeddings_batch(texts[start_idx : start_idx + limit], model))
+        return out
     # LiteLLM maps 'dimensions' -> outputDimensionality for Vertex AI
     # gemini-embedding-001 supports up to 3072
     kwargs = {"model": model, "input": texts}

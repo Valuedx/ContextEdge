@@ -23,7 +23,8 @@ def _engine():
 
 
 class RequestAuditMiddleware(BaseHTTPMiddleware):
-    """Log mutating requests to structlog and insert a row into `audit_logs` when tenant is known."""
+    """Log mutating requests to structlog and insert a row into `audit_logs`
+    when tenant is known."""
 
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         try:
@@ -66,7 +67,8 @@ class RequestAuditMiddleware(BaseHTTPMiddleware):
             try:
                 tid = uuid.UUID(str(tenant_id))
                 aid = uuid.UUID(str(user_id)) if user_id else None
-                action = f"http.{request.method.lower()}.{request.url.path.strip('/').replace('/', '.')[:80]}"
+                path_slug = request.url.path.strip('/').replace('/', '.')[:80]
+                action = f"http.{request.method.lower()}.{path_slug}"
                 if response.status_code < 400:
                     outcome = "success"
                 elif response.status_code in (401, 403):
@@ -83,7 +85,7 @@ class RequestAuditMiddleware(BaseHTTPMiddleware):
                         "causation_id": getattr(request.state, "causation_id", None),
                     }
                 )
-                
+
                 def _do_insert():
                     try:
                         with _engine().connect() as conn:
@@ -112,7 +114,7 @@ class RequestAuditMiddleware(BaseHTTPMiddleware):
                             conn.commit()
                     except Exception as e:
                         logger.warning("audit_db_error", error=str(e))
-                
+
                 # Offload sync DB call to thread
                 await anyio.to_thread.run_sync(_do_insert)
 

@@ -21,7 +21,12 @@ from contextedge.graph.agent.contracts import (
     HydratedGraphNode,
     RankedGraphSeed,
 )
-from contextedge.graph.agent.hydrators import NODE_MODELS, hydrate_node, node_is_visible
+from contextedge.graph.agent.hydrators import (
+    NODE_MODELS,
+    hydrate_node,
+    node_is_visible,
+    playbook_version_facts,
+)
 from contextedge.graph.temporal import edge_valid_at
 from contextedge.models.entity import Entity
 from contextedge.models.episode import CanonicalIdentity, Episode, IdentityAlias
@@ -217,6 +222,7 @@ class SQLAlchemyAgentGraphRepository:
             # would otherwise leave the whole session aborted and every
             # later query in this projection raising InFailedSQLTransaction.
             episode_rows: list = []
+            playbook_rows: list = []
             try:
                 from contextedge.ai.provider import generate_embedding
                 from contextedge.search.vector_ops import (
@@ -253,6 +259,29 @@ class SQLAlchemyAgentGraphRepository:
                     if episode_domain is not None:
                         episode_q = episode_q.where(episode_domain)
                     episode_rows = list((await self.db.execute(episode_q)).all())
+
+                    # Direct semantic playbook match (0035): the embedding
+                    # text includes trigger conditions and step titles, so
+                    # symptom-level queries ("users can't log in") can reach
+                    # a playbook whose title never says those words — and it
+                    # works on cold-start tenants with no episode history.
+                    pb_distance = halfvec_cosine_distance(
+                        Playbook.embedding, query_embedding
+                    ).label("distance")
+                    playbook_sem_q = (
+                        select(Playbook.id, pb_distance)
+                        .where(
+                            Playbook.tenant_id == scope.tenant_id,
+                            Playbook.lifecycle_state == "approved",
+                            Playbook.embedding.is_not(None),
+                        )
+                        .order_by(pb_distance)
+                        .limit(3)
+                    )
+                    pb_domain = self._domain_predicate(Playbook.domain_id, scope)
+                    if pb_domain is not None:
+                        playbook_sem_q = playbook_sem_q.where(pb_domain)
+                    playbook_rows = list((await self.db.execute(playbook_sem_q)).all())
             except Exception as exc:
                 logger.warning(
                     "agent_graph.semantic_seed_unavailable",
@@ -267,6 +296,17 @@ class SQLAlchemyAgentGraphRepository:
                 seeds.append(
                     RankedGraphSeed(
                         ref=GraphNodeRef(type="episode", id=episode_id),
+                        relevance=round(0.6 + 0.3 * similarity, 4),
+                        reason="query_semantic",
+                    )
+                )
+            for playbook_id, playbook_distance in playbook_rows:
+                similarity = 1.0 - min(max(float(playbook_distance), 0.0), 1.0)
+                if similarity < 0.5:
+                    continue
+                seeds.append(
+                    RankedGraphSeed(
+                        ref=GraphNodeRef(type="playbook", id=playbook_id),
                         relevance=round(0.6 + 0.3 * similarity, 4),
                         reason="query_semantic",
                     )
@@ -510,6 +550,29 @@ class SQLAlchemyAgentGraphRepository:
                 model.tenant_id == scope.tenant_id,
             )
             rows = (await self.db.execute(query)).scalars().all()
+
+            # Playbook nodes carry their current version's steps and
+            # trigger conditions (bounded — see hydrators caps): a
+            # playbook the agent can't see the steps of forces a second
+            # round-trip or a guess. Batch-loaded, one query per
+            # projection regardless of playbook count.
+            version_map: dict = {}
+            if node_type == "playbook":
+                from contextedge.models.playbook import PlaybookVersion
+
+                version_ids = [
+                    row.current_version_id for row in rows if row.current_version_id
+                ]
+                if version_ids:
+                    versions = (
+                        await self.db.execute(
+                            select(PlaybookVersion).where(
+                                PlaybookVersion.id.in_(version_ids)
+                            )
+                        )
+                    ).scalars().all()
+                    version_map = {v.id: v for v in versions}
+
             for row in rows:
                 if not node_is_visible(
                     node_type,
@@ -519,5 +582,17 @@ class SQLAlchemyAgentGraphRepository:
                 ):
                     continue
                 node = hydrate_node(node_type, row)
+                if node_type == "playbook":
+                    version = version_map.get(row.current_version_id)
+                    # playbook_id check: a stale/corrupt current_version_id
+                    # pointing at another playbook's version must not leak
+                    # that version's steps here.
+                    if version is not None and version.playbook_id == row.id:
+                        version_facts, version_confidence = playbook_version_facts(
+                            version
+                        )
+                        node.facts.update(version_facts)
+                        if node.confidence is None:
+                            node.confidence = version_confidence
                 hydrated[node.ref.key] = node
         return hydrated

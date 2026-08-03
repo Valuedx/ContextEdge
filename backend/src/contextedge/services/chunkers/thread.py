@@ -36,9 +36,8 @@ from __future__ import annotations
 import re
 from dataclasses import replace
 
-from contextedge.services.chunkers.base import ChunkSpec, Chunker
+from contextedge.services.chunkers.base import ChunkSpec
 from contextedge.services.chunkers.fallback import FallbackChunker
-
 
 # Common quoted-reply patterns. Greedy from the first match to the end
 # of the body — once a reply quote starts, everything after it is

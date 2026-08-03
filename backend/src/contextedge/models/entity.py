@@ -23,12 +23,11 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Numeric, String, UniqueConstraint, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, Numeric, String, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from contextedge.models.base import Base, TenantScopedMixin
-
 
 ENTITY_TYPES = (
     "user",
@@ -46,6 +45,10 @@ ENTITY_TYPES = (
     "sop",
     "tool",
     "approval_group",
+    # ServiceNow reference enrichment (servicenow_reference_service):
+    # cmdb_ci rows whose class has no richer mapping, and the owning team.
+    "configuration_item",
+    "assignment_group",
 )
 
 
@@ -77,6 +80,13 @@ class Entity(Base, TenantScopedMixin):
     name: Mapped[str] = mapped_column(String(500), nullable=False)
 
     environment: Mapped[str | None] = mapped_column(String(30), nullable=True, index=True)
+    # Normalized traits (0043): the deciding dimensions for fix
+    # applicability. NULL means the source did not provide the trait —
+    # absent is absent, never guessed.
+    manufacturer: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    model: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    os_name: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    os_version: Mapped[str | None] = mapped_column(String(80), nullable=True)
     business_unit: Mapped[str | None] = mapped_column(String(100), nullable=True)
     data_domain: Mapped[str | None] = mapped_column(String(100), nullable=True)
 

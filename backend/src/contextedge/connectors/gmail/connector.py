@@ -4,7 +4,7 @@ Uses service account with domain-wide delegation for shared mailbox access.
 Supports history-based incremental sync and thread-centric processing.
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 import httpx
@@ -34,7 +34,7 @@ class GmailConnector(BaseConnector):
 
     async def _get_access_token(self, user_email: str | None = None) -> str:
         """Get access token for Gmail API.
-        
+
         Supports both:
         1. Service Account with Domain-Wide Delegation (requires user_email to impersonate)
         2. Personal OAuth2 Token (Authorized User flow, user_email ignored)
@@ -42,9 +42,9 @@ class GmailConnector(BaseConnector):
         if self._access_token:
             return self._access_token
 
+        from google.auth.transport.requests import Request  # type: ignore[import-untyped]
         from google.oauth2 import service_account  # type: ignore[import-untyped]
         from google.oauth2.credentials import Credentials  # type: ignore[import-untyped]
-        from google.auth.transport.requests import Request  # type: ignore[import-untyped]
 
         scopes = ["https://www.googleapis.com/auth/gmail.readonly"]
 
@@ -62,7 +62,7 @@ class GmailConnector(BaseConnector):
 
         if not creds.valid:
             creds.refresh(Request())
-        
+
         self._access_token = creds.token
         return self._access_token
 
@@ -120,10 +120,10 @@ class GmailConnector(BaseConnector):
             if not mailboxes and self.credentials.get("user_oauth2_info"):
                 await self._get_access_token()
                 return CredentialStatus(valid=True, message="Personal Gmail access verified")
-            
+
             if not mailboxes:
                 return CredentialStatus(valid=False, message="No mailbox_email configured")
-            
+
             await self._get_access_token(mailboxes[0])
             return CredentialStatus(valid=True, message="Gmail API access verified")
         except Exception as e:
@@ -131,7 +131,7 @@ class GmailConnector(BaseConnector):
 
     async def discover_objects(self) -> list[DiscoveredObject]:
         mailboxes = self._get_mailbox_list()
-        
+
         # For personal OAuth2, if no mailbox is configured, we discover the "me" profile
         if not mailboxes and self.credentials.get("user_oauth2_info"):
             mailboxes = ["me"]
@@ -175,7 +175,7 @@ class GmailConnector(BaseConnector):
 
         after_epoch = int(window.start.timestamp())
         before_epoch = int(window.end.timestamp())
-        
+
         keywords = self._get_relevance_keywords()
         query = f"after:{after_epoch} before:{before_epoch}"
         if keywords:
@@ -215,7 +215,7 @@ class GmailConnector(BaseConnector):
                     thread_id=f"{user_email}:{thread_summary['id']}",
                     timestamp=datetime.fromtimestamp(
                         int(messages[0].get("internalDate", "0")) / 1000,
-                        tz=timezone.utc,
+                        tz=UTC,
                     ) if messages else None,
                     metadata={"mailbox": user_email},
                 )
@@ -278,10 +278,11 @@ class GmailConnector(BaseConnector):
                     )
                     snippet = thread_meta.get("snippet", "")
                     subject = ""
-                    for h in thread_meta.get("messages", [{}])[0].get("payload", {}).get("headers", []):
+                    first_payload = thread_meta.get("messages", [{}])[0].get("payload", {})
+                    for h in first_payload.get("headers", []):
                         if h["name"].lower() == "subject":
                             subject = h["value"]
-                    
+
                     if not self._matches_keywords(f"{subject} {snippet}", keywords):
                         continue
                 except Exception:
@@ -320,16 +321,23 @@ class GmailConnector(BaseConnector):
         messages = []
         participants: set[str] = set()
         for msg in data.get("messages", []):
-            headers = {h["name"].lower(): h["value"] for h in msg.get("payload", {}).get("headers", [])}
+            headers = {
+                h["name"].lower(): h["value"]
+                for h in msg.get("payload", {}).get("headers", [])
+            }
             body = ""
             payload = msg.get("payload", {})
             if payload.get("body", {}).get("data"):
                 import base64
-                body = base64.urlsafe_b64decode(payload["body"]["data"]).decode("utf-8", errors="replace")
+                body = base64.urlsafe_b64decode(payload["body"]["data"]).decode(
+                    "utf-8", errors="replace"
+                )
             elif payload.get("parts"):
                 for part in payload["parts"]:
                     if part.get("mimeType") == "text/plain" and part.get("body", {}).get("data"):
-                        body = base64.urlsafe_b64decode(part["body"]["data"]).decode("utf-8", errors="replace")
+                        body = base64.urlsafe_b64decode(part["body"]["data"]).decode(
+                            "utf-8", errors="replace"
+                        )
                         break
 
             from_addr = headers.get("from", "")

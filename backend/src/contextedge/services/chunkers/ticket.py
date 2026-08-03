@@ -33,9 +33,8 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-from contextedge.services.chunkers.base import ChunkSpec, Chunker
+from contextedge.services.chunkers.base import ChunkSpec
 from contextedge.services.chunkers.fallback import FallbackChunker
-
 
 # Fields the connectors stamp on the canonical payload that we want
 # in chunk metadata. Mirrors what the connectors emit (see

@@ -27,6 +27,7 @@ async def test_transition_to_approved_publishes_current_version():
         current_version_id=version_id,
         approver_user_id=None,
         last_validated_at=None,
+        embedding=None,
     )
     version = SimpleNamespace(
         id=version_id,
@@ -43,6 +44,7 @@ async def test_transition_to_approved_publishes_current_version():
     with (
         patch("contextedge.services.playbook_service.append_operational_event", AsyncMock()) as event_mock,
         patch("contextedge.services.playbook_service.promote_playbook_memory", AsyncMock()) as promote_mock,
+        patch("contextedge.services.playbook_embedding.embed_playbook", AsyncMock()) as embed_mock,
     ):
         out = await transition_playbook(db, playbook, "approved", actor_id)
 
@@ -55,6 +57,43 @@ async def test_transition_to_approved_publishes_current_version():
     db.flush.assert_awaited()
     event_mock.assert_awaited_once()
     promote_mock.assert_awaited_once()
+    # NULL embedding at approve time (pre-0035 row or transient embed
+    # failure) is repaired with the version being approved.
+    embed_mock.assert_awaited_once_with(db, playbook, version)
+
+
+@pytest.mark.asyncio
+async def test_transition_to_approved_skips_embed_when_already_present():
+    version_id = uuid4()
+    playbook = SimpleNamespace(
+        id=uuid4(),
+        tenant_id=uuid4(),
+        lifecycle_state="under_review",
+        current_version_id=version_id,
+        approver_user_id=None,
+        last_validated_at=None,
+        embedding=[0.1] * 3072,
+    )
+    version = SimpleNamespace(
+        id=version_id,
+        playbook_id=playbook.id,
+        published_at=None,
+        published_by=None,
+    )
+    db = SimpleNamespace(
+        get=AsyncMock(return_value=version),
+        add=Mock(),
+        flush=AsyncMock(),
+    )
+
+    with (
+        patch("contextedge.services.playbook_service.append_operational_event", AsyncMock()),
+        patch("contextedge.services.playbook_service.promote_playbook_memory", AsyncMock()),
+        patch("contextedge.services.playbook_embedding.embed_playbook", AsyncMock()) as embed_mock,
+    ):
+        await transition_playbook(db, playbook, "approved", uuid4())
+
+    embed_mock.assert_not_awaited()  # no provider spend on the human path
 
 
 @pytest.mark.asyncio
@@ -229,7 +268,7 @@ async def test_transition_invalidates_runtime_match_cache_for_same_tenant():
     playbook = SimpleNamespace(
         id=uuid4(), tenant_id=tenant_a, lifecycle_state="under_review",
         current_version_id=uuid4(), approver_user_id=None,
-        last_validated_at=None,
+        last_validated_at=None, embedding=[0.0],
     )
     version = SimpleNamespace(
         id=playbook.current_version_id, playbook_id=playbook.id,
@@ -272,7 +311,7 @@ async def test_transition_without_redis_still_works():
     playbook = SimpleNamespace(
         id=uuid4(), tenant_id=uuid4(), lifecycle_state="under_review",
         current_version_id=uuid4(), approver_user_id=None,
-        last_validated_at=None,
+        last_validated_at=None, embedding=[0.0],
     )
     version = SimpleNamespace(
         id=playbook.current_version_id, playbook_id=playbook.id,

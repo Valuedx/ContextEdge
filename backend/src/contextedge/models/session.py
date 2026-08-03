@@ -159,7 +159,11 @@ class CaseLink(Base):
         nullable=False,
         index=True,
     )
-    canonical_case_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    canonical_case_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        nullable=False,
+        index=True,
+    )
     system: Mapped[str] = mapped_column(String(100), nullable=False)
     external_id: Mapped[str] = mapped_column(String(500), nullable=False)
     evidence_id: Mapped[uuid.UUID | None] = mapped_column(

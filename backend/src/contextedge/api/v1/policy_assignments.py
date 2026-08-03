@@ -16,7 +16,9 @@ from contextedge.services.policy_assignment import assert_policy_assignment
 router = APIRouter()
 
 
-def _assignment_response(resource_type: str, resource_id: UUID, policy_type: str, policy_id: UUID) -> PolicyAssignmentResponse:
+def _assignment_response(
+    resource_type: str, resource_id: UUID, policy_type: str, policy_id: UUID
+) -> PolicyAssignmentResponse:
     return PolicyAssignmentResponse(
         resource_type=resource_type,
         resource_id=resource_id,
@@ -79,7 +81,9 @@ async def list_policy_assignments(
         if resource_id and resource_type == "evidence":
             stmt = stmt.where(EvidenceItem.id == resource_id)
         for row in (await db.execute(stmt)).scalars().all():
-            assignments.append(_assignment_response("evidence", row.id, "access", row.access_policy_id))
+            assignments.append(
+                _assignment_response("evidence", row.id, "access", row.access_policy_id)
+            )
 
     if resource_type in (None, "source"):
         stmt = select(Source).where(Source.tenant_id == user.tenant_id)
@@ -87,9 +91,15 @@ async def list_policy_assignments(
             stmt = stmt.where(Source.id == resource_id)
         for row in (await db.execute(stmt)).scalars().all():
             if row.classification_policy_id:
-                assignments.append(_assignment_response("source", row.id, "classification", row.classification_policy_id))
+                assignments.append(
+                    _assignment_response(
+                        "source", row.id, "classification", row.classification_policy_id
+                    )
+                )
             if row.retention_policy_id:
-                assignments.append(_assignment_response("source", row.id, "retention", row.retention_policy_id))
+                assignments.append(
+                    _assignment_response("source", row.id, "retention", row.retention_policy_id)
+                )
 
     if resource_type in (None, "playbook"):
         stmt = select(Playbook).where(
@@ -99,7 +109,9 @@ async def list_policy_assignments(
         if resource_id and resource_type == "playbook":
             stmt = stmt.where(Playbook.id == resource_id)
         for row in (await db.execute(stmt)).scalars().all():
-            assignments.append(_assignment_response("playbook", row.id, "approval", row.approval_policy_id))
+            assignments.append(
+                _assignment_response("playbook", row.id, "approval", row.approval_policy_id)
+            )
 
     return assignments
 
@@ -121,7 +133,9 @@ async def assign_policy(
     field = _resource_policy_field(body.resource_type, body.policy_type)
     setattr(target, field, body.policy_id)
     await db.flush()
-    return _assignment_response(body.resource_type, body.resource_id, body.policy_type, body.policy_id)
+    return _assignment_response(
+        body.resource_type, body.resource_id, body.policy_type, body.policy_id
+    )
 
 
 @router.delete("", response_model=PolicyAssignmentResponse)

@@ -1,9 +1,9 @@
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Query, status
-from sqlalchemy import func, select
+from sqlalchemy import select
 
-from contextedge.deps import AuthUser, DbSession, require_role
+from contextedge.deps import AuthUser, DbSession
 from contextedge.middleware.audit import log_audit_event
 from contextedge.models.tenant import Tenant
 from contextedge.schemas.tenant import TenantCreate, TenantResponse, TenantUpdate
@@ -19,7 +19,9 @@ async def list_tenants(
     offset: int = Query(0, ge=0),
 ):
     user.require_role("platform_super_admin")
-    result = await db.execute(select(Tenant).limit(limit).offset(offset).order_by(Tenant.created_at.desc()))
+    result = await db.execute(
+        select(Tenant).limit(limit).offset(offset).order_by(Tenant.created_at.desc())
+    )
     return result.scalars().all()
 
 

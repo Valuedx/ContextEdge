@@ -152,12 +152,12 @@ def test_all_migrated_prompt_families_registered():
     # identity defaults to v2 since the layered-resolver shipment (v1 stays
     # registered for tenants pinned to it); identity_adjudication is new.
     expected_defaults = {
-        "episode": "v1",
-        "decision": "v1",
+        "episode": "v3",
+        "decision": "v2",
         "identity": "v2",
         "identity_adjudication": "v1",
-        "pattern": "v1",
-        "playbook": "v1",
+        "pattern": "v2",
+        "playbook": "v2",
         "contradiction": "v1",
     }
     for name, default_version in expected_defaults.items():
@@ -170,7 +170,7 @@ def test_all_migrated_prompt_families_registered():
     ("module_path", "entry", "expected_name", "expected_version"),
     [
         ("contextedge.ai.extractors.identity_extractor", "extract_identities", "identity", "v2"),
-        ("contextedge.ai.extractors.decision_extractor", "extract_decisions", "decision", "v1"),
+        ("contextedge.ai.extractors.decision_extractor", "extract_decisions", "decision", "v2"),
     ],
 )
 def test_migrated_extractors_forward_prompt_identity(
@@ -222,7 +222,7 @@ def test_episode_extractor_forwards_prompt_identity():
         ))
 
     assert captured.get("prompt_name") == "episode"
-    assert captured.get("prompt_version") == "v1"
+    assert captured.get("prompt_version") == "v3"
 
 
 def test_relevance_classifier_passes_prompt_version_to_llm():

@@ -171,7 +171,7 @@
   <h1>From raw tickets to an operational memory graph</h1>
   <p class="lede">
     ContextEdge watches your company's support tools (ServiceNow, Jira Service
-    Management, Gmail, Microsoft Teams), remembers every incident, learns which
+    Management, SapphireIMS, Gmail, Microsoft Teams), remembers every incident, learns which
     problems repeat, and hands that memory — with governance — to humans and AI
     agents. This page explains how, using one real incident followed end to end.
   </p>
@@ -293,6 +293,7 @@ flowchart LR
   subgraph Sources["External tools"]
     SN[ServiceNow]
     JR[Jira SM]
+    SI[SapphireIMS]
     GM[Gmail]
     TM[MS Teams]
   end
@@ -312,7 +313,7 @@ flowchart LR
     G["Context graph<br/>projection"]
     X["Governed execution<br/>approvals · audit"]
   end
-  SN & JR & GM & TM --> C
+  SN & JR & SI & GM & TM --> C
   EP & PA & PB --> G
   N --> S
   G --> A["MAF agents / dashboard"]
@@ -385,10 +386,22 @@ flowchart LR
   <p>
     Correlation asks: do these belong together? Both reference case
     <code>INC0007421</code> → a deterministic <b>case link</b> at confidence 1.0.
-    (If only a shared device inside a 7-day window connected them, the link
-    would be a cautious 0.65–0.75. A shared <em>person</em> alone creates no
-    link at all — John Smith touching two unrelated tickets months apart must
-    never glue them together.)
+    A ticket number quoted in a Teams message or email creates a
+    <b>case membership</b> for that evidence (proof it relates to the case —
+    never that every ticket quoted together is one case), and a Teams
+    <em>reply</em> inherits its parent message's case unless the reply says
+    otherwise ("different issue&hellip;"). If only a shared device connected
+    them inside a 7-day window, the link is rarity-weighted: a device seen in
+    a handful of items scores 0.75–0.85; a common one 0.65; a <em>hub</em>
+    entity linked to hundreds of items ("corporate network") creates no link
+    at all. A shared <em>person</em> alone never does either — John Smith
+    touching two unrelated tickets months apart must never glue them
+    together. The thread itself also carries state: once one message
+    clearly names the ticket, the whole conversation is "about" that
+    case and later replies join it without repeating the number. Saying
+    "correction — wrong ticket" un-links what the earlier message
+    claimed; saying "not related" blocks the link from coming back; and
+    an edited or deleted message stops counting for what it used to say.
   </p>
   <pre class="mermaid">
 flowchart LR
@@ -403,9 +416,23 @@ flowchart LR
   EV1 -. "correlation: case_link_match (1.0)" .- EV2
   linkStyle 4 stroke:#0e7c66,stroke-width:3px
 </pre>
+  <pre class="mermaid">
+flowchart TD
+  M1["10:00 — 'VPN logins are failing again'"] --> M2
+  M2["10:02 — 'tracking under INC0007421'"] --> M3
+  M3["10:05 — 'restarting the auth service'"] --> M4
+  M4["10:09 — 'different issue — is the<br/>ordering DB also slow?'"]
+  TOPIC(["Thread topic: INC0007421<br/>set by the one clear mention"])
+  M2 == "sets the topic" ==> TOPIC
+  TOPIC -. "later messages inherit it" .-> M3
+  TOPIC -. "✖ blocked — the message says<br/>it's a different issue" .-> M4
+</pre>
   <div class="refs"><b>What wrote this</b>
     <span class="file">services/correlation_service.py</span>
     (<code>correlate_evidence_item</code>: case/thread refs first, then gated identity co-occurrence)
+    <span class="file">services/ticket_bridge_service.py</span>
+    (ticket-number memberships, reply inheritance, corrections, negative evidence)
+    <span class="file">services/thread_topic_service.py</span> (thread topics)
   </div>
 </div>
 
@@ -414,10 +441,16 @@ flowchart LR
   <span class="stage-tag">Stage 3 · Reconstruct the episode</span>
   <h3>Correlated evidence becomes one incident story</h3>
   <p>
-    An LLM reads the correlated cluster and writes the story: symptom
+    First the <b>cluster resolver</b> walks case links, ticket
+    memberships, and correlation edges (max 3 hops, 50 items, a 30-day
+    window, legal-hold and redaction fences applied in SQL) to assemble the
+    full evidence set — and reconstruction is <em>debounced</em>, waiting for
+    a burst of messages to settle instead of re-writing the story on every
+    reply. Then an LLM reads the cluster and writes the story: symptom
     ("all VPN logins failing"), root cause ("VPN certificate expired on
     vpn-gw-east-01"), resolution ("renewed certificate, restarted auth
-    service"). That story is an <b>Episode</b> node, wired to its proof with
+    service"). That story is an <b>Episode</b> node that cites which specific
+    evidence backs each step, wired to its proof with
     <code>derived_from</code> edges and to the systems it touched with
     <code>affects</code> edges. A human reviewer approves it before it can
     teach anything downstream.
@@ -434,6 +467,7 @@ flowchart TD
   classDef new fill:#0e7c66,color:#ffffff,stroke:#0e7c66
 </pre>
   <div class="refs"><b>What wrote this</b>
+    <span class="file">services/episode_cluster_service.py</span>
     <span class="file">services/episode_service.py</span>
     <span class="file">ai/extractors/episode_extractor.py</span>
     <span class="file">graph/builder.py</span> (<code>build_episode_graph</code>)
@@ -450,7 +484,15 @@ flowchart TD
     similar) clusters together. A <b>Pattern</b> node is born —
     "Recurring VPN auth failures from expired certificates" — with
     <code>clusters</code> edges to both episodes. More recurrences raise its
-    confidence.
+    confidence. Recurrence is also recognized by shape: every approved
+    episode gets an <b>issue signature</b> — what broke, which part, and
+    how — so when July's episode matches March's fingerprint, the new
+    case gets a <code>recurrence</code> pointer to the old one: "we have
+    seen this before, here is the precedent". The two incidents stay
+    separate cases. And when a new message merely <em>reads</em> like an
+    old incident and shares a rarely-seen device with it, that lands as
+    a suggestion on the Review Queues page — wording similarity alone
+    never links anything; a human always decides.
   </p>
   <pre class="mermaid">
 flowchart TD
@@ -598,7 +640,14 @@ flowchart LR
   <span class="file">services/redaction_service.py</span>
   <span class="file">services/chunkers/</span>
   — order matters: the content hash is computed <em>before</em> redaction so
-  dedup survives redaction-rule changes.
+  dedup survives redaction-rule changes. Chat and email get one extra
+  label here — the <em>message function</em> (is this a status update, a
+  question, a correction, or "different issue"?) that the linking rules
+  consult before connecting anything. And every AI call along this line
+  runs inside guardrails: a per-tenant daily budget, a hard timeout, a
+  circuit breaker that stops hammering a failing provider, an optional
+  fallback model, and fencing that makes evidence text enter prompts as
+  data — never as instructions.
 </div>
 
 <h3>5.2 Identity resolution — the layered resolver</h3>
@@ -631,7 +680,12 @@ flowchart TD
       caps at 2,000 dims, so all similarity queries go through a
       <code>halfvec</code> expression index —
       <span class="file">search/vector_ops.py</span>,
-      <span class="file">alembic/versions/0032_halfvec_hnsw_indexes.py</span>.</li>
+      <span class="file">alembic/versions/0032_halfvec_hnsw_indexes.py</span>.
+      Search is <em>chunk-first</em>: it oversamples chunk-level matches,
+      diversifies them (MMR), and rolls up to one hit per parent evidence
+      scored by its best chunk — so the result points at the relevant
+      paragraph, not just the document —
+      <span class="file">search/chunk_rollup.py</span>.</li>
   <li><b>Hybrid ranking</b> combines both plus graph and identity signals to
       recommend playbooks — <span class="file">search/hybrid_ranker.py</span>.</li>
 </ul>
@@ -678,10 +732,20 @@ sequenceDiagram
 <h2 id="maf">6 · Plugging into MAF agents</h2>
 <p>
   Microsoft Agent Framework (MAF) agents are the primary consumers of this
-  memory. Integration is <b>one plugin, two mechanisms</b> — and the important
-  design fact for freshers: <b>the graph tool is read-only</b>. Agents read
-  memory through it; any <em>action</em> goes through the governed execution
-  API with its approvals.
+  memory. Integration is <b>one plugin, two mechanisms</b> — a memory provider
+  that injects context every turn, and read-only tools the model can call
+  mid-reasoning: <code>query_context_graph</code> (the graph slice, including
+  playbook steps), <code>cmdb_topology</code> (live ±1-hop CI neighborhood,
+  served from a demand-driven cache), <code>assess_change_risk</code>
+  (deterministic per-CI risk profile from blamed-change history, incident
+  pressure, and blast radius), and <code>assess_fix_applicability</code>
+  (given a machine, which known fixes actually pass their requirement
+  checklist for it — and whether a human must review first; an empty
+  answer means "no validated precedent", which the agent must not paper
+  over). The important design fact for freshers:
+  <b>every tool is read-only</b>. Agents read memory through them; any
+  <em>action</em> goes through the governed execution API with its
+  approvals.
 </p>
 <pre class="mermaid">
 flowchart LR
@@ -690,7 +754,7 @@ flowchart LR
   end
   subgraph Plugin["ContextGraphMAFPlugin"]
     PR["1 · Memory provider<br/>(before_run: auto-inject<br/>context each turn)"]
-    TL["2 · query_context_graph<br/>(read-only tool the model<br/>can call mid-reasoning)"]
+    TL["2 · Read-only tools<br/>query_context_graph · cmdb_topology<br/>assess_change_risk · assess_fix_applicability"]
   end
   CE["ContextEdge<br/>graph projection<br/>(maf.v1 profile)"]
   PR --> CE
@@ -744,6 +808,8 @@ agent = Agent(
   <dt>Evidence</dt><dd>One raw piece of proof — a ticket, a chat thread, an email — redacted and embedded.</dd>
   <dt>Identity</dt><dd>One canonical person/device/service, with all its aliases attached.</dd>
   <dt>Correlation</dt><dd>A link saying two pieces of evidence concern the same incident.</dd>
+  <dt>Case membership</dt><dd>Proof that one evidence item relates to one case (e.g. it quotes the ticket number) — deliberately weaker than merging cases.</dd>
+  <dt>Correlation suggestion</dt><dd>A semantically-similar, corroborated evidence pair queued for human review; only an accepted suggestion becomes a correlation edge.</dd>
   <dt>Episode</dt><dd>One complete incident story (symptom → root cause → fix), human-approved.</dd>
   <dt>Pattern</dt><dd>A recurring problem, detected by clustering similar episodes.</dd>
   <dt>Playbook</dt><dd>The approved, versioned, step-by-step fix for a pattern — with risk tiers.</dd>
@@ -758,9 +824,9 @@ agent = Agent(
 
 <h2 style="margin-top: 40px;">The entire schema, in plain English</h2>
 <p class="lede" style="font-size: 1.05rem;">
-  ContextEdge stores everything in one PostgreSQL database — 61 tables, defined
+  ContextEdge stores everything in one PostgreSQL database — 73 tables, defined
   in <span class="file">models/</span> and evolved through numbered migrations
-  in <span class="file">alembic/versions/</span> (currently 0001–0034). Below is
+  in <span class="file">alembic/versions/</span> (currently 0001–0048). Below is
   every table, grouped by what it's <em>for</em>, described the way you'd
   explain it to a new teammate. Column names in <code>code</code> are the ones
   worth remembering.
@@ -810,7 +876,7 @@ erDiagram
 <div class="tablewrap"><table>
   <tr><th>Table</th><th>Plain English</th></tr>
   <tr><td class="tname">raw_evidence_objects</td><td>The untouched original payload exactly as the connector fetched it (big ones live in object storage). Kept so nothing is ever lost in translation.</td></tr>
-  <tr><td class="tname">evidence_items</td><td>The cleaned, working copy: redacted text, a 3,072-dim <code>embedding</code> for similarity search, a <code>content_hash</code> for dedup (computed <em>before</em> redaction, on purpose), relevance classification, and lifecycle fields for retention (<code>relevance_state</code>, legal hold).</td></tr>
+  <tr><td class="tname">evidence_items</td><td>The cleaned, working copy: redacted text, a 3,072-dim <code>embedding</code> for similarity search, a <code>content_hash</code> for dedup (computed <em>before</em> redaction, on purpose), relevance classification, lifecycle fields for retention (<code>relevance_state</code>, legal hold), and — for chat and email — <code>message_function</code>: what the message is <em>doing</em> (reporting status, asking a question, correcting an earlier message, or saying "this is a different issue"). The correlation rules read this label before linking anything.</td></tr>
   <tr><td class="tname">evidence_chunks</td><td>Long bodies split into small, individually-embedded pieces so search can find the relevant paragraph of a 20-page ticket, not just its title.</td></tr>
   <tr><td class="tname">threads</td><td>Conversation containers (a Teams thread, an email chain) so replies stay grouped with their root message.</td></tr>
   <tr><td class="tname">attachment_artifacts</td><td>Text extracted from attachments (PDFs, logs), linked back to their evidence item.</td></tr>
@@ -840,7 +906,13 @@ erDiagram
 <div class="tablewrap"><table>
   <tr><th>Table</th><th>Plain English</th></tr>
   <tr><td class="tname">case_links</td><td>Maps external case identifiers (ticket number <code>INC0007421</code>, a thread id) to one internal <code>canonical_case_id</code>, so evidence from different tools about the same incident meets in the middle.</td></tr>
-  <tr><td class="tname">correlation_edges</td><td>"Evidence A and evidence B concern the same incident" — with a <code>correlation_type</code> and confidence: 1.0 for a shared case number, 0.5–0.75 for shared systems inside a 7-day window. A shared person alone never creates one.</td></tr>
+  <tr><td class="tname">correlation_edges</td><td>"Evidence A and evidence B concern the same incident" — with a <code>correlation_type</code> and confidence: 1.0 for a shared case number; rarity-weighted 0.65–0.85 for shared systems inside a 7-day window (a rarely-seen device is a strong signal; a hub entity linked to hundreds of items creates <em>no</em> edge). A shared person alone never creates one.</td></tr>
+  <tr><td class="tname">case_identifiers</td><td>The authoritative registry mapping a ticket's human-readable number (<code>INC0010427</code>, <code>ITOPS-101</code>) to its canonical case — written when the ticket itself is ingested.</td></tr>
+  <tr><td class="tname">evidence_case_memberships</td><td>"This message relates to that case" — one row per link, labelled with <em>how</em> the link was made: the ticket itself (<code>primary_case</code>), a quoted ticket number (<code>explicit_reference</code>), a reply to a linked message (<code>reply_inheritance</code>), the thread's current topic (<code>thread_topic</code>), a passing mention in a report (<code>mentioned_only</code>), a similar past incident (<code>recurrence</code>), or membership in a reviewer-approved fleet incident (<code>fleet_member</code>). A message saying "this is NOT related to INC0010427" writes a <em>negative</em> row that stops the system from ever re-linking that pair on its own. Nothing in this table ever merges two cases into one.</td></tr>
+  <tr><td class="tname">pending_identifier_mentions</td><td>Ticket numbers quoted <em>before</em> their ticket was ingested — reconciled the moment the identifier registers, so bridging is ingestion-order independent.</td></tr>
+  <tr><td class="tname">correlation_suggestions</td><td>Evidence pairs that <em>read</em> like the same problem (embedding similarity ≥ 0.7) and also share a rarely-seen device or a case — shown to a human on the Review Queues page. Accepting creates a real correlation edge; rejecting is remembered forever, so the pair is never suggested again.</td></tr>
+  <tr><td class="tname">thread_topics</td><td>What a chat thread is currently <em>about</em>. Set only when one message clearly names exactly one ticket (or a correction changes it) — never by digests or bots. Once set, later messages in the thread inherit the case without naming it. A thread discussing an incident that has no ticket yet holds a <em>provisional</em> topic that connects up automatically when the ticket finally arrives.</td></tr>
+  <tr><td class="tname">fleet_group_suggestions</td><td>Thirty laptops failing right after the same Windows patch is really ONE incident — but deciding that is a human call. When ≥3 incidents inside a week all blame the same change, the system <em>suggests</em> a group; a reviewer's accept creates the parent case and attaches every member. A rejected group stays rejected, even if the change is re-ingested later.</td></tr>
 </table></div>
 </div>
 
@@ -848,8 +920,9 @@ erDiagram
 <h3>Group 6 · The story of one incident — episodes</h3>
 <div class="tablewrap"><table>
   <tr><th>Table</th><th>Plain English</th></tr>
-  <tr><td class="tname">episodes</td><td>One complete incident story reconstructed from correlated evidence: title, <code>root_cause_summary</code>, <code>final_outcome</code>, its own embedding for similarity, and <code>reviewer_state</code> — an episode teaches nothing downstream until a human approves it.</td></tr>
+  <tr><td class="tname">episodes</td><td>One complete incident story reconstructed from correlated evidence: title, <code>root_cause_summary</code>, <code>final_outcome</code>, its own embedding for similarity, and <code>reviewer_state</code> — an episode teaches nothing downstream until a human approves it. When the sources <em>disagreed</em> about a fact (the ticket's close notes say one thing, the Teams thread another), both accounts are kept in <code>contradictions</code> for the reviewer to see — never silently merged into one guess.</td></tr>
   <tr><td class="tname">episode_steps</td><td>The ordered timeline inside the story: observation → hypothesis → action → verification.</td></tr>
+  <tr><td class="tname">episode_evidence_links</td><td>Which evidence each episode is actually built from, with the reason it joined the cluster ("same case", "ticket_ref:explicit_reference") — the provenance behind "why does this episode cite that message?".</td></tr>
 </table></div>
 </div>
 
@@ -925,7 +998,7 @@ erDiagram
 </pre>
 <div class="tablewrap"><table>
   <tr><th>Table</th><th>Plain English</th></tr>
-  <tr><td class="tname">execution_runs</td><td>One governed run of an approved playbook: who started it, its <code>max_safety_class</code> cap, status, and final <code>outcome</code> (validated against a fixed list; completion is refused while steps are still open).</td></tr>
+  <tr><td class="tname">execution_runs</td><td>One governed run of an approved playbook: who started it, its <code>max_safety_class</code> cap, status, and final <code>outcome</code> (validated against a fixed list; completion is refused while steps are still open). After completion, telemetry-based verification checks whether the fix actually held and stamps <code>verified</code> / <code>failed</code> / <code>unverifiable</code>.</td></tr>
   <tr><td class="tname">execution_step_runs</td><td>Each step's own record — status, inputs/outputs, <code>safety_class</code>, and whether it <code>requires_approval</code>. Unknown safety classes fail closed.</td></tr>
   <tr><td class="tname">tool_invocations</td><td>Every tool call a step made, with shadow-mode runs explicitly tagged so dry-runs never masquerade as real outcomes.</td></tr>
   <tr><td class="tname">approval_requests</td><td>The human gate for risky steps: pending → approved / denied / modified, row-locked so two admins can't double-decide, and policy-checked (approver roles, self-approval bans).</td></tr>
@@ -935,14 +1008,37 @@ erDiagram
 </div>
 
 <div class="schema-group">
-<h3>Group 13 · The operational world model — entities &amp; fixes</h3>
-<p>These tables model the IT landscape itself. The schema is ready; several
-population paths await the AutomationEdge connector (see KNOWN_GAPS).</p>
+<h3>Group 13 · The operational world model — entities, classes &amp; fixes</h3>
+<p>These tables model the IT landscape itself — and answer the question a
+fresher will hear on week one: <em>"we fixed this on one gateway; is the
+same fix safe on that other one?"</em> Entities come from ticket references
+and the demand-driven CMDB cache; the class taxonomy and the recorded
+traits (manufacturer, model, OS) let a fix carry a precise scope instead
+of a vague one. Some population paths still await the AutomationEdge
+connector (see KNOWN_GAPS).</p>
+<pre class="mermaid-lazy">
+flowchart TD
+  FIX["Known fix:<br/>'renew certificate, restart auth service'<br/>learned on vpn-gw-east-01"]
+  Q{"Does the other machine match<br/>everything this fix requires?<br/>(same gateway model · same cert setup<br/>· same error signature)"}
+  T1["vpn-gw-emea-03<br/>same model, same setup,<br/>same expired-cert error"]
+  T2["branch-fw-12<br/>a firewall — different device,<br/>different error"]
+  FIX --> Q
+  Q -- "all requirements match" --> OK["Recommend the fix<br/>(high confidence, no review needed)"]
+  Q -- "some match, some differ" --> REV["Suggest it, but a human<br/>reviews before anyone acts"]
+  Q -- "requirements not met" --> NO["No recommendation —<br/>an honest 'no precedent'<br/>beats a stretched guess"]
+  T1 -.-> OK
+  T2 -.-> NO
+</pre>
 <div class="tablewrap"><table>
   <tr><th>Table</th><th>Plain English</th></tr>
-  <tr><td class="tname">entities</td><td>Operational nouns that aren't people: a workflow (MG22), a server, a schedule — with their external system ids for exact matching.</td></tr>
+  <tr><td class="tname">entities</td><td>Operational nouns that aren't people: a workflow (MG22), a server, a schedule — with external system ids for exact matching, plus the traits the CMDB actually knows: <code>manufacturer</code>, <code>model</code>, <code>os_name</code>, <code>os_version</code>. A trait the source never provided stays empty — the system records what it knows, never what it guesses.</td></tr>
+  <tr><td class="tname">entity_classes</td><td>A small family tree of device kinds — laptop → portable endpoint → endpoint → computing device — that entities connect to with <code>instance_of</code> edges. A CI class the system does not recognize simply lands at the generic root. (Operating system is deliberately a <em>trait</em>, not a branch of the tree: a laptop is both "portable" and "Windows" at once.)</td></tr>
+  <tr><td class="tname">issue_signatures</td><td>The generalized shape of a problem — what stopped working, which part failed, and how ("wireless connectivity / Wi-Fi driver / adapter disappears after resume"). Extracted only from human-approved episodes, so two incidents on different machines can be recognized as the SAME kind of problem even when their logs are worded differently.</td></tr>
+  <tr><td class="tname">episode_issue_signatures</td><td>Which episodes share which problem shape — episodes sharing one form a "this keeps happening" chain.</td></tr>
   <tr><td class="tname">error_signatures</td><td>A recognizable error fingerprint ("AUTH_CERT_EXPIRED") that can be matched against new incidents and linked to its pattern.</td></tr>
   <tr><td class="tname">fix_patterns</td><td>A known remedy for an error signature, pointing at the recommended playbook, with success/failure counts.</td></tr>
+  <tr><td class="tname">fix_applicability_rules</td><td>The checklist a fix must pass before being recommended for another machine: which device class it targets, and which traits are <em>required</em> (same Wi-Fi adapter, same driver version…) or <em>forbidden</em> (physically broken hardware). Every required item must actually match — a machine missing one is rejected, never stretched. The answer comes back as one of seven explicit levels, from "exact same machine" down to "only the words look similar".</td></tr>
+  <tr><td class="tname">fix_cohort_stats</td><td>Success and failure counted separately per device model, per device class, and per device family — because "worked 9 of 10 times on this laptop model, 0 of 4 on desktops" is three different stories, not one average. Consistent success can propose widening a fix's scope, but only a human approves the widening; a single failure blocks it automatically.</td></tr>
   <tr><td class="tname">case_outcomes</td><td>How a case ultimately ended, in structured form.</td></tr>
   <tr><td class="tname">case_state_transitions</td><td>The state history of a case over time.</td></tr>
   <tr><td class="tname">case_outcome_fix_patterns</td><td>The feedback loop: which fix a given outcome validated or invalidated — this is how the system learns which remedies actually work.</td></tr>

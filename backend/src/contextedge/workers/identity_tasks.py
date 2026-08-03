@@ -25,7 +25,9 @@ from contextedge.workers.celery_app import celery_app
 logger = structlog.get_logger()
 
 
-def _rewrite_identity_refs(refs: dict | None, duplicate_id: str, primary: CanonicalIdentity) -> dict | None:
+def _rewrite_identity_refs(
+    refs: dict | None, duplicate_id: str, primary: CanonicalIdentity
+) -> dict | None:
     """Replace duplicate identity references with the primary, deduplicating.
 
     Returns the rewritten dict, or None when nothing referenced the

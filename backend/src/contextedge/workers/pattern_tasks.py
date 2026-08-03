@@ -2,16 +2,16 @@ import uuid
 
 import structlog
 from sqlalchemy import select
-
 from sqlalchemy.orm import selectinload
-from contextedge.ai.generators import playbook_generator
+
 from contextedge.ai.extractors.pattern_extractor import synthesize_pattern
+from contextedge.ai.generators import playbook_generator
 from contextedge.ai.provider import generate_embedding
+from contextedge.graph.builder import ensure_edge, link_node_to_identities
 from contextedge.models.episode import Episode
 from contextedge.models.pattern import NegativeKnowledgeItem, Pattern, PatternEvidenceLink
 from contextedge.models.playbook import Playbook
 from contextedge.models.tenant import User
-from contextedge.graph.builder import ensure_edge, link_node_to_identities
 from contextedge.services.identity_service import identity_ids_from_refs
 from contextedge.services.pattern_service import create_pattern_from_episodes
 from contextedge.services.playbook_service import create_playbook_version
@@ -66,23 +66,21 @@ async def _linked_episode_ids(db, tenant_id: uuid.UUID) -> set[uuid.UUID]:
     return {row[0] for row in r.all() if row[0]}
 
 
-@celery_app.task(
-    bind=True,
-    max_retries=2,
-    default_retry_delay=120,
-    name="pattern.cluster_episodes",
-)
-def cluster_episodes(self, domain_id: str, tenant_id: str):
-    """Group approved episodes in a domain into semantic patterns using vector similarity."""
+def _domain_predicate(did: uuid.UUID | None):
+    """Strict per-domain mining scope. A domain pass sees ONLY that
+    domain's episodes; the global pass (did=None) sees ONLY tenant-global
+    (NULL-domain) episodes. NULL episodes are deliberately NOT folded
+    into domain passes: whichever domain's pass ran first would capture
+    them into its pattern (episodes link once), making the tagging
+    arbitrary — the exact bug this replaces."""
+    return Episode.domain_id == did if did is not None else Episode.domain_id.is_(None)
 
-    async def work(db):
-        tid = uuid.UUID(tenant_id)
-        did = uuid.UUID(domain_id)
 
+async def _cluster(db, tid: uuid.UUID, did: uuid.UUID | None) -> dict:
         logger.info(
             "cluster_episodes_started",
             tenant_id=str(tid),
-            domain_id=str(did),
+            domain_id=str(did) if did else "global",
         )
 
         # 0. Repair: backfill embeddings for ALL approved episodes in the tenant
@@ -122,13 +120,18 @@ def cluster_episodes(self, domain_id: str, tenant_id: str):
         linked = await _linked_episode_ids(db, tid)
         logger.info("cluster_episodes_linked", linked_count=len(linked))
 
-        # 2. Fetch ALL unlinked approved episodes with embeddings across the tenant.
-        # Domain filter is intentionally removed here — we cluster at tenant level
-        # and tag the resulting pattern with the requested domain_id.
+        # 2. Fetch unlinked approved episodes with embeddings IN THIS
+        # DOMAIN SCOPE only. Mining used to run tenant-wide and stamp the
+        # result with the requested domain — which surfaced domain B's
+        # episode content in a domain-A pattern through the projection's
+        # domain predicate. Patterns are synthesized CONTENT, so the
+        # cluster must be domain-homogeneous (create_pattern_from_episodes
+        # enforces the same rule as a second layer).
         r = await db.execute(
             select(Episode)
             .where(
                 Episode.tenant_id == tid,
+                _domain_predicate(did),
                 Episode.reviewer_state == "approved",
                 Episode.embedding.is_not(None),
                 Episode.id.not_in(tuple(linked)) if linked else True,
@@ -138,7 +141,7 @@ def cluster_episodes(self, domain_id: str, tenant_id: str):
         )
         candidates = list(r.scalars().all())
         logger.info("cluster_episodes_candidates", count=len(candidates))
-        
+
         assigned_ids = set()
         created = 0
         total_considered = len(candidates)
@@ -146,12 +149,15 @@ def cluster_episodes(self, domain_id: str, tenant_id: str):
         for ep in candidates:
             if ep.id in assigned_ids:
                 continue
-            
+
             # Find similar episodes using vector distance (threshold 0.20)
+            # — same domain scope as the candidates: similarity must never
+            # pull another domain's episode into this cluster.
             similar_r = await db.execute(
                 select(Episode)
                 .where(
                     Episode.tenant_id == tid,
+                    _domain_predicate(did),
                     Episode.reviewer_state == "approved",
                     Episode.embedding.is_not(None),
                     Episode.id.not_in(tuple(linked)) if linked else True,
@@ -165,7 +171,7 @@ def cluster_episodes(self, domain_id: str, tenant_id: str):
             # better to create a pattern than silently drop a valid approved episode.
             if len(cluster) == 0:
                 cluster = [ep]
-            
+
             # Form a pattern using AI synthesis for high-fidelity results
             try:
                 # Fetch steps for the cluster episodes to provide context to the LLM
@@ -175,7 +181,7 @@ def cluster_episodes(self, domain_id: str, tenant_id: str):
                     .options(selectinload(Episode.steps))
                 )
                 cluster_with_steps = list(synth_r.scalars().all())
-                
+
                 # Prepare data structure for the pattern extractor
                 ep_data = [
                     {
@@ -189,7 +195,7 @@ def cluster_episodes(self, domain_id: str, tenant_id: str):
 
                 # Call AI to synthesize pattern from the cluster
                 synthesis = await synthesize_pattern(ep_data, tenant_id=tid, db=db)
-                
+
                 await create_pattern_from_episodes(
                     db,
                     tenant_id=tid,
@@ -219,13 +225,35 @@ def cluster_episodes(self, domain_id: str, tenant_id: str):
                 )
             created += 1
             assigned_ids.update(e.id for e in cluster)
-            
-        return {"patterns_created": created, "episodes_considered": total_considered, "embeddings_repaired": repaired}
 
+        return {
+            "patterns_created": created,
+            "episodes_considered": total_considered,
+            "embeddings_repaired": repaired,
+        }
+
+
+@celery_app.task(
+    bind=True,
+    max_retries=2,
+    default_retry_delay=120,
+    name="pattern.cluster_episodes",
+)
+def cluster_episodes(self, domain_id: str | None, tenant_id: str):
+    """Group approved episodes into semantic patterns, strictly within one
+    domain scope. ``domain_id=None`` runs the global pass over
+    tenant-global (NULL-domain) episodes and produces NULL-domain
+    patterns."""
+    tid = uuid.UUID(tenant_id)
+    did = uuid.UUID(domain_id) if domain_id else None
     try:
-        return run_async(work)
+        return run_async(lambda db: _cluster(db, tid, did))
     except Exception as exc:
-        logger.exception("pattern.cluster_failed", domain_id=domain_id, error=str(exc))
+        logger.exception(
+            "pattern.cluster_failed",
+            domain_id=domain_id or "global",
+            error=str(exc),
+        )
         raise self.retry(exc=exc) from exc
 
 
@@ -338,7 +366,12 @@ def generate_playbook_candidate(self, pattern_id: str, tenant_id: str):
             "playbook_confidence": float(llm.get("playbook_confidence") or 0.5),
             "execution_confidence_guidance": llm.get("execution_confidence_guidance"),
         }
-        await create_playbook_version(db, playbook, version_data)
+        version = await create_playbook_version(db, playbook, version_data)
+        # Semantic fingerprint so the agent seed resolver can match this
+        # playbook by meaning, not just title words. Best-effort.
+        from contextedge.services.playbook_embedding import embed_playbook
+
+        await embed_playbook(db, playbook, version)
         identity_ids = []
         for episode in episodes:
             identity_ids.extend(identity_ids_from_refs(episode.entity_refs))

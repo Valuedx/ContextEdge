@@ -1,7 +1,7 @@
 from datetime import datetime
 from uuid import UUID
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, HTTPException, Query
 
 from contextedge.deps import AuthUser, DbSession
 from contextedge.graph.agent.contracts import AgentGraphRequest, AgentGraphSubset
@@ -29,6 +29,92 @@ async def create_agent_graph_subset(
         scope,
         invocation_mode="api",
     )
+
+
+@router.get("/cmdb-topology")
+async def cmdb_topology(
+    db: DbSession,
+    user: AuthUser,
+    ci: str = Query(
+        ...,
+        min_length=1,
+        max_length=500,
+        description="CI display name (e.g. vpn-gw-east-01) or 32-hex sys_id.",
+    ),
+):
+    """Live ±1-hop CMDB neighborhood for a CI, write-through cached into
+    entities / graph_edges; falls back to the cached view (marked stale)
+    when ServiceNow is unreachable."""
+    from contextedge.services.cmdb_topology_service import lookup_topology
+
+    return await lookup_topology(db, user.tenant_id, ci)
+
+
+@router.post("/fix-outcomes")
+async def record_fix_outcome_endpoint(
+    db: DbSession,
+    user: AuthUser,
+    fix_pattern_id: UUID,
+    ci: str = Query(..., min_length=1, max_length=500),
+    success: bool = Query(...),
+):
+    """Record a fix outcome against a CI (B5): updates per-cohort
+    counters and mints review-gated promotion candidates when the
+    ladder's thresholds are met. Scope only broadens via review."""
+    user.require_role("knowledge_manager")
+    from contextedge.services.cmdb_topology_service import resolve_ci_entity
+    from contextedge.services.fix_cohort_service import record_fix_outcome
+
+    entity = await resolve_ci_entity(db, user.tenant_id, ci)
+    if entity is None:
+        raise HTTPException(status_code=404, detail="CI not found")
+    result = await record_fix_outcome(
+        db, user.tenant_id, fix_pattern_id, entity, success
+    )
+    if result.get("error"):
+        raise HTTPException(status_code=404, detail=result["error"])
+    return result
+
+
+@router.get("/fix-applicability")
+async def fix_applicability(
+    db: DbSession,
+    user: AuthUser,
+    ci: str = Query(..., min_length=1, max_length=500),
+):
+    """Deterministic fix-applicability assessment for a CI: which known
+    fixes validate against its recorded traits, at which level of the
+    7-level ladder, and whether review is required (B4)."""
+    user.require_role("knowledge_manager")
+    from contextedge.services.cmdb_topology_service import resolve_ci_entity
+    from contextedge.services.fix_applicability_service import (
+        assess_fix_applicability,
+    )
+
+    entity = await resolve_ci_entity(db, user.tenant_id, ci)
+    if entity is None:
+        raise HTTPException(status_code=404, detail="CI not found")
+    return await assess_fix_applicability(db, user.tenant_id, entity)
+
+
+@router.get("/change-risk")
+async def change_risk(
+    db: DbSession,
+    user: AuthUser,
+    ci: str = Query(
+        ...,
+        min_length=1,
+        max_length=500,
+        description="CI display name (e.g. vpn-gw-east-01) or 32-hex sys_id.",
+    ),
+    window_days: int = Query(180, ge=1, le=730),
+):
+    """Deterministic change-risk profile for a CI from operational history:
+    change→incident blame rate, incident pressure, alert activity, and
+    cached blast radius — every factor explained."""
+    from contextedge.services.change_risk_service import assess_change_risk
+
+    return await assess_change_risk(db, user.tenant_id, ci, window_days=window_days)
 
 
 @router.get("/neighbors")

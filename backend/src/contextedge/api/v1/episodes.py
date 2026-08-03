@@ -1,6 +1,7 @@
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
-from datetime import datetime, timedelta, UTC
+import structlog
 from fastapi import APIRouter, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
@@ -19,6 +20,8 @@ from contextedge.schemas.evidence import (
     EpisodeUpdate,
     ReconstructRequest,
 )
+
+logger = structlog.get_logger()
 
 router = APIRouter()
 
@@ -208,6 +211,15 @@ async def approve_episode(episode_id: UUID, db: DbSession, user: AuthUser):
         resource_type="episode",
         resource_id=str(episode.id),
     )
+    # B3: approved stories mint their issue signature. The task re-reads
+    # the episode and no-ops unless approved, so the small dispatch-vs-
+    # commit race resolves via its retry.
+    try:
+        from contextedge.workers.signature_tasks import extract_issue_signature_task
+
+        extract_issue_signature_task.delay(str(episode.id), str(user.tenant_id))
+    except Exception:  # broker down must not fail the approval
+        logger.warning("issue_signature.dispatch_failed", episode_id=str(episode.id))
     return episode
 
 
@@ -258,7 +270,7 @@ async def trigger_manual_reconstruction(
 
     from contextedge.workers.extraction_tasks import reconstruct_episode_task
     cluster_id = ",".join([str(eid) for eid in evidence_ids])
-    
+
     # Try to determine domain_id from evidence if possible, or fallback to default
     domain_id = body.domain_id if hasattr(body, "domain_id") and body.domain_id else None
     if not domain_id:
@@ -266,7 +278,12 @@ async def trigger_manual_reconstruction(
         res = await db.execute(select(Domain.id).where(Domain.tenant_id == user.tenant_id).limit(1))
         domain_id = res.scalar_one_or_none()
 
-    task = reconstruct_episode_task.delay(cluster_id, str(user.tenant_id), domain_id=str(domain_id) if domain_id else None)
+    task = reconstruct_episode_task.delay(
+        cluster_id,
+        str(user.tenant_id),
+        domain_id=str(domain_id) if domain_id else None,
+        settle=False,  # explicit reviewer request bypasses the debounce
+    )
 
     return TaskDispatchResponse(
         status="reconstruction_queued",
@@ -276,6 +293,102 @@ async def trigger_manual_reconstruction(
             "domain_id": str(domain_id) if domain_id else None,
         },
     )
+
+
+@router.post("/{episode_id}/evidence/{evidence_id}", response_model=EpisodeResponse)
+async def add_episode_evidence(
+    episode_id: UUID, evidence_id: UUID, db: DbSession, user: AuthUser
+):
+    """Reviewer action (P0): attach evidence the cluster missed. Updates
+    both the JSONB list and the normalized provenance link."""
+    user.require_role("knowledge_manager")
+    from sqlalchemy import select as sa_select
+
+    from contextedge.models.episode import EpisodeEvidenceLink
+    from contextedge.models.evidence import EvidenceItem
+
+    episode = await db.get(Episode, episode_id)
+    if episode is None or episode.tenant_id != user.tenant_id:
+        raise HTTPException(status_code=404, detail="Episode not found")
+    evidence = await db.get(EvidenceItem, evidence_id)
+    if evidence is None or evidence.tenant_id != user.tenant_id:
+        raise HTTPException(status_code=404, detail="Evidence not found")
+
+    current = list(episode.evidence_ids or [])
+    if str(evidence_id) not in current:
+        episode.evidence_ids = current + [str(evidence_id)]
+        existing_link = (
+            await db.execute(
+                sa_select(EpisodeEvidenceLink.id).where(
+                    EpisodeEvidenceLink.episode_id == episode_id,
+                    EpisodeEvidenceLink.evidence_id == evidence_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if existing_link is None:
+            db.add(
+                EpisodeEvidenceLink(
+                    tenant_id=user.tenant_id,
+                    episode_id=episode_id,
+                    evidence_id=evidence_id,
+                    link_reason="reviewer_added",
+                )
+            )
+        await db.flush()
+    await db.commit()
+    await db.refresh(episode)
+    return episode
+
+
+@router.delete("/{episode_id}/evidence/{evidence_id}", response_model=EpisodeResponse)
+async def remove_episode_evidence(
+    episode_id: UUID, evidence_id: UUID, db: DbSession, user: AuthUser
+):
+    """Reviewer action (P0): detach evidence that does not belong to
+    this episode (mis-correlated or split-off content)."""
+    user.require_role("knowledge_manager")
+    from sqlalchemy import delete as sa_delete
+
+    from contextedge.models.episode import EpisodeEvidenceLink
+
+    episode = await db.get(Episode, episode_id)
+    if episode is None or episode.tenant_id != user.tenant_id:
+        raise HTTPException(status_code=404, detail="Episode not found")
+
+    current = list(episode.evidence_ids or [])
+    if str(evidence_id) in current:
+        episode.evidence_ids = [e for e in current if e != str(evidence_id)]
+        await db.execute(
+            sa_delete(EpisodeEvidenceLink).where(
+                EpisodeEvidenceLink.episode_id == episode_id,
+                EpisodeEvidenceLink.evidence_id == evidence_id,
+            )
+        )
+        # A7: removal is a human's "this does not belong here". When the
+        # evidence has exactly ONE active case membership, negate it so
+        # the cluster resolver cannot pull the item straight back in on
+        # the next reconstruction. Multi-case evidence is ambiguous —
+        # which case the reviewer objected to is unknowable — so only
+        # the unambiguous case is negated.
+        from sqlalchemy import select as sa_select2
+
+        from contextedge.models.case_bridge import EvidenceCaseMembership
+
+        memberships = (
+            await db.execute(
+                sa_select2(EvidenceCaseMembership).where(
+                    EvidenceCaseMembership.tenant_id == user.tenant_id,
+                    EvidenceCaseMembership.evidence_id == evidence_id,
+                    EvidenceCaseMembership.status == "active",
+                )
+            )
+        ).scalars().all()
+        if len(memberships) == 1:
+            memberships[0].status = "negative"
+        await db.flush()
+    await db.commit()
+    await db.refresh(episode)
+    return episode
 
 
 @router.delete("/{episode_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -292,6 +405,7 @@ async def delete_episode(episode_id: UUID, db: DbSession, user: AuthUser):
         raise HTTPException(status_code=404, detail="Episode not found")
 
     from sqlalchemy import delete
+
     from contextedge.models.episode import EpisodeStep
 
     # 1. Delete Episode Steps

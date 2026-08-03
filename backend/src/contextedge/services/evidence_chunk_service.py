@@ -16,8 +16,8 @@ from __future__ import annotations
 
 import hashlib
 import uuid
-from datetime import datetime, timezone
-from typing import Iterable
+from collections.abc import Iterable
+from datetime import UTC, datetime
 
 import structlog
 from sqlalchemy import delete, select
@@ -111,7 +111,7 @@ async def write_chunks(
     # Stamp the parent. ``utcnow()`` is intentionally tz-aware via
     # ``timezone.utc`` to match the rest of the codebase that stores
     # ``DateTime(timezone=True)`` columns.
-    evidence.chunked_at = datetime.now(timezone.utc)
+    evidence.chunked_at = datetime.now(UTC)
     evidence.chunk_count = len(rows)
     await db.flush()
 

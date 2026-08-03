@@ -48,7 +48,10 @@ def require_destructive_reset_allowed(script_name: str) -> None:
             app_env=settings.app_env,
             db_host=host,
         )
-        print(f"[{script_name}] destructive reset proceeding (app_env={settings.app_env}, db_host={host})")
+        print(
+            f"[{script_name}] destructive reset proceeding "
+            f"(app_env={settings.app_env}, db_host={host})"
+        )
         return
     raise DestructiveResetBlocked(
         f"{script_name} TRUNCATEs shared tables for ALL tenants and is blocked "

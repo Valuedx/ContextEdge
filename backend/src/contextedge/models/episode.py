@@ -1,13 +1,28 @@
 import uuid
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text, func, text
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+    text,
+)
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from contextedge.models.base import Base, TenantScopedMixin
 
+if TYPE_CHECKING:
+    from contextedge.models.evidence import EvidenceItem
 
 # Lifecycle of a canonical identity's resolution (migration 0033):
 #   resolved     — matched/created before the layered resolver, or auto-linked
@@ -52,7 +67,12 @@ class CanonicalIdentity(Base, TenantScopedMixin):
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=False, index=True)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("tenants.id"),
+        nullable=False,
+        index=True,
+    )
     entity_type: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
     canonical_name: Mapped[str] = mapped_column(String(500), nullable=False, index=True)
     normalized_name: Mapped[str | None] = mapped_column(String(500), nullable=True)
@@ -94,7 +114,12 @@ class IdentityAlias(Base):
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    canonical_identity_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("canonical_identities.id"), nullable=False, index=True)
+    canonical_identity_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("canonical_identities.id"),
+        nullable=False,
+        index=True,
+    )
     # Denormalized from the canonical row (0033) so alias uniqueness can be
     # tenant-scoped without a join. Not index=True: the composite lookup
     # index above leads with tenant_id.
@@ -108,9 +133,18 @@ class IdentityAlias(Base):
     source_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     confidence: Mapped[float] = mapped_column(Float, default=1.0, nullable=False)
     created_by: Mapped[str | None] = mapped_column(String(50), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    times_observed: Mapped[int] = mapped_column(Integer, default=1, server_default="1", nullable=False)
+    times_observed: Mapped[int] = mapped_column(
+        Integer,
+        default=1,
+        server_default="1",
+        nullable=False,
+    )
 
     canonical_identity: Mapped["CanonicalIdentity"] = relationship(back_populates="aliases")
 
@@ -154,9 +188,22 @@ class CorrelationEdge(Base, TenantScopedMixin):
     __tablename__ = "correlation_edges"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=False, index=True)
-    source_evidence_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("evidence_items.id", ondelete="CASCADE"), nullable=False)
-    target_evidence_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("evidence_items.id", ondelete="CASCADE"), nullable=False)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("tenants.id"),
+        nullable=False,
+        index=True,
+    )
+    source_evidence_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("evidence_items.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    target_evidence_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("evidence_items.id", ondelete="CASCADE"),
+        nullable=False,
+    )
     correlation_type: Mapped[str] = mapped_column(String(30), nullable=False)
     confidence: Mapped[float] = mapped_column(Float, default=0.5, nullable=False)
     explanation: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -167,29 +214,56 @@ class Episode(Base, TenantScopedMixin):
     __tablename__ = "episodes"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=False, index=True)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("tenants.id"),
+        nullable=False,
+        index=True,
+    )
     workspace_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
-    domain_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("domains.id"), nullable=True)
+    domain_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("domains.id"),
+        nullable=True,
+    )
     primary_case_ref: Mapped[str | None] = mapped_column(String(500), nullable=True)
     title: Mapped[str] = mapped_column(String(500), nullable=False)
     status: Mapped[str] = mapped_column(String(30), default="draft", nullable=False, index=True)
     extraction_confidence: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
     root_cause_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     final_outcome: Mapped[str | None] = mapped_column(Text, nullable=True)
-    reviewer_state: Mapped[str] = mapped_column(String(30), default="pending_review", nullable=False)
+    reviewer_state: Mapped[str] = mapped_column(
+        String(30),
+        default="pending_review",
+        nullable=False,
+    )
     reviewer_user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     evidence_ids: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    # Hash of the resolved cluster's evidence set (0037): powers draft
+    # idempotency and supersede-on-growth in episode reconstruction.
+    cluster_fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True)
     entity_refs: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    # Conflicting accounts between sources, preserved instead of merged
+    # (0040): [{"topic": ..., "accounts": [{"evidence_id": ..., "claim": ...}]}]
+    contradictions: Mapped[list | None] = mapped_column(JSONB, nullable=True)
     embedding = mapped_column(Vector(3072), nullable=True)
 
-    steps: Mapped[list["EpisodeStep"]] = relationship(back_populates="episode", order_by="EpisodeStep.step_order")
+    steps: Mapped[list["EpisodeStep"]] = relationship(
+        back_populates="episode",
+        order_by="EpisodeStep.step_order",
+    )
 
 
 class EpisodeStep(Base):
     __tablename__ = "episode_steps"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    episode_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("episodes.id"), nullable=False, index=True)
+    episode_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("episodes.id"),
+        nullable=False,
+        index=True,
+    )
     step_order: Mapped[int] = mapped_column(Integer, nullable=False)
     step_type: Mapped[str] = mapped_column(String(30), nullable=False)
     text: Mapped[str] = mapped_column(Text, nullable=False)
@@ -201,3 +275,41 @@ class EpisodeStep(Base):
     extraction_confidence: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
 
     episode: Mapped["Episode"] = relationship(back_populates="steps")
+
+
+class EpisodeEvidenceLink(Base):
+    """Normalized episode↔evidence membership (migration 0037).
+
+    The JSONB ``Episode.evidence_ids`` list remains for cheap reads; this
+    table is the queryable provenance — which evidence grounds which
+    episode, and why (``link_reason``: the cluster reason or
+    ``model_attribution`` when the extractor assigned it).
+    """
+
+    __tablename__ = "episode_evidence_links"
+    __table_args__ = (
+        UniqueConstraint("episode_id", "evidence_id", name="uq_episode_evidence"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=False, index=True
+    )
+    episode_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("episodes.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    evidence_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("evidence_items.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    link_reason: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )

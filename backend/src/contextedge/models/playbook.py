@@ -1,6 +1,7 @@
 import uuid
 from datetime import datetime
 
+from pgvector.sqlalchemy import Vector
 from sqlalchemy import Computed, DateTime, Float, ForeignKey, String, Text, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -82,6 +83,13 @@ class Playbook(Base, TenantScopedMixin):
         ),
         deferred=True,
     )
+    # Semantic fingerprint of title + description + the current version's
+    # trigger conditions and step titles (migration 0035). "Current" is the
+    # latest-created version — create_playbook_version repoints
+    # current_version_id immediately, before review. Nullable: a
+    # playbook with no embedding simply doesn't appear in semantic seeds
+    # and falls back to FTS. Written by services/playbook_embedding.py.
+    embedding = mapped_column(Vector(3072), nullable=True)
     lifecycle_state: Mapped[str] = mapped_column(
         String(30),
         default="candidate",

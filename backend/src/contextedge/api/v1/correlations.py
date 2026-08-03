@@ -4,6 +4,7 @@ from fastapi import APIRouter, HTTPException, Query, status
 from sqlalchemy import or_, select
 
 from contextedge.deps import AuthUser, DbSession
+from contextedge.models.correlation_suggestion import CorrelationSuggestion
 from contextedge.models.episode import CorrelationEdge
 from contextedge.schemas.common import StatusResponse
 from contextedge.schemas.review import (
@@ -11,8 +12,13 @@ from contextedge.schemas.review import (
     CorrelationEdgeCreate,
     CorrelationEdgeResponse,
     CorrelationEdgeUpdate,
+    CorrelationSuggestionResponse,
 )
 from contextedge.services.correlation_service import create_correlation
+from contextedge.services.correlation_suggestion_service import (
+    accept_suggestion,
+    reject_suggestion,
+)
 
 router = APIRouter()
 
@@ -58,6 +64,173 @@ async def create_manual_correlation(
         body.confidence,
         explanation=body.explanation,
         created_by=user.email,
+    )
+
+
+@router.get("/fleet-suggestions")
+async def list_fleet_suggestions(
+    db: DbSession,
+    user: AuthUser,
+    status_filter: str = Query("pending", alias="status"),
+    limit: int = Query(50, ge=1, le=200),
+):
+    user.require_role("knowledge_manager")
+    from contextedge.models.fleet_group import FleetGroupSuggestion
+
+    rows = (
+        await db.execute(
+            select(FleetGroupSuggestion)
+            .where(
+                FleetGroupSuggestion.tenant_id == user.tenant_id,
+                FleetGroupSuggestion.status == status_filter,
+            )
+            .order_by(FleetGroupSuggestion.created_at.desc())
+            .limit(limit)
+        )
+    ).scalars().all()
+    return [
+        {
+            "id": str(s.id),
+            "change_ref": s.change_ref,
+            "member_count": s.member_count,
+            "member_evidence_ids": s.member_evidence_ids,
+            "status": s.status,
+            "parent_case_id": str(s.parent_case_id) if s.parent_case_id else None,
+            "created_at": s.created_at,
+        }
+        for s in rows
+    ]
+
+
+async def _pending_fleet_suggestion(db, user, suggestion_id: UUID):
+    from contextedge.models.fleet_group import FleetGroupSuggestion
+
+    suggestion = (
+        await db.execute(
+            select(FleetGroupSuggestion).where(
+                FleetGroupSuggestion.id == suggestion_id,
+                FleetGroupSuggestion.tenant_id == user.tenant_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if not suggestion:
+        raise HTTPException(status_code=404, detail="Fleet suggestion not found")
+    if suggestion.status != "pending":
+        raise HTTPException(
+            status_code=409, detail=f"Fleet suggestion already {suggestion.status}"
+        )
+    return suggestion
+
+
+@router.post("/fleet-suggestions/{suggestion_id}/accept")
+async def accept_fleet_suggestion(
+    suggestion_id: UUID, db: DbSession, user: AuthUser
+):
+    """Reviewer accept (B6): mints the parent fleet case and attaches
+    every member — grouping only ever happens through this gate."""
+    user.require_role("knowledge_manager")
+    from contextedge.services.fleet_group_service import accept_fleet_group
+
+    suggestion = await _pending_fleet_suggestion(db, user, suggestion_id)
+    return await accept_fleet_group(db, user.tenant_id, suggestion, user.email)
+
+
+@router.post("/fleet-suggestions/{suggestion_id}/reject", response_model=StatusResponse)
+async def reject_fleet_suggestion(
+    suggestion_id: UUID, db: DbSession, user: AuthUser
+):
+    user.require_role("knowledge_manager")
+    from contextedge.services.fleet_group_service import reject_fleet_group
+
+    suggestion = await _pending_fleet_suggestion(db, user, suggestion_id)
+    await reject_fleet_group(db, user.tenant_id, suggestion, user.email)
+    return StatusResponse(
+        status="rejected", detail={"suggestion_id": str(suggestion_id)}
+    )
+
+
+@router.get("/suggestions/stats")
+async def suggestion_stats(db: DbSession, user: AuthUser):
+    """Reviewer-outcome aggregates per source pair and corroborator
+    type (C1). The per-pair learned floors derive from these counts —
+    visible here so a raised bar is never a mystery."""
+    user.require_role("knowledge_manager")
+    from contextedge.services.correlation_suggestion_service import (
+        SIMILARITY_FLOOR,
+        similarity_floor_for,
+        suggestion_review_stats,
+    )
+
+    stats = await suggestion_review_stats(db, user.tenant_id)
+    floors = {
+        pair: similarity_floor_for(pair, stats["pairs"])
+        for pair in stats["pairs"]
+    }
+    return {**stats, "base_floor": SIMILARITY_FLOOR, "effective_floors": floors}
+
+
+@router.get("/suggestions", response_model=list[CorrelationSuggestionResponse])
+async def list_suggestions(
+    db: DbSession,
+    user: AuthUser,
+    status_filter: str = Query("pending", alias="status"),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+):
+    user.require_role("knowledge_manager")
+    stmt = (
+        select(CorrelationSuggestion)
+        .where(
+            CorrelationSuggestion.tenant_id == user.tenant_id,
+            CorrelationSuggestion.status == status_filter,
+        )
+        .order_by(CorrelationSuggestion.created_at.desc())
+        .limit(limit)
+        .offset(offset)
+    )
+    return (await db.execute(stmt)).scalars().all()
+
+
+async def _pending_suggestion(db, user, suggestion_id: UUID) -> CorrelationSuggestion:
+    suggestion = (
+        await db.execute(
+            select(CorrelationSuggestion).where(
+                CorrelationSuggestion.id == suggestion_id,
+                CorrelationSuggestion.tenant_id == user.tenant_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if not suggestion:
+        raise HTTPException(status_code=404, detail="Suggestion not found")
+    if suggestion.status != "pending":
+        raise HTTPException(
+            status_code=409, detail=f"Suggestion already {suggestion.status}"
+        )
+    return suggestion
+
+
+@router.post("/suggestions/{suggestion_id}/accept", response_model=CorrelationEdgeResponse)
+async def accept_correlation_suggestion(
+    suggestion_id: UUID,
+    db: DbSession,
+    user: AuthUser,
+):
+    user.require_role("knowledge_manager")
+    suggestion = await _pending_suggestion(db, user, suggestion_id)
+    return await accept_suggestion(db, user.tenant_id, suggestion, user.email)
+
+
+@router.post("/suggestions/{suggestion_id}/reject", response_model=StatusResponse)
+async def reject_correlation_suggestion(
+    suggestion_id: UUID,
+    db: DbSession,
+    user: AuthUser,
+):
+    user.require_role("knowledge_manager")
+    suggestion = await _pending_suggestion(db, user, suggestion_id)
+    await reject_suggestion(db, user.tenant_id, suggestion, user.email)
+    return StatusResponse(
+        status="rejected", detail={"suggestion_id": str(suggestion_id)}
     )
 
 

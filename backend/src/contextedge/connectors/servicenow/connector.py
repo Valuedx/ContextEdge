@@ -7,10 +7,11 @@ handling, and journal/comment extraction.
 """
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 import httpx
+import structlog
 
 from contextedge.connectors.base import (
     BackfillResult,
@@ -25,12 +26,102 @@ from contextedge.connectors.base import (
     RateLimitConfig,
 )
 
+# Reference fields (problem_id, rfc, caused_by, parent_incident, cmdb_ci,
+# assignment_group) serialize as {"value": <sys_id>, "link": ...} under the
+# default sysparm_display_value=false; the dot-walked companions
+# (cmdb_ci.name, ...) come back as flat display strings. Both feed
+# services/servicenow_reference_service.py — deterministic case links,
+# typed graph edges, and CI / team entities. Keep sysparm_display_value
+# at its default: flipping it to all/true turns EVERY field into a dict
+# and breaks the (sys_updated_on, sys_id) keyset checkpoint parsing.
 TABLES = {
-    "incident": {"label": "Incidents", "fields": "number,short_description,description,state,priority,assigned_to,opened_at,resolved_at,close_notes,sys_updated_on"},
-    "problem": {"label": "Problems", "fields": "number,short_description,description,state,priority,assigned_to,opened_at,resolved_at,sys_updated_on"},
-    "change_request": {"label": "Change Requests", "fields": "number,short_description,description,state,type,assigned_to,start_date,end_date,sys_updated_on"},
-    "kb_knowledge": {"label": "KB Articles", "fields": "number,short_description,text,workflow_state,author,sys_updated_on"},
+    "incident": {
+        "label": "Incidents",
+        "fields": (
+            "number,short_description,description,state,priority,assigned_to,"
+            "opened_at,resolved_at,close_notes,close_code,category,sys_updated_on,"
+            "problem_id,rfc,caused_by,parent_incident,cmdb_ci,cmdb_ci.name,"
+            "cmdb_ci.sys_class_name,cmdb_ci.manufacturer.name,"
+            "cmdb_ci.model_id.name,cmdb_ci.os,cmdb_ci.os_version,"
+            "assignment_group,assignment_group.name"
+        ),
+    },
+    "problem": {
+        "label": "Problems",
+        "fields": (
+            "number,short_description,description,state,priority,assigned_to,"
+            "opened_at,resolved_at,sys_updated_on,rfc,cmdb_ci,cmdb_ci.name,"
+            "cmdb_ci.sys_class_name,cmdb_ci.manufacturer.name,"
+            "cmdb_ci.model_id.name,cmdb_ci.os,cmdb_ci.os_version,"
+            "assignment_group,assignment_group.name"
+        ),
+    },
+    "change_request": {
+        "label": "Change Requests",
+        "fields": (
+            "number,short_description,description,state,type,assigned_to,"
+            "start_date,end_date,close_code,category,sys_updated_on,cmdb_ci,"
+            "cmdb_ci.name,cmdb_ci.sys_class_name,cmdb_ci.manufacturer.name,"
+            "cmdb_ci.model_id.name,cmdb_ci.os,cmdb_ci.os_version,"
+            "assignment_group,assignment_group.name"
+        ),
+    },
+    "kb_knowledge": {
+        "label": "KB Articles",
+        "fields": "number,short_description,text,workflow_state,author,sys_updated_on",
+    },
+    # The request side of ITSM. Incidents record what broke; requests record
+    # what was provisioned and how — which is the answer to a large share of
+    # service-desk questions ("how do we set up a new starter's laptop").
+    #
+    # The chain is REQ -> RITM -> SCTASK. Only the last two are ingested: the
+    # REQ header is an envelope with no subject of its own — verified against a
+    # live instance, it normalises to "Untitled Evidence" — so ingesting it
+    # would pay to classify empty records. Each RITM carries `request.number`,
+    # so the request it belonged to is still recoverable without storing the
+    # envelope itself.
+    "sc_req_item": {
+        "label": "Requested Items",
+        # A RITM carries no short_description of its own — the catalog item is
+        # the subject ("Standard Laptop"), so cat_item.name is dot-walked in
+        # and promoted to the title below. Without that, every requested item
+        # lands as untitled evidence.
+        "fields": (
+            "number,short_description,description,state,stage,approval,priority,"
+            "opened_at,closed_at,close_notes,request,request.number,"
+            "cat_item,cat_item.name,requested_for,requested_for.name,"
+            "assignment_group,assignment_group.name,cmdb_ci,cmdb_ci.name,"
+            "sys_updated_on"
+        ),
+    },
+    "sc_task": {
+        "label": "Catalog Tasks",
+        "fields": (
+            "number,short_description,description,state,priority,opened_at,"
+            "closed_at,close_notes,request_item,request_item.number,"
+            "assigned_to,assignment_group,assignment_group.name,sys_updated_on"
+        ),
+    },
+    # em_alert never produces per-record events — each sync invocation
+    # rolls fetched alerts up per (CI, day) in alert_rollup.py. Severity
+    # is filtered server-side (see _table_extra_query); the checkpoint
+    # cursor still advances on the RAW alert rows, so rollup batching
+    # cannot skip records.
+    "em_alert": {
+        "label": "EM Alerts (rolled up)",
+        "fields": (
+            "number,severity,state,short_description,description,source,"
+            "cmdb_ci,cmdb_ci.name,incident,initial_event_time,last_event_time,"
+            "sys_updated_on"
+        ),
+    },
 }
+
+# Alerts at or below this severity number are ingested (1=critical …
+# 5=info). Overridable per source via source_config["alert_severity_max"].
+DEFAULT_ALERT_SEVERITY_MAX = 3
+
+logger = structlog.get_logger()
 
 
 class ServiceNowConnector(BaseConnector):
@@ -42,6 +133,47 @@ class ServiceNowConnector(BaseConnector):
 
     def _auth(self) -> tuple[str, str]:
         return (self.credentials["username"], self.credentials["password"])
+
+    def _table_extra_query(self, table_name: str) -> str:
+        """Per-table server-side filter, appended to EVERY branch of a
+        sysparm_query (a ^NQ branch is a fresh query — a filter appended
+        to only one branch silently leaks through the other).
+
+        Two sources of filter, combined:
+
+        - ``alert_severity_max`` bounds em_alert severity (default 3).
+        - ``table_filters`` scopes any table to a subset, as raw encoded-query
+          syntax keyed by table name, e.g.::
+
+              {"table_filters": {"incident": "priority<=2"}}
+
+          Syncing an entire ServiceNow instance is rarely what anyone wants —
+          most tenants care about a queue, a priority band, or an assignment
+          group. Filtering server-side means the records never leave
+          ServiceNow, so they cost no extraction and no storage. Applied to
+          both the backfill and the keyset-paged incremental query.
+        """
+        parts: list[str] = []
+
+        if table_name == "em_alert":
+            try:
+                max_severity = int(
+                    (self.source_config or {}).get(
+                        "alert_severity_max", DEFAULT_ALERT_SEVERITY_MAX
+                    )
+                )
+            except (TypeError, ValueError):
+                max_severity = DEFAULT_ALERT_SEVERITY_MAX
+            if not 1 <= max_severity <= 5:
+                max_severity = DEFAULT_ALERT_SEVERITY_MAX
+            parts.append(f"^severity<={max_severity}")
+
+        custom = ((self.source_config or {}).get("table_filters") or {}).get(table_name)
+        if isinstance(custom, str) and custom.strip():
+            # Tolerate a leading ^ so both "priority=1" and "^priority=1" work.
+            parts.append("^" + custom.strip().lstrip("^"))
+
+        return "".join(parts)
 
     # Retry transient failures (429 / 5xx / transport errors) with capped
     # exponential backoff, honoring Retry-After on 429.
@@ -89,7 +221,7 @@ class ServiceNowConnector(BaseConnector):
 
     async def validate_credentials(self) -> CredentialStatus:
         try:
-            data = await self._snow_get(
+            await self._snow_get(
                 "/api/now/table/incident",
                 {"sysparm_limit": "1", "sysparm_fields": "number"},
             )
@@ -98,12 +230,36 @@ class ServiceNowConnector(BaseConnector):
             return CredentialStatus(valid=False, message=str(e))
 
     async def discover_objects(self) -> list[DiscoveredObject]:
+        """List the tables this instance actually exposes.
+
+        A table is skipped rather than fatal when the instance does not have
+        it. ``em_alert`` ships with ITOM Event Management, which is not
+        activated on a stock instance, and the Table API answers 400 for a
+        table that does not exist. Letting that abort discovery means an
+        instance missing one optional plugin can offer *no* objects at all —
+        incidents included — which is how a working ServiceNow source looks
+        completely broken. Verified against a PDI without ITOM: 4 tables
+        discovered, em_alert skipped.
+        """
         objects: list[DiscoveredObject] = []
         for table_name, meta in TABLES.items():
-            count_data = await self._snow_get(
-                f"/api/now/stats/{table_name}",
-                {"sysparm_count": "true"},
-            )
+            try:
+                count_data = await self._snow_get(
+                    f"/api/now/stats/{table_name}",
+                    {"sysparm_count": "true"},
+                )
+            except httpx.HTTPStatusError as exc:
+                # 400 = no such table, 403 = present but not readable by this
+                # account. Both mean "cannot sync it", and neither should cost
+                # the caller the tables that do work.
+                if exc.response.status_code in (400, 403, 404):
+                    logger.info(
+                        "servicenow.table_unavailable",
+                        table=table_name,
+                        status=exc.response.status_code,
+                    )
+                    continue
+                raise
             count = count_data.get("result", {}).get("stats", {}).get("count", "0")
             objects.append(
                 DiscoveredObject(
@@ -133,7 +289,11 @@ class ServiceNowConnector(BaseConnector):
 
         params = {
             "sysparm_fields": f"sys_id,{fields}",
-            "sysparm_query": f"sys_updated_onBETWEEN{start_str}@{end_str}^ORDERBYsys_updated_on",
+            "sysparm_query": (
+                f"sys_updated_onBETWEEN{start_str}@{end_str}"
+                f"{self._table_extra_query(table_name)}"
+                "^ORDERBYsys_updated_on"
+            ),
             "sysparm_limit": "100",
             "sysparm_offset": str(offset),
         }
@@ -141,19 +301,26 @@ class ServiceNowConnector(BaseConnector):
         data = await self._snow_get(f"/api/now/table/{table_name}", params)
         records = data.get("result", [])
 
-        for record in records:
-            sys_id = record.get("sys_id", "")
-            events.append(
-                IngestionEvent(
-                    external_id=sys_id,
-                    source_type="servicenow",
-                    object_type=table_name,
-                    content=record,
-                    thread_id=f"{table_name}:{sys_id}",
-                    timestamp=_parse_snow_datetime(record.get("sys_updated_on")),
-                    metadata={"table": table_name},
-                )
+        if table_name == "em_alert":
+            from contextedge.connectors.servicenow.alert_rollup import (
+                rollup_alert_events,
             )
+
+            events.extend(rollup_alert_events(records))
+        else:
+            for record in records:
+                sys_id = record.get("sys_id", "")
+                events.append(
+                    IngestionEvent(
+                        external_id=sys_id,
+                        source_type="servicenow",
+                        object_type=table_name,
+                        content=_with_derived_title(record),
+                        thread_id=f"{table_name}:{sys_id}",
+                        timestamp=_parse_snow_datetime(record.get("sys_updated_on")),
+                        metadata={"table": table_name},
+                    )
+                )
 
         has_more = len(records) == 100
         new_offset = offset + len(records)
@@ -172,7 +339,7 @@ class ServiceNowConnector(BaseConnector):
                 # Empty final page: clamp the seed to "now" when the window
                 # extends into the future, or records updated between this
                 # backfill and window.end would be skipped by incremental.
-                now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+                now_str = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S")
                 latest_ts = min(end_str, now_str)
             # Seed the compound checkpoint fetch_changes resumes from.
             new_checkpoint = Checkpoint(
@@ -217,12 +384,14 @@ class ServiceNowConnector(BaseConnector):
         cursor_sys_id = last_sys_id
         latest_ts = last_updated
         latest_sys_id = last_sys_id
+        extra = self._table_extra_query(table_name)
+        alert_records: list[dict] = []
         for _page in range(self.INCREMENTAL_MAX_PAGES):
             params = {
                 "sysparm_fields": f"sys_id,{fields}",
                 "sysparm_query": (
-                    f"sys_updated_on>{cursor_ts}"
-                    f"^NQsys_updated_on={cursor_ts}^sys_id>{cursor_sys_id}"
+                    f"sys_updated_on>{cursor_ts}{extra}"
+                    f"^NQsys_updated_on={cursor_ts}^sys_id>{cursor_sys_id}{extra}"
                     "^ORDERBYsys_updated_on^ORDERBYsys_id"
                 ),
                 "sysparm_limit": str(self.INCREMENTAL_PAGE_SIZE),
@@ -255,12 +424,17 @@ class ServiceNowConnector(BaseConnector):
                     continue  # server returned an already-seen row; skip
                 if (ts, sys_id) > (latest_ts, latest_sys_id):
                     latest_ts, latest_sys_id = ts, sys_id
+                if table_name == "em_alert":
+                    # Alerts roll up after pagination — one event per
+                    # (CI, day) group, never per record.
+                    alert_records.append(record)
+                    continue
                 events.append(
                     IngestionEvent(
                         external_id=sys_id,
                         source_type="servicenow",
                         object_type=table_name,
-                        content=record,
+                        content=_with_derived_title(record),
                         thread_id=f"{table_name}:{sys_id}",
                         timestamp=_parse_snow_datetime(ts),
                         metadata={"table": table_name},
@@ -273,6 +447,13 @@ class ServiceNowConnector(BaseConnector):
             if len(records) < self.INCREMENTAL_PAGE_SIZE:
                 break
 
+        if alert_records:
+            from contextedge.connectors.servicenow.alert_rollup import (
+                rollup_alert_events,
+            )
+
+            events.extend(rollup_alert_events(alert_records))
+
         return ChangeResult(
             events=events,
             new_checkpoint=Checkpoint(
@@ -283,6 +464,16 @@ class ServiceNowConnector(BaseConnector):
 
     async def hydrate_thread(self, thread_ref: str) -> HydratedThread:
         """Fetch record with journal entries (comments/work notes)."""
+        if thread_ref.startswith("em_alert_rollup:"):
+            # Rollup threads aggregate many alerts; there is no single
+            # record or journal to fetch — the rollup evidence bodies ARE
+            # the thread content.
+            return HydratedThread(
+                thread_id=thread_ref,
+                messages=[],
+                participant_count=0,
+                metadata={"rollup": True},
+            )
         parts = thread_ref.split(":")
         table_name, sys_id = parts[0], parts[1]
 
@@ -290,7 +481,7 @@ class ServiceNowConnector(BaseConnector):
         record_data = record.get("result", {})
 
         journal_data = await self._snow_get(
-            f"/api/now/table/sys_journal_field",
+            "/api/now/table/sys_journal_field",
             {
                 "sysparm_query": f"element_id={sys_id}^ORDERBYsys_created_on",
                 "sysparm_fields": "value,element,sys_created_on,sys_created_by",
@@ -316,14 +507,78 @@ class ServiceNowConnector(BaseConnector):
             metadata={"record": record_data},
         )
 
+    # CMDB topology (services/cmdb_topology_service.py): live ±1-hop
+    # lookups, NOT bulk sync — the CMDB stays in ServiceNow; ContextEdge
+    # caches only the neighborhoods that operational reality touches.
+
+    CMDB_REL_PAGE_SIZE = 200
+
+    async def fetch_ci_relationships(self, sys_id: str) -> list[dict]:
+        """cmdb_rel_ci rows where the CI is parent or child, bounded at
+        CMDB_REL_PAGE_SIZE — a hub CI's neighborhood is truncated, not
+        paged (±1-hop context, not a replica). type.name is dot-walked so
+        the relationship label arrives without a second call."""
+        data = await self._snow_get(
+            "/api/now/table/cmdb_rel_ci",
+            {
+                "sysparm_query": f"parent={sys_id}^ORchild={sys_id}",
+                "sysparm_fields": "sys_id,parent,child,type.name",
+                "sysparm_limit": str(self.CMDB_REL_PAGE_SIZE),
+            },
+        )
+        return data.get("result", [])
+
+    async def fetch_ci_details(self, sys_ids: list[str]) -> list[dict]:
+        """Name / class / status for a bounded set of CIs in one call."""
+        if not sys_ids:
+            return []
+        data = await self._snow_get(
+            "/api/now/table/cmdb_ci",
+            {
+                "sysparm_query": "sys_idIN" + ",".join(sys_ids[:200]),
+                "sysparm_fields": (
+                    "sys_id,name,sys_class_name,operational_status,"
+                    # B2 traits. os/os_version exist only on computer
+                    # subclasses — ServiceNow returns them empty for
+                    # other classes, which lands as absent traits.
+                    "manufacturer.name,model_id.name,os,os_version"
+                ),
+                "sysparm_limit": "200",
+            },
+        )
+        return data.get("result", [])
+
     def rate_limit_config(self) -> RateLimitConfig:
         return RateLimitConfig(requests_per_second=10.0, burst_size=20)
+
+
+def _with_derived_title(record: dict) -> dict:
+    """Give a record a usable ``short_description`` when the table has none.
+
+    ``evidence_title_from_payload`` looks for title/subject/short_description
+    and then falls back to a body snippet. A requested item has an empty
+    ``short_description`` — its subject is the catalog item ("Standard
+    Laptop"), which arrives dot-walked as ``cat_item.name`` and so is invisible
+    to that helper. Untitled evidence is hard to review and hard to cite, so
+    the mapping is done here, where the ServiceNow-specific knowledge lives,
+    rather than teaching the generic normaliser about catalog items.
+
+    Returns the record unchanged when it already has a description.
+    """
+    if str(record.get("short_description") or "").strip():
+        return record
+    subject = str(record.get("cat_item.name") or "").strip()
+    if not subject:
+        return record
+    enriched = dict(record)
+    enriched["short_description"] = subject
+    return enriched
 
 
 def _parse_snow_datetime(value: str | None) -> datetime | None:
     if not value:
         return None
     try:
-        return datetime.strptime(value, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+        return datetime.strptime(value, "%Y-%m-%d %H:%M:%S").replace(tzinfo=UTC)
     except ValueError:
         return None

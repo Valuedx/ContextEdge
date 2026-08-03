@@ -29,11 +29,11 @@ from __future__ import annotations
 
 import re
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 import structlog
-from sqlalchemy import select, update
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -274,7 +274,7 @@ async def _record_scan_state(
 ) -> None:
     """Upsert a row into ``contradiction_scan_state``. Uses the unique
     constraint on ``(playbook_version_id, evidence_id)`` for idempotency."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     existing = (
         await db.execute(
             select(ContradictionScanState).where(
@@ -358,7 +358,7 @@ async def scan_contradictions(
     # first-time KB ingest flagging 100 contradictions) doesn't spam
     # the notification channel. After the cap, we emit a single
     # summary notification at the end of the scan instead.
-    MAX_INDIVIDUAL_NOTIFICATIONS = 10
+    max_individual_notifications = 10
     notifications_sent = 0
     deferred_contradictions: list[tuple[object, str]] = []  # (contradiction, reason)
 
@@ -511,14 +511,16 @@ async def scan_contradictions(
                     # Review F-27: respect the per-scan notification
                     # cap so a scan flagging 100 contradictions doesn't
                     # spam 100 notifications in one shot.
-                    if notifications_sent < MAX_INDIVIDUAL_NOTIFICATIONS:
+                    if notifications_sent < max_individual_notifications:
                         await send_notification(
                             db,
                             tenant_id,
                             None,
                             NotificationType.CONTRADICTION_ALERT,
                             f"Contradiction detected for {playbook.title}",
-                            reason or "A contradiction was detected between a playbook step and KB evidence.",
+                            reason
+                            or "A contradiction was detected between a "
+                            "playbook step and KB evidence.",
                             metadata={
                                 "playbook_id": str(playbook.id),
                                 "evidence_id": str(item.id),
@@ -543,7 +545,7 @@ async def scan_contradictions(
             f"{len(deferred_contradictions)} additional contradictions detected",
             (
                 f"The scan reached the per-run notification cap ("
-                f"{MAX_INDIVIDUAL_NOTIFICATIONS}) and deferred "
+                f"{max_individual_notifications}) and deferred "
                 f"{len(deferred_contradictions)} further contradictions. "
                 "Check the Contradictions view for the full list."
             ),

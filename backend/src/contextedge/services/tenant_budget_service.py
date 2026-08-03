@@ -30,7 +30,7 @@ import asyncio
 import time
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Literal
 
@@ -83,6 +83,22 @@ class BudgetCheckResult:
     current_cost_usd: float
     token_limit: int | None
     cost_cap_usd: float | None
+
+
+@dataclass(frozen=True)
+class _DefaultBudget:
+    """Stand-in for a missing ``tenant_llm_budgets`` row.
+
+    Carries exactly the three attributes ``_check_budget_locked`` reads, so the
+    deployment-default caps go through the same evaluation path as a
+    configured row — no second implementation of the limit logic to drift.
+    Not persisted: writing a row on first use would silently create config
+    nobody asked for, and would then shadow later changes to the defaults.
+    """
+
+    daily_token_limit: int | None
+    daily_cost_cap_usd: float | None
+    action_on_exceed: str
 
 
 class TenantBudgetExceeded(Exception):
@@ -165,7 +181,7 @@ async def get_current_day_usage(
         if cached is not None:
             return cached
 
-    start_of_day = datetime.now(timezone.utc).replace(
+    start_of_day = datetime.now(UTC).replace(
         hour=0, minute=0, second=0, microsecond=0,
     )
     rows = (
@@ -211,18 +227,37 @@ async def check_budget(
     overshooting the cap by one call each. Note this is not
     cross-worker — see the note at the top of this module.
     """
-    # Short-circuit: no budget row means no cap, no need to lock.
     budget = await get_budget(db, tenant_id)
     if budget is None:
-        return BudgetCheckResult(
-            allowed=True,
-            action="warn",  # meaningless without a cap; kept for shape.
-            reason="no_budget",
-            current_tokens=0,
-            current_cost_usd=0.0,
-            token_limit=None,
-            cost_cap_usd=None,
-        )
+        # No row used to mean "no cap", which left the normal case — a tenant
+        # nobody has configured yet — as the only uncapped one. Fall back to
+        # the deployment defaults instead. Set both to None in config to
+        # restore the old unlimited behaviour.
+        from contextedge.config import settings as _settings
+
+        default_tokens = _settings.default_daily_token_limit
+        default_cost = _settings.default_daily_cost_cap_usd
+        if default_tokens is None and default_cost is None:
+            return BudgetCheckResult(
+                allowed=True,
+                action="warn",  # meaningless without a cap; kept for shape.
+                reason="no_budget",
+                current_tokens=0,
+                current_cost_usd=0.0,
+                token_limit=None,
+                cost_cap_usd=None,
+            )
+        async with _lock_for_tenant(tenant_id):
+            return await _check_budget_locked(
+                db,
+                tenant_id,
+                _DefaultBudget(
+                    daily_token_limit=default_tokens,
+                    daily_cost_cap_usd=default_cost,
+                    action_on_exceed=_settings.default_budget_action_on_exceed,
+                ),
+                use_cache=use_cache,
+            )
 
     async with _lock_for_tenant(tenant_id):
         return await _check_budget_locked(db, tenant_id, budget, use_cache=use_cache)
@@ -231,7 +266,7 @@ async def check_budget(
 async def _check_budget_locked(
     db: AsyncSession,
     tenant_id: uuid.UUID,
-    budget: TenantLLMBudget,
+    budget: TenantLLMBudget | _DefaultBudget,
     *,
     use_cache: bool = True,
 ) -> BudgetCheckResult:

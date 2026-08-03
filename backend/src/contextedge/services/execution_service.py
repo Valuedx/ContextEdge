@@ -6,10 +6,11 @@ import uuid
 from datetime import UTC, datetime
 
 from sqlalchemy import cast, func, select
+from sqlalchemy.dialects.postgresql import JSONB as JSONB_TYPE
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
-from sqlalchemy.dialects.postgresql import JSONB as JSONB_TYPE
 
+from contextedge.graph.builder import ensure_edge
 from contextedge.models.execution import (
     OUTCOMES,
     SAFETY_CLASSES,
@@ -18,7 +19,6 @@ from contextedge.models.execution import (
     ExecutionStepRun,
     ToolInvocation,
 )
-from contextedge.graph.builder import ensure_edge
 from contextedge.models.playbook import Playbook, PlaybookVersion, is_shadow_mode
 from contextedge.models.session import ResolutionSession
 from contextedge.services.approval_policy_service import (
@@ -89,7 +89,8 @@ async def start_execution(
         raise ExecutionPolicyError("Playbook not found")
     if playbook.lifecycle_state != "approved":
         raise ExecutionPolicyError(
-            f"Cannot execute playbook in '{playbook.lifecycle_state}' state; only 'approved' playbooks may be executed"
+            f"Cannot execute playbook in '{playbook.lifecycle_state}' state; "
+            "only 'approved' playbooks may be executed"
         )
     # Review F-12: a playbook that transitioned to approved a long time
     # ago and now has an explicit expiry_at in the past must not be
@@ -325,7 +326,9 @@ async def start_execution(
         actor_id=actor_id,
         session_id=session_id,
         rationale_summary=f"Initiated execution of playbook {playbook.title or playbook.id}",
-        compact_trace=f"Executing playbook {playbook.title or playbook.id} v{version.semantic_version}",
+        compact_trace=(
+            f"Executing playbook {playbook.title or playbook.id} v{version.semantic_version}"
+        ),
         confidence=None,
         context_snapshot={
             "playbook_id": str(playbook.id),

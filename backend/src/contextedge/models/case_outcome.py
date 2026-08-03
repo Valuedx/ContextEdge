@@ -31,7 +31,6 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from contextedge.models.base import Base
 
-
 OUTCOME_STATUSES = (
     "resolved",
     "unresolved",

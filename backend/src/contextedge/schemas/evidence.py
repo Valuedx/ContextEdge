@@ -70,6 +70,13 @@ class EpisodeResponse(BaseModel):
     root_cause_summary: str | None
     final_outcome: str | None
     reviewer_state: str
+    # Per-episode membership + the cluster identity behind this draft
+    # (P0 provenance work) — the review surface renders both.
+    evidence_ids: list[str] | None = None
+    cluster_fingerprint: str | None = None
+    # Conflicting source accounts, preserved instead of merged (P4) —
+    # the review surface shows reviewers exactly what disagrees.
+    contradictions: list | None = None
     created_at: datetime
     updated_at: datetime
 
