@@ -131,3 +131,59 @@ def test_redact_idempotent():
     twice, twice_counts = redact(once)
     assert twice == once
     assert twice_counts == {}
+
+
+# --- digits inside an identifier are not a phone number ----------------------
+#
+# Found on a live identity: the external id
+# "a9c0c8d2c2895551234f7705562f9cb0" was stored as
+# "a9c0c8d2c[REDACTED:PHONE]f7705562f9cb0". The PHONE rule guarded its
+# boundaries against adjacent DIGITS only, so a ten-digit run inside a hex
+# identifier matched happily.
+#
+# That is not cosmetic. External ids are Layer 1 strong identifiers in
+# identity resolution — the deterministic layer everything else falls
+# back from. A corrupted one stops matching silently, and the identity
+# forks on every subsequent mention.
+
+
+@pytest.mark.parametrize(
+    "identifier",
+    [
+        "a9c0c8d2c2895551234f7705562f9cb0",  # the observed value
+        "deadbeef5551234567cafebabe",
+        "9f8e7d6c5b4a3928175551234098abcd",
+        "user5551234567",
+        "sess_5551234567abc",
+        "v5551234567",
+    ],
+)
+def test_an_identifier_containing_digits_is_left_intact(identifier):
+    out, counts = redact(identifier)
+    assert out == identifier
+    assert counts == {}
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Call me on +1 555-123-4567 tomorrow",
+        "Phone: (555) 123-4567",
+        "contact 5551234567 urgently",
+        "tel 555.123.4567",
+        "ring +44 555 123 4567",
+        "(555)123-4567.",
+        "number: 555-123-4567, thanks",
+    ],
+)
+def test_every_real_phone_format_is_still_redacted(text):
+    """The guard narrows what counts as "inside an identifier", not what
+    counts as a phone number.
+
+    For a privacy control, failing to redact is the worse direction — so
+    separators stay fully permissive and only adjacency to a LETTER is
+    treated as evidence the digits belong to a larger token.
+    """
+    out, counts = redact(text)
+    assert "[REDACTED:PHONE]" in out
+    assert counts.get("PHONE", 0) >= 1

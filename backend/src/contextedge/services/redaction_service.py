@@ -86,13 +86,30 @@ _RULES: tuple[tuple[str, re.Pattern[str]], ...] = (
         re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}"),
     ),
     # E.164-ish phone: optional +CC, optional parens / dashes / spaces.
+    #
+    # The boundaries exclude any WORD character, not just digits. Guarding
+    # on `(?<!\d)` alone let a ten-digit run inside a hex identifier match:
+    # the external id "a9c0c8d2c2895551234f7705562f9cb0" was stored as
+    # "a9c0c8d2c[REDACTED:PHONE]f7705562f9cb0". That is worse than a
+    # cosmetic problem — external ids are Layer 1 strong identifiers, so a
+    # corrupted one silently stops matching and the identity forks on
+    # every future mention. Serial numbers and hex blobs were hit the same
+    # way.
+    #
+    # Deliberately still permissive about separators: hyphens, spaces,
+    # dots and parens remain inside and around the match, so every real
+    # formatting of a phone number is still caught. Only adjacency to a
+    # LETTER is treated as evidence that the digits belong to a larger
+    # token. For a privacy control, failing to redact is the worse
+    # direction, so the guard narrows what counts as "inside an
+    # identifier" rather than narrowing what counts as a phone number.
     (
         "PHONE",
         re.compile(
-            r"(?<!\d)"
+            r"(?<!\w)"
             r"(?:\+\d{1,3}[\s.\-]?)?"
             r"(?:\(\d{3}\)|\d{3})[\s.\-]?\d{3}[\s.\-]?\d{4}"
-            r"(?!\d)"
+            r"(?!\w)"
         ),
     ),
     (
