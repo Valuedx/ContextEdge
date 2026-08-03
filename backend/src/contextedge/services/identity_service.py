@@ -348,6 +348,10 @@ async def _create_identity(
                 alias_type=alias_type,
                 canonical_id=str(canonical.id),
             )
+
+    # Learned at creation, which is the moment that matters: this is the
+    # identity a later abbreviation would otherwise fork away from.
+    await _learn_content_aliases(db, tenant_id, canonical, entity, source_id)
     return canonical
 
 
@@ -363,12 +367,36 @@ async def _learn_alias(
 ) -> None:
     """Attach the observed display name to a matched identity so the next
     occurrence resolves deterministically without an LLM call."""
+    await _record_alias(
+        db,
+        tenant_id,
+        canonical,
+        entity.display_name,
+        confidence=confidence,
+        created_by=created_by,
+        source_id=source_id,
+    )
+
+
+async def _record_alias(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    canonical: CanonicalIdentity,
+    alias_text: str,
+    *,
+    confidence: float,
+    created_by: str,
+    source_id: uuid.UUID | None,
+) -> None:
+    normalized_alias = _normalize_term(alias_text)
+    if not normalized_alias:
+        return
     existing = await db.execute(
         select(IdentityAlias.id).where(
             IdentityAlias.canonical_identity_id == canonical.id,
             or_(
-                IdentityAlias.normalized_alias == entity.normalized_name,
-                func.lower(IdentityAlias.alias_text) == entity.normalized_name,
+                IdentityAlias.normalized_alias == normalized_alias,
+                func.lower(IdentityAlias.alias_text) == normalized_alias,
             ),
         )
     )
@@ -378,8 +406,8 @@ async def _learn_alias(
         IdentityAlias(
             canonical_identity_id=canonical.id,
             tenant_id=tenant_id,
-            alias_text=entity.display_name,
-            normalized_alias=entity.normalized_name,
+            alias_text=alias_text,
+            normalized_alias=normalized_alias,
             alias_type="display_name",
             source_id=source_id,
             confidence=confidence,
@@ -387,6 +415,40 @@ async def _learn_alias(
             last_seen_at=datetime.now(UTC),
         )
     )
+
+
+async def _learn_content_aliases(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    canonical: CanonicalIdentity,
+    entity: NormalizedEntity,
+    source_id: uuid.UUID | None,
+) -> None:
+    """Record the other names the CONTENT gave for this same entity.
+
+    "Sales Force Automation (SFA)" states the relationship outright, so
+    the abbreviation is learned against the identity as it is created.
+    The next bare "SFA" then resolves at the alias layer — deterministic,
+    no model call.
+
+    Without this the two fork: candidate generation matches on shared
+    substrings, "sfa" shares none with "sales force automation", and the
+    adjudicator is never shown the pair. A live tenant had exactly that,
+    twice over (SFA, and HP UPD vs HP Universal Print Driver).
+
+    Confidence 0.9 rather than 1.0: the content asserted it, which is
+    strong, but it is still one document's word.
+    """
+    for alias_text in entity.aliases:
+        await _record_alias(
+            db,
+            tenant_id,
+            canonical,
+            alias_text,
+            confidence=0.9,
+            created_by="extracted_alias",
+            source_id=source_id,
+        )
 
 
 def _resolved_entry(
@@ -459,6 +521,7 @@ async def resolve_extracted_entities(
                 db, tenant_id, canonical, entity,
                 confidence=0.95, created_by="strong_match", source_id=source_id,
             )
+            await _learn_content_aliases(db, tenant_id, canonical, entity, source_id)
             method = f"strong:{alias_type}"
             resolved.append(
                 _resolved_entry(canonical, entity, matched_via=method, confidence=1.0)

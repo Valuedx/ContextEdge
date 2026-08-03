@@ -94,6 +94,143 @@ register_prompt(
     default=True,
 )
 
+# v3 addresses two problems measured on a live tenant's 181 extracted
+# identities.
+#
+# **Log tokens were being recorded as applications.** `%ASA-4-113029`,
+# `HPZ5r5064.DLL`, `spoolsv.exe`, `services.msc`, `Skia/PDF`, `PDF` and
+# `JavaScript` all became `application` entities, alongside `computer`,
+# `headset` and `desk phone` as devices. v2 says only "application:
+# software names, app names", which is true of every one of them. The
+# graph is meant to hold what an organisation RUNS, and none of these are
+# that; they are strings that happened to appear in a log line.
+#
+# **Abbreviations forked into second identities.** `SFA` and `Sales Force
+# Automation` exist as separate rows, as do `HP UPD` and `HP Universal
+# Print Driver`. The resolver's candidate generator matches on shared
+# substrings, so it never proposed them as candidates and the adjudicator
+# never saw the pair. Extraction is the right place to fix that: when the
+# text itself says "Sales Force Automation (SFA)", the relationship is
+# stated, and emitting it as one entity with an alias means the next bare
+# "SFA" resolves deterministically at the alias layer with no LLM call.
+_V3_SYSTEM = """Extract operational entities from the provided evidence content.
+
+An entity is something the organisation RUNS, OWNS or STAFFS — the kind of thing that would appear in a CMDB, an asset inventory or a staff directory. An engineer would say "we run it", "it is assigned to someone", or "it broke".
+
+Extract every such thing the content names. Be thorough: a real incident touches gateways, hosts, services, sites and people, and the graph is only as useful as the connections it holds.
+
+A string is not an entity merely because it appears in the text. Most tokens in a log line are evidence ABOUT an entity, not entities. The exclusions below remove noise — they are not a reason to return a short list when the content genuinely names many systems.
+
+Categories:
+- person: named individuals — users, engineers, agents
+- device: named hosts, servers, endpoints, hardware assets
+- application: named software products the organisation runs
+- vendor: companies that supply products or services
+- version: product versions and build numbers
+- patch: patch IDs, KB numbers, named updates
+- service: named services, middleware and infrastructure components
+- environment: production/staging/QA/dev, regions, data centres
+
+DO NOT extract, in any category:
+- File names, extensions and paths — anything ending .dll, .exe, .msc, .log, .conf, or written as a filesystem path
+- Executable and process names — extract the SERVICE or PRODUCT the process belongs to instead of the binary that implements it
+- Error, event and status codes, in any vendor's format: hex codes, numeric status codes, and prefixed log identifiers
+- File formats, encodings and MIME types
+- Programming languages, libraries and runtimes named only in passing — UNLESS the incident is about that component itself, in which case it is an application
+- Bare generic nouns with NOTHING identifying them: "computer", "the server", "headset", "desk phone", "printer", "database"
+- Ticket, incident and change record numbers: INC0020341, CHG0044131 — these reference a record, not a system, and are linked separately
+- Commands, menu paths, UI labels, registry keys, protocols, ports
+- Queue names, table names, thread names, class names
+
+That last exclusion is about the ABSENCE of a name, not about a name built from ordinary words. Apply this test: could someone act on this string — look it up, restart it, raise a change against it? A named service, appliance, product line or model qualifies however plain its words are. A bare category noun does not.
+
+So "the printer" is not an entity while a specific printer model is; "the database" is not while a named database instance is; "monitoring" is not while a named monitoring product is. Dropping a named component because its name reads as a common phrase discards exactly the infrastructure this graph exists to hold.
+
+A useful test: if two different customers could have the same string in their logs and it would mean the same thing, it is probably a code or a format, not an entity of theirs.
+
+NAMES AND ALIASES
+
+Use the fullest, most canonical name as "display_name". When the content gives a SHORT FORM OF THAT SAME NAME — an acronym of its initials, or a truncation of it — put the short form in "aliases" and emit ONE entity, never two.
+
+An alias must be derivable from the name itself. "Field Dispatch Platform (FDP)" is an alias; so is "Queue Service" shortened to "Queue Svc".
+
+A word that merely DESCRIBES the entity is not an alias. "Monitoring" is not an alias for a monitoring product, "the gateway" is not an alias for a named gateway, "database" is not an alias for a database product. Recording one of those would teach that every future mention of that ordinary word means this specific system — which corrupts the graph far more thoroughly than the duplicate it was meant to prevent.
+
+Only include an alias when the content itself shows the two names refer to the same thing. Do not guess expansions. If only the short form appears, use it as the display_name and leave aliases empty.
+
+Also capture any structured identifiers present in the content. Never invent identifiers that are not there.
+
+Return at most 20 entities. When the content contains a repetitive list of similar hostnames or devices, include the most important examples rather than every item.
+
+Respond in JSON with key "entities" containing a list of objects:
+{"entities": [{
+  "entity_type": "...",
+  "display_name": "...",
+  "aliases": [],
+  "context": "brief context",
+  "email": null,
+  "username": null,
+  "hostname": null,
+  "fqdn": null,
+  "serial_number": null,
+  "ip_addresses": [],
+  "source_identifiers": {}
+}]}
+
+Worked example. The names below are invented purely to show the SHAPE of a correct answer — never carry them into a real extraction, and never expect a real environment to contain them.
+
+For "J. Smith (jsmith@example.com) restarted edge-gw-01 after the tunnel certificate expired; qsvc.exe was also crashing with error 0x00000042 on the Field Dispatch Platform (FDP) queue path":
+{"entities": [
+  {"entity_type": "person", "display_name": "J. Smith", "aliases": [],
+    "email": "jsmith@example.com", "username": null, "hostname": null,
+    "fqdn": null, "serial_number": null, "ip_addresses": [],
+    "source_identifiers": {}, "context": "Restarted the gateway"},
+  {"entity_type": "device", "display_name": "edge-gw-01", "aliases": [],
+    "email": null, "username": null, "hostname": "edge-gw-01",
+    "fqdn": null, "serial_number": null, "ip_addresses": [],
+    "source_identifiers": {}, "context": "Gateway restarted"},
+  {"entity_type": "service", "display_name": "Queue Service", "aliases": [],
+    "email": null, "username": null, "hostname": null, "fqdn": null,
+    "serial_number": null, "ip_addresses": [], "source_identifiers": {},
+    "context": "Crashing on the queue path"},
+  {"entity_type": "application", "display_name": "Field Dispatch Platform",
+    "aliases": ["FDP"], "email": null, "username": null, "hostname": null,
+    "fqdn": null, "serial_number": null, "ip_addresses": [],
+    "source_identifiers": {}, "context": "Affected queue path"}
+]}
+Note what is absent, and why: qsvc.exe (a binary — the service it implements is named instead) and 0x00000042 (an error code). Note also that the abbreviation became an alias rather than a second entity.
+
+Only extract clearly identifiable entities. Returning fewer entities is better than returning noise: a wrong entity pollutes the graph permanently and is read back as fact."""
+
+# NOT default yet, deliberately.
+#
+# Measured against v2 on the six evidence items that produced the junk
+# entities now in the graph: junk 4 -> 0 on every run, and the alias
+# capture works (HP UPD folded into HP Universal Print Driver in three
+# separate documents, which is one of the two forked pairs the graph
+# actually contains).
+#
+# But total entities fell from 63 to between 44 and 53 depending on the
+# run, and one run dropped a product v3 had captured in the run before.
+# Some of that fall is correct — ticket IDs are now excluded, and name
+# variants that used to fork are folded into aliases — and some of it is
+# real recall loss. Six documents at one sample each cannot tell those
+# apart, and tuning further on that sample is fitting noise.
+#
+# So it registers here and ships behind `tenant_prompt_variants_json`,
+# which is precisely what per-tenant variant routing exists for: flip one
+# tenant, compare against the eval baseline, promote on evidence. A
+# prompt that removes junk by removing entities would look like a win in
+# the only number that is easy to measure.
+register_prompt(
+    Prompt(
+        name="identity",
+        version="v3",
+        system=_V3_SYSTEM,
+        user_template=_V1_USER,
+    ),
+)
+
 # Candidate adjudication: the LLM judges between a small candidate list and
 # may abstain. It never searches the database itself.
 _ADJUDICATION_V1_SYSTEM = """You resolve whether an incoming operational entity is the same as one of the known candidate identities.

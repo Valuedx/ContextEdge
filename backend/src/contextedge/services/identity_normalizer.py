@@ -39,6 +39,14 @@ class NormalizedEntity:
     context: str | None = None
     # alias_type -> list of (normalized_value, source_system | None)
     identifiers: dict[str, list[tuple[str, str | None]]] = field(default_factory=dict)
+    # Other names the CONTENT ITSELF gave for this same entity —
+    # "Sales Force Automation (SFA)". Learned against the resolved
+    # identity so the next bare "SFA" matches at the alias layer instead
+    # of forking a second identity, which is what happened before: the
+    # candidate generator matches on shared substrings, and "sfa" shares
+    # none with "sales force automation", so the adjudicator was never
+    # even shown the pair.
+    aliases: list[str] = field(default_factory=list)
 
     def add_identifier(self, alias_type: str, value: str, source_system: str | None = None) -> None:
         normalized = normalize_text(value)
@@ -103,6 +111,14 @@ def normalize_extracted_entity(entity: dict) -> NormalizedEntity | None:
     for value in entity.get("ip_addresses") or []:
         if value:
             normalized.add_identifier("ip_address", str(value))
+
+    for alias in entity.get("aliases") or []:
+        text = str(alias).strip()
+        # An "alias" identical to the display name teaches nothing, and a
+        # single character matches far too much to be worth learning.
+        if len(text) > 1 and normalize_text(text) != normalized.normalized_name:
+            if text not in normalized.aliases:
+                normalized.aliases.append(text)
 
     source_identifiers = entity.get("source_identifiers")
     if isinstance(source_identifiers, dict):
