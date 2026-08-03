@@ -189,7 +189,10 @@ async def llm_complete(
     # Clamp generated tokens to the deployment ceiling. Callers pass whatever
     # their prompt might need; this is the backstop that stops one caller (or
     # one runaway prompt) from buying an 8k-token answer on every retry.
-    effective_max_tokens = min(max_tokens, settings.llm_max_output_tokens)
+    ceiling = settings.llm_task_output_tokens.get(
+        task or "", settings.llm_max_output_tokens
+    )
+    effective_max_tokens = min(max_tokens, ceiling)
     if effective_max_tokens < max_tokens:
         logger.debug(
             "llm.max_tokens_clamped",
@@ -415,7 +418,7 @@ async def llm_complete_json(
     caching and maximises OpenAI's automatic prefix-cache hit rate.
     """
     # Increase token limit for extraction tasks to avoid truncation
-    max_tokens = 16384 if task == "extraction" else 8192
+    max_tokens = 16384 if task in ("extraction", "playbook") else 8192
 
     result = await llm_complete(
         prompt,

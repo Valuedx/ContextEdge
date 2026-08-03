@@ -71,6 +71,26 @@ class Settings(BaseSettings):
     # caller passes. Output is the expensive half of the bill, and on a
     # thinking model most of it is reasoning the caller never sees.
     llm_max_output_tokens: int = Field(default=4096, ge=256)
+    # Per-task override of that ceiling, for tasks whose *correct* answer
+    # is genuinely longer than the default.
+    #
+    # The global cap is a cost backstop and a good one, but as an
+    # absolute ceiling it silently overruled callers that had already
+    # asked for more, and the failure was invisible: playbook generation
+    # requested 16384, got 4096, ran out of budget partway through the
+    # steps array, and the JSON-repair path salvaged the complete prefix.
+    # The result was a playbook persisted with ZERO steps and a task that
+    # reported success. A cap that turns a correct answer into a
+    # confidently empty one is not saving money, it is buying nothing.
+    #
+    # Playbook generation is the long-output case by construction: every
+    # step carries its own text, type, risk and source citations, and
+    # prompt v3 added a conflicts block on top. It is also low-volume —
+    # one call per pattern — so the cost of a bigger ceiling here is
+    # small and the cost of truncation is a useless artifact.
+    llm_task_output_tokens: dict[str, int] = Field(
+        default_factory=lambda: {"playbook": 16384}
+    )
     # Largest number of texts sent to the embedding API in one request.
     # Callers hand in whole documents' worth of chunks; without a cap a single
     # call can be arbitrarily large and fail late, after paying for it.

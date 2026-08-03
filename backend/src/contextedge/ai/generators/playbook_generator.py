@@ -74,7 +74,12 @@ async def generate_playbook_candidate(
     ref_map = _build_ref_map(knowledge_sources or [], episode_summaries)
     result = await llm_complete_json(
         user,
-        task="extraction",
+        # Its own task name, not "extraction". A playbook is not an
+        # extraction — it is the longest single output the system
+        # produces — and sharing a label meant it shared a token budget
+        # sized for something else, and disappeared into someone else's
+        # line on the cost dashboard.
+        task="playbook",
         system_prompt=prompt.system,
         tenant_id=tenant_id,
         db=db,
