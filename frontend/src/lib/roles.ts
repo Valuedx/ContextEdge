@@ -28,6 +28,18 @@ export const canManageEval = (roles: string[]) => isKnowledgeManager(roles);
 export const canTransitionPlaybook = (roles: string[]) =>
   isPlaybookReviewer(roles) || isKnowledgeManager(roles) || isTenantAdmin(roles);
 
+/**
+ * Can change a playbook's automation mode.
+ *
+ * Deliberately narrower than editing a playbook. Automation mode decides
+ * whether a playbook may act on a real system at all — `suggest_only`
+ * caps every caller at read_only regardless of their own role, so
+ * raising it is what makes every other approval gate load-bearing.
+ * Editing a playbook's text and authorising it to take destructive
+ * action are not the same privilege.
+ */
+export const canEditAutomationMode = (roles: string[]) => isTenantAdmin(roles);
+
 /** Can trigger source discovery */
 export const canDiscoverSources = (roles: string[]) => isDomainAdmin(roles);
 
