@@ -149,10 +149,11 @@ def test_all_migrated_prompt_families_registered():
     registered at import time. Regression guard — forgetting to import
     a submodule in ``ai/prompts/__init__.py`` silently breaks the
     caller via a KeyError at first LLM call."""
-    # identity defaults to v2 since the layered-resolver shipment (v1 stays
-    # registered for tenants pinned to it). identity stays at v2 while v3
-    # is evaluated per-tenant: v3 removes junk entities but its recall on
-    # a six-document sample was too variable to promote on.
+    # identity is v3 since the extraction eval harness could decide it:
+    # 19 labelled cases at 3 samples each gave junk 9.5% -> 0%, forbidden
+    # 23 -> 3, stability 0.96 -> 1.00, and MISSING 0 -> 0. That last one
+    # settled it — the entity-count fall that looked like recall loss on
+    # an unlabelled sample was the junk being removed.
     #
     # identity_adjudication moved to v2 with the trigram candidate
     # change. Candidates are now found by similarity rather than
@@ -165,7 +166,7 @@ def test_all_migrated_prompt_families_registered():
     expected_defaults = {
         "episode": "v3",
         "decision": "v2",
-        "identity": "v2",
+        "identity": "v3",
         "identity_adjudication": "v2",
         "pattern": "v2",
         # v3 adds approved KB/SOP as a distinct input, step-level source
@@ -183,7 +184,7 @@ def test_all_migrated_prompt_families_registered():
 @pytest.mark.parametrize(
     ("module_path", "entry", "expected_name", "expected_version"),
     [
-        ("contextedge.ai.extractors.identity_extractor", "extract_identities", "identity", "v2"),
+        ("contextedge.ai.extractors.identity_extractor", "extract_identities", "identity", "v3"),
         ("contextedge.ai.extractors.decision_extractor", "extract_decisions", "decision", "v2"),
     ],
 )
