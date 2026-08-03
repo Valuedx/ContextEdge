@@ -51,3 +51,11 @@ backend/package-lock.json
 scratch/
 scratch_db_check.py
 diag_episodes.py
+
+# Celery beat's persistent scheduler state (a shelve of last-run times).
+# Runtime state, regenerated on start — and versioning it actively broke
+# the scheduler: a truncated .dat was committed with a non-empty .dir, so
+# every checkout got a beat that died on boot with "EOFError: Ran out of
+# input". No beat ran between April and August 2026 because of it.
+backend/celerybeat-schedule*
+celerybeat-schedule*
