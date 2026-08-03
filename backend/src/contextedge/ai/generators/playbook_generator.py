@@ -20,13 +20,25 @@ async def generate_playbook_candidate(
     episode_summaries: list[dict],
     negative_knowledge: list[str],
     *,
+    knowledge_sources: list[Any] | None = None,
     tenant_id: _uuid.UUID | str | None = None,
     db: Any | None = None,
 ) -> dict:
-    """Generate a playbook candidate from pattern analysis."""
+    """Generate a playbook candidate from pattern analysis.
+
+    ``knowledge_sources`` are the approved KB/SOP documents retrieved for
+    this pattern. They are passed as a *distinct* input rather than
+    folded into the episode summaries, because the prompt has to treat
+    them differently: knowledge is normative (what should be done) and
+    episodes are empirical (what was done). Merging them would erase the
+    distinction the reviewer needs to adjudicate a disagreement.
+
+    Episodes are labelled ``[ep-N]`` so steps can cite them the same way
+    they cite ``[kb-N]`` knowledge sections.
+    """
     summaries_text = ""
     for i, ep in enumerate(episode_summaries[:10]):
-        summaries_text += f"\n{i + 1}. {ep.get('title', 'Untitled')}"
+        summaries_text += f"\n[ep-{i + 1}] {ep.get('title', 'Untitled')}"
         if ep.get("root_cause"):
             summaries_text += f"\n   Root cause: {ep['root_cause']}"
         if ep.get("outcome"):
@@ -38,14 +50,27 @@ async def generate_playbook_candidate(
         else "None identified"
     )
 
-    prompt = get_prompt("playbook", tenant_id)
-    user = prompt.format_user(
-        pattern_title=pattern_title,
-        pattern_description=pattern_description or "",
-        episode_count=episode_count,
-        episode_summaries=summaries_text,
-        negative_knowledge=neg_text,
+    from contextedge.services.knowledge_retrieval_service import (
+        format_knowledge_block,
     )
+
+    knowledge_text = format_knowledge_block(knowledge_sources or [])
+
+    prompt = get_prompt("playbook", tenant_id)
+    format_kwargs: dict[str, Any] = {
+        "pattern_title": pattern_title,
+        "pattern_description": pattern_description or "",
+        "episode_count": episode_count,
+        "episode_summaries": summaries_text,
+        "negative_knowledge": neg_text,
+    }
+    # Older prompt versions have no knowledge slot; a tenant pinned to v1
+    # or v2 via variant routing must keep working rather than raising on
+    # an unexpected format key.
+    if "{knowledge_sources}" in prompt.user_template:
+        format_kwargs["knowledge_sources"] = knowledge_text
+
+    user = prompt.format_user(**format_kwargs)
     return await llm_complete_json(
         user,
         task="extraction",

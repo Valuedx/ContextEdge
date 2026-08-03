@@ -92,6 +92,12 @@ async def _existing_semantic_versions(
 # generation path actually knows.
 EVIDENCE_LINK_TYPE = "derived_from_evidence"
 EPISODE_LINK_TYPE = "derived_from_episode"
+# Normative grounding: the approved KB/SOP this version implements, as
+# distinct from the incidents it was derived from. Kept a separate link
+# type so "which SOP does this playbook implement" is answerable without
+# re-reading the JSON blob, and so a knowledge-drift check can find every
+# playbook version citing an article that changed.
+KNOWLEDGE_LINK_TYPE = "based_on_kb"
 
 MAX_EVIDENCE_LINKS = 500
 
@@ -123,14 +129,18 @@ def _materialize_evidence_links(
 
     evidence_ids: list[object] = []
     episode_ids: list[object] = []
+    knowledge_ids: list[object] = []
 
     if isinstance(evidence_refs, dict):
         raw_evidence = evidence_refs.get("evidence_ids")
         raw_episodes = evidence_refs.get("episode_ids")
+        raw_knowledge = evidence_refs.get("knowledge_ids")
         if isinstance(raw_evidence, list):
             evidence_ids = raw_evidence
         if isinstance(raw_episodes, list):
             episode_ids = raw_episodes
+        if isinstance(raw_knowledge, list):
+            knowledge_ids = raw_knowledge
     elif isinstance(evidence_refs, list):
         evidence_ids = evidence_refs
 
@@ -161,6 +171,24 @@ def _materialize_evidence_links(
                 playbook_version_id=version.id,
                 episode_id=parsed,
                 link_type=EPISODE_LINK_TYPE,
+            )
+        )
+        written += 1
+
+    for raw_id in knowledge_ids[:MAX_EVIDENCE_LINKS]:
+        parsed = _coerce_uuid(raw_id)
+        # Deduped against the evidence namespace: a KB article is an
+        # EvidenceItem, so the same id could arrive on both lists. When
+        # it does, the knowledge link is the more specific claim and the
+        # first write wins.
+        if parsed is None or ("e", str(parsed)) in seen:
+            continue
+        seen.add(("e", str(parsed)))
+        db.add(
+            PlaybookEvidenceLink(
+                playbook_version_id=version.id,
+                evidence_id=parsed,
+                link_type=KNOWLEDGE_LINK_TYPE,
             )
         )
         written += 1
@@ -337,6 +365,7 @@ async def create_playbook_version(
                     steps=version_data.get("steps", []),
                     rollback_notes=version_data.get("rollback_notes"),
                     evidence_refs=version_data.get("evidence_refs"),
+                    conflicts=version_data.get("conflicts"),
                     playbook_confidence=float(version_data.get("playbook_confidence", 0.5)),
                     execution_confidence_guidance=version_data.get("execution_confidence_guidance"),
                     verification_policy=version_data.get("verification_policy"),

@@ -359,12 +359,38 @@ def generate_playbook_candidate(self, pattern_id: str, tenant_id: str):
             for row in nk_r.scalars().all()
         ]
 
+        # Approved KB/SOP content for this pattern. Retrieved here, after
+        # episodes are reconstructed, because the pattern's own vocabulary
+        # (root causes, outcomes) is a far better retrieval fingerprint
+        # than an incident title — "Laptop Wi-Fi not working" matches
+        # nothing useful; "Intel AX201 Code 10 driver rollback" matches
+        # the article that documents it.
+        from contextedge.services.knowledge_retrieval_service import (
+            retrieve_knowledge_for_pattern,
+        )
+
+        knowledge = await retrieve_knowledge_for_pattern(
+            db,
+            tid,
+            pattern_title=pattern.title,
+            pattern_description=pattern.description,
+            episode_summaries=summaries,
+        )
+        logger.info(
+            "playbook.knowledge_retrieved",
+            tenant_id=str(tid),
+            pattern_id=str(pid),
+            documents=len(knowledge),
+            sections=sum(len(k.sections) for k in knowledge),
+        )
+
         llm = await playbook_generator.generate_playbook_candidate(
             pattern_title=pattern.title,
             pattern_description=pattern.description,
             episode_count=len(episodes),
             episode_summaries=summaries,
             negative_knowledge=neg,
+            knowledge_sources=knowledge,
             tenant_id=tid,
             db=db,
         )
@@ -405,7 +431,20 @@ def generate_playbook_candidate(self, pattern_id: str, tenant_id: str):
                 "evidence_ids": evidence_ref_ids,
                 "episode_ids": [str(eid) for eid in ep_ids],
                 "pattern_id": str(pattern.id),
+                # Knowledge is recorded separately from the episode
+                # evidence it was generated alongside. It grounds the
+                # playbook normatively, not empirically, and a reviewer
+                # asking "which SOP does this implement" needs that
+                # distinction preserved rather than flattened into one
+                # evidence list.
+                "knowledge_ids": [str(k.evidence_id) for k in knowledge],
             },
+            # Where the documented procedure and observed practice
+            # disagree. Persisted rather than resolved: preferring the
+            # SOP ignores verified runs that did something else,
+            # preferring practice quietly deletes a safeguard. The
+            # reviewer decides.
+            "conflicts": llm.get("conflicts") or [],
             "playbook_confidence": float(llm.get("playbook_confidence") or 0.5),
             "execution_confidence_guidance": llm.get("execution_confidence_guidance"),
         }
