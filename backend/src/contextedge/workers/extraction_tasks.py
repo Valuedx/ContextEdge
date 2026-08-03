@@ -470,8 +470,49 @@ async def _classify(db: AsyncSession, evidence_id: str, tenant_id: uuid.UUID) ->
     label = out.get("classification", "not_relevant")
     ev.relevance_state = label.replace(" ", "_")
     ev.relevance_score = float(out.get("confidence", 0.0))
+
+    await _extract_applicability(db, ev, tenant_id)
+
     await db.flush()
     return {"evidence_id": evidence_id, "classification": ev.relevance_state}
+
+
+async def _extract_applicability(
+    db: AsyncSession, ev: EvidenceItem, tenant_id: uuid.UUID
+) -> None:
+    """Read and persist where a knowledge article applies.
+
+    Ingest time is the only place this is affordable: one call per
+    article for the life of the article, rather than one per candidate
+    article per playbook generation. Knowledge evidence only — a ticket
+    does not have an applicability, it has an environment.
+
+    Never raises. Applicability is an enhancement to ranking, and an
+    article that fails extraction must still be ingested, chunked and
+    retrievable; retrieval falls back to the lexical extractor for it.
+    """
+    from contextedge.services.evidence_typing import KNOWLEDGE_EVIDENCE_TYPES
+    from contextedge.services.knowledge_applicability_service import (
+        extract_applicability_llm,
+    )
+
+    if ev.evidence_type not in KNOWLEDGE_EVIDENCE_TYPES or ev.applicability:
+        return
+
+    try:
+        facets = await extract_applicability_llm(
+            ev.title, ev.body_text, tenant_id=tenant_id, db=db
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "applicability.extract_failed",
+            evidence_id=str(ev.id),
+            error_type=type(exc).__name__,
+        )
+        return
+
+    if facets is not None:
+        ev.applicability = facets.to_payload()
 
 
 # Reconstruction debounce: in a busy incident channel every message
