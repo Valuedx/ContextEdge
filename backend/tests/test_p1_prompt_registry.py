@@ -150,12 +150,23 @@ def test_all_migrated_prompt_families_registered():
     a submodule in ``ai/prompts/__init__.py`` silently breaks the
     caller via a KeyError at first LLM call."""
     # identity defaults to v2 since the layered-resolver shipment (v1 stays
-    # registered for tenants pinned to it); identity_adjudication is new.
+    # registered for tenants pinned to it). identity stays at v2 while v3
+    # is evaluated per-tenant: v3 removes junk entities but its recall on
+    # a six-document sample was too variable to promote on.
+    #
+    # identity_adjudication moved to v2 with the trigram candidate
+    # change. Candidates are now found by similarity rather than
+    # substring, which raised the share of mentions reaching the
+    # adjudicator from 33% to 52% — and started routinely showing it
+    # numbered siblings like MAILGW01/MAILGW02 that are textually near
+    # and genuinely different machines. v1 said nothing about those.
+    # Raising recall into a judge without telling it what the new
+    # near-misses look like trades a silent fork for a silent wrong link.
     expected_defaults = {
         "episode": "v3",
         "decision": "v2",
         "identity": "v2",
-        "identity_adjudication": "v1",
+        "identity_adjudication": "v2",
         "pattern": "v2",
         # v3 adds approved KB/SOP as a distinct input, step-level source
         # citations, and the conflicts block. v1/v2 remain registered and
