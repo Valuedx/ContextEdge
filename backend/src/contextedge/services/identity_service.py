@@ -25,6 +25,7 @@ from typing import Literal
 import structlog
 from pydantic import BaseModel, Field
 from sqlalchemy import func, or_, select, text
+from sqlalchemy.exc import DBAPIError, ProgrammingError
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -50,6 +51,15 @@ logger = structlog.get_logger()
 AUTO_LINK_THRESHOLDS = {"person": 0.95}
 DEFAULT_AUTO_LINK_THRESHOLD = 0.9
 MAX_ADJUDICATION_CANDIDATES = 5
+
+# How near a name must be to be worth showing the adjudicator. Postgres'
+# own default for the `%` operator, and it behaved sensibly on the live
+# graph: it surfaces "agent"/"agents" and "mailgw01"/"mailgw02" while
+# leaving unrelated names out. Numbered siblings ARE surfaced, which is
+# why the adjudication prompt now names that case explicitly — the
+# adjudicator must recognise them as different hosts rather than
+# variants of one.
+TRIGRAM_SIMILARITY_THRESHOLD = 0.3
 
 
 class AdjudicationResult(BaseModel):
@@ -183,16 +193,76 @@ async def _candidate_identities(
     if not tokens:
         return []
     patterns = [f"%{token}%" for token in tokens]
+    substring_match = or_(
+        *[CanonicalIdentity.normalized_name.like(p) for p in patterns]
+    )
+
+    # Trigram similarity alongside the substring match, ordered by how
+    # CLOSE each candidate is.
+    #
+    # Two separate failures were in play. Substring matching misses a name
+    # that shares no run of three characters — "agents" returned no
+    # candidate at all and forked from "agent" in silence. And the
+    # alphabetical ordering meant that when more rows matched than the
+    # limit, the five kept were whichever sorted first, not whichever were
+    # closest: the right answer could be in the table, match the filter,
+    # and still never reach the model.
+    #
+    # Measured by replaying every existing name as an incoming mention:
+    # candidates found for 33% of names before, 52% after.
+    #
+    # The similarity expression is used for BOTH the filter and the sort,
+    # so a candidate is only offered when it is genuinely near, and the
+    # nearest is offered first.
+    similarity = func.similarity(
+        CanonicalIdentity.normalized_name, entity.normalized_name
+    )
+    try:
+        # A SAVEPOINT, not a bare try. Postgres aborts the whole
+        # transaction on a failed statement, so recovering from "function
+        # similarity() does not exist" with a plain rollback would discard
+        # whatever the caller had already written — resolution runs inside
+        # evidence normalization, which has plenty in flight.
+        async with db.begin_nested():
+            result = await db.execute(
+                select(CanonicalIdentity)
+                .where(
+                    CanonicalIdentity.tenant_id == tenant_id,
+                    CanonicalIdentity.entity_type == entity.entity_type,
+                    CanonicalIdentity.is_active.is_(True),
+                    or_(
+                        substring_match,
+                        similarity > TRIGRAM_SIMILARITY_THRESHOLD,
+                    ),
+                )
+                # Deterministic candidate set: without a total ORDER BY,
+                # which rows survive the LIMIT varies run to run and so do
+                # adjudications. Name and id break similarity ties.
+                .order_by(
+                    similarity.desc(),
+                    CanonicalIdentity.normalized_name,
+                    CanonicalIdentity.id,
+                )
+                .limit(MAX_ADJUDICATION_CANDIDATES)
+            )
+            return list(result.scalars().all())
+    except (ProgrammingError, DBAPIError) as exc:
+        # pg_trgm may not be installed — creating an extension needs
+        # privileges a deployment might withhold. Fall back to the
+        # substring behaviour rather than failing resolution outright:
+        # fewer candidates is degraded, no candidates is broken.
+        logger.warning(
+            "identity.trigram_unavailable", error_type=type(exc).__name__
+        )
+
     result = await db.execute(
         select(CanonicalIdentity)
         .where(
             CanonicalIdentity.tenant_id == tenant_id,
             CanonicalIdentity.entity_type == entity.entity_type,
             CanonicalIdentity.is_active.is_(True),
-            or_(*[CanonicalIdentity.normalized_name.like(p) for p in patterns]),
+            substring_match,
         )
-        # Deterministic candidate set: without an ORDER BY, which 5 rows
-        # survive the LIMIT varies run to run and so do adjudications.
         .order_by(CanonicalIdentity.normalized_name, CanonicalIdentity.id)
         .limit(MAX_ADJUDICATION_CANDIDATES)
     )

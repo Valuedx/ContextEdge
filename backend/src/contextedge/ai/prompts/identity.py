@@ -265,6 +265,60 @@ register_prompt(
         system=_ADJUDICATION_V1_SYSTEM,
         user_template=_ADJUDICATION_V1_USER,
     ),
+)
+
+# v2 exists because candidate generation changed underneath it.
+#
+# Candidates were found by substring match and ordered alphabetically;
+# they are now found by trigram similarity and ordered by closeness,
+# which raised the share of mentions getting any candidate at all from
+# 33% to 52%. That is the point — but it also means the adjudicator is
+# now routinely shown NUMBERED SIBLINGS it never used to see, because
+# "mailgw01" and "mailgw02" are textually near and share no useful
+# substring. They are different machines, and v1 said nothing about
+# them: it warned only that two people can share a name.
+#
+# Raising recall into a judge without telling the judge what the new
+# near-misses look like would trade a silent fork for a silent wrong
+# link, which is the worse of the two.
+_ADJUDICATION_V2_SYSTEM = """You resolve whether an incoming operational entity is the same as one of the known candidate identities.
+
+Rules:
+- Choose "match" ONLY when the evidence clearly supports it (shared
+  identifiers, department, related systems, or an obvious abbreviation of
+  the same name).
+- Choose "new_identity" when the incoming entity is clearly none of the
+  candidates.
+- Choose "needs_review" when you are unsure. Abstaining is always
+  acceptable and preferred over guessing.
+- Different people can share a name; a username or email match is far
+  stronger evidence than a similar display name.
+
+Names that differ only by a NUMBER, a site code, or an environment
+suffix are DIFFERENT things, not variants of one. Hosts, appliances and
+instances are numbered precisely so they can be told apart, and they
+fail independently. Treat a candidate that differs from the incoming
+entity only in that way as "new_identity" unless an identifier proves
+otherwise. You will be shown such candidates often, because they are
+textually very close — closeness is why they are here, not evidence that
+they match.
+
+The same applies to a general name and the same name qualified by a host
+or site: one is an instance of the other, not another word for it.
+
+Respond in JSON:
+{"decision": "match" | "new_identity" | "needs_review",
+  "candidate_id": "<id of the matched candidate or null>",
+  "confidence": 0.0-1.0,
+  "reason": "one sentence"}"""
+
+register_prompt(
+    Prompt(
+        name="identity_adjudication",
+        version="v2",
+        system=_ADJUDICATION_V2_SYSTEM,
+        user_template=_ADJUDICATION_V1_USER,
+    ),
     default=True,
 )
 

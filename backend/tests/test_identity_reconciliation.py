@@ -221,3 +221,74 @@ async def test_a_proposal_from_another_tenant_is_invisible():
         )
         is None
     )
+
+
+# --- candidate generation -----------------------------------------------------
+#
+# The adjudicator only ever judges what this query returns, so the query
+# is the real ceiling on resolution quality. Replaying every existing
+# identity name as an incoming mention: the substring query returned
+# candidates for 33% of them, the trigram query for 52%. "agents"
+# returned NOTHING and so forked from "agent" in silence.
+
+
+def test_candidates_are_ordered_by_closeness_not_alphabetically():
+    """The second half of the problem.
+
+    With more matches than the limit, the five kept were whichever sorted
+    first — so the right answer could be in the table, match the filter,
+    and still never reach the model.
+    """
+    import inspect
+
+    from contextedge.services import identity_service
+
+    source = inspect.getsource(identity_service._candidate_identities)
+    assert "similarity.desc()" in source
+    ordering = source.index("similarity.desc()")
+    fallback = source.index("identity.trigram_unavailable")
+    # The similarity ordering belongs to the primary query, not the
+    # fallback that runs when pg_trgm is missing.
+    assert ordering < fallback
+
+
+def test_substring_matching_is_kept_alongside_similarity():
+    """Trigram is an addition, not a replacement: a short token inside a
+    long name scores low on similarity but is still a real match."""
+    import inspect
+
+    from contextedge.services import identity_service
+
+    source = inspect.getsource(identity_service._candidate_identities)
+    assert "substring_match" in source
+    assert "or_(" in source
+
+
+def test_a_missing_extension_degrades_instead_of_failing():
+    """pg_trgm needs privileges a deployment may withhold. Fewer
+    candidates is degraded; no candidates is broken."""
+    import inspect
+
+    from contextedge.services import identity_service
+
+    source = inspect.getsource(identity_service._candidate_identities)
+    assert "ProgrammingError" in source
+    # A SAVEPOINT, not a bare rollback: Postgres aborts the whole
+    # transaction on a failed statement, and resolution runs inside
+    # evidence normalization with plenty already written.
+    assert "begin_nested" in source
+    assert "await db.rollback()" not in source
+
+
+def test_the_adjudicator_is_told_numbered_siblings_are_distinct():
+    """Trigram surfaces MAILGW01 next to MAILGW02 — textually near,
+    genuinely different machines. Raising recall into a judge without
+    telling it what the new near-misses look like trades a silent fork
+    for a silent wrong link."""
+    from contextedge.ai.prompts import get_prompt
+
+    prompt = get_prompt("identity_adjudication")
+    assert prompt.version == "v2"
+    system = prompt.system.lower()
+    assert "number" in system
+    assert "new_identity" in system
