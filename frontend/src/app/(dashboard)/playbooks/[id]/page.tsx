@@ -36,7 +36,12 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { api } from "@/lib/api";
-import type { Playbook, PlaybookVersion, PlaybookVersionDiff } from "@/lib/types";
+import type {
+  PoliciesOverview,
+  Playbook,
+  PlaybookVersion,
+  PlaybookVersionDiff,
+} from "@/lib/types";
 import { useAuthStore } from "@/lib/stores/auth-store";
 import { canEditAutomationMode, canTransitionPlaybook } from "@/lib/roles";
 import { GitCompare, RotateCcw } from "lucide-react";
@@ -236,100 +241,223 @@ const AUTOMATION_MODES: { value: string; label: string; detail: string }[] = [
   },
 ];
 
+const NO_POLICY = "__none__";
+
+/** What an approval policy's config actually enforces, in plain terms. */
+function describePolicy(config: Record<string, unknown>): string[] {
+  const out: string[] = [];
+  const roles = config.approver_roles;
+  if (Array.isArray(roles) && roles.length > 0) {
+    out.push(`Only ${roles.join(", ")} may decide approvals`);
+  }
+  if (config.forbid_self_approval) {
+    out.push("The person who starts a run may not approve their own steps");
+  }
+  if (typeof config.require_approval_min_safety_class === "string") {
+    out.push(
+      `Anything at or above ${config.require_approval_min_safety_class} always needs approval`,
+    );
+  }
+  if (typeof config.max_automation_mode === "string") {
+    out.push(`Automation capped at ${config.max_automation_mode}`);
+  }
+  return out;
+}
+
 /**
- * Automation mode — the switch that decides whether this playbook may
- * act on a real system.
+ * Governance: automation mode and the approval policy bound to it.
  *
- * It was displayed in four places and editable in none, so every
- * generated playbook stayed at `suggest_only` forever and the per-step
- * approval machinery was unreachable in practice.
+ * One panel rather than two because they constrain each other — a policy
+ * can cap automation mode, so choosing them apart invites saving a
+ * combination the API will reject.
  *
- * Restricted to tenant_admin rather than the knowledge_manager who may
- * edit everything else about the playbook: authoring a procedure and
- * authorising it to take destructive action are different privileges.
+ * Both were unreachable from the UI. Automation mode was rendered in
+ * four places and editable in none, so every generated playbook stayed
+ * at `suggest_only` — which caps every caller at read_only — and the
+ * per-step approval machinery below it could never engage. Approval
+ * policies could be authored on the policies page but never bound to
+ * anything, so `forbid_self_approval` and `approver_roles` were written
+ * and never applied.
+ *
+ * Restricted to tenant_admin. Attaching a policy only ever adds
+ * constraints, but the same control detaches one, and clearing it drops
+ * the two-person rule and the autonomy ceiling in a single action.
  */
-function AutomationModePanel({ playbook }: { playbook: Playbook }) {
+function GovernancePanel({ playbook }: { playbook: Playbook }) {
   const qc = useQueryClient();
   const roles = useAuthStore((s) => s.roles);
   const editable = canEditAutomationMode(roles);
-  const [pending, setPending] = useState<string | null>(null);
 
-  const current =
+  const [pendingMode, setPendingMode] = useState<string | null>(null);
+  const [pendingPolicy, setPendingPolicy] = useState<string | null>(null);
+
+  const { data: policies } = useQuery<PoliciesOverview>({
+    queryKey: ["policies"],
+    queryFn: () => api.get<PoliciesOverview>("/policies"),
+    enabled: editable,
+  });
+  // Inactive policies fail closed at execution and are rejected at bind
+  // time, so offering them would only produce an error later.
+  const approvalPolicies = (policies?.approval_policies ?? []).filter(
+    (p) => p.is_active,
+  );
+
+  const currentMode =
     AUTOMATION_MODES.find((m) => m.value === playbook.automation_mode) ?? null;
+  const boundPolicy =
+    approvalPolicies.find((p) => p.id === playbook.approval_policy_id) ?? null;
 
   const mut = useMutation({
-    mutationFn: (mode: string) =>
-      api.patch(`/playbooks/${playbook.id}`, { automation_mode: mode }),
-    onSuccess: (_data, mode) => {
+    mutationFn: (body: Record<string, unknown>) =>
+      api.patch(`/playbooks/${playbook.id}`, body),
+    onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["playbook", playbook.id] });
       qc.invalidateQueries({ queryKey: ["playbooks"] });
-      toast.success(`Automation mode set to "${mode}"`);
-      setPending(null);
+      toast.success("Governance updated");
+      setPendingMode(null);
+      setPendingPolicy(null);
     },
     onError: (err: Error) => {
-      // A tenant approval policy can cap autonomy; the API rejects a mode
-      // above that ceiling. Surface its reason rather than a generic
-      // failure — "your policy caps this at supervised" is actionable,
+      // The API rejects a mode above the bound policy's ceiling. Surface
+      // its own reason — "policy caps this at supervised" is actionable,
       // "update failed" is not.
-      toast.error(err.message || "Could not change automation mode");
-      setPending(null);
+      toast.error(err.message || "Could not update governance");
     },
   });
 
+  const modeChanged = pendingMode !== null && pendingMode !== playbook.automation_mode;
+  const policySelection = pendingPolicy ?? playbook.approval_policy_id ?? NO_POLICY;
+  const policyChanged =
+    pendingPolicy !== null &&
+    pendingPolicy !== (playbook.approval_policy_id ?? NO_POLICY);
+
+  const apply = () => {
+    const body: Record<string, unknown> = {};
+    if (modeChanged) body.automation_mode = pendingMode;
+    if (policyChanged) {
+      body.approval_policy_id = pendingPolicy === NO_POLICY ? null : pendingPolicy;
+    }
+    if (Object.keys(body).length > 0) mut.mutate(body);
+  };
+
+  const previewPolicy =
+    approvalPolicies.find((p) => p.id === policySelection) ?? boundPolicy;
+
   return (
-    <div className="rounded-lg border p-4 space-y-3">
+    <div className="rounded-lg border p-4 space-y-4">
       <div>
-        <h3 className="text-sm font-semibold">Automation mode</h3>
+        <h3 className="text-sm font-semibold">Governance</h3>
         <p className="mt-1 text-xs text-muted-foreground">
           {editable
-            ? "Decides whether this playbook may act on a real system. Raising it is what makes the per-step approval gates apply."
-            : "Decides whether this playbook may act on a real system. Only a tenant administrator can change it."}
+            ? "Whether this playbook may act on a real system, and who must approve when it does."
+            : "Whether this playbook may act on a real system, and who must approve when it does. Only a tenant administrator can change these."}
         </p>
       </div>
 
-      <div className="flex flex-wrap items-center gap-2">
-        <StatusBadge status={playbook.automation_mode} />
-        {current && (
-          <span className="text-xs text-muted-foreground">{current.detail}</span>
-        )}
+      <div className="grid gap-4 sm:grid-cols-2">
+        <div className="space-y-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-xs text-muted-foreground">Automation</span>
+            <StatusBadge status={playbook.automation_mode} />
+          </div>
+          {currentMode && (
+            <p className="text-xs text-muted-foreground">{currentMode.detail}</p>
+          )}
+          {editable && (
+            <div>
+              <Label htmlFor="automation-mode" className="text-xs">
+                Change to
+              </Label>
+              <Select
+                value={pendingMode ?? playbook.automation_mode}
+                onValueChange={(v) => setPendingMode(v ?? null)}
+              >
+                <SelectTrigger id="automation-mode" className="mt-1">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {AUTOMATION_MODES.map((mode) => (
+                    <SelectItem key={mode.value} value={mode.value}>
+                      {mode.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
+        </div>
+
+        <div className="space-y-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-xs text-muted-foreground">Approval policy</span>
+            {playbook.approval_policy_id ? (
+              <span className="rounded border px-1.5 py-0.5 text-[11px]">
+                {boundPolicy?.name ?? "attached"}
+              </span>
+            ) : (
+              <span className="text-xs">
+                None — role and automation mode alone decide gating
+              </span>
+            )}
+          </div>
+          {editable && (
+            <div>
+              <Label htmlFor="approval-policy" className="text-xs">
+                Bind policy
+              </Label>
+              <Select
+                value={policySelection}
+                onValueChange={(v) => setPendingPolicy(v ?? NO_POLICY)}
+              >
+                <SelectTrigger id="approval-policy" className="mt-1">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={NO_POLICY}>None</SelectItem>
+                  {approvalPolicies.map((policy) => (
+                    <SelectItem key={policy.id} value={policy.id}>
+                      {policy.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
+          {/* What binding it actually does. A policy name alone tells a
+              reviewer nothing about the rules they are switching on. */}
+          {previewPolicy && describePolicy(previewPolicy.config).length > 0 && (
+            <ul className="space-y-0.5">
+              {describePolicy(previewPolicy.config).map((rule) => (
+                <li key={rule} className="text-xs text-muted-foreground">
+                  • {rule}
+                </li>
+              ))}
+            </ul>
+          )}
+          {editable && approvalPolicies.length === 0 && (
+            <p className="text-xs text-muted-foreground">
+              No active approval policies exist yet — create one on the
+              Policies page.
+            </p>
+          )}
+        </div>
       </div>
 
       {editable && (
-        <div className="flex flex-wrap items-end gap-2">
-          <div className="min-w-[200px]">
-            <Label htmlFor="automation-mode">Change to</Label>
-            <Select
-              value={pending ?? playbook.automation_mode}
-              onValueChange={(v) => setPending(v ?? null)}
-            >
-              <SelectTrigger id="automation-mode" className="mt-1">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {AUTOMATION_MODES.map((mode) => (
-                  <SelectItem key={mode.value} value={mode.value}>
-                    {mode.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
+        <div className="flex items-center gap-2">
           <Button
-            disabled={
-              mut.isPending || !pending || pending === playbook.automation_mode
-            }
-            onClick={() => pending && mut.mutate(pending)}
+            disabled={mut.isPending || (!modeChanged && !policyChanged)}
+            onClick={apply}
           >
             {mut.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
             Apply
           </Button>
+          {modeChanged && (
+            <span className="text-xs text-muted-foreground">
+              {AUTOMATION_MODES.find((m) => m.value === pendingMode)?.detail}
+            </span>
+          )}
         </div>
-      )}
-
-      {editable && pending && pending !== playbook.automation_mode && (
-        <p className="text-xs text-muted-foreground">
-          {AUTOMATION_MODES.find((m) => m.value === pending)?.detail}
-        </p>
       )}
     </div>
   );
@@ -654,7 +782,7 @@ export default function PlaybookDetailPage() {
         )}
       </div>
 
-      <AutomationModePanel playbook={playbook} />
+      <GovernancePanel playbook={playbook} />
       {latest && <KnowledgeSourcesPanel version={latest} />}
       {latest && <ConflictsPanel version={latest} />}
 

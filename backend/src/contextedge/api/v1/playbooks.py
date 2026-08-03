@@ -163,6 +163,13 @@ async def update_playbook(playbook_id: UUID, body: PlaybookUpdate, db: DbSession
         user.require_role("tenant_admin")
 
     if "approval_policy_id" in update_data:
+        # Same bar, for the mirror-image reason. Attaching a policy only
+        # ever adds constraints, but the same field DETACHES one: setting
+        # it to null removes the two-person rule, the approver-role
+        # requirement and the autonomy ceiling in a single write. A
+        # privilege is defined by the most dangerous thing it permits,
+        # and that is the clear rather than the bind.
+        user.require_role("tenant_admin")
         await assert_policy_assignment(
             db,
             user.tenant_id,
