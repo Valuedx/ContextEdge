@@ -109,6 +109,7 @@ export interface EvidenceItem {
   id: string;
   tenant_id: string;
   source_id: string;
+  source_type: string | null;
   evidence_type: string;
   title: string | null;
   body_text?: string | null;

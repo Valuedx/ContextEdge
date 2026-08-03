@@ -8,6 +8,7 @@ class EvidenceItemResponse(BaseModel):
     id: UUID
     tenant_id: UUID
     source_id: UUID
+    source_type: str | None = None
     evidence_type: str
     title: str | None
     body_summary: str | None

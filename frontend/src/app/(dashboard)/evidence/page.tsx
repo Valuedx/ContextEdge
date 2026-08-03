@@ -2,7 +2,7 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ColumnDef } from "@tanstack/react-table";
-import { Trash2, Loader2 } from "lucide-react";
+import { RefreshCw, Trash2, Loader2 } from "lucide-react";
 
 import { PageHeader } from "@/components/common/page-header";
 import { DataTable } from "@/components/common/data-table";
@@ -87,6 +87,11 @@ const columns: ColumnDef<EvidenceItem>[] = [
   },
   { accessorKey: "evidence_type", header: "Type" },
   {
+    accessorKey: "source_type",
+    header: "Source",
+    cell: ({ row }) => row.original.source_type || "unknown",
+  },
+  {
     accessorKey: "relevance_state",
     header: "Relevance",
     cell: ({ row }) => <StatusBadge status={row.getValue("relevance_state")} />,
@@ -133,7 +138,7 @@ export default function EvidencePage() {
     },
   });
 
-  const { data = [], isLoading } = useQuery<EvidenceItem[]>({
+  const { data = [], isLoading, isFetching } = useQuery<EvidenceItem[]>({
     queryKey: ["evidence", appliedQuery, pg.page],
     queryFn: () => {
       const params: Record<string, string> = { ...pg.params };
@@ -156,6 +161,19 @@ export default function EvidencePage() {
           className="font-mono text-sm"
         />
         <div className="flex shrink-0 gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => queryClient.invalidateQueries({ queryKey: ["evidence"] })}
+            disabled={isFetching}
+          >
+            {isFetching ? (
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+            ) : (
+              <RefreshCw className="mr-2 h-4 w-4" />
+            )}
+            Refresh
+          </Button>
           <Button
             type="button"
             variant="secondary"
