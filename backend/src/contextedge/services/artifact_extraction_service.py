@@ -25,6 +25,29 @@ from contextedge.services.object_store import download_artifact, download_raw, u
 
 MAX_ATTACHMENT_TEXT_CHARS = 4_000
 MAX_COMBINED_BODY_CHARS = 16_000
+
+# Documents get their own, much larger budgets. The 4 KB / 16 KB caps
+# above are correct for a log attachment — nobody needs the whole log in
+# the evidence body, and the artifact keeps the full text — but applying
+# them to a 60-page SOP truncates it to roughly its title page. The
+# procedure, rollback, and verification sections a playbook needs to cite
+# are all past the cut.
+#
+# These bound the *evidence body*, which is what the classifier and
+# embedder read. Structure-aware chunking is what will make long
+# documents properly retrievable; until then a generous cap is the
+# difference between a searchable SOP and a searchable cover sheet.
+MAX_DOCUMENT_TEXT_CHARS = 200_000
+MAX_DOCUMENT_BODY_CHARS = 400_000
+
+# Element metadata persisted per artifact. Bounded because it lands in a
+# JSONB column: a 500-page document can produce tens of thousands of
+# elements, and the row should stay readable.
+MAX_PERSISTED_ELEMENTS = 2_000
+
+# Parser types that produce documents rather than log-ish text, and so
+# earn the larger budgets above.
+DOCUMENT_PARSER_TYPES = frozenset({"pdf_native", "docx_native"})
 TEXT_EXTENSIONS = {".txt", ".text", ".md", ".csv"}
 LOG_EXTENSIONS = {".log", ".out", ".err"}
 JSON_EXTENSIONS = {".json", ".jsonl", ".ndjson"}
@@ -118,6 +141,18 @@ def extract_artifact_text(
     mime_type: str | None,
     data: bytes,
 ) -> ArtifactExtractionResult:
+    # Structured document parsers are tried first: a PDF or DOCX is not a
+    # text blob, and the elements they produce (page, section path,
+    # bounding box, tables, figure placeholders) are what step-level
+    # citations and structure-aware chunking need. The text rendering
+    # returned here keeps the existing pipeline working; the elements are
+    # carried in parser_metadata for consumers that want them.
+    document_result = _extract_structured_document(
+        filename=filename, mime_type=mime_type, data=data
+    )
+    if document_result is not None:
+        return document_result
+
     parser_type = _detect_parser(filename, mime_type)
     if parser_type is None:
         return ArtifactExtractionResult(
@@ -164,6 +199,83 @@ def extract_artifact_text(
             "byte_count": len(data),
         },
     )
+
+
+def _extract_structured_document(
+    *, filename: str | None, mime_type: str | None, data: bytes
+) -> ArtifactExtractionResult | None:
+    """Parse via a document adapter, or ``None`` if none claims the file.
+
+    Returning ``None`` is the normal path for logs, JSON, and
+    transcripts — they fall through to the text extractors below.
+
+    A parse failure returns a *failed* result rather than raising or
+    falling through: a PDF that pdfplumber cannot open is a PDF, and
+    reporting "unsupported_artifact_type" for it would send an operator
+    looking for a missing feature instead of a corrupt file.
+    """
+    from contextedge.services.documents import get_parser, render_elements_to_text
+
+    parser = get_parser(filename=filename, mime_type=mime_type)
+    if parser is None:
+        return None
+
+    try:
+        parsed = parser.parse(data, filename=filename)
+    except Exception as exc:  # noqa: BLE001
+        return ArtifactExtractionResult(
+            status="failed",
+            parser_type=parser.name,
+            parser_confidence=0.0,
+            text=None,
+            parser_metadata={
+                "mime_type": _clean_mime_type(mime_type),
+                "filename": filename,
+            },
+            error=f"document_parse_failed: {type(exc).__name__}",
+        )
+
+    text = render_elements_to_text(parsed.elements, max_chars=MAX_DOCUMENT_TEXT_CHARS)
+    empty_pages = parsed.metadata.get("empty_pages") or []
+
+    return ArtifactExtractionResult(
+        status="completed",
+        parser_type=parser.name,
+        # Confidence reflects coverage, not parser quality: a document
+        # whose pages are largely image-only has been read correctly and
+        # still yields little. Downstream completeness assessment needs
+        # to see that difference.
+        parser_confidence=_document_coverage(parsed.page_count, len(empty_pages)),
+        text=text,
+        parser_metadata={
+            "mime_type": _clean_mime_type(mime_type),
+            "filename": filename,
+            "byte_count": len(data),
+            "page_count": parsed.page_count,
+            "element_count": len(parsed.elements),
+            # Pages with no text layer. These are the selective targets
+            # for the later multimodal pass — recorded, never guessed at.
+            "pages_without_text": empty_pages[:100],
+            "warnings": parsed.warnings[:20],
+            "elements": [
+                {
+                    "type": e.element_type,
+                    "page": e.page_number,
+                    "section": e.section_path,
+                    "bbox": list(e.bounding_box) if e.bounding_box else None,
+                    "method": e.extraction_method,
+                    "text": e.text[:2000],
+                }
+                for e in parsed.elements[:MAX_PERSISTED_ELEMENTS]
+            ],
+        },
+    )
+
+
+def _document_coverage(page_count: int, empty_page_count: int) -> float:
+    if page_count <= 0:
+        return 0.0
+    return round(max(0.0, (page_count - empty_page_count) / page_count), 3)
 
 
 def _attachment_payload_entries(payload: dict | None) -> list[dict]:
@@ -283,17 +395,26 @@ def build_combined_evidence_body(
     attachments: list[AttachmentArtifact],
 ) -> str | None:
     sections = [base_body.strip()] if base_body and base_body.strip() else []
+    has_document = False
     for artifact in attachments:
         if artifact.extraction_status != "completed" or not artifact.extracted_text:
             continue
-        snippet = artifact.extracted_text.strip()[:MAX_ATTACHMENT_TEXT_CHARS]
+        # Per-artifact budget by kind: a log is sampled, a document is
+        # kept. Applying the log cap to an SOP truncates it to about its
+        # title page, past which every section a playbook would cite
+        # lives.
+        is_document = (artifact.parser_type or "") in DOCUMENT_PARSER_TYPES
+        has_document = has_document or is_document
+        budget = MAX_DOCUMENT_TEXT_CHARS if is_document else MAX_ATTACHMENT_TEXT_CHARS
+        snippet = artifact.extracted_text.strip()[:budget]
         if not snippet:
             continue
         parser_label = artifact.parser_type or "deterministic"
         sections.append(f"[Attachment: {artifact.filename} | parser={parser_label}]\n{snippet}")
     if not sections:
         return None
-    return "\n\n".join(sections)[:MAX_COMBINED_BODY_CHARS]
+    combined_budget = MAX_DOCUMENT_BODY_CHARS if has_document else MAX_COMBINED_BODY_CHARS
+    return "\n\n".join(sections)[:combined_budget]
 
 
 async def synchronize_evidence_artifacts(
