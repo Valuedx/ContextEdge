@@ -5,12 +5,16 @@ from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
 from contextedge.deps import AuthUser, DbSession
+from contextedge.schemas.common import StatusResponse
 from contextedge.models.episode import (
+    IdentityMergeProposal,
     RESOLUTION_STATES,
     CanonicalIdentity,
     IdentityAlias,
 )
 from contextedge.schemas.review import (
+    IdentityMergeProposalDecision,
+    IdentityMergeProposalResponse,
     IdentityMergeRequest,
     IdentityResponse,
     IdentityUpdate,
@@ -19,6 +23,7 @@ from contextedge.services.identity_normalizer import (
     _classify_bare_name,
     normalize_text,
 )
+from contextedge.services.identity_reconciliation_service import decide_proposal
 from contextedge.services.identity_service import merge_canonical_identities
 
 router = APIRouter()
@@ -176,3 +181,92 @@ async def merge_identities(
         .options(selectinload(CanonicalIdentity.aliases))
     )
     return result.scalar_one()
+
+
+@router.get("/merge-proposals", response_model=list[IdentityMergeProposalResponse])
+async def list_merge_proposals(
+    db: DbSession,
+    user: AuthUser,
+    status_filter: str = Query("pending", alias="status"),
+    limit: int = Query(50, ge=1, le=200),
+):
+    """Pairs a reconciliation pass believes are the same thing.
+
+    Per-mention resolution cannot find these — it only ever sees
+    candidates sharing a substring with the incoming name, so an acronym
+    and its expansion are never presented together and fork into two
+    identities.
+    """
+    user.require_role("knowledge_manager")
+    rows = (
+        (
+            await db.execute(
+                select(IdentityMergeProposal)
+                .where(
+                    IdentityMergeProposal.tenant_id == user.tenant_id,
+                    IdentityMergeProposal.status == status_filter,
+                )
+                .order_by(IdentityMergeProposal.confidence.desc())
+                .limit(limit)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    if not rows:
+        return []
+
+    # Resolve both names in one query. A reviewer cannot judge "fold A
+    # into B" from two UUIDs, and per-row lookups would be N+1.
+    identity_ids = {r.primary_identity_id for r in rows} | {
+        r.duplicate_identity_id for r in rows
+    }
+    names = dict(
+        (
+            await db.execute(
+                select(CanonicalIdentity.id, CanonicalIdentity.canonical_name).where(
+                    CanonicalIdentity.id.in_(identity_ids)
+                )
+            )
+        ).all()
+    )
+    return [
+        IdentityMergeProposalResponse(
+            id=row.id,
+            entity_type=row.entity_type,
+            primary_identity_id=row.primary_identity_id,
+            primary_name=names.get(row.primary_identity_id),
+            duplicate_identity_id=row.duplicate_identity_id,
+            duplicate_name=names.get(row.duplicate_identity_id),
+            confidence=row.confidence,
+            reason=row.reason,
+            status=row.status,
+            created_at=row.created_at,
+        )
+        for row in rows
+    ]
+
+
+@router.post("/merge-proposals/{proposal_id}/decide", response_model=StatusResponse)
+async def decide_merge_proposal(
+    proposal_id: UUID,
+    body: IdentityMergeProposalDecision,
+    db: DbSession,
+    user: AuthUser,
+):
+    """Accept a proposal (performing the merge) or reject it.
+
+    A rejection is as valuable as an acceptance: it is what stops the
+    next scheduled run from raising the same pair again.
+    """
+    user.require_role("knowledge_manager")
+    proposal = await decide_proposal(
+        db,
+        user.tenant_id,
+        proposal_id,
+        accept=body.accept,
+        actor_id=user.user_id,
+    )
+    if proposal is None:
+        raise HTTPException(status_code=404, detail="Merge proposal not found")
+    return StatusResponse(status=proposal.status)

@@ -446,6 +446,11 @@ async def test_merge_repoints_aliases_and_records_duplicate_name():
             _ScalarsResult([]),           # primary evidence-link ids
             _ScalarsResult([]),           # duplicate evidence links
             _ScalarsResult([]),           # graph edges referencing duplicate
+            # Edges already on the primary. Loaded so a re-point that
+            # would collide with one of them is deleted instead —
+            # merging a genuine duplicate always collides, because one
+            # document naming both forms produces an edge to each.
+            _ScalarsResult([]),
         ]
     )
 
@@ -523,6 +528,9 @@ async def test_merge_strong_alias_text_collision_is_repointed_not_deleted():
             _ScalarsResult([dup_email]),
             _ScalarsResult([]),
             _ScalarsResult([]),
+            _ScalarsResult([]),
+            # Edges already on the primary — loaded so a colliding
+            # re-point is deleted rather than violating the unique index.
             _ScalarsResult([]),
         ]
     )

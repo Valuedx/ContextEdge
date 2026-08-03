@@ -138,3 +138,58 @@ def rebuild_identity_snapshots(self, tenant_id: str, primary_id: str, duplicate_
             error=str(exc),
         )
         raise self.retry(exc=exc) from exc
+
+
+@celery_app.task(
+    bind=True,
+    max_retries=1,
+    default_retry_delay=600,
+    name="identity.reconcile_identities",
+)
+def reconcile_identities_task(self, tenant_id: str = "all"):
+    """Propose merges across a tenant's unresolved identities.
+
+    Scheduled rather than triggered because the duplicates it finds are
+    created one at a time by the hot path and only become visible as a
+    SET. Per-mention resolution compares an incoming name against
+    candidates sharing a substring with it, so an acronym and its
+    expansion never meet; this pass reads the whole type at once.
+
+    Proposes only. The merge itself waits for a human on the identities
+    page, because a wrong merge destroys the distinction between two real
+    systems and leaves no trace that it did.
+    """
+    from contextedge.models.tenant import Tenant
+    from contextedge.services.identity_reconciliation_service import (
+        reconcile_identities,
+    )
+
+    async def work(db):
+        if tenant_id == "all":
+            tenant_ids = list(
+                (await db.execute(select(Tenant.id))).scalars().all()
+            )
+        else:
+            tenant_ids = [uuid.UUID(tenant_id)]
+
+        total = 0
+        for tid in tenant_ids:
+            try:
+                proposals = await reconcile_identities(db, tid)
+                total += len(proposals)
+                await db.flush()
+            except Exception as exc:  # noqa: BLE001
+                # One tenant's failure must not stop the fan-out; the
+                # next beat retries it anyway.
+                logger.warning(
+                    "identity.reconcile_tenant_failed",
+                    tenant_id=str(tid),
+                    error_type=type(exc).__name__,
+                )
+        return {"status": "ok", "tenants": len(tenant_ids), "proposals": total}
+
+    try:
+        return run_async(work)
+    except Exception as exc:
+        logger.exception("identity.reconcile_failed", error=str(exc))
+        raise self.retry(exc=exc) from exc

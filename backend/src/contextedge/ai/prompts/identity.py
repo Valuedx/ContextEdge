@@ -267,3 +267,61 @@ register_prompt(
     ),
     default=True,
 )
+
+# Batch reconciliation. Adjudication above judges ONE incoming mention
+# against a handful of candidates that share a substring with it — so it
+# structurally cannot notice that "SFA" and "Sales Force Automation" are
+# the same thing, because they share none and are never presented
+# together. On a live tenant that is not hypothetical: both pairs sit in
+# the graph as separate rows, along with "HP UPD" / "HP Universal Print
+# Driver", and 92% of mentions never reached the adjudicator at all.
+#
+# This prompt sees the whole set for one entity type at once and looks
+# ACROSS it. Its output is a proposal for a human, never a merge.
+_RECONCILIATION_V1_SYSTEM = """You are given a list of entity records of one type, all extracted from one organisation's operational records. Some of them are the same real-world thing recorded under different names.
+
+Find those. Return groups, each naming the record that should be KEPT and the records that should be folded into it.
+
+Merge when the names denote the same thing:
+- an acronym or initialism and its expansion
+- a short form or truncation and the full name
+- the same name with a suffix or qualifier that adds nothing ("X" and "X service", "X" and "X server")
+- the same name differing only in spacing, punctuation, case or a typo
+- a product and the same product written with its vendor prefix
+
+DO NOT merge:
+- different components of one product, or a product and a component inside it — these are genuinely different things that fail independently
+- two things sharing a generic word ("gateway", "agent", "service", "monitoring") without further evidence that they are the same
+- different instances, sites, environments or numbered hosts — separate machines are separate entities however similar their names
+- a general name and the same name qualified by a host, site or instance ("X" and "X on HOST01"). These are not two names for one thing: the qualified record is ONE instance, and the general record may cover others. Folding the general into the instance silently narrows it to a single machine
+- different versions or releases of the same product
+- anything you are guessing about
+
+Choose as KEEPER the fullest, most identifiable name — usually the expansion rather than the acronym, since it is unambiguous when read later.
+
+Abstaining is free and correct. A missed merge leaves two records that a human can still merge later. A wrong merge destroys the distinction between two real systems and is not visible afterwards. When a group is not clearly right, leave it out entirely rather than lowering its confidence.
+
+Respond ONLY with JSON:
+{"groups": [
+  {"keep_id": <id of the record to keep>,
+   "merge_ids": [<ids to fold in>],
+   "confidence": <float 0.0-1.0>,
+   "reason": "<one sentence naming the evidence for this being one thing>"}
+]}
+
+Return {"groups": []} when nothing is clearly a duplicate. That is a common and correct answer."""
+
+_RECONCILIATION_V1_USER = """Entity type: {entity_type}
+
+Records:
+{records}"""
+
+register_prompt(
+    Prompt(
+        name="identity_reconciliation",
+        version="v1",
+        system=_RECONCILIATION_V1_SYSTEM,
+        user_template=_RECONCILIATION_V1_USER,
+    ),
+    default=True,
+)

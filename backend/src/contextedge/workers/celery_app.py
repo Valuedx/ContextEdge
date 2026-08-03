@@ -225,6 +225,14 @@ celery_app.conf.update(
             "task": "sync.trigger_scheduled_syncs",
             "schedule": 900.0,
         },
+        # Daily, because the duplicates this finds accrue one mention at
+        # a time and only become visible as a set — and because its
+        # output is a review queue, which nobody wants refilled hourly.
+        "reconcile-identities-daily": {
+            "task": "identity.reconcile_identities",
+            "schedule": 86400.0,
+            "args": ("all",),
+        },
         # Decision analytics beats — fanning out across tenants in a
         # single task keeps the beat simple and lets the worker
         # parallelise per-tenant iteration internally. Daily cadence is
