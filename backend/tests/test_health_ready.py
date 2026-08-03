@@ -1,3 +1,4 @@
+from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
@@ -87,10 +88,59 @@ async def test_ready_object_store_degraded_does_not_gate(app, monkeypatch):
 
 
 def test_expected_migration_head_resolves():
-    """Also validates the alembic chain has exactly one head."""
+    """The alembic chain must resolve to exactly one head.
+
+    Asserts the *invariant* rather than a pinned revision id. Pinning it
+    meant every new migration broke this test, which is exactly how it
+    came to be red — `0049_evidence_chunks_updated_at` landed while the
+    constant still read `0048_fleet_groups`, so a test guarding the
+    readiness probe was failing for a reason that had nothing to do with
+    readiness. A stale assertion that fires on healthy changes trains
+    people to ignore it.
+
+    What actually matters here is what `/ready` depends on: the bundled
+    scripts resolve, and they resolve to ONE head. Two heads mean a
+    branched chain, which makes "is this database up to date" unanswerable.
+    """
     main_module._expected_migration_head.cache_clear()
     head = main_module._expected_migration_head()
-    assert head == "0048_fleet_groups"
+    assert head is not None, "alembic scripts must resolve in the test layout"
+
+    from alembic.script import ScriptDirectory
+
+    import contextedge
+
+    alembic_dir = Path(contextedge.__file__).resolve().parents[2] / "alembic"
+    script = ScriptDirectory(str(alembic_dir))
+
+    heads = script.get_heads()
+    assert len(heads) == 1, f"alembic chain has branched: {heads}"
+    assert head == heads[0]
+
+
+def test_every_migration_file_is_reachable_from_the_head():
+    """A migration file that is not wired into the chain never runs.
+
+    This is the failure the pinned-revision assertion was groping at: a
+    new migration is added, but its `down_revision` does not extend the
+    current head, so alembic silently skips it and the column it was
+    meant to add never exists in production. Walking the chain from the
+    head catches that; comparing a hardcoded string does not.
+    """
+    from alembic.script import ScriptDirectory
+
+    import contextedge
+
+    alembic_dir = Path(contextedge.__file__).resolve().parents[2] / "alembic"
+    script = ScriptDirectory(str(alembic_dir))
+
+    on_disk = {rev.revision for rev in script.walk_revisions()}
+    reachable = {
+        rev.revision
+        for rev in script.iterate_revisions(script.get_current_head(), "base")
+    }
+    orphaned = on_disk - reachable
+    assert not orphaned, f"migrations not reachable from the head: {sorted(orphaned)}"
 
 
 @pytest.mark.asyncio
