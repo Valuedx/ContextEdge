@@ -341,6 +341,11 @@ def generate_playbook_candidate(self, pattern_id: str, tenant_id: str):
         episodes = list(er.scalars().all())
         summaries = [
             {
+                # Carried so a generated step citing [ep-N] resolves to a
+                # real episode rather than a label. Without it the
+                # citation validates (the label was supplied) but points
+                # at nothing a reviewer can open.
+                "id": str(ep.id),
                 "title": ep.title,
                 "root_cause": ep.root_cause_summary,
                 "outcome": ep.final_outcome,
