@@ -130,6 +130,37 @@ def test_no_policy_means_no_ceiling():
     check_automation_mode(policy, "full_auto")  # must not raise
 
 
+def test_binding_or_clearing_an_approval_policy_demands_tenant_admin():
+    """Attaching a policy only adds constraints — but the same field
+    DETACHES one, and clearing it drops the two-person rule, the
+    approver-role requirement and the autonomy ceiling in a single write.
+    A privilege is defined by the most dangerous thing it permits."""
+    import inspect
+
+    from contextedge.api.v1 import playbooks
+
+    source = inspect.getsource(playbooks.update_playbook)
+    policy_block = source.index('if "approval_policy_id" in update_data:')
+    guard = source.index('require_role("tenant_admin")', policy_block)
+    apply = source.index("setattr(playbook, field, value)")
+    assert policy_block < guard < apply
+
+
+def test_an_inactive_policy_cannot_be_bound():
+    """It fails closed at execution, so binding it would only surface the
+    problem later, as a broken run rather than a bad choice."""
+    from contextedge.services.approval_policy_service import load_approval_policy
+
+    import inspect
+
+    source = inspect.getsource(load_approval_policy)
+    assert "not row.is_active" in source
+    # And the PATCH loads the policy, so that check runs at bind time.
+    from contextedge.api.v1 import playbooks
+
+    assert "load_approval_policy" in inspect.getsource(playbooks.update_playbook)
+
+
 def test_changing_automation_mode_demands_tenant_admin():
     """Narrower than editing the playbook, on purpose.
 
