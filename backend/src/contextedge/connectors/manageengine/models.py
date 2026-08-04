@@ -1,48 +1,38 @@
 """ManageEngine ServiceDesk Plus data models."""
 
 from datetime import datetime
-from typing import Optional
+
 from pydantic import BaseModel
 
 
 class METicket(BaseModel):
     """Ticket data from ManageEngine SDP."""
+
     id: str
-    ticket_number: Optional[str] = None
+    ticket_number: str | None = None
     subject: str
-    description: Optional[str] = None
-    short_description: Optional[str] = None
-    category: Optional[str] = None
-    subcategory: Optional[str] = None
-    priority: Optional[str] = None
-    impact: Optional[str] = None
-    urgency: Optional[str] = None
-    status: Optional[str] = None
-    group_name: Optional[str] = None
-    assignee_name: Optional[str] = None
-    resolution: Optional[str] = None
-    created_time: Optional[datetime] = None
-    closed_time: Optional[datetime] = None
+    description: str | None = None
+    short_description: str | None = None
+    category: str | None = None
+    subcategory: str | None = None
+    priority: str | None = None
+    impact: str | None = None
+    urgency: str | None = None
+    status: str | None = None
+    group_name: str | None = None
+    assignee_name: str | None = None
+    resolution: str | None = None
+    created_time: datetime | None = None
+    closed_time: datetime | None = None
     raw_json: dict
 
 
 class MEWorklog(BaseModel):
     """Worklog/note from ManageEngine SDP."""
+
     id: str
     ticket_id: str
     description: str
-    technician_name: Optional[str] = None
-    created_time: Optional[datetime] = None
-    raw_json: dict
-
-
-class MESolution(BaseModel):
-    """Solution/KB article from ManageEngine SDP."""
-    id: str
-    title: str
-    content: Optional[str] = None
-    keywords: Optional[list[str]] = None
-    category: Optional[str] = None
-    created_time: Optional[datetime] = None
-    updated_time: Optional[datetime] = None
+    technician_name: str | None = None
+    created_time: datetime | None = None
     raw_json: dict

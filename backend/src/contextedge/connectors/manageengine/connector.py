@@ -4,7 +4,7 @@ import asyncio
 import json
 import logging
 from datetime import datetime, timedelta
-from typing import Any, Optional
+from typing import Any
 
 import httpx
 
@@ -21,25 +21,29 @@ from contextedge.connectors.base import (
     RateLimitConfig,
 )
 
-from .models import METicket, MEWorklog, MESolution
+from .models import METicket, MEWorklog
 
 logger = logging.getLogger(__name__)
 
 
 class MEError(Exception):
     """Base class for ManageEngine connector errors."""
+
     pass
 
 
 class MERateLimitError(MEError):
     """Raised when ManageEngine rate limit (4001) is hit and retries exhausted."""
+
     pass
 
 
 class ManageEngineConnector(BaseConnector):
     """ManageEngine ServiceDesk Plus V3 API connector for ContextEdge."""
 
-    def __init__(self, source_config: dict[str, Any], credentials: dict[str, Any]):
+    def __init__(
+        self, source_config: dict[str, Any], credentials: dict[str, Any]
+    ):
         super().__init__(source_config, credentials)
         self.base_url = credentials.get("base_url", "").rstrip("/")
         self.api_key = credentials.get("api_key", "")
@@ -55,7 +59,10 @@ class ManageEngineConnector(BaseConnector):
     async def validate_credentials(self) -> CredentialStatus:
         """Test connection to ManageEngine."""
         try:
-            result = await self._request("GET", "/requests", params={"input_data": json.dumps({"list_info": {"row_count": 1, "start_index": 1}})})
+            input_data = {"list_info": {"row_count": 1, "start_index": 1}}
+            await self._request(
+                "GET", "/requests", params={"input_data": json.dumps(input_data)}
+            )
             return CredentialStatus(valid=True, message="Connection successful")
         except MERateLimitError:
             return CredentialStatus(valid=False, message="Rate limit exceeded")
@@ -79,14 +86,19 @@ class ManageEngineConnector(BaseConnector):
 
             # Try to fetch available categories
             try:
-                result = await self._request("GET", "/sdp_master_objects/categories")
+                result = await self._request(
+                    "GET", "/sdp_master_objects/categories"
+                )
                 for cat in result.get("categories", []):
                     objects.append(
                         DiscoveredObject(
                             external_id=f"category_{cat.get('id', '')}",
                             object_type="ticket_queue",
                             display_name=f"Category: {cat.get('name', '')}",
-                            metadata={"category_id": cat.get("id"), "category_name": cat.get("name")},
+                            metadata={
+                                "category_id": cat.get("id"),
+                                "category_name": cat.get("name"),
+                            },
                         )
                     )
             except Exception as e:
@@ -110,7 +122,9 @@ class ManageEngineConnector(BaseConnector):
             tickets = await self._fetch_tickets(
                 since=window.start,
                 until=window.end,
-                start_index=checkpoint.data.get("start_index", 1) if checkpoint else 1,
+                start_index=checkpoint.data.get("start_index", 1)
+                if checkpoint
+                else 1,
             )
 
             events = []
@@ -134,15 +148,21 @@ class ManageEngineConnector(BaseConnector):
                         "status": ticket.status,
                         "group_name": ticket.group_name,
                         "assignee_name": ticket.assignee_name,
-                        "created_time": ticket.created_time.isoformat() if ticket.created_time else None,
-                        "closed_time": ticket.closed_time.isoformat() if ticket.closed_time else None,
+                        "created_time": ticket.created_time.isoformat()
+                        if ticket.created_time
+                        else None,
+                        "closed_time": ticket.closed_time.isoformat()
+                        if ticket.closed_time
+                        else None,
                         "resolution": ticket.resolution,
                         "worklogs": [
                             {
                                 "id": wl.id,
                                 "description": wl.description,
                                 "technician_name": wl.technician_name,
-                                "created_time": wl.created_time.isoformat() if wl.created_time else None,
+                                "created_time": wl.created_time.isoformat()
+                                if wl.created_time
+                                else None,
                             }
                             for wl in worklogs
                         ],
@@ -151,7 +171,9 @@ class ManageEngineConnector(BaseConnector):
                                 "id": n.id,
                                 "description": n.description,
                                 "technician_name": n.technician_name,
-                                "created_time": n.created_time.isoformat() if n.created_time else None,
+                                "created_time": n.created_time.isoformat()
+                                if n.created_time
+                                else None,
                             }
                             for n in notes
                         ],
@@ -162,7 +184,10 @@ class ManageEngineConnector(BaseConnector):
 
             # Create new checkpoint for pagination
             new_checkpoint = Checkpoint(
-                data={"start_index": 1 + len(tickets), "last_sync": datetime.utcnow().isoformat()},
+                data={
+                    "start_index": 1 + len(tickets),
+                    "last_sync": datetime.utcnow().isoformat(),
+                },
                 captured_at=datetime.utcnow(),
             )
 
@@ -184,7 +209,9 @@ class ManageEngineConnector(BaseConnector):
     ) -> ChangeResult:
         """Fetch changes since last checkpoint."""
         try:
-            last_sync = datetime.fromisoformat(checkpoint.data.get("last_sync", datetime.utcnow().isoformat()))
+            last_sync = datetime.fromisoformat(
+                checkpoint.data.get("last_sync", datetime.utcnow().isoformat())
+            )
             now = datetime.utcnow()
 
             tickets = await self._fetch_tickets(since=last_sync, until=now)
@@ -208,15 +235,21 @@ class ManageEngineConnector(BaseConnector):
                         "status": ticket.status,
                         "group_name": ticket.group_name,
                         "assignee_name": ticket.assignee_name,
-                        "created_time": ticket.created_time.isoformat() if ticket.created_time else None,
-                        "closed_time": ticket.closed_time.isoformat() if ticket.closed_time else None,
+                        "created_time": ticket.created_time.isoformat()
+                        if ticket.created_time
+                        else None,
+                        "closed_time": ticket.closed_time.isoformat()
+                        if ticket.closed_time
+                        else None,
                         "resolution": ticket.resolution,
                         "worklogs": [
                             {
                                 "id": wl.id,
                                 "description": wl.description,
                                 "technician_name": wl.technician_name,
-                                "created_time": wl.created_time.isoformat() if wl.created_time else None,
+                                "created_time": wl.created_time.isoformat()
+                                if wl.created_time
+                                else None,
                             }
                             for wl in worklogs
                         ],
@@ -225,7 +258,9 @@ class ManageEngineConnector(BaseConnector):
                                 "id": n.id,
                                 "description": n.description,
                                 "technician_name": n.technician_name,
-                                "created_time": n.created_time.isoformat() if n.created_time else None,
+                                "created_time": n.created_time.isoformat()
+                                if n.created_time
+                                else None,
                             }
                             for n in notes
                         ],
@@ -265,7 +300,9 @@ class ManageEngineConnector(BaseConnector):
                     "subject": ticket.subject,
                     "description": ticket.description,
                     "created_by": ticket.assignee_name,
-                    "created_at": ticket.created_time.isoformat() if ticket.created_time else None,
+                    "created_at": ticket.created_time.isoformat()
+                    if ticket.created_time
+                    else None,
                 }
             ]
 
@@ -276,7 +313,9 @@ class ManageEngineConnector(BaseConnector):
                         "type": "worklog",
                         "description": worklog.description,
                         "created_by": worklog.technician_name,
-                        "created_at": worklog.created_time.isoformat() if worklog.created_time else None,
+                        "created_at": worklog.created_time.isoformat()
+                        if worklog.created_time
+                        else None,
                     }
                 )
 
@@ -287,14 +326,18 @@ class ManageEngineConnector(BaseConnector):
                         "type": "note",
                         "description": note.description,
                         "created_by": note.technician_name,
-                        "created_at": note.created_time.isoformat() if note.created_time else None,
+                        "created_at": note.created_time.isoformat()
+                        if note.created_time
+                        else None,
                     }
                 )
 
             return HydratedThread(
                 thread_id=thread_ref,
                 messages=messages,
-                participant_count=len(set(m.get("created_by") for m in messages if m.get("created_by"))),
+                participant_count=len(
+                    set(m.get("created_by") for m in messages if m.get("created_by"))
+                ),
             )
         except Exception as e:
             logger.error("Hydrate thread failed", error=str(e))
@@ -310,8 +353,8 @@ class ManageEngineConnector(BaseConnector):
         self,
         method: str,
         endpoint: str,
-        params: Optional[dict] = None,
-        data: Optional[dict] = None,
+        params: dict[str, Any] | None = None,
+        data: dict[str, Any] | None = None,
     ) -> dict:
         """Make API request to ManageEngine."""
         if not endpoint.startswith("/"):
@@ -353,16 +396,24 @@ class ManageEngineConnector(BaseConnector):
                             resp_status = error_data.get("response_status", {})
                             status_code = resp_status.get("status_code")
                             messages = resp_status.get("messages", [])
-                            is_throttled = status_code == 4001 or any(m.get("status_code") == 4001 for m in messages)
+                            is_throttled = status_code == 4001 or any(
+                                m.get("status_code") == 4001 for m in messages
+                            )
 
                             if is_throttled and attempt < max_retries - 1:
                                 wait_time = retry_delay * (attempt + 1) * 2
-                                logger.warning("ME rate limit hit, retrying", url=url, attempt=attempt + 1)
+                                logger.warning(
+                                    "ME rate limit hit, retrying",
+                                    url=url,
+                                    attempt=attempt + 1,
+                                )
                                 await asyncio.sleep(wait_time)
                                 continue
                             elif is_throttled:
                                 logger.error("ME rate limit exhausted", url=url)
-                                raise MERateLimitError(f"ManageEngine rate limit exceeded on {url}")
+                                raise MERateLimitError(
+                                    f"ManageEngine rate limit exceeded on {url}"
+                                )
                         except MERateLimitError:
                             raise
                         except Exception:
@@ -372,7 +423,11 @@ class ManageEngineConnector(BaseConnector):
                     return response.json()
                 except httpx.HTTPStatusError as e:
                     if attempt == max_retries - 1:
-                        logger.error("ME API error", status_code=e.response.status_code, url=url)
+                        logger.error(
+                            "ME API error",
+                            status_code=e.response.status_code,
+                            url=url,
+                        )
                         raise
                     if e.response.status_code >= 500:
                         await asyncio.sleep(retry_delay * (attempt + 1))
@@ -382,14 +437,16 @@ class ManageEngineConnector(BaseConnector):
                     if isinstance(e, MERateLimitError):
                         raise
                     if attempt == max_retries - 1:
-                        logger.error("ME request failed", url=url, error=str(e))
+                        logger.error(
+                            "ME request failed", url=url, error=str(e)
+                        )
                         raise
                     await asyncio.sleep(retry_delay * (attempt + 1))
 
     async def _fetch_tickets(
         self,
         since: datetime,
-        until: Optional[datetime] = None,
+        until: datetime | None = None,
         row_count: int = 100,
         start_index: int = 1,
     ) -> list[METicket]:
@@ -412,11 +469,13 @@ class ManageEngineConnector(BaseConnector):
         ]
 
         if until:
-            criteria.append({
-                "field": "created_time",
-                "condition": "lesser than",
-                "values": [to_epoch_ms(until)],
-            })
+            criteria.append(
+                {
+                    "field": "created_time",
+                    "condition": "lesser than",
+                    "values": [to_epoch_ms(until)],
+                }
+            )
 
         row_count = min(row_count, 100)
 
@@ -435,7 +494,10 @@ class ManageEngineConnector(BaseConnector):
                 params={"input_data": json.dumps({"list_info": list_info})},
             )
         except Exception as e:
-            logger.warning("Search-based sync failed, trying fallback")
+            logger.warning(
+                "Search-based sync failed, trying fallback", error=str(e)
+            )
+            # Fallback: Just get recent tickets without complex search
             fallback_info = {"row_count": row_count, "start_index": start_index}
             result = await self._request(
                 "GET",
@@ -448,10 +510,14 @@ class ManageEngineConnector(BaseConnector):
             ticket = self._parse_ticket(req)
             tickets.append(ticket)
 
-        logger.info("Fetched tickets from ManageEngine", count=len(tickets), since=since.isoformat())
+        logger.info(
+            "Fetched tickets from ManageEngine",
+            count=len(tickets),
+            since=since.isoformat(),
+        )
         return tickets
 
-    async def _fetch_ticket(self, ticket_id: str) -> Optional[METicket]:
+    async def _fetch_ticket(self, ticket_id: str) -> METicket | None:
         """Fetch full details for a single ticket."""
         try:
             result = await self._request("GET", f"/requests/{ticket_id}")
@@ -461,7 +527,9 @@ class ManageEngineConnector(BaseConnector):
                 return None
             return self._parse_ticket(req_data)
         except Exception as e:
-            logger.error("Failed to fetch ticket details", ticket_id=ticket_id, error=str(e))
+            logger.error(
+                "Failed to fetch ticket details", ticket_id=ticket_id, error=str(e)
+            )
             return None
 
     async def _fetch_ticket_worklogs(self, ticket_id: str) -> list[MEWorklog]:
@@ -475,14 +543,20 @@ class ManageEngineConnector(BaseConnector):
                         id=str(wl.get("id", "")),
                         ticket_id=ticket_id,
                         description=wl.get("description", ""),
-                        technician_name=wl.get("owner", {}).get("name") if wl.get("owner") else None,
-                        created_time=self._parse_datetime(wl.get("recorded_time") or wl.get("created_time")),
+                        technician_name=wl.get("owner", {}).get("name")
+                        if wl.get("owner")
+                        else None,
+                        created_time=self._parse_datetime(
+                            wl.get("recorded_time") or wl.get("created_time")
+                        ),
                         raw_json=wl,
                     )
                 )
             return worklogs
         except Exception as e:
-            logger.warning("Failed to fetch worklogs", ticket_id=ticket_id, error=str(e))
+            logger.warning(
+                "Failed to fetch worklogs", ticket_id=ticket_id, error=str(e)
+            )
             return []
 
     async def _fetch_ticket_notes(self, ticket_id: str) -> list[MEWorklog]:
@@ -491,20 +565,31 @@ class ManageEngineConnector(BaseConnector):
             result = await self._request("GET", f"/requests/{ticket_id}/notes")
             notes = []
             for note in result.get("notes", []):
-                content = note.get("notetext") or note.get("text") or note.get("description") or ""
+                content = (
+                    note.get("notetext")
+                    or note.get("text")
+                    or note.get("description")
+                    or ""
+                )
                 notes.append(
                     MEWorklog(
                         id=str(note.get("id", "")),
                         ticket_id=ticket_id,
                         description=content,
-                        technician_name=note.get("added_by", {}).get("name") if note.get("added_by") else None,
-                        created_time=self._parse_datetime(note.get("recorded_time") or note.get("added_time")),
+                        technician_name=note.get("added_by", {}).get("name")
+                        if note.get("added_by")
+                        else None,
+                        created_time=self._parse_datetime(
+                            note.get("recorded_time") or note.get("added_time")
+                        ),
                         raw_json=note,
                     )
                 )
             return notes
         except Exception as e:
-            logger.warning("Failed to fetch notes", ticket_id=ticket_id, error=str(e))
+            logger.warning(
+                "Failed to fetch notes", ticket_id=ticket_id, error=str(e)
+            )
             return []
 
     def _parse_ticket(self, data: dict) -> METicket:
@@ -518,21 +603,39 @@ class ManageEngineConnector(BaseConnector):
             subject=data.get("subject", ""),
             description=description,
             short_description=data.get("short_description", ""),
-            category=data.get("category", {}).get("name") if data.get("category") else None,
-            subcategory=data.get("subcategory", {}).get("name") if data.get("subcategory") else None,
-            priority=data.get("priority", {}).get("name") if data.get("priority") else None,
-            impact=data.get("impact", {}).get("name") if data.get("impact") else None,
-            urgency=data.get("urgency", {}).get("name") if data.get("urgency") else None,
-            status=data.get("status", {}).get("name") if data.get("status") else None,
-            group_name=data.get("group", {}).get("name") if data.get("group") else None,
-            assignee_name=data.get("technician", {}).get("name") if data.get("technician") else None,
-            resolution=data.get("resolution", {}).get("content") if data.get("resolution") else None,
+            category=data.get("category", {}).get("name")
+            if data.get("category")
+            else None,
+            subcategory=data.get("subcategory", {}).get("name")
+            if data.get("subcategory")
+            else None,
+            priority=data.get("priority", {}).get("name")
+            if data.get("priority")
+            else None,
+            impact=data.get("impact", {}).get("name")
+            if data.get("impact")
+            else None,
+            urgency=data.get("urgency", {}).get("name")
+            if data.get("urgency")
+            else None,
+            status=data.get("status", {}).get("name")
+            if data.get("status")
+            else None,
+            group_name=data.get("group", {}).get("name")
+            if data.get("group")
+            else None,
+            assignee_name=data.get("technician", {}).get("name")
+            if data.get("technician")
+            else None,
+            resolution=data.get("resolution", {}).get("content")
+            if data.get("resolution")
+            else None,
             created_time=self._parse_datetime(data.get("created_time")),
             closed_time=self._parse_datetime(data.get("closed_time")),
             raw_json=data,
         )
 
-    def _parse_datetime(self, value) -> Optional[datetime]:
+    def _parse_datetime(self, value: Any) -> datetime | None:
         """Parse ManageEngine datetime value."""
         if not value:
             return None
@@ -547,7 +650,7 @@ class ManageEngineConnector(BaseConnector):
                 if value.isdigit():
                     return datetime.fromtimestamp(int(value) / 1000)
                 return datetime.fromisoformat(value.replace("Z", "+00:00"))
-            except:
+            except ValueError:
                 return None
         return None
 
@@ -560,15 +663,20 @@ class ManageEngineConnector(BaseConnector):
                         "id": "1001",
                         "display_id": "REQ-001",
                         "subject": "VPN Connection Issues",
-                        "description": "User unable to connect to office VPN since yesterday.",
+                        "description": "User unable to connect to office VPN.",
                         "short_description": "VPN Connection Issues",
                         "category": {"name": "Network"},
                         "priority": {"name": "High"},
                         "status": {"name": "Resolved"},
                         "group": {"name": "Network Support"},
                         "technician": {"name": "John Doe"},
-                        "created_time": {"value": int((datetime.utcnow() - timedelta(hours=2)).timestamp() * 1000)},
-                        "resolution": {"content": "Reset user profile on VPN gateway."},
+                        "created_time": {
+                            "value": int(
+                                (datetime.utcnow() - timedelta(hours=2)).timestamp()
+                                * 1000
+                            )
+                        },
+                        "resolution": {"content": "Reset user profile on VPN."},
                     }
                 ],
                 "response_status": {"status": "success"},
