@@ -5,13 +5,13 @@ from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
 from contextedge.deps import AuthUser, DbSession
-from contextedge.schemas.common import StatusResponse
 from contextedge.models.episode import (
-    IdentityMergeProposal,
     RESOLUTION_STATES,
     CanonicalIdentity,
     IdentityAlias,
+    IdentityMergeProposal,
 )
+from contextedge.schemas.common import StatusResponse
 from contextedge.schemas.review import (
     IdentityMergeProposalDecision,
     IdentityMergeProposalResponse,

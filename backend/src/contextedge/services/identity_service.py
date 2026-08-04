@@ -30,8 +30,8 @@ from typing import Literal
 import structlog
 from pydantic import BaseModel, Field
 from sqlalchemy import func, or_, select, text
-from sqlalchemy.exc import DBAPIError, ProgrammingError
 from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.exc import DBAPIError, ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from contextedge.ai.extractors.identity_extractor import extract_identities

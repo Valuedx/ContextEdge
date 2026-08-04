@@ -34,7 +34,7 @@ import uuid
 from dataclasses import dataclass
 
 import structlog
-from sqlalchemy import or_, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from contextedge.models.episode import (
