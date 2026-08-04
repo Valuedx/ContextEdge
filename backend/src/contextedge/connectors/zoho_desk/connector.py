@@ -121,6 +121,67 @@ DEFAULT_MAX_PAGES = 20
 # because the checkpoint only advances over records actually emitted.
 DETAIL_FETCH_LIMIT = 200
 
+# The ticket list endpoint does NOT return `modifiedTime` in its default
+# response. Articles do; tickets do not — verified against the live
+# instance, where every ticket row came back with 35 fields and none of
+# them was the one the entire incremental strategy depends on.
+#
+# The consequences were both silent. `fetch_changes` read an empty
+# timestamp for every row, compared "" against the checkpoint, decided
+# every ticket was older than it, and stopped on the first row — so
+# incremental ticket sync returned zero, forever. `backfill` skipped its
+# window comparisons entirely (they are guarded on a parsed time, and ""
+# does not parse), so it returned rows regardless of the window asked
+# for and looked like it was working.
+#
+# `fields` REPLACES the default projection rather than adding to it —
+# requesting `fields=modifiedTime` returns two fields, not thirty-six —
+# so every field the event mapper reads has to be named here. Anything
+# omitted silently becomes None in the evidence, which is why this list
+# is explicit rather than clever.
+#
+# An unrecognised name makes the whole call 500 rather than being
+# ignored, so this set is the subset the live API actually accepts:
+# `subStatus`, `statusText` and `isArchived` are returned in the DEFAULT
+# projection but rejected when requested by name.
+#
+# Custom fields are deliberately absent. `cf` is accepted here but comes
+# back null on the list endpoint — they exist only on
+# `/tickets/{id}`, which `_hydrate_rows` already fetches. That detail
+# call is what carries the per-ticket version field that knowledge
+# applicability reads.
+TICKET_FIELDS = ",".join(
+    (
+        "id",
+        "modifiedTime",
+        "createdTime",
+        "closedTime",
+        "dueDate",
+        "subject",
+        "status",
+        "priority",
+        "category",
+        "subCategory",
+        "channel",
+        "classification",
+        "departmentId",
+        "productId",
+        "ticketNumber",
+        "webUrl",
+        "isEscalated",
+        "isOverDue",
+        "email",
+        "phone",
+        "threadCount",
+        "commentCount",
+        "contactId",
+        "assigneeId",
+        "teamId",
+        "accountId",
+        "isSpam",
+    )
+)
+
 MODULES: dict[str, dict[str, Any]] = {
     "tickets": {
         "label": "Tickets",
@@ -129,6 +190,8 @@ MODULES: dict[str, dict[str, Any]] = {
         "scope": "Desk.tickets.READ",
         "evidence_type": "ticket",
         "thread_prefix": "zoho_ticket",
+        # Sent on every list call for this module.
+        "list_fields": TICKET_FIELDS,
     },
     "articles": {
         "label": "KB Articles",
@@ -350,6 +413,11 @@ class ZohoDeskConnector(BaseConnector):
 
     def _list_params(self, module: str, extra: dict | None = None) -> dict:
         params: dict[str, Any] = {}
+        # Ask for the projection this module needs before anything else,
+        # so a tenant's module_filters can still override it.
+        list_fields = MODULES.get(module, {}).get("list_fields")
+        if list_fields:
+            params["fields"] = list_fields
         module_filter = self.module_filters.get(module)
         if isinstance(module_filter, dict):
             params.update({str(k): v for k, v in module_filter.items()})
@@ -582,6 +650,28 @@ class ZohoDeskConnector(BaseConnector):
             # modifiedTime only, because that is the entire ordering
             # guarantee (see the tie-order note above).
             times = [_modified_time(row) for row in rows]
+
+            # A row with no timestamp cannot be ordered, checkpointed or
+            # windowed, and every downstream comparison degrades to a
+            # silent wrong answer rather than an error: "" sorts as
+            # oldest, so the checkpoint stop fires on the first row and
+            # incremental sync returns nothing; and the window bounds are
+            # guarded on a parsed time, so a backfill quietly ignores the
+            # dates it was asked for.
+            #
+            # This is not hypothetical — it is exactly what the ticket
+            # module did until `fields` was sent, and neither failure
+            # surfaced anywhere. Refuse the page instead.
+            if any(not t for t in times):
+                logger.error(
+                    "zoho_desk.missing_modified_time",
+                    module=module,
+                    page_size=len(rows),
+                    without_time=sum(1 for t in times if not t),
+                    hint="list projection is missing modifiedTime",
+                )
+                return [], stop_at_time or "", set(stop_at_ids), False, offset
+
             if times != sorted(times, reverse=True):
                 logger.error(
                     "zoho_desk.page_order_violation",
