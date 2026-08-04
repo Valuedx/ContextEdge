@@ -144,6 +144,22 @@ export interface EvidenceApplicability {
   extracted_by?: string;
 }
 
+/**
+ * A record's identity in the system it came from.
+ *
+ * Connector-agnostic on purpose: Zoho calls it `ticket_number`,
+ * ServiceNow `number`, ManageEngine `display_id`. A reviewer just wants
+ * the number printed on the ticket and a way to open it — the internal
+ * UUID is the one identifier nobody can search for.
+ */
+export interface SourceReference {
+  external_id?: string | null;
+  /** The human-facing number: "351086", "INC0021355". */
+  display_id?: string | null;
+  url?: string | null;
+  source_type?: string | null;
+}
+
 export interface EvidenceItemDetail extends EvidenceItem {
   body_text: string | null;
   workspace_id: string | null;
@@ -159,6 +175,8 @@ export interface EvidenceItemDetail extends EvidenceItem {
    * which means it was read and stated no constraints.
    */
   applicability?: EvidenceApplicability | null;
+  /** Null for uploads and anything with no originating record. */
+  source_reference?: SourceReference | null;
 }
 
 export interface Episode {

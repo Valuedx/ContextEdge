@@ -177,6 +177,31 @@ export default function EvidenceDetailPage() {
             </CardTitle>
           </CardHeader>
           <CardContent className="pt-4 space-y-3.5 text-sm">
+            {/* The number a human can actually act on. Without it the
+                only identifier on this page was the internal UUID, which
+                cannot be searched for in the source system or quoted to
+                anyone. */}
+            {item.source_reference?.display_id && (
+              <div className="flex items-center justify-between">
+                <span className="text-slate-400">Source Record:</span>
+                {item.source_reference.url ? (
+                  <a
+                    href={item.source_reference.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="font-mono font-medium text-indigo-400 hover:underline flex items-center gap-1"
+                  >
+                    #{item.source_reference.display_id}
+                    <ExternalLink className="h-3.5 w-3.5" />
+                  </a>
+                ) : (
+                  <span className="font-mono font-medium text-slate-200">
+                    #{item.source_reference.display_id}
+                  </span>
+                )}
+              </div>
+            )}
+
             <div className="flex items-center justify-between">
               <span className="text-slate-400">Ingested Source:</span>
               <Link
@@ -290,7 +315,19 @@ export default function EvidenceDetailPage() {
             <FileText className="h-4 w-4 text-indigo-400" />
             Raw Evidence Ticket Content
           </CardTitle>
-          <span className="text-xs text-slate-400 font-mono">ID: {item.id}</span>
+          {/* Lead with the ticket number; the UUID stays for support
+              but is not what a reviewer is looking for. */}
+          {/* Truncated because a connector with no record number falls
+              back to its external id, which for file sources is a long
+              slug rather than a ticket number. */}
+          <span
+            className="text-xs text-slate-400 font-mono truncate max-w-[28rem]"
+            title={item.id}
+          >
+            {item.source_reference?.display_id
+              ? `#${item.source_reference.display_id} · ${item.id}`
+              : `ID: ${item.id}`}
+          </span>
         </CardHeader>
         <CardContent className="pt-4">
           {item.body_summary && (
