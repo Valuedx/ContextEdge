@@ -298,3 +298,96 @@ def test_senders_are_optional():
     out = clean_thread_bodies(["Answer.\n> quoted question"])
     assert out[0]["body"] == "Answer."
     assert out[0]["is_delivery_failure"] is False
+
+
+# --- NDRs must reach the STANDARD pipeline, not only hydration ---------------
+#
+# Bounces do not only arrive inside hydrated threads. An email connector,
+# an Exchange sync, or a ticket whose description is itself a bounce all
+# go straight to normalization and never touch hydrate_thread.
+
+
+def test_normalization_drops_a_bounce_for_every_source():
+    from contextedge.services.evidence_normalization import (
+        DELIVERY_FAILURE_MARKER,
+        evidence_body_from_payload,
+    )
+
+    payload = {
+        "from": "Microsoft Outlook",
+        "body": "Unknown To address. Couldn't deliver the message to: a@b.com. How to Fix It",
+    }
+    assert evidence_body_from_payload(payload) == DELIVERY_FAILURE_MARKER
+
+
+def test_the_failed_recipients_addresses_do_not_reach_the_graph():
+    """They would otherwise be mined into person entities: real people
+    entering the graph as contacts because their mail bounced."""
+    from contextedge.services.evidence_normalization import evidence_body_from_payload
+
+    payload = {
+        "from": "Microsoft Outlook",
+        "body": (
+            "Couldn't deliver the message to the following recipients:\n"
+            "manikanta@example.com, shiva@example.com\nHow to Fix It"
+        ),
+    }
+    body = evidence_body_from_payload(payload)
+    assert "manikanta@example.com" not in body
+    assert "shiva@example.com" not in body
+
+
+def test_a_bounce_is_reduced_to_a_marker_not_to_nothing():
+    """The title falls back to a body snippet, so an empty body would
+    leave the evidence unnameable in every list and search result."""
+    from contextedge.services.evidence_normalization import evidence_body_from_payload
+
+    body = evidence_body_from_payload(
+        {"from": "MAILER-DAEMON", "body": "delivery has failed to these recipients"}
+    )
+    assert body.strip()
+
+
+@pytest.mark.parametrize("key", ["from", "sender", "author", "email"])
+def test_the_sender_is_read_from_whatever_key_a_connector_uses(key):
+    from contextedge.services.evidence_normalization import (
+        DELIVERY_FAILURE_MARKER,
+        evidence_body_from_payload,
+    )
+
+    assert (
+        evidence_body_from_payload({key: "Mail Delivery Subsystem", "body": "x"})
+        == DELIVERY_FAILURE_MARKER
+    )
+
+
+# --- dedup identity must not move when cleaning rules change ------------------
+
+
+def test_the_content_hash_ignores_cleaning():
+    """If the hash reflected the stripped text, adding one quote marker
+    to the pattern list would change the hash of every message
+    containing it, and the next sync would re-ingest the lot as new."""
+    from contextedge.services.evidence_normalization import (
+        evidence_content_hash_from_payload,
+        raw_body_from_payload,
+    )
+    import hashlib
+
+    payload = {"body": "Answer.\n> quoted question"}
+    expected = hashlib.sha256(
+        raw_body_from_payload(payload).encode("utf-8")
+    ).hexdigest()
+    assert evidence_content_hash_from_payload(payload) == expected
+
+
+def test_two_different_bounces_stay_distinct():
+    """Cleaning reduces every bounce to the same marker. Hashing that
+    would collapse every delivery failure in a source into one row."""
+    from contextedge.services.evidence_normalization import (
+        evidence_content_hash_from_payload,
+    )
+
+    one = {"from": "Microsoft Outlook", "body": "Couldn't deliver to a@b.com. How to Fix It"}
+    two = {"from": "Microsoft Outlook", "body": "Couldn't deliver to x@y.com. How to Fix It"}
+    assert evidence_content_hash_from_payload(one) != evidence_content_hash_from_payload(two)
