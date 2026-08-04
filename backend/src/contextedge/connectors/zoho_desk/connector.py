@@ -70,7 +70,9 @@ Config (``source_config``, all optional):
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import time
+import weakref
 from datetime import UTC, datetime
 from typing import Any
 
@@ -182,6 +184,67 @@ TICKET_FIELDS = ",".join(
     )
 )
 
+# Access tokens shared across every connector instance in this process,
+# keyed by a hash of the credential set: {key: (token, expires_at, scope)}.
+#
+# Zoho caps refresh-token exchanges at 5/minute and live access tokens at
+# 30 per refresh token, and exceeding either returns empty results rather
+# than an error. A per-instance cache never survives, because each Celery
+# task constructs its own connector.
+_ACCESS_TOKEN_CACHE: dict[str, tuple[str, float, str]] = {}
+
+# Minting locks, per event loop and then per credential set.
+#
+# An asyncio.Lock binds to the loop it is first awaited on and raises if
+# awaited from another, and Celery runs every task under its own
+# asyncio.run(). A single process-global lock would therefore work for
+# the first task in a worker and fail for all the rest. Locking across
+# loops is not needed anyway — they do not run concurrently.
+#
+# Weak-keyed so a finished loop takes its locks with it. Keying on
+# id(loop) instead would eventually hand a new loop the dead loop's lock
+# once CPython reused the address.
+_TOKEN_LOCKS: weakref.WeakKeyDictionary[
+    asyncio.AbstractEventLoop, dict[str, asyncio.Lock]
+] = weakref.WeakKeyDictionary()
+
+
+def _token_lock(cache_key: str) -> asyncio.Lock:
+    """One minting at a time per credential set, within this loop."""
+    per_loop = _TOKEN_LOCKS.setdefault(asyncio.get_running_loop(), {})
+    lock = per_loop.get(cache_key)
+    if lock is None:
+        lock = per_loop[cache_key] = asyncio.Lock()
+    return lock
+
+
+def _is_fatal_for_the_run(exc: Exception) -> bool:
+    """Whether a failure will hit every following record identically.
+
+    Record-level fetching is deliberately fail-soft: one unreadable
+    thread must not cost a ticket its other messages. Authentication and
+    quota failures are different in kind — they are a statement about the
+    caller, not about the record — and swallowing them turns every
+    subsequent record into a plausible-looking empty one.
+
+    That is not hypothetical. Zoho answers the sixth refresh-token
+    exchange in a minute with an error body rather than a 4xx, and
+    hydrating 20 ticket threads in a loop stored 9 full conversations and
+    11 empty ones, twice, with the run reporting success both times.
+    """
+    if isinstance(exc, ValueError):
+        # From _mint_token: missing credentials, a dead refresh token, or
+        # the accounts endpoint answering 200 with an error — which is
+        # what an exhausted refresh quota looks like.
+        return True
+    # 401 has already been re-minted and replayed once inside _get, so
+    # reaching here means the credentials themselves are refused.
+    return (
+        isinstance(exc, httpx.HTTPStatusError)
+        and exc.response.status_code in (401, 403, 429)
+    )
+
+
 MODULES: dict[str, dict[str, Any]] = {
     "tickets": {
         "label": "Tickets",
@@ -274,15 +337,60 @@ class ZohoDeskConnector(BaseConnector):
     async def _token(self, *, force: bool = False) -> str:
         """Cached access token from the refresh-token grant.
 
-        Zoho access tokens live one hour and the refresh endpoint is
-        itself rate limited, so the token is cached for the life of the
-        connector instance. ``force`` re-mints after a 401, which is how
-        a token revoked mid-sync recovers without failing the run.
+        Cached at PROCESS level, not just on the instance. Every Celery
+        task builds a fresh connector via ``get_connector``, so an
+        instance-only cache is never reused and each task mints its own
+        token.
+
+        That is not a minor inefficiency. Zoho allows 5 refresh-token
+        exchanges per minute and 30 live access tokens per refresh token,
+        and exceeding either does not raise — the subsequent API calls
+        simply return nothing. Hydrating 20 ticket threads in a loop
+        produced 9 full threads and 11 that looked like empty tickets,
+        twice, until the pattern gave it away. A bulk run would
+        under-ingest silently and report success.
+
+        Access tokens live an hour, so one serves thousands of records.
         """
         now = time.monotonic()
         if not force and self._access_token and now < self._token_expires_at:
             return self._access_token
 
+        cache_key = self._token_cache_key()
+        if not force:
+            cached = _ACCESS_TOKEN_CACHE.get(cache_key)
+            if cached and now < cached[1]:
+                self._access_token, self._token_expires_at = cached[0], cached[1]
+                self._granted_scope = cached[2]
+                return cached[0]
+        else:
+            _ACCESS_TOKEN_CACHE.pop(cache_key, None)
+
+        # One minting at a time per credential set. Without this, a
+        # worker starting several syncs at once spends its whole
+        # per-minute quota racing to mint the same token.
+        async with _token_lock(cache_key):
+            cached = _ACCESS_TOKEN_CACHE.get(cache_key)
+            if not force and cached and time.monotonic() < cached[1]:
+                self._access_token, self._token_expires_at = cached[0], cached[1]
+                self._granted_scope = cached[2]
+                return cached[0]
+            return await self._mint_token(cache_key)
+
+    def _token_cache_key(self) -> str:
+        """Identity of a credential set, without holding the secret.
+
+        Hashed so the process-wide cache does not keep a second copy of
+        the refresh token lying around in a module global.
+        """
+        material = "|".join(
+            str(self.credentials.get(key) or "")
+            for key in ("client_id", "refresh_token")
+        )
+        return hashlib.sha256(material.encode("utf-8")).hexdigest()
+
+    async def _mint_token(self, cache_key: str) -> str:
+        """Exchange the refresh token and publish the result to the cache."""
         missing = [
             key
             for key in ("client_id", "client_secret", "refresh_token")
@@ -315,10 +423,20 @@ class ZohoDeskConnector(BaseConnector):
             lifetime = float(data.get("expires_in") or 3600)
         except (TypeError, ValueError):
             lifetime = 3600.0
-        self._token_expires_at = now + max(
+        self._token_expires_at = time.monotonic() + max(
             60.0, lifetime - self.TOKEN_EXPIRY_SKEW_SECONDS
         )
         self._granted_scope = str(data.get("scope") or "")
+        _ACCESS_TOKEN_CACHE[cache_key] = (
+            self._access_token,
+            self._token_expires_at,
+            self._granted_scope,
+        )
+        logger.info(
+            "zoho_desk.access_token_minted",
+            expires_in=int(lifetime),
+            cached_tokens=len(_ACCESS_TOKEN_CACHE),
+        )
         return self._access_token
 
     async def _headers(self, *, force_token: bool = False) -> dict[str, str]:
@@ -1007,6 +1125,13 @@ class ZohoDeskConnector(BaseConnector):
 
         messages: list[dict] = []
 
+        # Whether each endpoint answered, as distinct from what it
+        # answered. A ticket with no conversation and a ticket we could
+        # not read both produce zero messages, and downstream there is
+        # nothing left to tell them apart — so the difference is decided
+        # here rather than inferred later.
+        listing: list[dict] = []
+        listing_error: Exception | None = None
         try:
             listing = self._rows(
                 await self._get(
@@ -1014,12 +1139,14 @@ class ZohoDeskConnector(BaseConnector):
                 )
             )
         except Exception as exc:  # noqa: BLE001
+            if _is_fatal_for_the_run(exc):
+                raise
             logger.warning(
                 "zoho_desk.thread_list_failed",
                 ticket_id=record_id,
                 error_type=type(exc).__name__,
             )
-            listing = []
+            listing_error = exc
 
         for entry in listing[: self.THREAD_FETCH_LIMIT]:
             entry_id = entry.get("id")
@@ -1053,6 +1180,8 @@ class ZohoDeskConnector(BaseConnector):
                 }
             )
 
+        comments: list[dict] = []
+        comment_error: Exception | None = None
         try:
             comments = self._rows(
                 await self._get(
@@ -1060,12 +1189,14 @@ class ZohoDeskConnector(BaseConnector):
                 )
             )
         except Exception as exc:  # noqa: BLE001
+            if _is_fatal_for_the_run(exc):
+                raise
             logger.warning(
                 "zoho_desk.comment_list_failed",
                 ticket_id=record_id,
                 error_type=type(exc).__name__,
             )
-            comments = []
+            comment_error = exc
 
         for comment in comments:
             body = html_to_text(comment.get("content"))
@@ -1086,6 +1217,13 @@ class ZohoDeskConnector(BaseConnector):
                     or None,
                 }
             )
+
+        if listing_error is not None and comment_error is not None:
+            # Neither endpoint was readable. Returning an empty thread
+            # would be a statement about the ticket, and nothing here
+            # supports one — the caller stores it as hydrated and the
+            # conversation is never fetched again.
+            raise listing_error
 
         messages.sort(key=lambda m: m.get("timestamp") or "")
         participants = {m.get("from") for m in messages if m.get("from")}

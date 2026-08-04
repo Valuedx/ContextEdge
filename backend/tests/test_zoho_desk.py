@@ -7,6 +7,7 @@ sharing a ``modifiedTime`` arrive id-ASCENDING inside the
 time-DESCENDING sequence.
 """
 
+import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 from uuid import uuid4
@@ -14,6 +15,7 @@ from uuid import uuid4
 import httpx
 import pytest
 
+import contextedge.connectors.zoho_desk.connector as connector_module
 from contextedge.connectors.base import Checkpoint, DateRange
 from contextedge.connectors.zoho_desk.connector import (
     PAGE_SIZE,
@@ -35,6 +37,17 @@ CREDENTIALS = {
     "org_id": "60001911841",
     "data_center": "in",
 }
+
+
+@pytest.fixture(autouse=True)
+def _clean_token_cache():
+    """The access-token cache is process-wide by design, so it outlives a
+    test the same way it outlives a Celery task. Cleared around each one
+    so a token minted by an earlier test cannot satisfy a later test's
+    call and hide the very refresh it was written to exercise."""
+    connector_module._ACCESS_TOKEN_CACHE.clear()
+    yield
+    connector_module._ACCESS_TOKEN_CACHE.clear()
 
 
 def _connector(config=None, credentials=None):
@@ -231,6 +244,139 @@ async def test_token_refresh_rejects_a_dead_refresh_token():
     ):
         with pytest.raises(ValueError, match="invalid_code"):
             await connector._token()
+
+
+def _token_client(calls):
+    """An accounts endpoint that hands out tok1, tok2, ... and counts."""
+
+    class _Resp:
+        status_code = 200
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            calls.append(1)
+            return {
+                "access_token": f"tok{len(calls)}",
+                "expires_in": 3600,
+                "scope": "Desk.tickets.READ",
+            }
+
+    class _Client:
+        async def __aenter__(self):
+            return SimpleNamespace(post=AsyncMock(return_value=_Resp()))
+
+        async def __aexit__(self, *args):
+            return False
+
+    return patch(
+        "contextedge.connectors.zoho_desk.connector.httpx.AsyncClient",
+        return_value=_Client(),
+    )
+
+
+@pytest.mark.asyncio
+async def test_one_token_serves_every_connector_built_from_the_same_credentials():
+    """Each Celery task builds its own connector via ``get_connector``, so
+    an instance-only cache is never reused. Zoho allows 5 refresh
+    exchanges a minute and answers the sixth with empty result sets
+    rather than an error — hydrating 20 threads in a loop returned 9 full
+    threads and 11 that looked like empty tickets."""
+    calls: list[int] = []
+    with _token_client(calls):
+        tokens = [
+            await ZohoDeskConnector({}, CREDENTIALS)._token() for _ in range(20)
+        ]
+
+    assert tokens == ["tok1"] * 20
+    assert len(calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_different_credentials_do_not_share_a_token():
+    """Two tenants syncing the same Desk instance authenticate as
+    themselves; sharing here would send one tenant's token with the
+    other's calls."""
+    calls: list[int] = []
+    with _token_client(calls):
+        first = await ZohoDeskConnector({}, CREDENTIALS)._token()
+        second = await ZohoDeskConnector(
+            {}, {**CREDENTIALS, "refresh_token": "other"}
+        )._token()
+
+    assert first != second
+    assert len(calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_a_forced_remint_invalidates_the_shared_token():
+    """A 401 forces a remint. If the stale token stayed in the shared
+    cache, the next connector would pick it up and 401 in turn."""
+    calls: list[int] = []
+    with _token_client(calls):
+        await ZohoDeskConnector({}, CREDENTIALS)._token()
+        assert await ZohoDeskConnector({}, CREDENTIALS)._token(force=True) == "tok2"
+        # A fresh connector sees the replacement, not the token that 401'd.
+        assert await ZohoDeskConnector({}, CREDENTIALS)._token() == "tok2"
+
+    assert len(calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_concurrent_first_calls_mint_once():
+    """Without the lock, a worker starting several syncs at once spends
+    its whole per-minute quota racing to mint the same token."""
+    calls: list[int] = []
+    with _token_client(calls):
+        tokens = await asyncio.gather(
+            *(ZohoDeskConnector({}, CREDENTIALS)._token() for _ in range(8))
+        )
+
+    assert tokens == ["tok1"] * 8
+    assert len(calls) == 1
+
+
+def test_the_shared_cache_does_not_hold_the_refresh_token():
+    """The cache key identifies a credential set without keeping a second
+    copy of the secret in a module global."""
+    key = ZohoDeskConnector({}, CREDENTIALS)._token_cache_key()
+    assert CREDENTIALS["refresh_token"] not in key
+    assert CREDENTIALS["client_secret"] not in key
+
+
+def test_locks_do_not_leak_across_event_loops():
+    """Celery runs each task under its own ``asyncio.run``, and an
+    ``asyncio.Lock`` binds to the loop it is first awaited on.
+
+    The binding is what makes a single process-global lock a trap rather
+    than an obvious bug: an UNCONTENDED acquire takes a fast path that
+    never touches the loop, so one shared across tasks looks fine in
+    tests and under light load, then raises ``bound to a different event
+    loop`` the first time two syncs actually overlap — which is the only
+    situation the lock exists for.
+    """
+    async def take():
+        return connector_module._token_lock("key")
+
+    assert asyncio.run(take()) is not asyncio.run(take())
+
+    calls: list[int] = []
+
+    def one_task():
+        async def run():
+            # force= so the call reaches the minting lock instead of
+            # being answered by the shared token cache — an expired
+            # token and a 401 replay both arrive here.
+            return await ZohoDeskConnector({}, CREDENTIALS)._token(force=True)
+
+        with _token_client(calls):
+            return asyncio.run(run())
+
+    # Separate loops, as separate Celery tasks would be.
+    assert one_task() == "tok1"
+    assert one_task() == "tok2"
+    assert len(calls) == 2
 
 
 @pytest.mark.asyncio
@@ -1032,6 +1178,73 @@ async def test_hydrate_survives_one_endpoint_failing():
     with patch.object(connector, "_get", side_effect=get):
         hydrated = await connector.hydrate_thread("zoho_ticket:1")
     assert len(hydrated.messages) == 1
+
+
+@pytest.mark.asyncio
+async def test_an_exhausted_token_quota_fails_hydration_instead_of_emptying_it():
+    """Zoho answers the sixth refresh exchange in a minute with an error
+    body, and ``_mint_token`` turns that into a ValueError. Absorbed as
+    "this ticket had no conversation", it stored 9 full threads and 11
+    empty ones out of 20 while reporting success — so it has to reach the
+    caller."""
+    connector = ZohoDeskConnector({}, CREDENTIALS)
+
+    async def get(path, params=None):
+        raise ValueError("Zoho token refresh returned no access_token: Access Denied")
+
+    with patch.object(connector, "_get", side_effect=get):
+        with pytest.raises(ValueError, match="Access Denied"):
+            await connector.hydrate_thread("zoho_ticket:1")
+
+
+@pytest.mark.asyncio
+async def test_a_refused_token_fails_hydration_instead_of_emptying_it():
+    """A 401 has already been re-minted and replayed inside ``_get``, so
+    one arriving here means the credentials are refused — which will be
+    just as true for every ticket after this one."""
+    connector = _connector()
+    request = httpx.Request("GET", "https://desk.zoho.in/api/v1/tickets/1/threads")
+
+    async def get(path, params=None):
+        raise httpx.HTTPStatusError(
+            "unauthorized",
+            request=request,
+            response=httpx.Response(401, request=request),
+        )
+
+    with patch.object(connector, "_get", side_effect=get):
+        with pytest.raises(httpx.HTTPStatusError):
+            await connector.hydrate_thread("zoho_ticket:1")
+
+
+@pytest.mark.asyncio
+async def test_both_endpoints_unreadable_raises_rather_than_reporting_no_messages():
+    """One endpoint down is survivable — the other still carries part of
+    the conversation. Neither readable is not evidence of an empty
+    ticket, and the caller marks a returned thread hydrated and never
+    fetches it again."""
+    connector = _connector()
+
+    async def get(path, params=None):
+        raise httpx.ConnectError("down")
+
+    with patch.object(connector, "_get", side_effect=get):
+        with pytest.raises(httpx.ConnectError):
+            await connector.hydrate_thread("zoho_ticket:1")
+
+
+@pytest.mark.asyncio
+async def test_a_genuinely_empty_ticket_still_hydrates_empty():
+    """The distinction being drawn is unreadable vs. empty — a ticket
+    that really has no threads and no comments must stay a success, or
+    every quiet ticket becomes a retry forever."""
+    connector = _connector()
+
+    with patch.object(connector, "_get", side_effect=AsyncMock(return_value=_page([]))):
+        hydrated = await connector.hydrate_thread("zoho_ticket:1")
+
+    assert hydrated.messages == []
+    assert hydrated.metadata["message_count"] == 0
 
 
 @pytest.mark.asyncio
