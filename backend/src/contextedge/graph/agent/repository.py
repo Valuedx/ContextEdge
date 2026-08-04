@@ -31,9 +31,11 @@ from contextedge.graph.agent.hydrators import (
 from contextedge.graph.temporal import edge_valid_at
 from contextedge.models.entity import Entity
 from contextedge.models.episode import CanonicalIdentity, Episode, IdentityAlias
+from contextedge.models.evidence import EvidenceChunk, EvidenceItem
 from contextedge.models.pattern import GraphEdge, Pattern
 from contextedge.models.playbook import Playbook
 from contextedge.search.access_control import resolve_excluded_access_policy_ids
+from contextedge.services.evidence_typing import KNOWLEDGE_EVIDENCE_TYPES
 
 logger = structlog.get_logger()
 
@@ -224,6 +226,7 @@ class SQLAlchemyAgentGraphRepository:
             # later query in this projection raising InFailedSQLTransaction.
             episode_rows: list = []
             playbook_rows: list = []
+            knowledge_rows: list = []
             try:
                 from contextedge.ai.provider import generate_embedding
                 from contextedge.search.vector_ops import (
@@ -283,6 +286,63 @@ class SQLAlchemyAgentGraphRepository:
                     if pb_domain is not None:
                         playbook_sem_q = playbook_sem_q.where(pb_domain)
                     playbook_rows = list((await self.db.execute(playbook_sem_q)).all())
+
+                    # Direct semantic KNOWLEDGE match: SOPs, KB articles and
+                    # product documentation, matched on their own chunks.
+                    #
+                    # Without this a documentation question can only reach a
+                    # document by traversing from some other seed. Measured on
+                    # a live graph: 17 of 18 KB articles had no edge to any
+                    # pattern or playbook, so there was usually no path — a
+                    # query that was almost the exact title of an article still
+                    # retrieved nothing. Documentation answers the questions no
+                    # incident ever covered (a compatibility matrix, a required
+                    # config key, a defect fixed in a later release), which is
+                    # precisely when there is no incident history to traverse
+                    # from.
+                    #
+                    # Chunks rather than whole documents, because a long manual
+                    # matches everything weakly and its one relevant section
+                    # strongly. The chunker keeps a step with its warning, so a
+                    # matched chunk is a coherent unit. Ranked per document —
+                    # its best chunk wins — so one well-matched manual cannot
+                    # occupy every seed slot.
+                    chunk_distance = halfvec_cosine_distance(
+                        EvidenceChunk.embedding, query_embedding
+                    ).label("distance")
+                    knowledge_q = (
+                        select(
+                            EvidenceChunk.evidence_id,
+                            func.min(chunk_distance).label("distance"),
+                        )
+                        .join(
+                            EvidenceItem,
+                            EvidenceItem.id == EvidenceChunk.evidence_id,
+                        )
+                        .where(
+                            EvidenceChunk.tenant_id == scope.tenant_id,
+                            EvidenceChunk.embedding.is_not(None),
+                            EvidenceItem.evidence_type.in_(
+                                tuple(KNOWLEDGE_EVIDENCE_TYPES)
+                            ),
+                            # Same gate hydration applies, checked here too so
+                            # a withheld document never consumes a seed slot.
+                            EvidenceItem.sensitivity_label.is_distinct_from(
+                                "legal_hold"
+                            ),
+                        )
+                        .group_by(EvidenceChunk.evidence_id)
+                        .order_by("distance")
+                        .limit(3)
+                    )
+                    knowledge_domain = self._domain_predicate(
+                        EvidenceItem.domain_id, scope
+                    )
+                    if knowledge_domain is not None:
+                        knowledge_q = knowledge_q.where(knowledge_domain)
+                    knowledge_rows = list(
+                        (await self.db.execute(knowledge_q)).all()
+                    )
             except Exception as exc:
                 logger.warning(
                     "agent_graph.semantic_seed_unavailable",
@@ -310,6 +370,22 @@ class SQLAlchemyAgentGraphRepository:
                         ref=GraphNodeRef(type="playbook", id=playbook_id),
                         relevance=round(0.6 + 0.3 * similarity, 4),
                         reason="query_semantic",
+                    )
+                )
+            for evidence_id, knowledge_distance in knowledge_rows:
+                similarity = 1.0 - min(max(float(knowledge_distance), 0.0), 1.0)
+                # Stricter than episodes and playbooks. A manual shares
+                # vocabulary with everything in its product, so a loose match
+                # returns normative-sounding text about the wrong procedure —
+                # the failure knowledge_retrieval_service names explicitly:
+                # "a weak match is worse than none".
+                if similarity < 0.6:
+                    continue
+                seeds.append(
+                    RankedGraphSeed(
+                        ref=GraphNodeRef(type="evidence", id=evidence_id),
+                        relevance=round(0.6 + 0.3 * similarity, 4),
+                        reason="query_knowledge",
                     )
                 )
 
