@@ -145,3 +145,58 @@ def is_knowledge_evidence(evidence_type: str | None) -> bool:
     events.
     """
     return (evidence_type or "") in KNOWLEDGE_EVIDENCE_TYPES
+
+
+# Payload keys connectors use for the human-facing record number, in
+# preference order. Zoho writes `ticket_number`, ServiceNow `number`,
+# ManageEngine `display_id` — a reviewer just wants the number printed
+# on the ticket, whichever connector produced it.
+_DISPLAY_ID_KEYS = (
+    "ticket_number",
+    "number",
+    "display_id",
+    "record_number",
+    "key",
+    "incident_number",
+)
+
+# And the deep link back into the source system.
+_URL_KEYS = ("web_url", "url", "permalink", "link", "portal_url", "href")
+
+
+def source_reference_from_payload(
+    payload: dict | None, external_id: str | None, source_type: str | None
+) -> dict:
+    """The record's identity in the system it came from.
+
+    Every field here was already stored on the raw object and none of it
+    reached the API, so evidence in the UI could not be traced back to a
+    ticket. The internal UUID was the only identifier shown, and it is
+    the one identifier nobody can search for or open.
+
+    Falls back to the external id for display: a connector with no
+    friendlier number should still show something actionable rather than
+    nothing.
+    """
+    data = payload if isinstance(payload, dict) else {}
+
+    display_id = None
+    for key in _DISPLAY_ID_KEYS:
+        value = data.get(key)
+        if value not in (None, ""):
+            display_id = str(value)
+            break
+
+    url = None
+    for key in _URL_KEYS:
+        value = data.get(key)
+        if isinstance(value, str) and value.startswith(("http://", "https://")):
+            url = value
+            break
+
+    return {
+        "external_id": external_id,
+        "display_id": display_id or external_id,
+        "url": url,
+        "source_type": source_type,
+    }

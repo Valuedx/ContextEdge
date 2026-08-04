@@ -5,7 +5,11 @@ from sqlalchemy import or_, select
 
 from contextedge.deps import AuthUser, DbSession
 from contextedge.middleware.audit import log_audit_event
-from contextedge.models.evidence import AttachmentArtifact, EvidenceItem
+from contextedge.models.evidence import (
+    AttachmentArtifact,
+    EvidenceItem,
+    RawEvidenceObject,
+)
 from contextedge.models.source import Source
 from contextedge.schemas.common import StatusResponse
 from contextedge.schemas.evidence import (
@@ -83,7 +87,36 @@ async def get_evidence(evidence_id: UUID, db: DbSession, user: AuthUser):
         excluded_policy_ids and item.access_policy_id in set(excluded_policy_ids)
     ):
         raise HTTPException(status_code=404, detail="Evidence not found")
-    return item
+
+    detail = EvidenceItemDetail.model_validate(item, from_attributes=True)
+    detail.source_reference = await _source_reference(db, item)
+    return detail
+
+
+async def _source_reference(db, item: EvidenceItem):
+    """Which ticket this evidence is, and where to open it.
+
+    Read from the raw object rather than duplicated onto the evidence
+    row: the raw payload is the record as the source system had it, and
+    copying a number out of it at ingest would go stale the moment a
+    connector changed which field it wrote.
+
+    Returns ``None`` for evidence with no raw object (uploads), rather
+    than an empty shell that renders as a blank field.
+    """
+    from contextedge.schemas.evidence import SourceReference
+    from contextedge.services.evidence_typing import source_reference_from_payload
+
+    if item.raw_object_ref is None:
+        return None
+    raw = await db.get(RawEvidenceObject, item.raw_object_ref)
+    if raw is None:
+        return None
+    return SourceReference(
+        **source_reference_from_payload(
+            raw.raw_payload, raw.external_id, item.source_type
+        )
+    )
 
 
 @router.get("/{evidence_id}/attachments", response_model=list[AttachmentArtifactResponse])

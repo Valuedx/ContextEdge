@@ -39,6 +39,31 @@ class EvidenceItemDetail(EvidenceItemResponse):
     # distinguish "does not apply anywhere in particular" from "nobody
     # ever looked", so this stays nullable rather than defaulting to {}.
     applicability: dict | None = None
+    # Where this evidence came from IN THE SOURCE SYSTEM: the number a
+    # human would search for, and a link back to the record.
+    #
+    # Everything needed was already stored on the raw object and none of
+    # it was exposed, so a reviewer looking at a piece of evidence could
+    # not tell which ticket it was, or open it. The internal UUID is the
+    # only identifier the UI had, and it is the one identifier nobody can
+    # act on.
+    source_reference: "SourceReference | None" = None
+
+
+class SourceReference(BaseModel):
+    """A record's identity in the system it came from.
+
+    Deliberately connector-agnostic. Zoho calls it ``ticket_number``,
+    ServiceNow ``number``, ManageEngine ``display_id`` — a reviewer just
+    wants the number on the ticket and a way to open it.
+    """
+
+    external_id: str | None = None
+    # The human-facing number: "351086", "INC0021355". Falls back to the
+    # external id when a connector has nothing friendlier.
+    display_id: str | None = None
+    url: str | None = None
+    source_type: str | None = None
 
 
 class EvidenceAccessPolicyUpdate(BaseModel):
