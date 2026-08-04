@@ -35,10 +35,25 @@ def test_playbook_generation_is_not_clamped_to_the_global_default():
     assert _effective(16384, "playbook") > settings.llm_max_output_tokens
 
 
+def test_extraction_is_not_clamped_either():
+    """The same regression, in the task the first fix walked past.
+
+    ``llm_complete_json`` asks for 16384 on extraction AND playbook "to
+    avoid truncation", and this map is what overrides it — so exempting
+    only playbook left episode reconstruction requesting 16384 and
+    receiving 4096. Observed live: completion_tokens 4082 against the
+    4096 ceiling, of which reasoning_tokens 3930, leaving ~150 tokens of
+    answer. The JSON stopped mid-object, repair failed at the same
+    offset on every attempt, and the episode was discarded.
+    """
+    assert _effective(16384, "extraction") == 16384
+    assert _effective(16384, "extraction") > settings.llm_max_output_tokens
+
+
 def test_other_tasks_keep_the_global_cost_ceiling():
     """The cap is a real cost guard and stays the default. Only tasks
     whose correct answer is genuinely longer opt out."""
-    for task in ("relevance", "classification", "extraction", ""):
+    for task in ("relevance", "classification", "identity", ""):
         assert _effective(16384, task) == settings.llm_max_output_tokens
 
 
@@ -73,6 +88,24 @@ def test_the_json_task_budget_covers_playbook():
 
     source = inspect.getsource(provider.llm_complete_json)
     assert '"playbook"' in source
+
+
+def test_the_request_and_the_ceiling_agree_on_which_tasks_are_long():
+    """The two halves disagreeing is the bug itself, twice over.
+
+    ``llm_complete_json`` decides what to ask for and this map decides
+    what may be granted. A task in the first list but not the second
+    requests a large budget, is silently cut to the default, and returns
+    a truncated answer that reads as a considered one — with nothing in
+    between to report the difference.
+    """
+    import inspect
+
+    from contextedge.ai import provider
+
+    source = inspect.getsource(provider.llm_complete_json)
+    asks_large = {t for t in ("extraction", "playbook") if f'"{t}"' in source}
+    assert asks_large <= set(settings.llm_task_output_tokens)
 
 
 @pytest.mark.asyncio

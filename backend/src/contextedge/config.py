@@ -88,8 +88,22 @@ class Settings(BaseSettings):
     # prompt v3 added a conflicts block on top. It is also low-volume —
     # one call per pattern — so the cost of a bigger ceiling here is
     # small and the cost of truncation is a useless artifact.
+    #
+    # Extraction is the same case and was missed. ``llm_complete_json``
+    # already asks for 16384 on both tasks "to avoid truncation", and
+    # this map is what overrides it — so episode reconstruction requested
+    # 16384, silently received 4096, and produced JSON that stopped
+    # mid-object. Observed on a live run: completion_tokens 4082 against
+    # a 4096 ceiling, of which reasoning_tokens 3930, leaving ~150 tokens
+    # of actual answer. Every attempt failed at the same offset and the
+    # episode was discarded, which is the identical failure that made
+    # playbooks arrive with no steps.
+    #
+    # Reasoning counting against the same budget is why this ceiling
+    # cannot be trimmed close to the expected output size: on
+    # gemini-2.5-flash the thinking is most of it.
     llm_task_output_tokens: dict[str, int] = Field(
-        default_factory=lambda: {"playbook": 16384}
+        default_factory=lambda: {"playbook": 16384, "extraction": 16384}
     )
     # Largest number of texts sent to the embedding API in one request.
     # Callers hand in whole documents' worth of chunks; without a cap a single
