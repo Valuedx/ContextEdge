@@ -1,7 +1,7 @@
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Query, status
-from sqlalchemy import or_, select
+from sqlalchemy import or_, select, text
 
 from contextedge.deps import AuthUser, DbSession
 from contextedge.middleware.audit import log_audit_event
@@ -50,7 +50,9 @@ async def search_evidence(
             limit=limit,
             exclude_policy_ids=excluded_policy_ids,
         )
-        return [item for item, _rank in fts_results]
+        return await _attach_source_references(
+            db, [item for item, _rank in fts_results]
+        )
 
     q = select(EvidenceItem).where(EvidenceItem.tenant_id == user.tenant_id)
     if excluded_policy_ids:
@@ -70,7 +72,7 @@ async def search_evidence(
         q = q.where(EvidenceItem.domain_id == domain_id)
     q = q.order_by(EvidenceItem.ingested_at.desc()).limit(limit).offset(offset)
     result = await db.execute(q)
-    return result.scalars().all()
+    return await _attach_source_references(db, list(result.scalars().all()))
 
 
 @router.get("/{evidence_id}", response_model=EvidenceItemDetail)
@@ -91,6 +93,76 @@ async def get_evidence(evidence_id: UUID, db: DbSession, user: AuthUser):
     detail = EvidenceItemDetail.model_validate(item, from_attributes=True)
     detail.source_reference = await _source_reference(db, item)
     return detail
+
+
+async def _attach_source_references(db, items: list[EvidenceItem]) -> list:
+    """Add the source record number to a page of evidence.
+
+    ONE query for the page, not one per row: the list is capped at 200
+    and an N+1 here would be 200 round trips to render a table.
+
+    Only the handful of payload keys that can hold a record number are
+    pulled out, in SQL. Selecting whole raw payloads would drag every
+    ticket body and thread through the API process to render a column
+    two dozen characters wide.
+    """
+    from contextedge.schemas.evidence import SourceReference
+
+    # The reference is ATTACHED to each row rather than the rows being
+    # converted here. FastAPI validates against the response model at the
+    # boundary anyway, so converting first would validate every row
+    # twice — 200 rows of wasted work per page — and would replace the
+    # objects the caller returned with copies.
+    raw_refs = {
+        ref
+        for ref in (getattr(item, "raw_object_ref", None) for item in items)
+        if ref
+    }
+    if not raw_refs:
+        return items
+
+    rows = (
+        await db.execute(
+            text(
+                """
+                select id,
+                       external_id,
+                       coalesce(
+                           nullif(raw_payload->>'ticket_number', ''),
+                           nullif(raw_payload->>'number', ''),
+                           nullif(raw_payload->>'display_id', ''),
+                           nullif(raw_payload->>'record_number', ''),
+                           nullif(raw_payload->>'key', ''),
+                           nullif(raw_payload->>'incident_number', '')
+                       ) as display_id,
+                       coalesce(
+                           raw_payload->>'web_url',
+                           raw_payload->>'url',
+                           raw_payload->>'permalink',
+                           raw_payload->>'link',
+                           raw_payload->>'portal_url'
+                       ) as url
+                from raw_evidence_objects
+                where id = any(:ids)
+                """
+            ),
+            {"ids": list(raw_refs)},
+        )
+    ).all()
+    by_raw_id = {row.id: row for row in rows}
+
+    for item in items:
+        row = by_raw_id.get(getattr(item, "raw_object_ref", None))
+        if row is None:
+            continue
+        url = row.url if (row.url or "").startswith(("http://", "https://")) else None
+        item.source_reference = SourceReference(
+            external_id=row.external_id,
+            display_id=row.display_id or row.external_id,
+            url=url,
+            source_type=getattr(item, "source_type", None),
+        )
+    return items
 
 
 async def _source_reference(db, item: EvidenceItem):
