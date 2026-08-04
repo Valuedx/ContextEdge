@@ -119,6 +119,13 @@ export interface EvidenceItem {
   created_at_source: string | null;
   ingested_at: string;
   created_at?: string;
+  /**
+   * On the list as well as the detail: scanning a page of evidence and
+   * having to open each row to find out which ticket it is defeats the
+   * point of the list. Null for uploads and anything with no
+   * originating record.
+   */
+  source_reference?: SourceReference | null;
 }
 
 /**
@@ -175,8 +182,6 @@ export interface EvidenceItemDetail extends EvidenceItem {
    * which means it was read and stated no constraints.
    */
   applicability?: EvidenceApplicability | null;
-  /** Null for uploads and anything with no originating record. */
-  source_reference?: SourceReference | null;
 }
 
 export interface Episode {

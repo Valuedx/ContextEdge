@@ -77,6 +77,40 @@ const columns: ColumnDef<EvidenceItem>[] = [
     enableHiding: false,
   },
   {
+    id: "record",
+    header: "Record",
+    // The number on the ticket. Without it the only identifier in this
+    // table is the title, which is neither unique nor searchable in the
+    // source system — two "Agent already registered" rows are
+    // indistinguishable until you open them.
+    cell: ({ row }) => {
+      const ref = row.original.source_reference;
+      if (!ref?.display_id) {
+        return <span className="text-muted-foreground text-xs">—</span>;
+      }
+      const label = `#${ref.display_id}`;
+      return ref.url ? (
+        <a
+          href={ref.url}
+          target="_blank"
+          rel="noopener noreferrer"
+          onClick={(event) => event.stopPropagation()}
+          className="font-mono text-xs text-primary hover:underline truncate block max-w-[12rem]"
+          title={ref.display_id}
+        >
+          {label}
+        </a>
+      ) : (
+        <span
+          className="font-mono text-xs truncate block max-w-[12rem]"
+          title={ref.display_id}
+        >
+          {label}
+        </span>
+      );
+    },
+  },
+  {
     accessorKey: "title",
     header: "Title",
     cell: ({ row }) => (

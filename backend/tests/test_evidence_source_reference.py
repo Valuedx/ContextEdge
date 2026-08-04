@@ -87,3 +87,61 @@ def test_evidence_with_no_raw_object_has_no_reference():
     source = inspect.getsource(evidence._source_reference)
     assert "if item.raw_object_ref is None:" in source
     assert "return None" in source
+
+
+# --- the list, not just the detail -------------------------------------------
+
+
+def test_the_list_response_carries_the_record_number():
+    """Scanning a page and having to open each row to find out which
+    ticket it is defeats the point of the list."""
+    from contextedge.schemas.evidence import (
+        EvidenceItemDetail,
+        EvidenceItemResponse,
+    )
+
+    assert "source_reference" in EvidenceItemResponse.model_fields
+    # Detail extends the list schema, so it inherits rather than
+    # redeclaring — one definition, no drift.
+    assert "source_reference" in EvidenceItemDetail.model_fields
+
+
+def test_the_page_costs_one_query_not_one_per_row():
+    """The list is capped at 200. An N+1 here would be 200 round trips
+    to render a table column."""
+    import inspect
+
+    from contextedge.api.v1 import evidence
+
+    source = inspect.getsource(evidence._attach_source_references)
+    assert "id = any(:ids)" in source
+    # No per-row fetch inside the loop.
+    assert "db.get(" not in source
+    assert source.count("await db.execute") == 1
+    # And it attaches rather than converting: converting would validate
+    # every row twice, since FastAPI validates at the boundary anyway.
+    assert "model_validate" not in source
+
+
+def test_whole_payloads_are_not_dragged_through_the_api():
+    """Selecting raw_payload would pull every ticket body and thread
+    into the API process to render a column two dozen characters wide."""
+    import inspect
+
+    from contextedge.api.v1 import evidence
+
+    source = inspect.getsource(evidence._attach_source_references)
+    # Keys are extracted in SQL; the payload column itself is never selected.
+    assert "raw_payload->>" in source
+    assert "select id,\n                       external_id," in source
+
+
+def test_both_list_paths_are_covered():
+    """Search and browse are different code paths in the same endpoint;
+    covering only one leaves the column blank half the time."""
+    import inspect
+
+    from contextedge.api.v1 import evidence
+
+    source = inspect.getsource(evidence.search_evidence)
+    assert source.count("_attach_source_references") == 2
