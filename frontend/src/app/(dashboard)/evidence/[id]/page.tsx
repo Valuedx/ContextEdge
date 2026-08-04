@@ -29,7 +29,14 @@ import {
 } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { api } from "@/lib/api";
-import type { AttachmentArtifact, EvidenceItemDetail, PoliciesOverview, ThreadSummary } from "@/lib/types";
+import { ThreadConversation } from "@/components/common/thread-conversation";
+import type {
+  AttachmentArtifact,
+  EvidenceItem,
+  EvidenceItemDetail,
+  PoliciesOverview,
+  ThreadSummary,
+} from "@/lib/types";
 import { useAuthStore } from "@/lib/stores/auth-store";
 import { canListPoliciesForEvidence, canEditEvidenceAccessPolicy } from "@/lib/roles";
 import {
@@ -74,6 +81,17 @@ export default function EvidenceDetailPage() {
     enabled: !!item?.thread_id,
   });
 
+  // 2b. The other messages in that thread. Every hydrated message is its
+  // own evidence row, so without this the page shows one message of a
+  // conversation with no way to reach the rest of it.
+  const { data: threadMessages = [], isLoading: threadMessagesLoading } = useQuery<
+    EvidenceItem[]
+  >({
+    queryKey: ["thread-evidence", item?.thread_id],
+    queryFn: () => api.get(`/threads/${item!.thread_id}/evidence`),
+    enabled: !!item?.thread_id,
+  });
+
   // 3. Fetch Attachments
   const { data: attachments = [] } = useQuery<AttachmentArtifact[]>({
     queryKey: ["evidence-attachments", evidenceId],
@@ -86,6 +104,10 @@ export default function EvidenceDetailPage() {
     mutationFn: () => api.post(`/threads/${item!.thread_id}/hydrate`, {}),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["thread", item?.thread_id] });
+      // The messages are what hydration produces, so the list has to be
+      // refetched too — invalidating only the summary leaves the count
+      // updating while the conversation below it stays stale.
+      qc.invalidateQueries({ queryKey: ["thread-evidence", item?.thread_id] });
       toast.success("Thread hydration queued");
     },
     onError: (err: Error) => toast.error(err.message || "Hydration failed"),
@@ -313,7 +335,12 @@ export default function EvidenceDetailPage() {
         <CardHeader className="border-b border-slate-800/80 pb-3 flex flex-row items-center justify-between">
           <CardTitle className="text-base font-bold text-slate-100 flex items-center gap-2">
             <FileText className="h-4 w-4 text-indigo-400" />
-            Raw Evidence Ticket Content
+            {/* Naming this "Ticket Content" on a hydrated message is how a
+                single reply reads as the whole ticket. Every message in a
+                thread is its own evidence row, and `evidence_type` cannot
+                tell them apart — normalization types them all as "ticket"
+                — so the thread is the signal. */}
+            {item.thread_id ? "Message Content" : "Raw Evidence Ticket Content"}
           </CardTitle>
           {/* Lead with the ticket number; the UUID stays for support
               but is not what a reviewer is looking for. */}
@@ -344,6 +371,18 @@ export default function EvidenceDetailPage() {
           </div>
         </CardContent>
       </Card>
+
+      {/* The rest of the conversation this message belongs to. */}
+      {item.thread_id && (
+        <ThreadConversation
+          thread={thread}
+          messages={threadMessages}
+          currentEvidenceId={item.id}
+          isLoading={threadMessagesLoading}
+          onHydrate={() => hydrateMut.mutate()}
+          isHydrating={hydrateMut.isPending}
+        />
+      )}
 
       {/* Attachments Section */}
       {attachments.length > 0 && (

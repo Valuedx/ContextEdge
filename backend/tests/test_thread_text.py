@@ -198,16 +198,35 @@ def test_normalization_strips_quotes_for_every_source():
     assert evidence_body_from_payload(payload) == "Restarted the service."
 
 
-def test_normalization_never_returns_nothing_where_there_was_something():
-    """A body that is entirely quoted still needs text for the title
-    fallback and the content hash — an empty hash would make distinct
-    replies collide and dedupe each other away."""
+def test_a_quote_only_message_is_marked_rather_than_repeated_or_emptied():
+    """Two constraints pull in opposite directions here.
+
+    The body must not be the quote: returning it re-embeds the whole
+    conversation for a message that added nothing to it, which is the
+    problem this module exists to solve.
+
+    The body must also not be empty: the title falls back to a body
+    snippet, so an unnameable evidence row is the alternative failure.
+
+    A marker satisfies both. Dedup is unaffected because the content
+    hash is taken over the RAW body, which is still distinct per
+    message — collapsing every quote-only reply into one row is what an
+    empty hash would have caused.
+    """
     from contextedge.services.evidence_normalization import (
+        QUOTED_ONLY_MARKER,
         evidence_body_from_payload,
+        evidence_content_hash_from_payload,
     )
 
-    quote_only = "> only a quote"
-    assert evidence_body_from_payload({"body": quote_only}) == quote_only
+    first = {"body": "> only a quote"}
+    second = {"body": "> a different quote entirely"}
+
+    assert evidence_body_from_payload(first) == QUOTED_ONLY_MARKER
+    assert evidence_body_from_payload(first).strip()
+    assert evidence_content_hash_from_payload(
+        first
+    ) != evidence_content_hash_from_payload(second)
 
 
 # --- delivery failures --------------------------------------------------------
@@ -391,3 +410,225 @@ def test_two_different_bounces_stay_distinct():
     one = {"from": "Microsoft Outlook", "body": "Couldn't deliver to a@b.com. How to Fix It"}
     two = {"from": "Microsoft Outlook", "body": "Couldn't deliver to x@y.com. How to Fix It"}
     assert evidence_content_hash_from_payload(one) != evidence_content_hash_from_payload(two)
+
+
+# --- signatures and legal disclaimers -----------------------------------------
+#
+# Measured on 285 real messages that had ALREADY had quoted history removed:
+# 79% still carried a sign-off, and 26% of the remaining text was signature
+# blocks and disclaimers. Cross-message dedup does not catch them — it keeps
+# the first occurrence per thread, so every thread retains one full copy.
+
+
+def test_a_legal_disclaimer_is_cut_to_the_end():
+    from contextedge.services.thread_text_service import strip_trailing_boilerplate
+
+    body = (
+        "The agent failed to register after the 8.2.5 upgrade.\n\n"
+        "This e-mail and any attachments hereto are intended only for the use "
+        "of the addressee(s) named herein and may contain confidential "
+        "information. If you have received this e-mail in error, please notify "
+        "the sender immediately and delete all copies."
+    )
+    out = strip_trailing_boilerplate(body)
+    assert out == "The agent failed to register after the 8.2.5 upgrade."
+    assert "confidential" not in out
+
+
+def test_a_signature_block_is_removed_with_its_contact_details():
+    """A signature is attached to a person, so leaving it in seeds identity
+    extraction with the sender's name, title, phone and employer on every
+    message they ever sent."""
+    from contextedge.services.thread_text_service import strip_trailing_boilerplate
+
+    body = (
+        "Please verify the ownership of the web driver directory.\n\n"
+        "Thanks and Regards,\n\nDana Reed\nSupport Engineer\n"
+        "Mobile: +91 98765 43210\nwww.example.com"
+    )
+    out = strip_trailing_boilerplate(body)
+    assert out == "Please verify the ownership of the web driver directory."
+    assert "98765" not in out
+    assert "Dana Reed" not in out
+
+
+def test_a_sign_off_followed_by_more_content_is_left_alone():
+    """The conservative half. "Thanks," is regularly followed by more
+    substance, and eating a paragraph of diagnosis costs far more than
+    keeping a name."""
+    from contextedge.services.thread_text_service import strip_trailing_boilerplate
+
+    body = (
+        "Restarted the service.\n\nThanks\n\n"
+        "One more thing worth flagging: the agent is still failing to register "
+        "against the QA gateway, and the RADIUS timeouts in the log look like "
+        "the same fault we saw in April. Could you check whether the firewall "
+        "rule was reapplied after the maintenance window?"
+    )
+    assert strip_trailing_boilerplate(body) == body.strip()
+
+
+def test_thanks_inside_a_sentence_is_not_a_sign_off():
+    from contextedge.services.thread_text_service import strip_trailing_boilerplate
+
+    body = "Thanks for confirming the port was open — that rules out the firewall."
+    assert strip_trailing_boilerplate(body) == body
+
+
+def test_the_last_sign_off_is_used_not_the_first():
+    """A message may thank someone mid-conversation and continue; only the
+    final sign-off plausibly begins the signature."""
+    from contextedge.services.thread_text_service import strip_trailing_boilerplate
+
+    body = (
+        "Thanks\n\nThe logs are attached and show the SSL handshake failing "
+        "at the point the client presents its certificate to the gateway.\n\n"
+        "Regards,\nDana"
+    )
+    out = strip_trailing_boilerplate(body)
+    assert "SSL handshake" in out
+    assert not out.rstrip().endswith("Dana")
+
+
+def test_a_message_that_is_only_a_signature_is_never_emptied():
+    """A body reduced to nothing leaves the evidence unnameable, and a
+    message consisting solely of a sign-off is still a real event with a
+    real author."""
+    from contextedge.services.thread_text_service import strip_trailing_boilerplate
+
+    body = "Thanks and Regards,\n\nDana Reed\nSupport Engineer"
+    assert strip_trailing_boilerplate(body).strip()
+
+
+def test_boilerplate_rules_name_no_organisation():
+    """A rule listing one customer's company name silently does nothing for
+    every other tenant while appearing to work.
+
+    Scoped to the patterns themselves — the module docstring cites the
+    corpus the thresholds were measured on, which is a provenance note,
+    not a matching rule.
+    """
+    from contextedge.services.thread_text_service import (
+        _CONTACT,
+        _DISCLAIMER,
+        _SIGNOFF,
+    )
+
+    rules = " ".join(p.pattern.lower() for p in (_DISCLAIMER, _SIGNOFF, _CONTACT))
+    for banned in ("automationedge", "acme", "zoho", "hdfc", "idfc", "servicenow"):
+        assert banned not in rules
+
+
+def test_boilerplate_is_removed_before_the_dedup_memory_sees_it():
+    """A signature suppressed as a duplicate would still have claimed its
+    lines in `seen`, so the same words written later by a person would be
+    dropped as a repeat of a footer."""
+    from contextedge.services.thread_text_service import clean_thread_bodies
+
+    shared = "Please feel free to reach us at the links mentioned below today."
+    out = clean_thread_bodies(
+        [
+            f"The agent is down.\n\nRegards,\nDana\n{shared}\nwww.example.com",
+            # A person writes the same sentence as real content later.
+            f"{shared}",
+        ],
+        ["Dana", "Sam"],
+    )
+    assert "reach us at the links" not in out[0]["body"]
+    assert shared in out[1]["body"]
+
+
+def test_the_standard_pipeline_strips_boilerplate_too():
+    """Most conversational evidence never passes through hydration."""
+    from contextedge.services.evidence_normalization import evidence_body_from_payload
+
+    body = evidence_body_from_payload(
+        {"body": "Gateway timed out.\n\nBest Regards,\nDana Reed\nMobile: +1 555 0100"}
+    )
+    assert body == "Gateway timed out."
+
+
+@pytest.mark.parametrize(
+    "header",
+    [
+        "On 3 August 2026 at 14:02, Jane Doe <j@x.com> wrote:",
+        '---- on Mon, 27 Jul 2026 23:58:50 +0530 "Jane Doe"<j@x.com> wrote ----',
+        "---- On Tue, 21 Jul 2026 11:21:41 +0530 Jane Doe <j@x.com> wrote ----",
+        "on 1 Jan 2026 at 09:00, A B <a@b.c> wrote",
+    ],
+)
+def test_every_attribution_shape_is_recognised(header):
+    """Capital "On" and a mandatory colon was the original rule, and it
+    missed the dashed lowercase variant on 127 of 285 already-"cleaned"
+    messages — 43,136 characters, a quarter of the corpus, still carrying
+    the conversation the stripping was supposed to remove."""
+    body = f"My new reply.\n\n{header}\n> the whole prior conversation"
+    assert strip_quoted(body) == "My new reply."
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "As discussed on Monday, the engineer wrote a workaround",
+        "I read what he wrote",
+        "The script wrote 4,100 rows to the queue table",
+    ],
+)
+def test_prose_about_writing_is_not_an_attribution_line(line):
+    """The start anchor is what makes the looser pattern safe: prose
+    mentioning what someone wrote does not begin with "on"."""
+    body = f"{line}\nand the fault cleared after a restart."
+    assert strip_quoted(body) == body
+
+
+def test_a_trailing_link_footer_is_removed():
+    """"Follow us" rows and portal menus. Measured at 11.4% of what
+    survived the signature and disclaimer rules, the same footer
+    appearing 116 times."""
+    from contextedge.services.thread_text_service import strip_trailing_boilerplate
+
+    body = (
+        "The agent registered successfully after the firewall rule was reapplied.\n\n"
+        "Please feel free to reach us at the links mentioned.\n\n"
+        "https://example.com | Home | https://community.example.com | My Area"
+    )
+    out = strip_trailing_boilerplate(body)
+    assert out == "The agent registered successfully after the firewall rule was reapplied."
+
+
+def test_short_closing_lines_without_a_link_are_kept():
+    """A run of short lines with no link is a closing sentence, not a
+    footer — cutting it can take the last line of an answer."""
+    from contextedge.services.thread_text_service import strip_trailing_boilerplate
+
+    body = "We traced the fault to the gateway.\n\nIt is fixed now.\n\nPlease confirm."
+    assert strip_trailing_boilerplate(body) == body
+
+
+def test_a_link_inside_the_answer_is_not_a_footer():
+    """A URL is often the answer — a KB link, a build, a log location."""
+    from contextedge.services.thread_text_service import strip_trailing_boilerplate
+
+    body = (
+        "Download the patched driver from https://example.com/builds/8.2.6 and "
+        "restart the agent, then confirm the version reported in the console "
+        "matches what the installer wrote to the manifest file."
+    )
+    assert strip_trailing_boilerplate(body) == body
+
+
+def test_footer_rules_survive_an_empty_or_missing_body():
+    from contextedge.services.thread_text_service import strip_trailing_boilerplate
+
+    assert strip_trailing_boilerplate(None) == ""
+    assert strip_trailing_boilerplate("") == ""
+    assert strip_trailing_boilerplate("   \n  ") == ""
+
+
+def test_a_single_closing_link_is_not_a_menu():
+    """Two links make a menu; one makes a sentence. A closing line
+    pointing at a KB article or a build IS the answer."""
+    from contextedge.services.thread_text_service import strip_trailing_boilerplate
+
+    body = "Fixed in 8.2.6.\n\nRelease notes: https://example.com/notes"
+    assert strip_trailing_boilerplate(body) == body

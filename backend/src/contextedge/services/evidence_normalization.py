@@ -47,6 +47,10 @@ def evidence_title_from_payload(payload: dict | None) -> str:
 # Short, stable, and carries no addresses.
 DELIVERY_FAILURE_MARKER = "[automated delivery failure notification]"
 
+# What a message contributes when everything in it was already said
+# earlier in the same thread.
+QUOTED_ONLY_MARKER = "[quoted history only - no new text]"
+
 
 def raw_body_from_payload(payload: dict | None) -> str:
     """The body exactly as the connector supplied it, uncleaned."""
@@ -77,15 +81,37 @@ def evidence_body_from_payload(payload: dict | None) -> str:
     chunked and read by every extractor was the same conversation
     repeated.
     """
-    raw = raw_body_from_payload(payload)
-
     from contextedge.services.thread_text_service import (
         is_delivery_failure,
         strip_quoted,
+        strip_trailing_boilerplate,
     )
 
     p = payload or {}
     sender = p.get("from") or p.get("sender") or p.get("author") or p.get("email")
+
+    # Hydration made this call with the whole thread in hand and emptied
+    # the body accordingly; re-deriving it from what is left would ask
+    # the question of a body that no longer contains the answer.
+    if p.get("is_delivery_failure") is True:
+        return DELIVERY_FAILURE_MARKER
+
+    # A message whose body cleaned down to nothing is empty. It is not an
+    # invitation to describe the payload instead.
+    #
+    # raw_body_from_payload ends its `or` chain at ``str(payload)``,
+    # which is right for records that have no body concept at all — a CI
+    # record or a config object is better searchable as its own fields
+    # than as nothing. Here it is exactly wrong: an emptied body falls
+    # through to a repr of the payload that still holds ``body_original``
+    # — the quoted history this stripping exists to remove, and a
+    # bounce's recipient addresses — and puts it back into the text that
+    # gets embedded, chunked and read. One live message was carrying
+    # 2,408 characters of dict repr as its evidence body.
+    if "body" in p and not str(p.get("body") or "").strip():
+        return QUOTED_ONLY_MARKER
+
+    raw = raw_body_from_payload(p)
     if is_delivery_failure(raw, sender if isinstance(sender, str) else None):
         # A bounce is the mail system talking about a message, not a
         # message. Its body is remediation boilerplate plus the failed
@@ -97,11 +123,16 @@ def evidence_body_from_payload(payload: dict | None) -> str:
         # evidence unnameable.
         return DELIVERY_FAILURE_MARKER
 
-    stripped = strip_quoted(raw)
-    # Never return nothing where there was something. A message that is
-    # entirely quoted still needs a body for the title fallback;
-    # suppressing it here would leave the evidence unnameable.
-    return stripped or raw
+    # Signatures and legal disclaimers go here too, for the same reason
+    # quote stripping does: most conversational evidence never passes
+    # through hydration, and a signature carries the sender's name, title,
+    # phone and employer into identity extraction on every single message.
+    stripped = strip_trailing_boilerplate(strip_quoted(raw))
+    # A message that was entirely a quote contributed no new text, and
+    # returning the quote instead re-embeds the whole conversation for a
+    # message that added nothing to it. Marked rather than emptied: the
+    # title falls back to a body snippet, so nothing here may return "".
+    return stripped or QUOTED_ONLY_MARKER
 
 
 def evidence_content_hash_from_payload(payload: dict | None) -> str:
