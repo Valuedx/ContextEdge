@@ -84,6 +84,7 @@ def evidence_body_from_payload(payload: dict | None) -> str:
     from contextedge.services.thread_text_service import (
         is_delivery_failure,
         strip_quoted,
+        strip_trailing_boilerplate,
     )
 
     p = payload or {}
@@ -122,7 +123,11 @@ def evidence_body_from_payload(payload: dict | None) -> str:
         # evidence unnameable.
         return DELIVERY_FAILURE_MARKER
 
-    stripped = strip_quoted(raw)
+    # Signatures and legal disclaimers go here too, for the same reason
+    # quote stripping does: most conversational evidence never passes
+    # through hydration, and a signature carries the sender's name, title,
+    # phone and employer into identity extraction on every single message.
+    stripped = strip_trailing_boilerplate(strip_quoted(raw))
     # A message that was entirely a quote contributed no new text, and
     # returning the quote instead re-embeds the whole conversation for a
     # message that added nothing to it. Marked rather than emptied: the
