@@ -381,12 +381,23 @@ def generate_playbook_candidate(self, pattern_id: str, tenant_id: str):
             pattern_description=pattern.description,
             episode_summaries=summaries,
         )
+        # Record what retrieval just discovered. Without this the match is
+        # spent on one prompt and forgotten, and the document stays
+        # unreachable by traversal for every later projection.
+        from contextedge.services.knowledge_retrieval_service import (
+            persist_knowledge_links,
+        )
+
+        links_written = await persist_knowledge_links(
+            db, tid, pid, knowledge, domain_id=pattern.domain_id
+        )
         logger.info(
             "playbook.knowledge_retrieved",
             tenant_id=str(tid),
             pattern_id=str(pid),
             documents=len(knowledge),
             sections=sum(len(k.sections) for k in knowledge),
+            links_written=links_written,
         )
 
         llm = await playbook_generator.generate_playbook_candidate(

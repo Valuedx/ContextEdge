@@ -54,6 +54,10 @@ MAX_KNOWLEDGE_DOCS = 5
 # Sections per document. A long SOP has many; the ones that matter for a
 # procedure are the ones the pattern's own language matched.
 MAX_SECTIONS_PER_DOC = 6
+# Minimum similarity to write a pattern -> document edge. See
+# persist_knowledge_links for how this was measured and why it is much
+# stricter than the threshold used to seed a projection.
+KNOWLEDGE_LINK_MIN_SIMILARITY = 0.75
 # Cosine distance ceiling. Beyond this the article shares vocabulary with
 # the pattern but not subject matter — "VPN" appearing in an unrelated
 # onboarding checklist. A weak match is worse than none: it gives the
@@ -375,6 +379,100 @@ def _is_model_derived(chunk: Any) -> bool:
         metadata = {}
     methods = metadata.get("extraction_methods") or []
     return "vision" in methods
+
+
+async def persist_knowledge_links(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    pattern_id: uuid.UUID,
+    documents: list[KnowledgeDocument],
+    *,
+    domain_id: uuid.UUID | None = None,
+) -> int:
+    """Record pattern → document matches as graph edges.
+
+    Retrieval discovers these relationships every time a playbook is
+    generated, and until now discarded them the moment the prompt was built.
+    That left documentation reachable only by a direct semantic match on the
+    question: measured on a live graph, 17 of 18 KB articles had no edge to
+    any pattern or playbook, so an agent that landed on the right pattern
+    still could not traverse to the article documenting it.
+
+    ``supported_by`` rather than a new edge type — the pattern's procedure is
+    supported by the document, which is what the existing vocabulary already
+    means, and it carries a 1.15 traversal weight in maf.v1 so a document two
+    hops out survives the projection budget instead of decaying below the cut.
+
+    Only confident, applicable matches are written. An edge is a durable
+    claim that these two things belong together; a weak or
+    wrong-release match would be asserted here and then read back as fact by
+    every later projection. The applicability verdict already computed for
+    the prompt is reused rather than recomputed.
+
+    Idempotent via ``ensure_edge``. Never raises: a failure to record the
+    relationship must not fail playbook generation, which is what this
+    retrieval was actually called for.
+    """
+    if not documents:
+        return 0
+
+    from contextedge.graph.builder import ensure_edge
+
+    written = 0
+    for document in documents:
+        # best_distance is a cosine distance, so smaller is closer.
+        #
+        # Deliberately far stricter than the 0.6 the seeding layer uses, and
+        # the gap is the point: a seed is transient and competes on relevance,
+        # so a weak one simply ranks low and falls out of the budget. An edge
+        # is a durable assertion that these two things belong together, read
+        # back as fact by every later projection and by anything that
+        # traverses the graph. Wrong seeds cost a little context; wrong edges
+        # corrupt the graph.
+        #
+        # 0.75 was measured, not chosen. Ranking every pattern in a live
+        # tenant against its best-matching document put genuine pairs at
+        # 0.75-0.84 ("ActiveMQ broker not running" -> "activemq services not
+        # running"; "Agent fails to start after update" -> "agent is in
+        # updating stage") and pure vocabulary noise at 0.62-0.69 ("Process
+        # Studio SSL connection reset" -> "active directory error"; "VPN
+        # gateway session limit" -> "agent controller issue"). At 0.6 every
+        # one of those wrong pairs would have been written as a permanent
+        # edge.
+        similarity = 1.0 - min(max(float(document.best_distance), 0.0), 1.0)
+        if similarity < KNOWLEDGE_LINK_MIN_SIMILARITY:
+            continue
+        if document.applicability_verdict == "mismatch":
+            # Written for a different release or environment. Useful to show
+            # a human with the warning attached, not to assert as a link.
+            continue
+        try:
+            await ensure_edge(
+                db,
+                tenant_id,
+                "pattern",
+                pattern_id,
+                "evidence",
+                document.evidence_id,
+                "supported_by",
+                weight=round(similarity, 4),
+                metadata={
+                    "source": "knowledge_retrieval",
+                    "evidence_type": document.evidence_type,
+                    "applicability": document.applicability_verdict,
+                },
+                domain_id=domain_id,
+            )
+            written += 1
+        except Exception as exc:
+            logger.warning(
+                "knowledge_retrieval.link_failed",
+                tenant_id=str(tenant_id),
+                pattern_id=str(pattern_id),
+                evidence_id=str(document.evidence_id),
+                error=str(exc),
+            )
+    return written
 
 
 def format_knowledge_block(documents: list[KnowledgeDocument]) -> str:
