@@ -14,6 +14,82 @@ from contextedge.models.evidence import EvidenceItem
 logger = structlog.get_logger()
 
 
+async def _resolve_primary_case_ref(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    evidence_ids: list[uuid.UUID],
+) -> str | None:
+    """The ticket number this episode should be cited by.
+
+    An episode without one can be named but never opened: an agent cites the
+    title and the reader has nothing to look up. That is the difference
+    between a claim someone can verify in a click and one they must take on
+    trust.
+
+    Which identifier wins, when the cited evidence spans several cases:
+
+    1. Follow the episode's OWN evidence to its canonical cases
+       (``case_links``), never the whole cluster — the extractor may split a
+       mixed cluster, and each episode should carry its own ticket.
+    2. Prefer the case that the most of that evidence points at. An episode
+       reconstructed from six messages about INC0001 and one stray reference
+       to INC0002 is about INC0001.
+    3. Within the case, take the identifier the correlation layer already
+       marked ``is_authoritative`` — that flag exists precisely to answer
+       this, so this code defers to it rather than inventing a second rule.
+    4. Ties break on the lowest identifier value, so the same inputs always
+       produce the same answer.
+
+    Returns None when the evidence has no linked case yet, which is normal:
+    correlation may not have run. The field stays empty rather than being
+    filled with a guess.
+    """
+    if not evidence_ids:
+        return None
+
+    from contextedge.models.case_bridge import CaseIdentifier
+    from contextedge.models.session import CaseLink
+
+    rows = (
+        await db.execute(
+            select(CaseLink.canonical_case_id)
+            .where(
+                CaseLink.tenant_id == tenant_id,
+                CaseLink.evidence_id.in_(evidence_ids),
+            )
+        )
+    ).scalars().all()
+    if not rows:
+        return None
+
+    counts: dict[uuid.UUID, int] = {}
+    for case_id in rows:
+        counts[case_id] = counts.get(case_id, 0) + 1
+    # Most-referenced case first; ties resolve on the id so the choice is
+    # reproducible rather than dependent on row order.
+    best_case = sorted(counts.items(), key=lambda kv: (-kv[1], str(kv[0])))[0][0]
+
+    identifiers = (
+        await db.execute(
+            select(CaseIdentifier.display_value, CaseIdentifier.is_authoritative)
+            .where(
+                CaseIdentifier.tenant_id == tenant_id,
+                CaseIdentifier.canonical_case_id == best_case,
+            )
+        )
+    ).all()
+    if not identifiers:
+        return None
+
+    authoritative = sorted(
+        (value for value, is_auth in identifiers if is_auth and value)
+    )
+    if authoritative:
+        return authoritative[0]
+    fallback = sorted(value for value, _ in identifiers if value)
+    return fallback[0] if fallback else None
+
+
 def _merge_identity_refs(values: list[dict | None]) -> dict | None:
     merged: list[dict] = []
     seen: set[str] = set()
@@ -124,6 +200,9 @@ async def create_episodes_from_evidence(
             tenant_id=tenant_id,
             domain_id=domain_id,
             title=title,
+            primary_case_ref=await _resolve_primary_case_ref(
+                db, tenant_id, episode_evidence_ids
+            ),
             status="draft",
             extraction_confidence=float(ep_data.get("overall_confidence", 0.5)),
             root_cause_summary=root_cause,

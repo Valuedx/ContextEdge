@@ -23,6 +23,7 @@ from contextedge.graph.agent.contracts import (
 )
 from contextedge.graph.agent.hydrators import (
     NODE_MODELS,
+    episode_step_facts,
     hydrate_node,
     node_is_visible,
     playbook_version_facts,
@@ -556,6 +557,26 @@ class SQLAlchemyAgentGraphRepository:
             # playbook the agent can't see the steps of forces a second
             # round-trip or a guess. Batch-loaded, one query per
             # projection regardless of playbook count.
+            # Episode steps, batch-loaded for the same reason playbook
+            # versions are: one query per projection regardless of episode
+            # count, and never a lazy load (this session is async — a lazy
+            # relationship access here raises rather than fetching).
+            steps_map: dict = defaultdict(list)
+            if node_type == "episode":
+                from contextedge.models.episode import EpisodeStep
+
+                episode_ids = [row.id for row in rows]
+                if episode_ids:
+                    step_rows = (
+                        await self.db.execute(
+                            select(EpisodeStep)
+                            .where(EpisodeStep.episode_id.in_(episode_ids))
+                            .order_by(EpisodeStep.step_order)
+                        )
+                    ).scalars().all()
+                    for step in step_rows:
+                        steps_map[step.episode_id].append(step)
+
             version_map: dict = {}
             if node_type == "playbook":
                 from contextedge.models.playbook import PlaybookVersion
@@ -582,6 +603,8 @@ class SQLAlchemyAgentGraphRepository:
                 ):
                     continue
                 node = hydrate_node(node_type, row)
+                if node_type == "episode":
+                    node.facts.update(episode_step_facts(steps_map.get(row.id, [])))
                 if node_type == "playbook":
                     version = version_map.get(row.current_version_id)
                     # playbook_id check: a stale/corrupt current_version_id

@@ -196,6 +196,62 @@ def playbook_version_facts(version: PlaybookVersion) -> tuple[dict[str, Any], fl
     return facts, _float(version.playbook_confidence)
 
 
+# Ordered actions an engineer actually performed, bounded the same way a
+# playbook's steps are. An episode without them tells an agent what broke and
+# how it ended, but not what anyone DID — so the agent fills the gap with
+# generic troubleshooting structure ("verify connectivity using CLI tools")
+# instead of the commands that resolved it.
+EPISODE_STEPS_CAP = 12
+EPISODE_STEP_CHARS = 220
+
+# Evidence is the most numerous and least decisive node type in a projection.
+# See the evidence branch in hydrate_node for why this is far below the
+# 2,000-char default.
+EVIDENCE_SUMMARY_CHARS = 400
+
+
+def episode_step_facts(steps: list[Any]) -> dict[str, Any]:
+    """Render an episode's steps into node facts, successful ones first.
+
+    Ordering is deliberate. When the cap bites, the steps worth keeping are
+    the ones that worked: a failed attempt is useful context for a human
+    reading the whole record, and actively misleading as the first thing an
+    agent copies into an answer. Failed steps are kept — labelled — only
+    while there is room, because "we tried X and it did not help" is exactly
+    what stops the next engineer repeating it.
+
+    NOTE: step text is raw operational narrative and carries customer
+    identifiers (hostnames, company names). It belongs in an internal-facing
+    profile only. Do not add episodes to a partner- or customer-facing
+    profile without redaction — see MAF_NODE_TYPES in profiles.py.
+    """
+    if not steps:
+        return {}
+
+    def sort_key(step: Any) -> tuple[int, int]:
+        # Successful first, then the rest, each in recorded order.
+        succeeded = 1 if getattr(step, "successful_flag", False) else 0
+        return (-succeeded, int(getattr(step, "step_order", 0) or 0))
+
+    labels: list[str] = []
+    for step in sorted(steps, key=sort_key)[:EPISODE_STEPS_CAP]:
+        text = _text(getattr(step, "text", None), EPISODE_STEP_CHARS)
+        if not text:
+            continue
+        marker = ""
+        if getattr(step, "failed_flag", False):
+            marker = " [did not work]"
+        elif getattr(step, "successful_flag", False):
+            marker = " [resolved]"
+        observation = _text(getattr(step, "observation", None), 120)
+        suffix = f" -> {observation}" if observation else ""
+        labels.append(f"{len(labels) + 1}. {text}{suffix}{marker}")
+
+    if not labels:
+        return {}
+    return {"steps_total": len(steps), "steps_taken": labels}
+
+
 def hydrate_node(node_type: str, obj: Any) -> HydratedGraphNode:
     label: str
     summary: str | None
@@ -348,7 +404,15 @@ def hydrate_node(node_type: str, obj: Any) -> HydratedGraphNode:
         confidence = _float(obj.extraction_confidence)
     elif node_type == "evidence":
         label = obj.title or f"Evidence {str(obj.id)[:8]}"
-        summary = _text(obj.body_summary)
+        # Tighter than the 2,000-char default. Evidence is the most numerous
+        # node type and the lowest-ranked — a projection can carry 19 of them
+        # ahead of the playbook that answers the question, and at the default
+        # limit those summaries alone can exceed the whole character budget.
+        # Evidence corroborates; it is not the procedure. A short summary is
+        # enough to establish that a source exists and what it said, and the
+        # characters it frees go to episode steps and playbook steps, which
+        # carry far more answer per character.
+        summary = _text(obj.body_summary, EVIDENCE_SUMMARY_CHARS)
         facts = _facts(
             obj,
             "evidence_type",
