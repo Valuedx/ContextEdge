@@ -158,7 +158,25 @@ class PlaybookVersionResponse(BaseModel):
     outputs: list | dict
     steps: list
     rollback_notes: str | None
-    evidence_refs: list | None
+    # An OBJECT on anything generated since knowledge became an input —
+    # ``{evidence_ids, episode_ids, pattern_id, knowledge_ids, knowledge}``
+    # — because episode evidence and the knowledge that grounds a playbook
+    # normatively are different things and a flat list cannot say which is
+    # which. Four older rows still hold a bare list.
+    #
+    # Declaring only `list` here did not reject the write; it rejected the
+    # RESPONSE. FastAPI validated the endpoint's own output, raised
+    # ResponseValidationError and returned 500 for every playbook whose
+    # refs were an object — which is all of them since the generator
+    # changed. The detail page's version query failed, `versions` stayed
+    # empty, and the UI rendered "No published versions yet", so a
+    # playbook with six steps read as a playbook with none.
+    #
+    # Both shapes are accepted rather than migrating the four: a response
+    # model that refuses data the database legitimately holds is the bug
+    # itself, not a guard against it.
+    evidence_refs: dict | list | None
+    conflicts: list | None = None
     playbook_confidence: float
     execution_confidence_guidance: str | None
     verification_policy: dict | None = None
