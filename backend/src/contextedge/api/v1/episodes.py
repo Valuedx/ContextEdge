@@ -33,9 +33,26 @@ async def list_episodes(
     domain_id: UUID | None = None,
     status: str | None = None,
     reviewer_state: str | None = None,
+    include_superseded: bool = False,
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
 ):
+    """Episodes for review, newest first.
+
+    Superseded episodes are excluded unless asked for. Reconstruction
+    replaces its own drafts as more of a thread arrives, and a superseded
+    row is by definition the version that was replaced — 138 of 253 on
+    the live graph, 54%. Returned alongside current ones with nothing but
+    a status badge to tell them apart, they are indistinguishable from
+    the answer, and the replaced draft is usually the WORSE one: the
+    ActiveMQ example conflated two incidents and recorded two complaints
+    and no remediation, where its replacement recorded the broker bounce
+    and the seven failed executions.
+
+    Asking for them explicitly still works, either through
+    ``include_superseded`` or by naming the state — a reviewer auditing
+    what changed needs to see them.
+    """
     q = select(Episode).where(Episode.tenant_id == user.tenant_id)
     if domain_id:
         q = q.where(Episode.domain_id == domain_id)
@@ -43,6 +60,8 @@ async def list_episodes(
         q = q.where(Episode.status == status)
     if reviewer_state:
         q = q.where(Episode.reviewer_state == reviewer_state)
+    elif not include_superseded:
+        q = q.where(Episode.reviewer_state != "superseded")
     q = q.order_by(Episode.created_at.desc()).limit(limit).offset(offset)
     result = await db.execute(q)
     return result.scalars().all()

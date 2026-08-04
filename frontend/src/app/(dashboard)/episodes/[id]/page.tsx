@@ -3,7 +3,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { CheckCircle2, Loader2, Pencil, X, Check } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Loader2, Pencil, X, Check } from "lucide-react";
 import { useState } from "react";
 
 import { PageHeader } from "@/components/common/page-header";
@@ -213,6 +213,25 @@ export default function EpisodeDetailPage() {
         </span>
       </div>
 
+      {/* A superseded episode is a draft reconstruction replaced by a
+          later one, and it is usually the worse of the two -- the
+          replaced ActiveMQ draft conflated two incidents and recorded no
+          remediation. A status badge alone does not carry that, so a
+          reader takes the stale narrative for the current one. */}
+      {episode.reviewer_state === "superseded" && (
+        <div className="flex items-start gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm">
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" />
+          <div>
+            <p className="font-medium text-amber-200">This reconstruction was superseded</p>
+            <p className="text-xs text-amber-200/80">
+              A later reconstruction replaced it as more of the thread arrived. It is
+              kept for audit; the current narrative for this incident is another
+              episode.
+            </p>
+          </div>
+        </div>
+      )}
+
       <div className="grid gap-4 md:grid-cols-2">
         <Card>
           <CardHeader>
@@ -295,9 +314,15 @@ export default function EpisodeDetailPage() {
       <Separator />
 
       <div className="space-y-3">
-        <h3 className="text-lg font-semibold">Steps</h3>
+        <div>
+          <h3 className="text-lg font-semibold">Timeline</h3>
+          <p className="text-xs text-muted-foreground">
+            What happened, in order. The procedure derived from this lives on the
+            playbook.
+          </p>
+        </div>
         {steps.length === 0 ? (
-          <p className="text-sm text-muted-foreground">No steps extracted for this episode.</p>
+          <p className="text-sm text-muted-foreground">No timeline was extracted for this episode.</p>
         ) : (
           <div className="space-y-3">
             {steps.map((s) => (
