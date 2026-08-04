@@ -1263,3 +1263,114 @@ async def test_process_never_self_links():
         )
     assert counts["ticket_edges"] == 0
     assert edge_mock.await_count == 0
+
+
+# --- the ticket list projection ----------------------------------------------
+#
+# The ticket list endpoint does not return `modifiedTime` in its default
+# response. Articles do; tickets do not. Both failures that caused were
+# silent:
+#
+#   fetch_changes read "" for every row, compared it against the
+#   checkpoint, decided every ticket was older, and stopped on the first
+#   row — incremental ticket sync returned zero, forever.
+#
+#   backfill skipped its window comparisons (guarded on a parsed time,
+#   and "" does not parse) and returned rows regardless of the dates
+#   asked for, which looked exactly like success.
+
+
+def test_the_ticket_list_asks_for_modified_time():
+    """The whole incremental strategy is sortBy=-modifiedTime plus an
+    early stop, so the field it sorts and stops on has to be requested."""
+    from contextedge.connectors.zoho_desk.connector import TICKET_FIELDS
+
+    assert "modifiedTime" in TICKET_FIELDS.split(",")
+
+
+def test_the_projection_covers_every_field_the_mapper_reads():
+    """`fields` REPLACES the default projection — asking for one field
+    returns one field. Anything omitted here becomes None in the
+    evidence silently."""
+    from contextedge.connectors.zoho_desk.connector import TICKET_FIELDS
+
+    requested = set(TICKET_FIELDS.split(","))
+    for field in (
+        "id", "subject", "status", "priority", "category", "subCategory",
+        "channel", "classification", "departmentId", "ticketNumber",
+        "createdTime", "closedTime", "dueDate", "webUrl",
+    ):
+        assert field in requested, f"{field} is read by the mapper but not requested"
+
+
+def test_fields_rejected_by_the_live_api_are_not_requested():
+    """An unrecognised name makes the whole call 500 rather than being
+    ignored. These three are present in the DEFAULT projection but
+    rejected when named."""
+    from contextedge.connectors.zoho_desk.connector import TICKET_FIELDS
+
+    requested = set(TICKET_FIELDS.split(","))
+    for field in ("subStatus", "statusText", "isArchived"):
+        assert field not in requested
+
+
+def test_custom_fields_are_not_requested_from_the_list():
+    """`cf` is accepted on the list endpoint and comes back null. Custom
+    fields exist only on /tickets/{id}, which _hydrate_rows fetches —
+    and that detail call is what carries the per-ticket version field
+    knowledge applicability reads."""
+    from contextedge.connectors.zoho_desk.connector import TICKET_FIELDS
+
+    assert "cf" not in TICKET_FIELDS.split(",")
+
+
+def test_articles_keep_the_default_projection():
+    """Articles already return modifiedTime, so narrowing their
+    projection would only risk dropping fields for no gain."""
+    from contextedge.connectors.zoho_desk.connector import MODULES
+
+    assert "list_fields" in MODULES["tickets"]
+    assert "list_fields" not in MODULES["articles"]
+
+
+def test_the_projection_is_sent_on_list_calls():
+    from contextedge.connectors.zoho_desk.connector import ZohoDeskConnector
+
+    connector = ZohoDeskConnector({}, {})
+    assert "fields" in connector._list_params("tickets", {"limit": 50})
+    assert "fields" not in connector._list_params("articles", {"limit": 50})
+
+
+def test_a_tenant_filter_can_still_override_the_projection():
+    from contextedge.connectors.zoho_desk.connector import ZohoDeskConnector
+
+    connector = ZohoDeskConnector(
+        {"module_filters": {"tickets": {"fields": "id,modifiedTime"}}}, {}
+    )
+    assert connector._list_params("tickets", {})["fields"] == "id,modifiedTime"
+
+
+@pytest.mark.asyncio
+async def test_a_page_missing_timestamps_is_refused_not_silently_mishandled():
+    """Without this the failure is invisible: "" sorts as oldest, so the
+    checkpoint stop fires on row one and the window bounds are skipped.
+    Refusing the page is recoverable; a wrong answer is not."""
+    from contextedge.connectors.zoho_desk.connector import ZohoDeskConnector
+
+    connector = ZohoDeskConnector({"max_pages": 1}, {})
+
+    async def _fake_get(path, params=None):
+        return {"data": [{"id": "1", "subject": "no timestamp"}]}
+
+    connector._get = _fake_get
+    rows, max_time, ids, hit_budget, offset = await connector._walk_desc(
+        "tickets",
+        department_id=None,
+        stop_at_time="2026-01-01T00:00:00.000Z",
+        stop_at_ids=set(),
+        newer_than_end=None,
+        older_than_start=None,
+    )
+    assert rows == []
+    # The checkpoint must not move on a page we refused to trust.
+    assert max_time == "2026-01-01T00:00:00.000Z"
