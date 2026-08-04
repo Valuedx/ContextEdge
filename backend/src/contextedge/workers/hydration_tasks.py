@@ -11,6 +11,7 @@ from contextedge.models.evidence import Thread
 from contextedge.models.source import Source, SourceCredential
 from contextedge.services.ingestion_persistence import persist_ingestion_events
 from contextedge.services.source_service import decrypt_credentials
+from contextedge.services.thread_text_service import clean_thread_bodies
 from contextedge.workers.asyncio_runner import run_async
 from contextedge.workers.celery_app import celery_app
 
@@ -66,7 +67,28 @@ async def _hydrate(db: AsyncSession, thread_id: str, source_id: str, tenant_id: 
     last_ts: datetime | None = None
     ingestion_events: list[IngestionEvent] = []
 
-    for msg in hydrated.messages:
+    # Strip quoted history before anything downstream sees it.
+    #
+    # Measured on 305 real messages across 19 threads: 89% of the
+    # substantive text was already present earlier in the same thread,
+    # the worst threads 93-94%. Ingesting it verbatim embeds each copy,
+    # fills the graph with near-duplicate chunks so retrieval returns the
+    # same paragraph repeatedly, and makes identity extraction re-read
+    # the same names — skewing the mention frequencies that candidate
+    # generation and reconciliation depend on.
+    #
+    # Done here rather than in a connector because every conversational
+    # source has the same problem, and here is where a whole thread is in
+    # hand in arrival order — which cross-message dedup requires.
+    cleaned = clean_thread_bodies(
+        [m.get("body", "") for m in hydrated.messages],
+        [m.get("from", "") for m in hydrated.messages],
+    )
+    quoted_removed = sum(c["removed_chars"] for c in cleaned)
+    quote_only = sum(1 for c in cleaned if c["is_quote_only"])
+    bounces = sum(1 for c in cleaned if c.get("is_delivery_failure"))
+
+    for msg, clean in zip(hydrated.messages, cleaned, strict=True):
         msg_ts = _parse_msg_timestamp(msg.get("timestamp"))
         if msg_ts:
             if first_ts is None or msg_ts < first_ts:
@@ -75,7 +97,15 @@ async def _hydrate(db: AsyncSession, thread_id: str, source_id: str, tenant_id: 
                 last_ts = msg_ts
 
         msg_content: dict = {
-            "body": msg.get("body", ""),
+            "body": clean["body"],
+            # The message as it arrived, kept so a stripped body can
+            # always be audited against the source. Nothing is destroyed
+            # here; it is only kept out of the text that gets embedded
+            # and read.
+            "body_original": msg.get("body", ""),
+            "quoted_chars_removed": clean["removed_chars"],
+            "is_quote_only": clean["is_quote_only"],
+            "is_delivery_failure": clean.get("is_delivery_failure", False),
             "from": msg.get("from", ""),
             "type": msg.get("type", "message"),
         }
@@ -128,10 +158,26 @@ async def _hydrate(db: AsyncSession, thread_id: str, source_id: str, tenant_id: 
         new_raw_ids = []
 
     await db.flush()
+
+    if quoted_removed:
+        # Reported so a bulk run shows what it avoided sending through
+        # embedding and extraction, rather than the saving being silent.
+        logger.info(
+            "hydration.quoted_history_stripped",
+            thread_ref=thread_id,
+            messages=len(hydrated.messages),
+            chars_removed=quoted_removed,
+            quote_only_messages=quote_only,
+            delivery_failures=bounces,
+        )
+
     return {
         "thread_ref": thread_id,
         "messages": len(hydrated.messages),
         "raw_objects_created": len(new_raw_ids),
+        "quoted_chars_removed": quoted_removed,
+        "quote_only_messages": quote_only,
+        "delivery_failures": bounces,
         "_new_raw_ids": [str(rid) for rid in new_raw_ids],
     }
 
