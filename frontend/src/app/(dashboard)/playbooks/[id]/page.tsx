@@ -16,6 +16,7 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { StatusBadge } from "@/components/common/status-badge";
 import { Button, buttonVariants } from "@/components/ui/button";
+import { PlaybookSteps } from "@/components/common/playbook-steps";
 import { cn } from "@/lib/utils";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
@@ -847,10 +848,15 @@ export default function PlaybookDetailPage() {
                     </pre>
                   </div>
                   <div>
-                    <p className="text-xs text-muted-foreground mb-1">Steps ({Array.isArray(v.steps) ? v.steps.length : 0})</p>
-                    <pre className="max-h-48 overflow-auto rounded-md bg-muted p-2 text-xs">
-                      {JSON.stringify(v.steps, null, 2)}
-                    </pre>
+                    <p className="text-xs text-muted-foreground mb-2">
+                      Steps ({Array.isArray(v.steps) ? v.steps.length : 0})
+                    </p>
+                    {/* Rendered as a procedure, not as JSON. A reviewer
+                        approving this needs the instruction, what it
+                        expects to happen, what to do when it does not,
+                        and which incident it came from — all of which a
+                        stringify buries. */}
+                    <PlaybookSteps steps={v.steps} />
                   </div>
                 </CardContent>
               </Card>
