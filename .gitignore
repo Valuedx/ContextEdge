@@ -62,3 +62,4 @@ celerybeat-schedule*
 
 # Runtime logs from dev.py launchers, beside the scheduler state above.
 backend/*.log
+frontend/*.log
