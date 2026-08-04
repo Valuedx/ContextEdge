@@ -310,7 +310,19 @@ def hydrate_node(node_type: str, obj: Any) -> HydratedGraphNode:
     elif node_type == "episode":
         label = obj.title
         summary = _text(obj.root_cause_summary or obj.final_outcome)
-        facts = _facts(obj, "status", "reviewer_state", "final_outcome")
+        # `primary_case_ref` is the ticket this episode was reconstructed
+        # from (INC0009002, RITM0000004). Without it an agent can name an
+        # episode but never the record behind it, so an engineer has nothing
+        # to open and check — and a cited-but-unverifiable answer is exactly
+        # how a plausible wrong answer survives review.
+        facts = _facts(
+            obj,
+            "primary_case_ref",
+            "status",
+            "reviewer_state",
+            "final_outcome",
+        )
+        confidence = _float(obj.extraction_confidence)
         # C6: an agent consuming an episode must see that its sources
         # DISAGREED (P4 preserved the accounts; the projection was
         # silently dropping them). Bounded: 3 contradictions, topic +
