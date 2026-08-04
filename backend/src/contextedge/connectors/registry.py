@@ -45,6 +45,11 @@ _SOURCE_TYPE_LABELS: dict[str, tuple[str, str, str]] = {
     "teams": ("MS Teams", "planned", "Channel messages and replies via Microsoft Graph."),
     "servicenow": ("ServiceNow", "planned", "Incidents, problems, changes, requests, and KB."),
     "jira_sm": ("Jira Service Management", "planned", "Issues, comments, and linked records."),
+    "manageengine": (
+        "ManageEngine ServiceDesk Plus",
+        "planned",
+        "Service desk tickets, requests, and KB articles from SDP V3 API.",
+    ),
     "sapphireims": (
         "SapphireIMS",
         "planned",
@@ -86,6 +91,7 @@ def source_type_catalog() -> list[SourceTypeInfo]:
 def _register_connectors():
     from contextedge.connectors.gmail.connector import GmailConnector
     from contextedge.connectors.jira_sm.connector import JiraSmConnector
+    from contextedge.connectors.manageengine.connector import ManageEngineConnector
     from contextedge.connectors.sapphireims.connector import SapphireIMSConnector
     from contextedge.connectors.servicenow.connector import ServiceNowConnector
     from contextedge.connectors.teams.connector import TeamsConnector
@@ -97,6 +103,7 @@ def _register_connectors():
             "gmail": GmailConnector,
             "servicenow": ServiceNowConnector,
             "jira_sm": JiraSmConnector,
+            "manageengine": ManageEngineConnector,
             "sapphireims": SapphireIMSConnector,
             "zoho_desk": ZohoDeskConnector,
         }

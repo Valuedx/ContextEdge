@@ -58,6 +58,10 @@ const sourceSchema = z.object({
   sapphire_api_key: z.string().optional().or(z.literal("")),
   sapphire_auth_token: z.string().optional().or(z.literal("")),
   sapphire_projects: z.string().optional().or(z.literal("")),
+  // ManageEngine ServiceDesk Plus specific fields
+  manageengine_base_url: z.string().optional().or(z.literal("")),
+  manageengine_api_key: z.string().optional().or(z.literal("")),
+  manageengine_table_filters: z.string().optional().or(z.literal("")),
 });
 
 // Zoho pins each account to the data center it was created in; the
@@ -137,6 +141,9 @@ export function AddSourceDialog({ open, onOpenChange }: AddSourceDialogProps) {
       sapphire_api_key: "",
       sapphire_auth_token: "",
       sapphire_projects: "",
+      manageengine_base_url: "",
+      manageengine_api_key: "",
+      manageengine_table_filters: "",
     },
   });
 
@@ -355,6 +362,48 @@ export function AddSourceDialog({ open, onOpenChange }: AddSourceDialogProps) {
           base_url: baseUrl,
           api_key: apiKey,
           auth_token: authToken,
+        };
+      }
+
+      if (values.source_type === "manageengine") {
+        const baseUrl = values.manageengine_base_url?.trim().replace(/\/+$/, "");
+        const apiKey = values.manageengine_api_key?.trim();
+
+        if (!baseUrl || !apiKey) {
+          toast.error("ManageEngine base URL and API key are required.");
+          return;
+        }
+        if (!/^https?:\/\//i.test(baseUrl)) {
+          toast.error("ManageEngine base URL must start with http:// or https://.");
+          return;
+        }
+
+        let tableFilters: Record<string, string> = {};
+        const tableFilterText = values.manageengine_table_filters?.trim();
+        if (tableFilterText) {
+          try {
+            const parsed: unknown = JSON.parse(tableFilterText);
+            if (
+              !parsed ||
+              typeof parsed !== "object" ||
+              Array.isArray(parsed) ||
+              !Object.values(parsed).every((value) => typeof value === "string")
+            ) {
+              toast.error("ManageEngine table filters must be a JSON object with string values.");
+              return;
+            }
+            tableFilters = parsed as Record<string, string>;
+          } catch {
+            toast.error("ManageEngine table filters must be valid JSON.");
+            return;
+          }
+        }
+
+        payload.auth_type = "api_key";
+        payload.config = { table_filters: tableFilters };
+        payload.credentials = {
+          base_url: baseUrl,
+          api_key: apiKey,
         };
       }
 
@@ -783,6 +832,53 @@ export function AddSourceDialog({ open, onOpenChange }: AddSourceDialogProps) {
                   <p className="text-xs text-muted-foreground">
                     Comma-separated. Required — there is no public endpoint to
                     enumerate projects, so discovery only sees what you list.
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {sourceType === "manageengine" && (
+              <div className="space-y-4 p-4 border rounded-lg bg-slate-900/50">
+                <p className="text-xs text-muted-foreground">
+                  ManageEngine ServiceDesk Plus V3 API connector. Ingests service desk tickets, requests, and KB articles.
+                </p>
+
+                <div className="space-y-2">
+                  <Label htmlFor="manageengine_base_url">ServiceDesk Plus Base URL</Label>
+                  <Input
+                    id="manageengine_base_url"
+                    placeholder="https://servicedesk.example.com"
+                    {...register("manageengine_base_url")}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    The full URL to your ServiceDesk Plus instance (e.g., https://sdp.acme.com)
+                  </p>
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="manageengine_api_key">API Key (TECHNICIAN_KEY)</Label>
+                  <Input
+                    id="manageengine_api_key"
+                    type="password"
+                    autoComplete="off"
+                    placeholder="Your TECHNICIAN_KEY"
+                    {...register("manageengine_api_key")}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Create an API key for a technician account in ServiceDesk Plus
+                  </p>
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="manageengine_table_filters">Table Filters (optional)</Label>
+                  <Textarea
+                    id="manageengine_table_filters"
+                    className="font-mono text-xs min-h-24 bg-slate-950/50"
+                    placeholder='{"requests":"priority<=2"}'
+                    {...register("manageengine_table_filters")}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Optional JSON filters to scope syncs by table (e.g., priority, status). Server-side filtering saves tokens and storage.
                   </p>
                 </div>
               </div>
