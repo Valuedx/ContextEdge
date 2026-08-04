@@ -16,6 +16,8 @@ from contextedge.connectors.base import (
     IngestionEvent,
 )
 from contextedge.services.evidence_normalization import (
+    DELIVERY_FAILURE_MARKER,
+    QUOTED_ONLY_MARKER,
     evidence_body_from_payload,
     evidence_title_from_payload,
 )
@@ -374,6 +376,68 @@ class TestBodyExtraction:
             "snippet": "Fifth",
         }
         assert evidence_body_from_payload(payload) == "First"
+
+    def test_an_emptied_body_does_not_fall_through_to_the_payload_repr(self):
+        """A message cleaned down to nothing is empty, not a payload to
+        describe. The ``or`` chain ends at ``str(payload)``, so falling
+        through would put ``body_original`` — the quoted history the
+        stripping just removed — back into the text that gets embedded
+        and read. One live message was carrying 2,408 characters of dict
+        repr as its evidence body."""
+        payload = {
+            "body": "",
+            "body_original": "On 3 Aug, Jane wrote:\n> the whole prior conversation",
+            "from": "Vaibhav Chawan",
+            "quoted_chars_removed": 2408,
+        }
+        body = evidence_body_from_payload(payload)
+        assert body == QUOTED_ONLY_MARKER
+        assert "prior conversation" not in body
+        assert "Vaibhav" not in body
+
+    def test_a_whitespace_only_body_counts_as_empty(self):
+        assert evidence_body_from_payload({"body": "   \n  "}) == QUOTED_ONLY_MARKER
+
+    def test_a_payload_with_no_body_field_still_describes_itself(self):
+        """The fallback is right for records that have no body concept —
+        a CI record is better searchable as its fields than as nothing.
+        Only an explicitly emptied body is excluded from it."""
+        assert "random_field" in evidence_body_from_payload({"random_field": "xyz"})
+
+    def test_a_message_that_is_entirely_quoted_is_marked_not_repeated(self):
+        """Returning the quote would re-embed the whole conversation on
+        behalf of a message that added nothing to it."""
+        payload = {"body": "--- Original Message ---\nthe entire thread again"}
+        assert evidence_body_from_payload(payload) == QUOTED_ONLY_MARKER
+
+    def test_the_hydration_delivery_failure_flag_is_trusted(self):
+        """Hydration judged this with the whole thread in hand and
+        emptied the body accordingly; re-deriving the verdict from what
+        is left asks the question of a body that no longer answers it."""
+        payload = {
+            "body": "",
+            "is_delivery_failure": True,
+            "body_original": "Delivery has failed to these recipients:\njparuolo@example.com",
+        }
+        body = evidence_body_from_payload(payload)
+        assert body == DELIVERY_FAILURE_MARKER
+        assert "@" not in body
+
+    def test_a_bounce_is_still_caught_without_the_flag(self):
+        """Sources that never pass through hydration have no flag to
+        trust, so the text detection still has to stand on its own."""
+        raw = (
+            "Delivery has failed to these recipients or groups:\n"
+            "someone@example.com\nYour message couldn't be delivered.\n"
+            "How to Fix It: contact the recipient."
+        )
+        assert evidence_body_from_payload({"body": raw}) == DELIVERY_FAILURE_MARKER
+
+    def test_no_marker_is_ever_empty(self):
+        """The title falls back to a body snippet, so a body that
+        resolves to nothing leaves the evidence unnameable."""
+        for payload in ({"body": ""}, {"body": "   "}, {"is_delivery_failure": True}):
+            assert evidence_body_from_payload(payload).strip()
 
 
 # ---------------------------------------------------------------------------

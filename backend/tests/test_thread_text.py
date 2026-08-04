@@ -198,16 +198,35 @@ def test_normalization_strips_quotes_for_every_source():
     assert evidence_body_from_payload(payload) == "Restarted the service."
 
 
-def test_normalization_never_returns_nothing_where_there_was_something():
-    """A body that is entirely quoted still needs text for the title
-    fallback and the content hash — an empty hash would make distinct
-    replies collide and dedupe each other away."""
+def test_a_quote_only_message_is_marked_rather_than_repeated_or_emptied():
+    """Two constraints pull in opposite directions here.
+
+    The body must not be the quote: returning it re-embeds the whole
+    conversation for a message that added nothing to it, which is the
+    problem this module exists to solve.
+
+    The body must also not be empty: the title falls back to a body
+    snippet, so an unnameable evidence row is the alternative failure.
+
+    A marker satisfies both. Dedup is unaffected because the content
+    hash is taken over the RAW body, which is still distinct per
+    message — collapsing every quote-only reply into one row is what an
+    empty hash would have caused.
+    """
     from contextedge.services.evidence_normalization import (
+        QUOTED_ONLY_MARKER,
         evidence_body_from_payload,
+        evidence_content_hash_from_payload,
     )
 
-    quote_only = "> only a quote"
-    assert evidence_body_from_payload({"body": quote_only}) == quote_only
+    first = {"body": "> only a quote"}
+    second = {"body": "> a different quote entirely"}
+
+    assert evidence_body_from_payload(first) == QUOTED_ONLY_MARKER
+    assert evidence_body_from_payload(first).strip()
+    assert evidence_content_hash_from_payload(
+        first
+    ) != evidence_content_hash_from_payload(second)
 
 
 # --- delivery failures --------------------------------------------------------
