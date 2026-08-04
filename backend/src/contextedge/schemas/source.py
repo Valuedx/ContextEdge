@@ -8,8 +8,8 @@ class SourceCreate(BaseModel):
     source_type: str = Field(
         ...,
         pattern=(
-            r"^(local_file|teams|gmail|servicenow|jira_sm|sapphireims"
-            r"|zoho_desk|confluence|sharepoint|exchange)$"
+            r"^(local_file|teams|gmail|servicenow|jira_sm|manageengine"
+            r"|sapphireims|zoho_desk|confluence|sharepoint|exchange)$"
         ),
     )
     display_name: str = Field(..., min_length=1, max_length=255)
