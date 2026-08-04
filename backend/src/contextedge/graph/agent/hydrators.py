@@ -26,6 +26,7 @@ from contextedge.models.playbook import Playbook, PlaybookVersion
 from contextedge.models.policy import TenantPolicy
 from contextedge.models.session import ResolutionSession
 from contextedge.models.tenant import User
+from contextedge.services.evidence_typing import KNOWLEDGE_EVIDENCE_TYPES
 
 NODE_MODELS: dict[str, type[Any]] = {
     "session": ResolutionSession,
@@ -201,13 +202,20 @@ def playbook_version_facts(version: PlaybookVersion) -> tuple[dict[str, Any], fl
 # how it ended, but not what anyone DID — so the agent fills the gap with
 # generic troubleshooting structure ("verify connectivity using CLI tools")
 # instead of the commands that resolved it.
-EPISODE_STEPS_CAP = 12
-EPISODE_STEP_CHARS = 220
+# Measured, not guessed: at 12 x 220 a single episode rendered up to 3,195
+# characters and eight of them took 57% of a 25,000-character projection —
+# crowding out the playbooks and documentation that rank below them. Steps are
+# worth more per character than evidence summaries, but not at any price. Six
+# steps is enough to convey the shape of a resolution; a reader who needs the
+# full sequence opens the ticket.
+EPISODE_STEPS_CAP = 6
+EPISODE_STEP_CHARS = 180
 
 # Evidence is the most numerous and least decisive node type in a projection.
 # See the evidence branch in hydrate_node for why this is far below the
-# 2,000-char default.
+# 2,000-char default — and why documentation is exempt from it.
 EVIDENCE_SUMMARY_CHARS = 400
+KNOWLEDGE_SUMMARY_CHARS = 1_600
 
 
 def episode_step_facts(steps: list[Any]) -> dict[str, Any]:
@@ -404,15 +412,25 @@ def hydrate_node(node_type: str, obj: Any) -> HydratedGraphNode:
         confidence = _float(obj.extraction_confidence)
     elif node_type == "evidence":
         label = obj.title or f"Evidence {str(obj.id)[:8]}"
-        # Tighter than the 2,000-char default. Evidence is the most numerous
-        # node type and the lowest-ranked — a projection can carry 19 of them
-        # ahead of the playbook that answers the question, and at the default
-        # limit those summaries alone can exceed the whole character budget.
-        # Evidence corroborates; it is not the procedure. A short summary is
-        # enough to establish that a source exists and what it said, and the
-        # characters it frees go to episode steps and playbook steps, which
-        # carry far more answer per character.
-        summary = _text(obj.body_summary, EVIDENCE_SUMMARY_CHARS)
+        # Two kinds of evidence share this table and want opposite budgets.
+        #
+        # A ticket, a Slack message or a log line CORROBORATES: it establishes
+        # that something happened and roughly what was said. 400 characters is
+        # plenty, and keeping it short is what leaves room for the playbook and
+        # episode steps that actually answer the question.
+        #
+        # An SOP, KB article or product manual IS the answer. It is vendor-
+        # authored, carries no customer data, and is often the only source for
+        # a question no incident has ever covered — a compatibility matrix, a
+        # required config key, a defect fixed in a later release. Truncating a
+        # procedure to 400 characters cuts it mid-sequence, which is the same
+        # failure the document chunker exists to avoid: you return the step and
+        # lose the warning attached to it.
+        is_knowledge = str(getattr(obj, "evidence_type", "") or "") in KNOWLEDGE_EVIDENCE_TYPES
+        summary = _text(
+            obj.body_summary,
+            KNOWLEDGE_SUMMARY_CHARS if is_knowledge else EVIDENCE_SUMMARY_CHARS,
+        )
         facts = _facts(
             obj,
             "evidence_type",
@@ -421,6 +439,12 @@ def hydrate_node(node_type: str, obj: Any) -> HydratedGraphNode:
             "relevance_state",
             "relevance_score",
         )
+        if is_knowledge:
+            # Say so explicitly. In a node list an SOP section and a Slack
+            # message are both "evidence", and an agent weighing them has no
+            # way to tell that one is normative and the other is hearsay.
+            facts["knowledge"] = True
+            facts["authority"] = "documented procedure"
         confidence = _float(obj.relevance_score)
     elif node_type == "identity":
         label = obj.canonical_name
