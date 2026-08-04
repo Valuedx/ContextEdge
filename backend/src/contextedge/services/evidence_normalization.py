@@ -43,6 +43,20 @@ def evidence_title_from_payload(payload: dict | None) -> str:
     return "Untitled Evidence"
 
 
+# What a non-delivery report contributes instead of its boilerplate.
+# Short, stable, and carries no addresses.
+DELIVERY_FAILURE_MARKER = "[automated delivery failure notification]"
+
+
+def raw_body_from_payload(payload: dict | None) -> str:
+    """The body exactly as the connector supplied it, uncleaned."""
+    p = payload or {}
+    return (
+        p.get("body") or p.get("body_text") or p.get("description")
+        or p.get("text") or p.get("snippet") or str(p)[:8000]
+    )
+
+
 def evidence_body_from_payload(payload: dict | None) -> str:
     """The text this evidence contributes.
 
@@ -63,24 +77,47 @@ def evidence_body_from_payload(payload: dict | None) -> str:
     chunked and read by every extractor was the same conversation
     repeated.
     """
-    p = payload or {}
-    raw = (
-        p.get("body") or p.get("body_text") or p.get("description")
-        or p.get("text") or p.get("snippet") or str(p)[:8000]
+    raw = raw_body_from_payload(payload)
+
+    from contextedge.services.thread_text_service import (
+        is_delivery_failure,
+        strip_quoted,
     )
 
-    from contextedge.services.thread_text_service import strip_quoted
+    p = payload or {}
+    sender = p.get("from") or p.get("sender") or p.get("author") or p.get("email")
+    if is_delivery_failure(raw, sender if isinstance(sender, str) else None):
+        # A bounce is the mail system talking about a message, not a
+        # message. Its body is remediation boilerplate plus the failed
+        # recipients' addresses — which identity extraction would
+        # otherwise mine into person entities.
+        #
+        # Reduced to a marker rather than to nothing: the title falls
+        # back to a body snippet, and an empty body would leave the
+        # evidence unnameable.
+        return DELIVERY_FAILURE_MARKER
 
     stripped = strip_quoted(raw)
     # Never return nothing where there was something. A message that is
-    # entirely quoted still needs a body for the title fallback and the
-    # content hash; suppressing it here would make distinct replies
-    # collide on an empty hash and dedupe each other away.
+    # entirely quoted still needs a body for the title fallback;
+    # suppressing it here would leave the evidence unnameable.
     return stripped or raw
 
 
 def evidence_content_hash_from_payload(payload: dict | None) -> str:
-    body = evidence_body_from_payload(payload)
+    """Dedup identity for an upstream row.
+
+    Hashes the RAW body, not the cleaned one, for the same reason the
+    caller hashes pre-redaction: dedup must not move when the cleaning
+    rules are tuned. If this hashed the stripped text, adding one quote
+    marker to the pattern list would change the hash of every message
+    that contains it, and the next sync would re-ingest the lot as new.
+
+    It also keeps distinct delivery failures distinct — cleaning reduces
+    them all to the same marker, and hashing that would collapse every
+    bounce in a source into one row.
+    """
+    body = raw_body_from_payload(payload)
     return hashlib.sha256(body.encode("utf-8", errors="replace")).hexdigest()
 
 
