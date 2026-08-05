@@ -21,6 +21,12 @@ NOW = datetime(2026, 8, 1, 12, 0, 0, tzinfo=UTC)
 def _rows_result(rows):
     result = Mock()
     result.all.return_value = rows
+    # create_episodes_from_evidence also resolves primary_case_ref, which
+    # queries case links via .scalars().all(). A bare Mock there returns a
+    # non-iterable and the loop TypeErrors; an empty list means "no linked
+    # case", so the resolver returns None — the correct outcome for these
+    # fixtures, which model no correlation state.
+    result.scalars.return_value.all.return_value = []
     return result
 
 

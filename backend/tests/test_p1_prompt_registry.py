@@ -172,7 +172,7 @@ def test_all_migrated_prompt_families_registered():
         # v3 adds approved KB/SOP as a distinct input, step-level source
         # citations, and the conflicts block. v1/v2 remain registered and
         # immutable for eval baselines.
-        "playbook": "v3",
+        "playbook": "v4",
         "contradiction": "v1",
     }
     for name, default_version in expected_defaults.items():

@@ -103,7 +103,11 @@ async def test_only_knowledge_evidence_is_returned():
         patch(
             "contextedge.search.vector_search.search_evidence_semantic",
             AsyncMock(
-                return_value=[(ticket, 0.1), (kb, 0.2), (chat, 0.25), (article, 0.3)]
+                # All four inside MAX_DISTANCE (0.25, derived from the link
+                # threshold) — this test is about the TYPE filter, and its
+                # fixtures must not straddle the distance ceiling or it
+                # silently becomes a threshold test.
+                return_value=[(ticket, 0.1), (kb, 0.15), (chat, 0.2), (article, 0.22)]
             ),
         ),
         patch(
@@ -255,13 +259,14 @@ async def test_older_prompt_versions_still_render():
 # --- prompt contract ---------------------------------------------------------
 
 
-def test_v3_instructs_the_model_to_surface_disagreement_not_resolve_it():
-    """The substantive change. Preferring the SOP ignores verified runs;
-    preferring practice deletes a safeguard. Both go to the reviewer."""
+def test_default_prompt_instructs_the_model_to_surface_disagreement_not_resolve_it():
+    """The substantive v3 change, asserted on the DEFAULT version so the
+    contract survives version bumps. Preferring the SOP ignores verified
+    runs; preferring practice deletes a safeguard. Both go to the reviewer."""
     from contextedge.ai.prompts import get_prompt
 
     prompt = get_prompt("playbook", None)
-    assert prompt.version == "v3"
+    assert prompt.version == "v4"
     # Whitespace-normalized: the prompt is hard-wrapped, so asserting on
     # raw text would break whenever a line is reflowed — a failure that
     # says nothing about the contract being tested.
@@ -272,12 +277,20 @@ def test_v3_instructs_the_model_to_surface_disagreement_not_resolve_it():
     # And the omission case the whole phase exists for.
     assert "even when no episode performed them" in system
     assert "Never invent a normative source" in system
+    # v4 contract: commands verbatim, prompt labels out of prose, unsourced
+    # steps state their verification.
+    assert "reproduce it EXACTLY" in system
+    assert "NOWHERE in prose" in system
+    assert "what observable result would confirm" in system
 
 
 def test_earlier_prompt_versions_remain_registered_and_immutable():
     from contextedge.ai.prompts import list_prompt_versions
 
-    assert list_prompt_versions("playbook") == ["v1", "v2", "v3"]
+    # v4 added: verbatim commands, no prompt labels in prose, unsourced
+    # steps must state their verification. Earlier versions stay for eval
+    # baselines and historical llm.usage attribution.
+    assert list_prompt_versions("playbook") == ["v1", "v2", "v3", "v4"]
 
 
 # --- provenance --------------------------------------------------------------

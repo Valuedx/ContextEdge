@@ -7,7 +7,7 @@ from uuid import UUID
 import structlog
 from fastapi import APIRouter, HTTPException, Query, Request, status
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import selectinload
 
 from contextedge.deps import AuthUser, DbSession
@@ -91,7 +91,26 @@ async def list_playbooks(
         q = q.where(Playbook.lifecycle_state == lifecycle_state)
     if domain_id:
         q = q.where(Playbook.domain_id == domain_id)
-    q = q.order_by(Playbook.updated_at.desc()).limit(limit).offset(offset)
+    if lifecycle_state == "candidate":
+        # The review queue. Ordered by the generator's own confidence rather
+        # than recency, because approval is what makes a playbook visible to
+        # agents — and with 30+ candidates pending, recency ordering buries
+        # the well-grounded ones (confidence 0.9, every step sourced) beneath
+        # whatever was generated last. Reviewing the best first converts the
+        # strongest content into agent-visible content fastest; the hollow
+        # tail can wait, or age out.
+        q = (
+            q.outerjoin(
+                PlaybookVersion, PlaybookVersion.id == Playbook.current_version_id
+            )
+            .order_by(
+                func.coalesce(PlaybookVersion.playbook_confidence, 0.0).desc(),
+                Playbook.updated_at.desc(),
+            )
+        )
+    else:
+        q = q.order_by(Playbook.updated_at.desc())
+    q = q.limit(limit).offset(offset)
     result = await db.execute(q)
     return result.scalars().all()
 

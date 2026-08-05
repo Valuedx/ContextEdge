@@ -177,7 +177,17 @@ def playbook_version_facts(version: PlaybookVersion) -> tuple[dict[str, Any], fl
     step_labels: list[str] = []
     for index, step in enumerate(steps[:PLAYBOOK_STEPS_CAP], start=1):
         if isinstance(step, dict):
-            label = step.get("title") or step.get("text") or step.get("action")
+            # "instruction" included: seeded playbooks store steps as
+            # {"order", "instruction"}, and without it every APPROVED playbook
+            # — the only kind an agent can see — projected steps_total with an
+            # empty step list. The agent knew four steps existed and could
+            # read none of them.
+            label = (
+                step.get("title")
+                or step.get("text")
+                or step.get("action")
+                or step.get("instruction")
+            )
         else:
             label = step
         if label:

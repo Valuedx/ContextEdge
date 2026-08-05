@@ -22,6 +22,10 @@ logger = structlog.get_logger()
 
 RISK_TIERS = ("low", "medium", "high")
 
+# Minimum pattern confidence before a playbook candidate is generated. See
+# the gate in generate_playbook_candidate for how this was calibrated.
+PLAYBOOK_GENERATION_MIN_PATTERN_CONFIDENCE = 0.5
+
 # Deterministic risk floor per step safety class. The LLM's suggested tier
 # may only raise risk above this floor, never lower it — risk assessment is
 # a policy decision, not a model output.
@@ -316,6 +320,36 @@ def generate_playbook_candidate(self, pattern_id: str, tenant_id: str):
         )
         if existing.scalar_one_or_none():
             return {"status": "skipped", "reason": "playbook_already_exists"}
+
+        # Evidence floor. Reviewing 37 generated playbooks showed the corpus
+        # splitting cleanly on pattern confidence: below ~0.5 the generator
+        # produced structured-but-hollow procedures ("check logs", "review
+        # firewall rules", escalate) for administrative requests and
+        # one-off anecdotes — half the corpus was generation the model itself
+        # distrusted, and every one of those costs reviewer attention and
+        # dilutes trust in the good ones. pattern_type cannot gate this
+        # (everything is recurring_issue), so confidence is the signal.
+        #
+        # Skipping is not a dead end, but it is not automatic either:
+        # generation is auto-dispatched only at pattern creation
+        # (create_pattern_from_episodes), so a pattern that crosses the floor
+        # later needs the manual POST /playbooks/generate route — which
+        # bypasses this worker entirely and stays available for exactly that
+        # case, and for a human who disagrees with the floor.
+        pattern_confidence = float(pattern.confidence or 0.0)
+        if pattern_confidence < PLAYBOOK_GENERATION_MIN_PATTERN_CONFIDENCE:
+            logger.info(
+                "playbook.generation_skipped_low_confidence",
+                tenant_id=str(tid),
+                pattern_id=str(pid),
+                confidence=pattern_confidence,
+                floor=PLAYBOOK_GENERATION_MIN_PATTERN_CONFIDENCE,
+            )
+            return {
+                "status": "skipped",
+                "reason": "pattern_confidence_below_floor",
+                "confidence": pattern_confidence,
+            }
 
         lr = await db.execute(
             select(PatternEvidenceLink).where(PatternEvidenceLink.pattern_id == pid)

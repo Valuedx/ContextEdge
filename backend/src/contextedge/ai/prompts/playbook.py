@@ -257,5 +257,53 @@ register_prompt(
         system=_V3_SYSTEM,
         user_template=_V3_USER,
     ),
+)
+
+
+# v4 — three changes, each from reviewing 37 generated playbooks against the
+# sources they were generated from:
+#
+# 1. Verbatim commands. Only 25 of 223 generated steps contained anything an
+#    engineer could actually run; the sources often held the literal command
+#    and the generator paraphrased it into "test basic network connectivity
+#    (e.g., ping, traceroute)" — the reader is handed back the work they
+#    asked to have done.
+# 2. No prompt labels in step text. Persisted steps read "as indicated by
+#    KB-1" — a label that exists only inside this prompt. After persistence
+#    it resolves to nothing. source_refs carries the citation; prose must
+#    stand on its own.
+# 3. An unsourced step must say what would verify it. "evidence_quality":
+#    "low" told a reviewer a step was inference but not what to check;
+#    81 of 223 steps carried the flag and nothing else.
+_V4_SYSTEM = _V3_SYSTEM.replace(
+    """5. A section marked "read from an image" is a model's paraphrase, not
+   the SOP's exact wording. Cite it, but do not quote it as verbatim
+   policy.""",
+    """5. A section marked "read from an image" is a model's paraphrase, not
+   the SOP's exact wording. Cite it, but do not quote it as verbatim
+   policy.
+6. When a supplied source contains a literal command, path, config key,
+   or flag, reproduce it EXACTLY in the step text — do not paraphrase
+   "openssl s_client -connect host:443" into "use an SSL testing tool".
+   Never compose a command that appears in no source: describe the goal
+   and mark the step "evidence_quality": "low" instead. A wrong literal
+   command is worse than none.
+7. The labels kb-N and ep-N exist only inside this prompt. They belong
+   in "source_refs" and NOWHERE in prose: never write "as per KB-1" in
+   "text", "on_failure", or "conflicts" fields. Once stored, those
+   labels resolve to nothing a reader can open.
+8. A step with empty source_refs must state, inside "expected_outcome",
+   what observable result would confirm the step was right — a reviewer
+   deciding whether to approve your inference needs something to check,
+   not just a low-evidence flag.""",
+)
+
+register_prompt(
+    Prompt(
+        name="playbook",
+        version="v4",
+        system=_V4_SYSTEM,
+        user_template=_V3_USER,
+    ),
     default=True,
 )

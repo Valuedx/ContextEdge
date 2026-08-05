@@ -62,7 +62,15 @@ def build_playbook_embedding_text(
         parts.extend(_flatten_strings(version.trigger_conditions, 1_200))
         for step in (version.steps or [])[:20]:
             if isinstance(step, dict):
-                label = step.get("title") or step.get("text") or step.get("action")
+                # "instruction" is the seeded-playbook key; without it the
+                # embedding text for those playbooks was title-only, so
+                # symptom-level queries could not reach them semantically.
+                label = (
+                    step.get("title")
+                    or step.get("text")
+                    or step.get("action")
+                    or step.get("instruction")
+                )
                 if label:
                     parts.append(str(label))
     return " ".join(" ".join(parts).split())[:MAX_EMBED_CHARS]

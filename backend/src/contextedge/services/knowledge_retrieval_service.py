@@ -62,7 +62,16 @@ KNOWLEDGE_LINK_MIN_SIMILARITY = 0.75
 # the pattern but not subject matter — "VPN" appearing in an unrelated
 # onboarding checklist. A weak match is worse than none: it gives the
 # generator normative-sounding text about the wrong procedure.
-MAX_DISTANCE = 0.55
+#
+# Derived from the link threshold rather than set independently, because the
+# two were answering the same question at different values and the looser one
+# lost: at the old 0.55 ceiling (similarity >= 0.45), a generated playbook for
+# "Process Studio SSL connection reset" cited "able to edit the ae url
+# username" (similarity 0.61) as a normative source in its steps — exactly
+# the vocabulary-noise band the link measurement mapped at 0.62-0.69. What is
+# too weak to assert as a graph edge is also too weak to write into a
+# procedure a reviewer is asked to approve.
+MAX_DISTANCE = round(1.0 - KNOWLEDGE_LINK_MIN_SIMILARITY, 2)
 # How much of an article to scan for applicability facets.
 #
 # This was 6000 and that number was invented rather than measured. On the
