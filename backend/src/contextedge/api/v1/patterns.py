@@ -59,6 +59,36 @@ async def get_pattern(pattern_id: UUID, db: DbSession, user: AuthUser):
     return pattern
 
 
+@router.post("/{pattern_id}/approve", response_model=PatternResponse)
+async def approve_pattern(pattern_id: UUID, db: DbSession, user: AuthUser):
+    """Approve a synthesized knowledge pattern and activate it."""
+    user.require_role("domain_admin")
+    result = await db.execute(
+        select(Pattern).where(Pattern.id == pattern_id, Pattern.tenant_id == user.tenant_id)
+    )
+    pattern = result.scalar_one_or_none()
+    if not pattern:
+        raise HTTPException(status_code=404, detail="Pattern not found")
+
+    pattern.active_flag = True
+    await db.commit()
+    await db.refresh(pattern)
+
+    from contextedge.middleware.audit import log_audit_event
+
+    await log_audit_event(
+        db,
+        tenant_id=user.tenant_id,
+        actor_id=user.user_id,
+        actor_email=user.email,
+        action="pattern.approved",
+        resource_type="pattern",
+        resource_id=str(pattern_id),
+        details={"title": pattern.title},
+    )
+    return pattern
+
+
 @router.get("/{pattern_id}/graph")
 async def get_pattern_graph(
     pattern_id: UUID,

@@ -23,7 +23,7 @@ import { api } from "@/lib/api";
 import type { Pattern, PatternEvidenceLink } from "@/lib/types";
 
 import { PatternGraph } from "@/components/patterns/pattern-graph";
-import { AlertCircle, Zap, Shield, Bug, Lightbulb, StepForward, Activity, Link2, Plus, Trash2 } from "lucide-react";
+import { AlertCircle, Zap, Shield, Bug, Lightbulb, StepForward, Activity, Link2, Plus, Trash2, CheckCircle2, Sparkles, Loader2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 
@@ -123,6 +123,26 @@ export default function PatternDetailPage() {
     onError: (err: Error) => toast.error(err.message || "Delete failed"),
   });
 
+  const approveMut = useMutation({
+    mutationFn: () => api.post<Pattern>(`/patterns/${patternId}/approve`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["pattern", patternId] });
+      toast.success("Pattern approved and activated");
+    },
+    onError: (err: Error) => toast.error(err.message || "Approval failed"),
+  });
+
+  const generatePbMut = useMutation({
+    mutationFn: () => api.post<{ id: string }>(`/playbooks/generate`, { pattern_id: patternId }),
+    onSuccess: (res) => {
+      toast.success("Playbook candidate generated!");
+      if (res?.id) {
+        window.location.href = `/playbooks/${res.id}`;
+      }
+    },
+    onError: (err: Error) => toast.error(err.message || "Playbook generation failed"),
+  });
+
   if (!patternId) return null;
 
   if (isLoading) {
@@ -154,11 +174,36 @@ export default function PatternDetailPage() {
         description={`${pattern.pattern_type.replace("_", " ")} · ${pattern.episode_count} episodes linked`}
         actions={
           <div className="flex gap-2">
+            <Button
+              variant={pattern.active_flag ? "outline" : "default"}
+              disabled={approveMut.isPending || pattern.active_flag}
+              onClick={() => approveMut.mutate()}
+              className={pattern.active_flag ? "border-emerald-500/50 text-emerald-400" : "bg-emerald-600 hover:bg-emerald-700"}
+            >
+              {approveMut.isPending ? (
+                <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+              ) : (
+                <CheckCircle2 className="mr-1.5 h-4 w-4" />
+              )}
+              {pattern.active_flag ? "Approved" : "Approve Pattern"}
+            </Button>
+
+            <Button
+              variant="default"
+              disabled={generatePbMut.isPending}
+              onClick={() => generatePbMut.mutate()}
+              className="bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700"
+            >
+              {generatePbMut.isPending ? (
+                <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+              ) : (
+                <Sparkles className="mr-1.5 h-4 w-4" />
+              )}
+              Generate Playbook
+            </Button>
+
             <Link href="/patterns" className={cn(buttonVariants({ variant: "outline" }))}>
               All patterns
-            </Link>
-            <Link href="/playbooks" className={cn(buttonVariants({ variant: "default" }))}>
-              View Playbooks
             </Link>
           </div>
         }
