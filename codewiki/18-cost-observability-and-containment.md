@@ -45,6 +45,18 @@ Four ceilings, all in `config.py`, all overridable via env (documented in `.env.
 
 Also measured: Vertex per-call latency varies 3–4× at identical token counts, so thinking caps are a **cost** lever, not a latency lever. Per-ticket latency comes from worker concurrency (RUNBOOK), not from trimming reasoning.
 
+### Local models: feasibility measured (2026-08-07)
+
+Benchmarked the FinetuneModeledge GGUF models via llama-server (OpenAI-compatible) on the real relevance-v2 prompt with real tickets, on the dev workstation (4-core Ryzen, no CUDA GPU):
+
+| model | warm latency | JSON contract | label quality |
+| --- | --- | --- | --- |
+| qwen2.5-0.5b Q4 (CPU) | ~6.3s | 6/6 valid | unusable — everything "operational" |
+| gemma-4B capability-router Q4 (CPU) | ~17s | 3/3 valid | discriminates (2/3 on a 3-ticket sample, wrong-task fine-tune) |
+| Vertex gemini-2.5-flash (production, 901 calls same day) | **2.4s avg / 2.6s p90** | — | baseline |
+
+Conclusions: integration is trivial (LiteLLM routes `openai/<model>` at a local base_url per task via `MODEL_ROUTING`; the JSON contract held 9/9) — **feasibility is purely a hardware question**. On CPU, local is 3–7× slower than Vertex for equal-or-worse quality: not viable. On the RTX-5090 class hardware these models were trained on, a 4B Q4 serves at ~1–2s/call — competitive with Vertex at zero marginal cost and no data egress. The credible path if pursued: fine-tune a small model on the relevance task itself (the FinetuneModeledge pipeline + eval harness exists; the ae-router card shows the full loop at ~11 min training), using the 332 v2-labeled evidence rows as seed data, serve on GPU, and A/B against stored v2 labels before touching `MODEL_ROUTING["classification"]`. The 30s calls people notice are episode extraction / identity reconciliation (13.6s avg / ~29s p90) — those need large-model quality and are the wrong local-model target; relevance (the volume workload) is already 2.4s external.
+
 ### What batching is and is not for
 
 Batch APIs (~50% discount, minutes-to-hours latency) fit the **ingestion pipeline** — classification, extraction, pattern synthesis, playbook generation, embeddings, eval runs — where nobody is waiting. They do not fit the serving path. Adopting them means restructuring Celery tasks around submit-then-poll and is scoped as its own piece of work.
