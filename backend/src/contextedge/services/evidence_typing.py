@@ -61,6 +61,16 @@ _OBJECT_TYPE_MAP: dict[tuple[str, str], str] = {
     # Conversational sources
     ("teams", "channel_message"): "chat_message",
     ("gmail", "email_thread"): "email",
+    # Hydrated thread messages — individual replies/comments fetched during
+    # thread hydration. Typed distinctly from the parent ticket so the
+    # evidence list can show only the parent while the ThreadConversation
+    # component shows the individual messages.
+    ("zoho_desk", "hydrated_message"): "thread_message",
+    ("servicenow", "hydrated_message"): "thread_message",
+    ("jira_sm", "hydrated_message"): "thread_message",
+    ("sapphireims", "hydrated_message"): "thread_message",
+    ("teams", "hydrated_message"): "thread_message",
+    ("gmail", "hydrated_message"): "thread_message",
 }
 
 # Fallback when the object type is unrecognized but the source is known.

@@ -68,6 +68,13 @@ async def search_evidence(
         q = q.where(EvidenceItem.relevance_state == relevance_state)
     if evidence_type:
         q = q.where(EvidenceItem.evidence_type == evidence_type)
+    else:
+        # Hide hydrated thread messages from the default list view.
+        # They are individual replies/comments that belong under the parent
+        # ticket's ThreadConversation section (served via
+        # GET /threads/{thread_id}/evidence), not as top-level items.
+        # Callers can still fetch them by passing evidence_type=thread_message.
+        q = q.where(EvidenceItem.evidence_type != "thread_message")
     if domain_id:
         q = q.where(EvidenceItem.domain_id == domain_id)
     q = q.order_by(EvidenceItem.ingested_at.desc()).limit(limit).offset(offset)

@@ -438,6 +438,12 @@ async def _normalize(db: AsyncSession, raw_object_id: str, tenant_id: uuid.UUID)
             confidence=classification_confidence,
         )
 
+    # Thread metadata for auto-hydration dispatch by the celery wrapper.
+    # Only populated for evidence types that carry a _thread_id (tickets,
+    # email), so conversational sources get their threads hydrated
+    # automatically rather than waiting for a manual "Hydrate thread" click.
+    thread_ext_id = (payload or {}).get("_thread_id")
+
     return {
         "evidence_id": str(ev.id),
         "deduped": False,
@@ -447,6 +453,8 @@ async def _normalize(db: AsyncSession, raw_object_id: str, tenant_id: uuid.UUID)
         "relevance_state": ev.relevance_state,
         "skipped_extraction": skip_extraction,
         "attachment_ids": [str(artifact.id) for artifact in attachments],
+        "_thread_external_id": thread_ext_id,
+        "_source_id": str(raw.source_id),
     }
 
 
@@ -923,6 +931,23 @@ def normalize_evidence(self, raw_object_id: str, tenant_id: str):
                 # admin UI but is no longer part of the default fan-out.
                 correlate_evidence.delay(res["evidence_id"], tenant_id)
                 compute_evidence_baseline_task.delay(res["evidence_id"], tenant_id)
+
+            # Auto-hydrate thread when a ticket/email is first normalized.
+            # Previously threads stayed in "pending" status until the user
+            # clicked "Hydrate thread" in the UI, which meant conversation
+            # messages were never ingested as separate EvidenceItems and the
+            # ThreadConversation component showed "not yet hydrated".
+            thread_ext_id = res.get("_thread_external_id")
+            source_id = res.get("_source_id")
+            if thread_ext_id and source_id and not res.get("deduped"):
+                from contextedge.workers.hydration_tasks import hydrate_thread
+
+                hydrate_thread.delay(thread_ext_id, source_id, tenant_id)
+                logger.info(
+                    "normalize.auto_hydration_dispatched",
+                    thread_ref=thread_ext_id,
+                    evidence_id=res["evidence_id"],
+                )
         return res
     except Exception as exc:
         raise self.retry(exc=exc) from exc

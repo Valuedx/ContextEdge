@@ -26,6 +26,9 @@ async def search_evidence_fts(
         .where(
             EvidenceItem.tenant_id == tenant_id,
             EvidenceItem.search_tsvector.op("@@")(tsquery),
+            # Exclude hydrated thread messages from search results.
+            # They are visible inside the parent ticket's conversation view.
+            EvidenceItem.evidence_type != "thread_message",
         )
         .order_by(rank.desc())
         .limit(limit)
