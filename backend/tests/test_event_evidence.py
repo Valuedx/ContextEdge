@@ -15,11 +15,13 @@ def _db_returning(existing_id=None, entity=None):
     db = MagicMock()
     db.add = MagicMock()
     db.flush = AsyncMock()
-    first = MagicMock()
-    first.scalar_one_or_none.return_value = existing_id
-    second = MagicMock()
-    second.scalar_one_or_none.return_value = entity
-    db.execute = AsyncMock(side_effect=[first, second])
+    dedupe = MagicMock()
+    dedupe.scalar_one_or_none.return_value = existing_id
+    source = MagicMock()
+    source.scalar_one_or_none.return_value = uuid.uuid4()  # events source
+    entity_res = MagicMock()
+    entity_res.scalar_one_or_none.return_value = entity
+    db.execute = AsyncMock(side_effect=[dedupe, source, entity_res])
     return db
 
 

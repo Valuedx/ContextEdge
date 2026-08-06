@@ -31,6 +31,53 @@ from contextedge.models.evidence import EvidenceItem
 logger = structlog.get_logger()
 
 EVENT_EVIDENCE_TYPE = "event"
+EVENTS_SOURCE_TYPE = "internal_events"
+
+
+async def _events_source_id(db, tenant_id: uuid.UUID) -> uuid.UUID:
+    """Find-or-create the tenant's synthetic events source.
+
+    evidence_items.source_id is NOT NULL — every row belongs to a
+    Source — and observed events have no connector. One push-mode
+    source per tenant owns them all; owner is the tenant's first user
+    (a Source requires an owner, and a tenant with no users has nobody
+    to diagnose for anyway).
+    """
+    from contextedge.models.source import Source
+    from contextedge.models.tenant import User
+
+    source_id = (
+        await db.execute(
+            select(Source.id)
+            .where(
+                Source.tenant_id == tenant_id,
+                Source.source_type == EVENTS_SOURCE_TYPE,
+            )
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if source_id is not None:
+        return source_id
+    owner_id = (
+        await db.execute(
+            select(User.id).where(User.tenant_id == tenant_id).limit(1)
+        )
+    ).scalar_one_or_none()
+    if owner_id is None:
+        raise ValueError("tenant has no users to own the events source")
+    source = Source(
+        tenant_id=tenant_id,
+        source_type=EVENTS_SOURCE_TYPE,
+        display_name="Internal Observations (events)",
+        owner_user_id=owner_id,
+        auth_type="none",
+        auth_status="connected",
+        discovery_status="complete",
+        sync_mode="push",
+    )
+    db.add(source)
+    await db.flush()
+    return source.id
 
 
 async def record_state_event(
@@ -86,6 +133,7 @@ async def record_state_event(
     ev = EvidenceItem(
         tenant_id=tenant_id,
         domain_id=domain_id,
+        source_id=await _events_source_id(db, tenant_id),
         evidence_type=EVENT_EVIDENCE_TYPE,
         source_type=source_label,
         title=title,

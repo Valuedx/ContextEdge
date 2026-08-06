@@ -1,4 +1,4 @@
-from fastapi import APIRouter
+﻿from fastapi import APIRouter
 
 router = APIRouter()
 
@@ -17,6 +17,7 @@ from contextedge.api.v1 import (  # noqa: E402, F401
     execution,
     graph,
     identities,
+    inventory,
     negative_knowledge,
     notifications,
     patterns,
@@ -65,5 +66,6 @@ router.include_router(
     policy_assignments.router, prefix="/policy-assignments", tags=["policy-assignments"]
 )
 router.include_router(graph.router, prefix="/graph", tags=["graph"])
+router.include_router(inventory.router, prefix="/inventory", tags=["inventory"])
 router.include_router(review_queue.router, prefix="/review-queue", tags=["review-queue"])
 router.include_router(admin_cost.router, prefix="/admin", tags=["admin"])
