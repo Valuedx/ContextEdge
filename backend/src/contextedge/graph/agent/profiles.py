@@ -77,6 +77,12 @@ MAF_NODE_TYPES = frozenset(
         "error_signature",
         "fix_pattern",
         "case_outcome",
+        # Structured diagnostic index (roadmap D2): failing_component +
+        # failure_mode + trigger_change in ~60 chars. Signature-first
+        # entry (symptom -> signature -> episodes) is how an experienced
+        # engineer thinks; until this line the 50+ populated signatures
+        # were invisible to the agent.
+        "issue_signature",
     }
 )
 
@@ -125,6 +131,20 @@ MAF_RELATIONSHIP_TYPES = frozenset(
         # type has been hydratable since the profile shipped; this makes the
         # edges that reach it traversable.
         "exhibits",
+        # episode <-> issue_signature (roadmap D2): the hop that makes a
+        # signature seed reach its episode history.
+        "has_signature",
+        # Instance-level causal topology written by ServiceNow reference
+        # enrichment (evidence -> evidence) since it shipped — and never
+        # projectable until now. caused_by_change IS the "which change
+        # caused this incident" join the diagnosis loop pivots on;
+        # child_of_incident is major-incident grouping (roadmap D3);
+        # preceded_incident is the alert-rollup -> incident timeline.
+        "related_problem",
+        "caused_by_change",
+        "remediated_by_change",
+        "child_of_incident",
+        "preceded_incident",
         "derived_from",
         "contradicts",
         "aggregated_by",
@@ -163,6 +183,11 @@ MAF_V1 = AgentGraphProjectionProfile(
         # relevance still decays monotonically).
         "belongs_to": 1.2,
         "derived_from": 1.2,
+        # Signature-first diagnosis: a matched signature's episodes are
+        # the precedent the agent came for, and the causal change join
+        # is the highest-value hop in the incident loop.
+        "has_signature": 1.15,
+        "caused_by_change": 1.2,
     },
     relationship_metadata={
         "approved_by": frozenset({"status"}),

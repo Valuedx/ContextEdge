@@ -21,6 +21,7 @@ from contextedge.models.episode import CanonicalIdentity, Episode
 from contextedge.models.error_signature import ErrorSignature, FixPattern
 from contextedge.models.evidence import EvidenceItem
 from contextedge.models.execution import ApprovalRequest, ExecutionRun
+from contextedge.models.issue_signature import IssueSignature
 from contextedge.models.pattern import Pattern
 from contextedge.models.playbook import Playbook, PlaybookVersion
 from contextedge.models.policy import TenantPolicy
@@ -48,6 +49,7 @@ NODE_MODELS: dict[str, type[Any]] = {
     "error_signature": ErrorSignature,
     "fix_pattern": FixPattern,
     "case_outcome": CaseOutcome,
+    "issue_signature": IssueSignature,
 }
 
 _RISK_ORDER = {"low": 0, "medium": 1, "high": 2, "restricted": 3}
@@ -545,6 +547,24 @@ def hydrate_node(node_type: str, obj: Any) -> HydratedGraphNode:
             "last_used_at",
         )
         confidence = _float(obj.confidence)
+    elif node_type == "issue_signature":
+        # ~60 chars of pure diagnostic structure. Label reads as
+        # "component: failure mode" so a node list scans like a
+        # differential-diagnosis sheet.
+        component = (obj.failing_component or obj.affected_capability or "").replace("_", " ")
+        mode = (obj.failure_mode or "").replace("_", " ")
+        label = f"{component}: {mode}" if component else mode
+        summary = None
+        facts = _facts(
+            obj,
+            "affected_capability",
+            "failing_component",
+            "failure_mode",
+            "trigger_change",
+            "environment",
+            "scope",
+            "episode_count",
+        )
     elif node_type == "case_outcome":
         label = obj.outcome_status.replace("_", " ")
         summary = _text(obj.resolution_summary)

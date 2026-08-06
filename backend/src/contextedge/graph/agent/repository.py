@@ -217,6 +217,48 @@ class SQLAlchemyAgentGraphRepository:
                     )
                 )
 
+            # Layer A2 — issue signatures (roadmap D2): the structured
+            # diagnostic index. Slug fields underscore-join their tokens
+            # ("ssl_handshake_failure_missing_tls_version"), so they are
+            # de-slugged before tsvector or no query word can ever match.
+            # Signature-first entry: the matched signature's episodes,
+            # one has_signature hop away, are the precedent the agent
+            # came for. No domain predicate — signatures carry no
+            # domain_id; tenant scoping alone, like identifiers.
+            from contextedge.models.issue_signature import IssueSignature
+
+            sig_tsvector = func.to_tsvector(
+                "english",
+                func.replace(
+                    func.concat_ws(
+                        " ",
+                        IssueSignature.affected_capability,
+                        IssueSignature.failing_component,
+                        IssueSignature.failure_mode,
+                        IssueSignature.trigger_change,
+                    ),
+                    "_",
+                    " ",
+                ),
+            )
+            sig_q = (
+                select(IssueSignature.id)
+                .where(
+                    IssueSignature.tenant_id == scope.tenant_id,
+                    sig_tsvector.op("@@")(tsquery),
+                )
+                .order_by(IssueSignature.episode_count.desc())
+                .limit(3)
+            )
+            for row in (await self.db.execute(sig_q)).scalars().all():
+                seeds.append(
+                    RankedGraphSeed(
+                        ref=GraphNodeRef(type="issue_signature", id=row),
+                        relevance=0.85,
+                        reason="signature_match",
+                    )
+                )
+
             # Layer B — semantic: similar approved past episodes by embedding
             # (halfvec HNSW, migration 0032). Traversal then pulls in their
             # patterns, playbooks, and evidence through belongs_to/

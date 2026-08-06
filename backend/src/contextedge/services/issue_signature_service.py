@@ -207,6 +207,34 @@ async def extract_issue_signature(
         counts["reason"] = "already_extracted"
         return counts
 
+    # Graph edge alongside the relational link (roadmap D2): the
+    # projection traverses graph_edges only, so without this the
+    # signature-seeded agent could see a signature but never reach the
+    # episodes behind it. Fail-soft — the relational link above is the
+    # authoritative record and the D2 backfill can heal a missed edge;
+    # failing extraction over graph bookkeeping would be backwards.
+    try:
+        from contextedge.graph.builder import ensure_edge
+
+        await ensure_edge(
+            db,
+            tenant_id,
+            source_type="episode",
+            source_id=episode_id,
+            target_type="issue_signature",
+            target_id=signature.id,
+            edge_type="has_signature",
+            weight=1.0,
+            confidence=draft.confidence,
+        )
+    except Exception as edge_exc:
+        logger.warning(
+            "issue_signature.edge_write_failed",
+            episode_id=str(episode_id),
+            signature_id=str(signature.id),
+            error=str(edge_exc),
+        )
+
     counts["status"] = "extracted"
     counts["signature_key"] = key
     counts["is_new_signature"] = is_new
