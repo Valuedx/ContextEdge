@@ -465,6 +465,27 @@ def hydrate_node(node_type: str, obj: Any) -> HydratedGraphNode:
             # way to tell that one is normative and the other is hearsay.
             facts["knowledge"] = True
             facts["authority"] = "documented procedure"
+        # E2 (roadmap): applicability constraints travel WITH the node so
+        # the agent can rule out a fix that does not match the incident's
+        # product version or environment — mis-applied remediation being
+        # the classic agent failure. Selected keys only; the extractor's
+        # raw dict can carry scratch fields.
+        applicability = getattr(obj, "applicability", None)
+        if applicability:
+            compact = {
+                key: _value(applicability[key])
+                for key in (
+                    "product",
+                    "product_versions",
+                    "version_floor",
+                    "version_ceiling",
+                    "environments",
+                    "components",
+                )
+                if applicability.get(key)
+            }
+            if compact:
+                facts["applicability"] = compact
         confidence = _float(obj.relevance_score)
     elif node_type == "identity":
         label = obj.canonical_name
