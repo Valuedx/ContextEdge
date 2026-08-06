@@ -29,6 +29,7 @@ from __future__ import annotations
 import asyncio
 import time
 import uuid
+import weakref
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -60,14 +61,32 @@ USAGE_CACHE_TTL_SECONDS = 60.0
 # multiple Celery workers). For that, swap the in-memory cache + lock
 # for a Redis-backed counter with INCRBY + atomic compare-against-limit.
 # See the module docstring.
-_TENANT_LOCKS: dict[uuid.UUID, asyncio.Lock] = {}
+#
+# Keyed PER EVENT LOOP: an asyncio.Lock binds to the loop it was created
+# under, and the `-P threads` Celery pool runs every task in its own
+# thread with its own asyncio.run loop. A single module-level dict made
+# the FIRST task's loop own every lock, and every task on another thread
+# died with "bound to a different event loop" — found live when the A3
+# reclassification sweep failed 499/499. WeakKeyDictionary so a finished
+# task's loop releases its locks instead of accumulating one entry per
+# task. Within one loop the serialisation semantics are unchanged (the
+# API server keeps its cross-request protection); across worker threads
+# the overshoot is bounded by concurrency, as documented in the RUNBOOK.
+_TENANT_LOCKS: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, dict[uuid.UUID, asyncio.Lock]]" = (
+    weakref.WeakKeyDictionary()
+)
 
 
 def _lock_for_tenant(tenant_id: uuid.UUID) -> asyncio.Lock:
-    lock = _TENANT_LOCKS.get(tenant_id)
+    loop = asyncio.get_running_loop()
+    per_loop = _TENANT_LOCKS.get(loop)
+    if per_loop is None:
+        per_loop = {}
+        _TENANT_LOCKS[loop] = per_loop
+    lock = per_loop.get(tenant_id)
     if lock is None:
         lock = asyncio.Lock()
-        _TENANT_LOCKS[tenant_id] = lock
+        per_loop[tenant_id] = lock
     return lock
 
 

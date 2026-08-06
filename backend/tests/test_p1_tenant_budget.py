@@ -365,3 +365,35 @@ async def test_batch_embedding_without_tenant_context_still_works():
     ):
         out = await provider_mod.generate_embeddings_batch(["some text"])
     assert len(out) == 1 and len(out[0]) == 3072
+
+
+def test_tenant_lock_is_per_event_loop():
+    """Regression for the threads-pool crash found live (roadmap A3
+    sweep, 499/499 failures): an asyncio.Lock binds to the loop that
+    created it, and the Celery threads pool gives every task its own
+    asyncio.run loop. The registry must hand each loop its own lock —
+    the SAME loop must keep getting the SAME lock (that is the F-29
+    serialisation guarantee), and a DIFFERENT loop must never receive a
+    lock bound elsewhere.
+    """
+    import asyncio
+    import uuid as _uuid
+
+    from contextedge.services.tenant_budget_service import _lock_for_tenant
+
+    tenant = _uuid.uuid4()
+
+    async def grab_twice():
+        return _lock_for_tenant(tenant), _lock_for_tenant(tenant)
+
+    a1, a2 = asyncio.run(grab_twice())
+    assert a1 is a2  # same loop -> same lock (serialisation preserved)
+
+    async def grab_and_use():
+        lock = _lock_for_tenant(tenant)
+        async with lock:  # would raise "bound to a different event loop" pre-fix
+            pass
+        return lock
+
+    b = asyncio.run(grab_and_use())
+    assert b is not a1  # new loop -> its own lock, not the dead loop's

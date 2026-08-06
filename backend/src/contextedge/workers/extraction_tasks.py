@@ -549,7 +549,19 @@ async def _classify(db: AsyncSession, evidence_id: str, tenant_id: uuid.UUID) ->
     await _extract_applicability(db, ev, tenant_id)
 
     await db.flush()
-    return {"evidence_id": evidence_id, "classification": ev.relevance_state}
+    return {
+        "evidence_id": evidence_id,
+        "classification": ev.relevance_state,
+        # An item that classified relevant but was never chunked was
+        # skipped by an earlier (v1, head-truncated) verdict — the caller
+        # dispatches the retrieval fan-out it missed. Post-commit only:
+        # the wrapper dispatches, never this function, so a worker can't
+        # read pre-commit state.
+        "needs_fanout": (
+            ev.relevance_state in ("operational", "possibly_relevant")
+            and getattr(ev, "chunked_at", None) is None
+        ),
+    }
 
 
 async def _extract_applicability(
@@ -1033,7 +1045,19 @@ def classify_relevance_task(self, evidence_id: str, tenant_id: str):
         return await _classify(db, evidence_id, tid)
 
     try:
-        return run_async(work)
+        res = run_async(work)
+        # Retrieval fan-out for items a stale verdict skipped (roadmap
+        # A3). Dispatched here — after run_async committed — mirroring
+        # normalize_evidence's post-commit dispatch pattern.
+        if isinstance(res, dict) and res.get("needs_fanout"):
+            from contextedge.workers.evidence_baseline_tasks import (
+                compute_evidence_baseline_task,
+            )
+
+            chunk_evidence_task.delay(evidence_id, tenant_id)
+            correlate_evidence.delay(evidence_id, tenant_id)
+            compute_evidence_baseline_task.delay(evidence_id, tenant_id)
+        return res
     except Exception as exc:
         raise self.retry(exc=exc) from exc
 

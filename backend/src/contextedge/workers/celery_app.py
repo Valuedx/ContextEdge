@@ -169,6 +169,9 @@ celery_app = Celery(
         "contextedge.workers.signature_tasks",
         # Fleet-group detection sweep (B6).
         "contextedge.workers.fleet_tasks",
+        # Operator-dispatched maintenance sweeps (roadmap A3) —
+        # module-path fallback route -> default queue.
+        "contextedge.workers.maintenance_tasks",
         # Post-hard-delete orphan sweeps (review F-18 / F-20).
         "contextedge.workers.cleanup_tasks",
         # Relational-to-graph edge reconciliation for post-0031 rows.
