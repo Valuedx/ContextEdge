@@ -355,6 +355,21 @@ async def _normalize(db: AsyncSession, raw_object_id: str, tenant_id: uuid.UUID)
         if cls.get("summary") and not ev.body_summary:
             ev.body_summary = cls["summary"]
         await db.flush()
+        # Claims from the same call (v3, roadmap A4) — land unverified,
+        # invisible to the projection until validated. Fail-soft.
+        if cls.get("claims"):
+            try:
+                from contextedge.services.claim_service import (
+                    persist_extracted_claims,
+                )
+
+                await persist_extracted_claims(db, tenant_id, ev, cls["claims"])
+            except Exception as claim_exc:
+                logger.warning(
+                    "claim_persistence_failed",
+                    evidence_id=str(ev.id),
+                    error=str(claim_exc),
+                )
     except Exception as cls_exc:
         # Classifier failure shouldn't block ingestion — fall through to the
         # full path as the pre-flip behaviour did.
@@ -545,6 +560,17 @@ async def _classify(db: AsyncSession, evidence_id: str, tenant_id: uuid.UUID) ->
     # re-classification is how stale items get their summary refreshed.
     if out.get("summary") and not ev.body_summary:
         ev.body_summary = out["summary"]
+    if out.get("claims"):
+        try:
+            from contextedge.services.claim_service import persist_extracted_claims
+
+            await persist_extracted_claims(db, tenant_id, ev, out["claims"])
+        except Exception as claim_exc:
+            logger.warning(
+                "claim_persistence_failed",
+                evidence_id=str(ev.id),
+                error=str(claim_exc),
+            )
 
     await _extract_applicability(db, ev, tenant_id)
 

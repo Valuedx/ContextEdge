@@ -82,3 +82,47 @@ register_prompt(
     ),
     default=True,
 )
+
+# v3 (roadmap A4): v2 plus 0-3 atomic claims from the same call — the
+# granular assertions the claim lifecycle (validation, supersession,
+# contradicted_by) needs as raw material. Claims land ``unverified``,
+# which the maf.v1 visibility gate excludes from projection until they
+# are machine-verified or human-validated: population without
+# projection pollution.
+#
+# NOT the default. Measured 2026-08-07 (8 recent tickets, stored-v2
+# labels as baseline): label stability 4/8 — asking the gating call to
+# also emit claims moved half the borderline possibly_relevant verdicts,
+# and one claim was mistyped. Same failure class the thinking-budget A/B
+# caught: an added output requirement is a behavior change, not a free
+# field. v3 stays registered for per-tenant iteration; the claim
+# parsing/persistence pipeline ships dormant behind v2 (empty claims
+# list). To retry: separate the claims pass from the gate, or A/B a
+# reworded v3 against a labeled set before flipping the default.
+_V3_SYSTEM = _V2_SYSTEM.replace(
+    """  "summary": "<operational summary, max 300 characters, or null>"
+}""",
+    """  "summary": "<operational summary, max 300 characters, or null>",
+  "claims": [
+    {
+      "type": "symptom" | "probable_root_cause" | "recommended_action" | "failed_step" | "user_impact",
+      "text": "<one atomic, self-contained assertion, max 200 characters>",
+      "confidence": <float between 0.0 and 1.0>
+    }
+  ]
+}""",
+).replace(
+    """For "not_relevant" items return null.""",
+    """For "not_relevant" items return null.
+
+Claims: at most 3, only for relevant items (empty list otherwise). Each claim is ONE atomic assertion a support engineer could verify — "Web drivers stop matching after browser auto-upgrades" — never a paraphrase of the whole ticket. Only state what the content actually asserts; skip claims rather than invent them.""",
+)
+
+register_prompt(
+    Prompt(
+        name="relevance",
+        version="v3",
+        system=_V3_SYSTEM,
+        user_template=_V1_USER,
+    ),
+)

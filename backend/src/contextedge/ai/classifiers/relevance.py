@@ -74,4 +74,40 @@ async def classify_relevance(
         # v2+ prompts return an operational summary; v1 (and models that
         # drop the field) yield None. Non-string junk degrades to None.
         "summary": summary.strip()[:300] if isinstance(summary, str) and summary.strip() else None,
+        # v3+ claims — strict-structure, lenient-vocabulary: unknown
+        # types and malformed entries drop silently, never crash the
+        # gate call.
+        "claims": _parse_claims(result.get("claims")),
     }
+
+
+_CLAIM_TYPES = frozenset(
+    {"symptom", "probable_root_cause", "recommended_action", "failed_step", "user_impact"}
+)
+
+
+def _parse_claims(raw: Any) -> list[dict]:
+    if not isinstance(raw, list):
+        return []
+    claims: list[dict] = []
+    for item in raw[:3]:
+        if not isinstance(item, dict):
+            continue
+        text = item.get("text")
+        claim_type = item.get("type")
+        if not isinstance(text, str) or not text.strip():
+            continue
+        if claim_type not in _CLAIM_TYPES:
+            continue
+        try:
+            confidence = min(max(float(item.get("confidence", 0.5)), 0.0), 1.0)
+        except (TypeError, ValueError):
+            confidence = 0.5
+        claims.append(
+            {
+                "type": claim_type,
+                "text": " ".join(text.split())[:300],
+                "confidence": confidence,
+            }
+        )
+    return claims

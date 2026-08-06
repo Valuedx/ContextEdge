@@ -60,6 +60,16 @@ def reclassify_stale_evidence_task(
                         EvidenceItem.tenant_id == tid,
                         EvidenceItem.body_summary.is_(None),
                         EvidenceItem.body_text.isnot(None),
+                        # not_relevant rows keep a NULL summary BY DESIGN
+                        # (the v2 prompt returns null for them), so they
+                        # are the sweep's correct end state, not stale
+                        # work. Without this exclusion every sweep pass
+                        # re-classified the same ~290 rows forever —
+                        # found live when "remaining" plateaued while
+                        # classifications kept succeeding.
+                        EvidenceItem.relevance_state.is_distinct_from(
+                            "not_relevant"
+                        ),
                     )
                     .order_by(EvidenceItem.ingested_at.desc())
                     .limit(limit)
