@@ -425,9 +425,16 @@ async def delete_episode(episode_id: UUID, db: DbSession, user: AuthUser):
 
     from sqlalchemy import delete
 
-    from contextedge.models.episode import EpisodeStep
+    from contextedge.models.episode import EpisodeEvidenceLink, EpisodeStep
+    from contextedge.models.pattern import PatternEvidenceLink
 
-    # 1. Delete Episode Steps
+    # 1. Delete dependent links and steps
+    await db.execute(
+        delete(PatternEvidenceLink).where(PatternEvidenceLink.episode_id == episode_id)
+    )
+    await db.execute(
+        delete(EpisodeEvidenceLink).where(EpisodeEvidenceLink.episode_id == episode_id)
+    )
     await db.execute(
         delete(EpisodeStep).where(EpisodeStep.episode_id == episode_id)
     )
