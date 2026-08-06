@@ -172,6 +172,92 @@ class HttpContextGraphClient:
                 await client.aclose()
 
 
+class DecisionWritebackClient(Protocol):
+    """Port for F1 agent decision write-back: the MAF agent's diagnostic
+    trail flows back into ContextEdge through the SAME decisions path
+    humans use, so governance (review, audit, supersession) applies to
+    agent-authored records identically."""
+
+    async def record_decision(self, payload: dict) -> dict | None: ...
+
+
+class InProcessDecisionWritebackClient:
+    def __init__(self, session_factory, tenant_id, actor_id):
+        self.session_factory = session_factory
+        self.tenant_id = tenant_id
+        self.actor_id = actor_id
+
+    async def record_decision(self, payload: dict) -> dict | None:
+        from contextedge.services.decision_trace_service import create_decision
+
+        async with self.session_factory() as db:
+            try:
+                decision = await create_decision(
+                    db,
+                    tenant_id=self.tenant_id,
+                    decision_type=payload.get("decision_type", "agent_diagnosis"),
+                    agent_step=payload.get("agent_step", "maf_run"),
+                    actor_type="ai",
+                    actor_id=self.actor_id,
+                    context_snapshot=payload.get("context_snapshot", {}),
+                    rationale_summary=payload.get("rationale_summary", ""),
+                    confidence=payload.get("confidence"),
+                )
+                await db.commit()
+                return {"id": str(decision.id)}
+            except Exception:
+                await db.rollback()
+                raise
+
+
+class HttpDecisionWritebackClient:
+    """POST /api/v1/decisions with the same token hygiene as the other
+    HTTP clients: credentials travel in headers, so plain HTTP is
+    refused unless local development opts in."""
+
+    def __init__(
+        self,
+        base_url: str,
+        *,
+        bearer_token: str | None = None,
+        service_token: str | None = None,
+        timeout: float = 15.0,
+        client: httpx.AsyncClient | None = None,
+        allow_insecure_http: bool = False,
+    ):
+        self.base_url = base_url.rstrip("/")
+        scheme = self.base_url.split("://", 1)[0].lower() if "://" in self.base_url else ""
+        if scheme != "https" and not (allow_insecure_http and scheme == "http"):
+            raise ValueError(
+                "HttpDecisionWritebackClient requires an https:// base_url; pass "
+                "allow_insecure_http=True to use http:// in local development."
+            )
+        self.bearer_token = bearer_token
+        self.service_token = service_token
+        self.timeout = timeout
+        self.client = client
+
+    async def record_decision(self, payload: dict) -> dict | None:
+        headers: dict[str, str] = {}
+        if self.bearer_token:
+            headers["Authorization"] = f"Bearer {self.bearer_token}"
+        if self.service_token:
+            headers["X-Service-Token"] = self.service_token
+        owns_client = self.client is None
+        client = self.client or httpx.AsyncClient(timeout=self.timeout)
+        try:
+            response = await client.post(
+                f"{self.base_url}/api/v1/decisions",
+                json=payload,
+                headers=headers,
+            )
+            response.raise_for_status()
+            return response.json()
+        finally:
+            if owns_client:
+                await client.aclose()
+
+
 class HttpCmdbTopologyClient:
     """Deployment-neutral twin of InProcessCmdbTopologyClient (D3): the
     same ``lookup`` contract over HTTPS against
