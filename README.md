@@ -113,7 +113,7 @@ make test
 Notes:
 
 - `make dev` starts the full Docker development stack.
-- Current Alembic head is `0031_maf_context_graph_hardening`. Run `make migrate` after pulling to apply any new revisions.
+- The migration chain moves frequently — check the current head with `alembic heads` (at the time of writing: `0053_identity_trigram_index`) rather than trusting any number written in a document. Run `make migrate` after pulling to apply new revisions.
 - Frontend unit tests run with Vitest via `npm test`.
 - The backend enforces a non-default `JWT_SECRET_KEY` when `APP_ENV` is not `development`. Set a real secret before deploying to staging or production.
 
@@ -134,7 +134,7 @@ docs/
   MIGRATIONS.md
 
 backend/
-  alembic/versions/        # 0001..0015 migration chain
+  alembic/versions/        # migration chain (check `alembic heads` for the current tip)
   src/contextedge/
     api/v1/                 # FastAPI routers (auth, evidence, episodes, patterns,
                             #   playbooks, runtime, sessions, evaluations, drift, graph, ...)

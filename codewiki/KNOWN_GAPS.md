@@ -2,7 +2,31 @@
 
 Short list of implementation gaps and operational caveats called out in the codewiki and root documentation. Use this when the product surface looks more complete in the architecture than it does in the current UI or environment.
 
-## Resolved: 2026-07-29 gap-fix shipment (`feature/review-gap-fixes`)
+## 2026-08-05 external end-to-end review — validated, partially fixed
+
+An external review assessed the repo as "advanced prototype, controlled-pilot ready, not enterprise-production ready" with five P0/P1 families. Each concrete claim was validated against the code before acting. Fixed in the same patch set (all with tests; suite at 1,394):
+
+- **Evidence deletion guards (review P0-2, confirmed exactly as reported).** Bulk-delete deleted correlation edges and attachments for *caller-supplied* UUIDs before any tenant check — cross-tenant dependency deletion was live. All destructive evidence routes now resolve-and-authorize first (any foreign id fails the whole request with 404, before any delete statement), refuse legal-hold items with 409, and purge preserves held evidence plus its raw objects (audited count). Uses the shared `exclude_legal_hold()` fragment per its own module contract. Background retention already honoured holds; the gap was the direct APIs only.
+- **Batch embedding budget bypass (review P1-8, confirmed).** `generate_embeddings_batch` took no tenant context: ingestion embeddings — the bulk of embedding spend — bypassed a blocked tenant's cap and recorded as `tenant_id=unknown`. Now takes `tenant_id`/`db`, enforces the same gate as the single-text path (re-checked per sub-batch so a long ingest stops at the cap rather than finishing past it), attributes usage, and the chunk worker passes its context. Tests pin both the block and legacy-caller compatibility.
+- **Normalization scoping (review P0-3, confirmed).** See the resolved `workspace_id`/`domain_id` entry below.
+- **Documentation drift (confirmed).** README claimed Alembic head `0031` and a `0001..0015` chain against an actual head of `0053`; RUNBOOK named `0013`. All now say "trust `alembic heads`, not a number in a doc."
+
+Validated but **deliberately not fixed here** — each is architecture, not a patch:
+
+- **Scoped RBAC (P0-1):** see the extended role-bindings entry below.
+- **Outcome loop is schema-only (P0-4, confirmed):** `CaseOutcome` / `CaseStateTransition` have model definitions and no writer anywhere — grep finds only the class declarations. Until a case-lifecycle service exists, MTTR / first-time-right / deflection claims are unmeasurable. Narrative docs describing these writes as current behaviour should be read as design intent.
+- **MAF governed-playbook contract (P1-5):** the plugin exposes graph/CMDB/risk tools but not playbook matching, explanation, full published retrieval, feedback, or outcome capture — the product's highest-value workflow is not agent-callable. Needs its own design pass (five-tool contract sketched in the review).
+- **Graph API scope consistency (P1-6):** `/graph/agent-subsets` builds a full scoped projection, but CMDB topology / change-risk / fix-applicability routes pass only `tenant_id` — a domain-limited agent identity can read wider than its projection would allow.
+- **Evaluation as a release gate (P1-7), SSO/service-token hardening + metrics exposure (P1-10), CI depth (frontend lint currently failing, no migration replay, no real-datastore integration lane):** all confirmed; roadmap items.
+
+A companion **graph-schema review** (same date, verdict: "storage foundation adequate, MAF contract incomplete — 3/5, no engine change needed") was validated the same way. Fixed immediately, each with tests:
+
+- **Ontology drift (confirmed, and then some):** Zoho wrote `customer_account`, `knowledge_category`, `topic` unregistered in `ENTITY_TYPES`; all three registered, and `test_entity_type_registry.py` now scans every reference-service source for written entity types and fails on any the registry doesn't know. The test's own first run produced a false positive (`os_name`, a CI trait key matching the tuple regex) — fixed in the test, documented inline.
+- **Connector relationships invisible to maf.v1 (confirmed):** `affects_ci` and `assigned_to_group` — written by every ticket connector — are now allowlisted, so an agent holding a CI seed can discover its incidents and owning team. `mentions_identity` stays excluded deliberately: measured fan-out of 40–70 edges per handful of tickets would spend the budget on identity hubs instead of topology.
+- **Execution hydration omitted verification (confirmed):** `verification_status` / `verified_at` now project — "completed" and "completed, then verified stable" are different precedents and were collapsed. `verification_details` (unbounded JSONB) stays out.
+- **weight-as-confidence conflation (confirmed, including in code written days earlier in this very repo):** `ensure_edge` now accepts `confidence`; `persist_knowledge_links` passes similarity as both weight (traversal importance — a better match matters more) and confidence (belief).
+
+Still open from the graph review, all architectural: a versioned node/edge/triple ontology registry shared by writers, materializer, profiles and hydrators; `playbook_version` as a projection node (version-qualified evidence trace); execution steps / tool invocations / case transitions in the graph; event-driven materialization with true reconciliation (today's is additive-only, 6h cadence, `replace_edge` has no production callers); relationship provenance in MAF responses (edge id, origin, derivation, validity interval); DB-enforced tenant/domain endpoint consistency plus integrity audits; coherent `as_of` semantics (historical edges currently combine with current node facts — the selector says so, callers must not draw historical operational conclusions); and task-specific projection profiles (case / topology / knowledge / governance) instead of one widening allowlist.
 
 The July 2026 production-readiness review's P0/P1 code gaps were closed in one branch. Headlines (each with tests):
 
@@ -123,9 +147,11 @@ Single-flight per source object shipped (advisory xact lock; overlapping runs sk
 
 Production-like environments must set a real `JWT_SECRET_KEY` when `APP_ENV` is not `development`.
 
-## Role bindings are stored, but login currently flattens roles
+## Role bindings are stored, but login currently flattens roles — P0 for multi-domain tenants
 
 `RoleBinding` stores `scope_type` and `scope_id`, but the login flow in `api/v1/auth.py` currently selects only `RoleBinding.role` values when it builds the JWT. In practice, most route enforcement is role-name based, with finer scope coming from token claims such as `allowed_domain_ids` or `workspace_ids`, not from dynamic resolution of every role binding on each request.
+
+The 2026-08-05 external review escalated this to an enterprise launch blocker, and validation against the code confirms the mechanics: `deps.has_role()` is a pure role-name check, so a reviewer or domain admin bound to ONE domain is treated as holding that role tenant-wide by every route-level `require_role` call. The required shape is effective grants as `(role, scope_type, scope_id)` enforced through a shared authorization layer, with negative tests per sensitive route and cross-domain combination. This is an architectural change (JWT claims, a policy layer, and route migration), not a spot fix — deliberately **not** attempted as part of the review-response patch set, because a partial scoping change that some routes honour and others don't is more dangerous than the documented current state. Until it lands, single-domain tenants are unaffected; multi-domain tenants should treat role grants as tenant-wide regardless of the binding's scope fields.
 
 ## Frontend source onboarding is local-file first
 
@@ -331,9 +357,9 @@ Teams `hydrate_thread` now fetches the root message first via `/messages/{messag
 
 `correlate_evidence` (Celery task) now enqueues `reconstruct_episode_task` when new correlation edges are created. Episode reconstruction LLM failures are caught and logged in `create_episodes_from_evidence` so they do not crash the task.
 
-## `workspace_id` and `domain_id` not set during normalization
+## Resolved: `workspace_id` and `domain_id` now copied from the source at normalization (2026-08-05)
 
-New `EvidenceItem` rows do not have `workspace_id` or `domain_id` set during normalization. These are intended to be populated by domain-assignment logic after the evidence item exists.
+New `EvidenceItem` rows used to land with both NULL — and the graph layer treats a NULL domain as eligible under *every* domain-scoped query, because NULL is the deliberate encoding for reviewed tenant-global knowledge. Unassigned ingest riding that convention meant a domain-limited agent could see evidence nobody had scoped yet (the 2026-08-05 external review's P0-3). Normalization now copies the source's `workspace_id` always, and its domain when unambiguous (source configured with exactly one); a multi-domain source's evidence stays domain-NULL, which genuinely is tenant-wide until a human or correlation narrows it. Reads via `getattr` and degrades to unscoped rather than crashing ingest on an unexpected source shape.
 
 ## `body_summary` only via artifact path
 

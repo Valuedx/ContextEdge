@@ -360,7 +360,7 @@ Current state:
 | Backend crashes on startup with `RuntimeError` about JWT_SECRET_KEY | Set `JWT_SECRET_KEY` to a non-default value, or set `APP_ENV=development` for local work |
 | Runtime returns 403 | Caller risk tier cap, playbook/domain mismatch, or service-token domain allowlist |
 | Runtime explain returns 404 | Redis cache expired or there was no previous `POST /runtime/match` |
-| Missing tables or columns | Run migrations and verify Alembic head (should be `0013_attachment_processing`) |
+| Missing tables or columns | Run migrations and verify the Alembic head matches `alembic heads` output — the chain moves frequently, so trust the command, not a number written in a doc |
 | FTS queries return no results | Verify migration `0007_fts_gin_indexes` was applied and `search_tsvector` columns exist |
 | `ModuleNotFoundError: No module named 'contextedge'` | Start host-run services with `cd backend && python dev.py ...` so `src/` is added automatically. If it still fails, check `python -c "import sys; print(sys.executable); print(sys.version)"` and verify you are using a Python 3.12+ backend virtualenv with dependencies installed |
 | Celery tasks do not execute | Worker not running, Redis misconfigured, broker URL mismatch |

@@ -293,10 +293,10 @@ Edges define how nodes relate. They are stored in `graph_edges`.
 - **When created:** During pattern aggregation.
 
 ### `evidence_for` / `supported_by`
-- **What it connects:** Evidence supporting a Claim or Decision.
-- **Direction:** Evidence → Claim/Decision (or vice versa depending on query perspective).
-- **Metadata:** Weight, support type.
-- **When created:** When a claim is formed or a decision is justified.
+- **What it connects:** Evidence supporting a Claim or Decision — and, since the knowledge-linking work, a **Pattern to the knowledge document** (SOP / KB article) that supports its procedure.
+- **Direction:** Evidence → Claim/Decision (or vice versa depending on query perspective); Pattern → Evidence for knowledge links.
+- **Metadata:** Weight, support type. Knowledge links carry `source: "knowledge_retrieval"`, the evidence type, and the applicability verdict.
+- **When created:** When a claim is formed or a decision is justified. Pattern→document links are written by `persist_knowledge_links` at playbook-generation time, and **only** for matches at similarity ≥ 0.75 with no applicability mismatch — measured on a live tenant, genuine pairs sit at 0.75–0.84 and vocabulary noise at 0.62–0.69, and an edge (unlike a seed) is a durable assertion read back as fact by every later projection.
 
 ### `contradicts`
 - **What it connects:** A Playbook to Evidence that shows the playbook is wrong.
@@ -419,6 +419,14 @@ This module generates specialized, bounded projections of the graph strictly for
 **Why:** We only want to expose specific, safe fields to the LLM, not the whole database row.
 **Design rationale:** Includes a crucial `node_is_visible` check that enforces Role-Based Access Control (RBAC), domain scoping, and legal-hold exclusions. If a node is secret, it is silently dropped from the graph projection.
 
+**What each node type carries (the parts that shape answer quality):**
+
+- **Episodes** project their **steps** (`steps_taken`, capped 6 × 180 chars, successful-first, failed ones labelled `[did not work]`) plus `primary_case_ref` — the ticket number an engineer can open to verify a citation — and `extraction_confidence`. Before steps were projected, an agent received the diagnosis and the outcome but not what anyone *did*, and filled the gap with generic troubleshooting shape. The caps are measured, not guessed: at 12 × 220, eight episodes consumed 57% of a 25k-character projection and crowded out everything ranked below them.
+- **Evidence** is budgeted by *kind*: ticket/chat/log summaries cap at 400 chars (they corroborate; they are not the procedure), while knowledge evidence (`kb_article` / `sop` / `documentation`) renders at 1,600 chars and carries `knowledge: true` / `authority: "documented procedure"` — in a node list an SOP section and a Slack message are both "evidence", and an agent weighing them needs to know one is normative and the other is hearsay.
+- **Playbooks** carry their current version's steps (capped 15 × 200). The label precedence is `title` / `text` / `action` / `instruction` — the last covers seeded playbooks, whose steps otherwise projected as an empty list on exactly the approved playbooks an agent is allowed to see.
+
+**Caution:** episode step text is raw operational narrative and can carry customer identifiers (company names, hostnames, people). The `maf.v1` profile is therefore **internal-facing**; a partner- or customer-facing agent needs a profile that excludes episodes rather than a redaction pass over them.
+
 ### `materializer.py`
 **File Rating:** 8/10
 **What:** Reconciles implicit relational links (like foreign keys) into explicit `GraphEdge` rows.
@@ -434,6 +442,12 @@ This module generates specialized, bounded projections of the graph strictly for
 **File Rating:** 9/10
 **What:** Data access layer for the agent graph.
 **Why:** Handles the actual SQL queries to resolve seeds (starting points based on text search) and load edges.
+
+**Seed layers** (each fail-soft, each scope-checked):
+1. **Patterns** by full-text search on the query.
+2. **Episodes and playbooks** by embedding similarity (halfvec HNSW), threshold 0.5.
+3. **Knowledge documents** (SOPs, KB articles, product documentation) by embedding similarity against their **chunks**, grouped per document on best chunk, threshold **0.6** — stricter than episodes because a manual shares vocabulary with everything in its product, and a weak match hands the agent normative-sounding text about the wrong procedure. Without this layer a documentation question could only reach a document by traversing from some other seed — and on a measured corpus 17 of 18 KB articles had no edge to any pattern, so there was usually no path.
+4. **Operational identifiers** extracted from the query (INC numbers, hostnames, emails) matched exactly against entities and identity aliases.
 
 ### `selector.py`
 **File Rating:** 10/10

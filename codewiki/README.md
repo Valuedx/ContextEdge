@@ -56,6 +56,7 @@ Start with the system architecture, then follow the numbered deep dives:
 | [15-dashboard-and-operator-workflows.md](./15-dashboard-and-operator-workflows.md) | Dashboard navigation and how business workflows map to APIs |
 | [16-decision-traces.md](./16-decision-traces.md) | First-class decision trace model, structured reject/modify codes, and the reviewer-console bundle endpoint |
 | [17-ae-ops-context-graph-alignment.md](./17-ae-ops-context-graph-alignment.md) | Migration `0029` alignment with the AE Ops Context Graph design — new entity / claim / action_policy / error_signature / fix_pattern / case_outcome tables, case-spine columns, idempotency, temporal graph edges |
+| [18-cost-observability-and-containment.md](./18-cost-observability-and-containment.md) | LLM spend made legible (reasoning tokens, per-tenant dashboard, effective-cap reporting) and bounded (retry / output / batch ceilings, default daily budgets for unconfigured tenants) |
 
 ## Following one incident end to end
 

@@ -13,6 +13,7 @@ Individual incidents become reusable organizational knowledge through a governed
 ### Episodes
 
 - `episode_service.create_episodes_from_evidence` calls `reconstruct_episode` (AI), merges identity refs from underlying `EvidenceItem` rows, and inserts `Episode` plus `EpisodeStep` children with `status="draft"` and `reviewer_state="pending_review"`.
+- Each new episode also resolves a **`primary_case_ref`** — the ticket number it should be cited by (`_resolve_primary_case_ref`). The rule: follow the episode's *own* cited evidence to its canonical cases via `case_links`, prefer the case most of that evidence points at, then take the identifier the correlation layer already marked `is_authoritative`. Returns `None` rather than a guess when evidence has no linked case (normal for `local_file` ingests, where the ticket number exists only in a filename — a filename is not a verified identifier). Without this field an agent can name an episode but never the record behind it, so a claim cannot be checked in one click.
 - API routes in `api/v1/episodes.py` expose list/get/create flows for tenant-scoped use (details per `docs/API.md`).
 
 ### Patterns
@@ -29,9 +30,21 @@ Individual incidents become reusable organizational knowledge through a governed
 - Per-step metadata on `PlaybookVersion.steps` is validated on write through the `PlaybookStep` Pydantic schema (`schemas/playbook.py`) — each step carries `reversible`, `time_estimate_sec`, `verification`, `rollback_hint`, `safety_class`, and `tool_ref`. All fields optional with defaults so pre-M2 payloads keep validating, and `extra="allow"` preserves vendor-specific keys. Storage is unchanged (JSONB list).
 - `PlaybookVersion.verification_policy` (JSONB) declares post-action recheck behavior — `auto_close_on_success`, `recheck_after_sec`, `recheck_metric`, `recheck_source` — so the reviewer console's "auto-close on successful recheck" commitment renders from data, not copy. Fields are descriptive at this revision; the recheck worker that honours them is a follow-up (see [KNOWN_GAPS.md](./KNOWN_GAPS.md)).
 
+### Playbook generation quality
+
+Reviewing an early generated corpus (37 playbooks, 223 steps) against its sources showed it splitting three ways: genuinely good episode-grounded procedures, structured-but-hollow filler on patterns the model itself scored 0.1–0.4, and "playbooks" for things that are not remediations. Four controls now shape what gets generated and reviewed:
+
+- **Evidence floor** (`pattern_tasks.py`, `PLAYBOOK_GENERATION_MIN_PATTERN_CONFIDENCE = 0.5`): generation is skipped — before any LLM spend, with a logged reason — for patterns below the floor. `pattern_type` cannot gate this (everything is `recurring_issue`), so confidence is the signal. Skips are not auto-retried; the manual `POST /playbooks/generate` route bypasses the worker gate for a human who disagrees.
+- **Knowledge threshold** (`knowledge_retrieval_service.MAX_DISTANCE`, derived from `KNOWLEDGE_LINK_MIN_SIMILARITY = 0.75`): what is too weak to assert as a graph edge is also too weak to become a step a reviewer is asked to approve. Measured on a live tenant: genuine pattern↔document pairs sit at similarity 0.75–0.84, vocabulary noise at 0.62–0.69 — the bands do not overlap.
+- **Prompt v4** (`ai/prompts/playbook.py`; earlier versions stay registered and immutable for eval baselines): reproduce a source's literal command *exactly* rather than paraphrasing it into "use an SSL testing tool"; `kb-N`/`ep-N` labels belong in `source_refs` and nowhere in prose (persisted text saying "as per KB-1" resolves to nothing); an unsourced step must state in `expected_outcome` what observable result would confirm it.
+- **Review-queue ordering** (`api/v1/playbooks.py`): listing with `lifecycle_state=candidate` orders by the generator's own confidence, not recency. Approval is what makes a playbook agent-visible, and with 30+ candidates pending, recency buried the fully-sourced 0.9-confidence ones beneath whatever generated last.
+
+One projection gotcha, fixed but worth knowing: seeded playbooks store steps as `{"order", "instruction"}` while generated ones use `{"text", ...}`. The graph hydrator and the embedding text both read `title`/`text`/`action`/`instruction` — before `instruction` was added to that chain, every *approved* playbook (the only kind an agent may see) projected an empty step list and embedded on its title alone.
+
 ### Relationships
 
 - Episodes ground patterns in real evidence; patterns can feed **playbook candidate** generation (see pattern workers). Playbooks link **evidence** via `PlaybookEvidenceLink` at version scope for semantic retrieval.
+- Knowledge retrieval at generation time also **persists** what it finds: confident, applicability-clean pattern→document matches are written as `pattern -supported_by-> evidence` graph edges (`persist_knowledge_links`), so a document that informed a playbook stays reachable by graph traversal afterwards instead of being spent on one prompt.
 
 ## Example: Acme VPN data at this stage
 
@@ -107,6 +120,10 @@ The playbook is only visible to runtime retrieval after it reaches `approved` st
 
 - **Publication timestamp on version** — *Why:* runtime ranks **published** versions only. *Tradeoff:* unpublished drafts invisible to match even if "newer."
 
+- **Confidence floor on generation, not on review** — *Why:* a hollow candidate costs reviewer attention and dilutes trust in the good ones; skipping before the LLM call also costs nothing. *Tradeoff:* a pattern that accrues evidence later needs the manual generate route — nothing re-dispatches automatically.
+
+- **Two thresholds for knowledge, deliberately different (0.6 seed vs 0.75 edge/step)** — *Why:* a weak *seed* ranks low and falls out of the projection budget; a weak *edge or step* is asserted as fact and read back forever. Wrong seeds cost a little context; wrong edges corrupt the graph. *Tradeoff:* thin coverage until product-derived patterns accumulate — 3 documents linked on the measured corpus, and that was the correct answer.
+
 ## Code map
 
 | Concern | Module path | Key symbols | When it runs |
@@ -121,6 +138,10 @@ The playbook is only visible to runtime retrieval after it reaches `approved` st
 | Playbook model | `backend/src/contextedge/models/playbook.py` | `Playbook`, `PlaybookVersion`, `PlaybookApproval` | ORM |
 | Playbook API | `backend/src/contextedge/api/v1/playbooks.py` | (router handlers) | HTTP |
 | Memory promotion | `backend/src/contextedge/services/memory_service.py` | `promote_pattern_memory`, `promote_playbook_memory` | Transitions / pattern create |
+| Generation gate | `backend/src/contextedge/workers/pattern_tasks.py` | `PLAYBOOK_GENERATION_MIN_PATTERN_CONFIDENCE`, `generate_playbook_candidate` | Celery, pattern create |
+| Knowledge for generation | `backend/src/contextedge/services/knowledge_retrieval_service.py` | `retrieve_knowledge_for_pattern`, `persist_knowledge_links`, `MAX_DISTANCE`, `KNOWLEDGE_LINK_MIN_SIMILARITY` | Generation |
+| Generator prompt | `backend/src/contextedge/ai/prompts/playbook.py` | `v4` (default), earlier versions immutable | Generation |
+| Case reference | `backend/src/contextedge/services/episode_service.py` | `_resolve_primary_case_ref` | Episode create |
 
 ## Acme VPN incident (this layer)
 
