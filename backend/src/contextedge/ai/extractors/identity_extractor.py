@@ -1,4 +1,4 @@
-"""Entity/identity extraction from evidence content.
+﻿"""Entity/identity extraction from evidence content.
 
 Prompt text lives in ``contextedge.ai.prompts.identity`` (registry-
 versioned, A/B-routable per tenant). Resolved via ``get_prompt`` on
@@ -14,6 +14,7 @@ from typing import Any
 from contextedge.ai.fencing import fence_untrusted
 from contextedge.ai.prompts import get_prompt
 from contextedge.ai.provider import llm_complete_json
+from contextedge.ai.text_salience import salient_slice
 
 
 async def extract_identities(
@@ -32,7 +33,7 @@ async def extract_identities(
         return []
 
     prompt = get_prompt("identity", tenant_id)
-    user = prompt.format_user(content=fence_untrusted(content[:4000]))
+    user = prompt.format_user(content=fence_untrusted(salient_slice(content, 4000)))
     result = await llm_complete_json(
         user,
         task="classification",

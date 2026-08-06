@@ -20,6 +20,7 @@ from typing import Any
 
 from contextedge.ai.prompts import get_prompt
 from contextedge.ai.provider import llm_complete_json
+from contextedge.ai.text_salience import salient_slice
 
 # Re-exported for legacy importers. New code should go through
 # ``get_prompt("relevance", tenant_id)`` so per-tenant variants route
@@ -51,7 +52,10 @@ async def classify_relevance(
         title=title or "",
         source_type=source_type,
         evidence_type=evidence_type,
-        body=(body or "")[:2000],
+        # Salience-aware, not head-first: a fused thread's first 2,000
+        # chars are the newest reply's greetings, and classifying those
+        # once discarded a complete resolution (roadmap F4).
+        body=salient_slice(body or "", 2000),
     )
     result = await llm_complete_json(
         user_prompt,
@@ -62,8 +66,12 @@ async def classify_relevance(
         prompt_name=prompt.name,
         prompt_version=prompt.version,
     )
+    summary = result.get("summary")
     return {
         "classification": result.get("classification", "not_relevant"),
         "confidence": float(result.get("confidence", 0.5)),
         "reasoning": result.get("reasoning", ""),
+        # v2+ prompts return an operational summary; v1 (and models that
+        # drop the field) yield None. Non-string junk degrades to None.
+        "summary": summary.strip()[:300] if isinstance(summary, str) and summary.strip() else None,
     }

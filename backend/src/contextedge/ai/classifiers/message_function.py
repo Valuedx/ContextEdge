@@ -1,9 +1,9 @@
-"""Message-function classifier for conversational evidence (backlog A1).
+﻿"""Message-function classifier for conversational evidence (backlog A1).
 
 One call per conversational evidence item, run inline in the normalize
 worker AFTER the relevance gate (noise never spends a second LLM call).
 The label is persisted on the evidence row and consumed
-deterministically downstream — dissociation veto, correction
+deterministically downstream â€” dissociation veto, correction
 supersession, negative-evidence store. The classifier proposes;
 deterministic policy disposes.
 
@@ -19,6 +19,7 @@ from typing import Any
 from contextedge.ai.prompts import get_prompt
 from contextedge.ai.prompts.message_function import MESSAGE_FUNCTIONS
 from contextedge.ai.provider import llm_complete_json
+from contextedge.ai.text_salience import salient_slice
 
 
 async def classify_message_function(
@@ -30,14 +31,14 @@ async def classify_message_function(
     db: Any | None = None,
 ) -> dict:
     """Returns ``{function, confidence}``. An out-of-vocabulary label
-    from the model degrades to ``unclassified`` — consumers treat that
+    from the model degrades to ``unclassified`` â€” consumers treat that
     exactly like "no classifier available" and fall back to their
     deterministic floors."""
     prompt = get_prompt("message_function", tenant_id)
     user_prompt = prompt.format_user(
         title=title or "",
         source_type=source_type,
-        body=(body or "")[:2000],
+        body=salient_slice(body or "", 2000),
     )
     result = await llm_complete_json(
         user_prompt,

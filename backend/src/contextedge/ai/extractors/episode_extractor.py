@@ -30,6 +30,7 @@ from contextedge.ai.extractors.episode_schema import validate_episode
 from contextedge.ai.fencing import fence_untrusted
 from contextedge.ai.prompts import get_prompt
 from contextedge.ai.provider import llm_complete_json
+from contextedge.ai.text_salience import salient_slice
 
 logger = structlog.get_logger()
 
@@ -62,7 +63,7 @@ def _format_evidence_block(evidence_items: list[dict]) -> str:
             out += f"Time: {item['timestamp']}\n"
         if item.get("title"):
             out += f"Title: {item['title']}\n"
-        out += f"Content: {(item.get('body', '') or '')[:PER_ITEM_CHAR_LIMIT]}\n"
+        out += f"Content: {salient_slice(item.get('body', '') or '', PER_ITEM_CHAR_LIMIT)}\n"
     return out
 
 

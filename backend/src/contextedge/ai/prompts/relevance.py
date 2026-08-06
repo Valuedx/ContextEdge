@@ -45,5 +45,40 @@ register_prompt(
         system=_V1_SYSTEM,
         user_template=_V1_USER,
     ),
+)
+
+# v2 (roadmap A2): identical classification contract plus a compact
+# operational summary, produced by the call that already reads every
+# body — one field for ~50 extra output tokens instead of a second LLM
+# pass. The summary lands in ``evidence_items.body_summary`` and from
+# there into the maf.v1 evidence projection, replacing "no summary" for
+# connector-ingested evidence. The classification instructions are
+# byte-identical to v1 so label behaviour carries over, and the system
+# block stays constant per version for provider prefix caching.
+_V2_SYSTEM = _V1_SYSTEM.replace(
+    """Respond ONLY with a JSON object matching this exact schema:
+{
+  "classification": "operational" | "possibly_relevant" | "not_relevant",
+  "confidence": <float between 0.0 and 1.0>,
+  "reasoning": "<one-sentence justification>"
+}""",
+    """Respond ONLY with a JSON object matching this exact schema:
+{
+  "classification": "operational" | "possibly_relevant" | "not_relevant",
+  "confidence": <float between 0.0 and 1.0>,
+  "reasoning": "<one-sentence justification>",
+  "summary": "<operational summary, max 300 characters, or null>"
+}
+
+The summary is for a support engineer scanning a list: state the symptom, the affected component, and the action/outcome if present ("Agent fails to start: NullPointerException during registration; resolved by re-uploading web drivers via SysAdmin"). Use only facts from the content — never invent. For "not_relevant" items return null.""",
+)
+
+register_prompt(
+    Prompt(
+        name="relevance",
+        version="v2",
+        system=_V2_SYSTEM,
+        user_template=_V1_USER,
+    ),
     default=True,
 )

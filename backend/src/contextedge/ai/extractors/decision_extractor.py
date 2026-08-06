@@ -1,4 +1,4 @@
-"""Decision/action extraction from evidence content.
+﻿"""Decision/action extraction from evidence content.
 
 Prompt text lives in ``contextedge.ai.prompts.decision`` (registry-
 versioned, A/B-routable per tenant).
@@ -12,6 +12,7 @@ from typing import Any
 from contextedge.ai.fencing import fence_untrusted
 from contextedge.ai.prompts import get_prompt
 from contextedge.ai.provider import llm_complete_json
+from contextedge.ai.text_salience import salient_slice
 
 
 async def extract_decisions(
@@ -25,7 +26,7 @@ async def extract_decisions(
         return []
 
     prompt = get_prompt("decision", tenant_id)
-    user = prompt.format_user(content=fence_untrusted(content[:4000]))
+    user = prompt.format_user(content=fence_untrusted(salient_slice(content, 4000)))
     result = await llm_complete_json(
         user,
         task="classification",

@@ -348,6 +348,12 @@ async def _normalize(db: AsyncSession, raw_object_id: str, tenant_id: uuid.UUID)
         classification_confidence = float(cls.get("confidence", 0.0))
         ev.relevance_state = classification_label.replace(" ", "_")
         ev.relevance_score = classification_confidence
+        # Operational summary from the same call (relevance prompt v2,
+        # roadmap A2) — the hydrator projects body_summary, which until
+        # now only attachment extraction ever populated. Never overwrite
+        # an existing summary (attachment extraction owns its value).
+        if cls.get("summary") and not ev.body_summary:
+            ev.body_summary = cls["summary"]
         await db.flush()
     except Exception as cls_exc:
         # Classifier failure shouldn't block ingestion — fall through to the
@@ -535,6 +541,10 @@ async def _classify(db: AsyncSession, evidence_id: str, tenant_id: uuid.UUID) ->
     label = out.get("classification", "not_relevant")
     ev.relevance_state = label.replace(" ", "_")
     ev.relevance_score = float(out.get("confidence", 0.0))
+    # Same summary persistence as the inline normalize call — manual
+    # re-classification is how stale items get their summary refreshed.
+    if out.get("summary") and not ev.body_summary:
+        ev.body_summary = out["summary"]
 
     await _extract_applicability(db, ev, tenant_id)
 

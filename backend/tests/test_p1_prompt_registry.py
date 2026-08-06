@@ -141,7 +141,11 @@ def test_real_relevance_prompt_registered():
     # registers v1 as default.
     assert "relevance" in prompts_mod._REGISTRY
     assert "v1" in prompts_mod._REGISTRY["relevance"]
-    assert prompts_mod._DEFAULTS["relevance"] == "v1"
+    # v2 promoted 2026-08-07 (roadmap A2): same classification contract
+    # plus the operational summary. A/B on live data: 6/6 normal tickets
+    # kept their v1 labels; the 5 giant fused threads flipped
+    # not_relevant -> operational at 0.90-0.95 (the F4 knowledge-loss fix).
+    assert prompts_mod._DEFAULTS["relevance"] == "v2"
 
 
 def test_all_migrated_prompt_families_registered():
@@ -259,4 +263,4 @@ def test_relevance_classifier_passes_prompt_version_to_llm():
         ))
 
     assert captured.get("prompt_name") == "relevance"
-    assert captured.get("prompt_version") == "v1"
+    assert captured.get("prompt_version") == "v2"
