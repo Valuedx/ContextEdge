@@ -28,6 +28,7 @@ from sqlalchemy import (
     Numeric,
     String,
     Text,
+    UniqueConstraint,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
@@ -37,6 +38,9 @@ from contextedge.models.base import Base, TenantScopedMixin
 
 class ErrorSignature(Base, TenantScopedMixin):
     __tablename__ = "error_signatures"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "signature_key", name="uq_error_signature_key"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4

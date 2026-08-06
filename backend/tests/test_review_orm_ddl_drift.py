@@ -145,6 +145,10 @@ _EXPECTED_MARKERS: set[tuple[str, str]] = {
     ('issue_signature.py', 'ForeignKey("error_signatures.id", ondelete="SET NULL"),'),
     ('issue_signature.py', 'ForeignKey("episodes.id", ondelete="CASCADE"),'),
     ('issue_signature.py', 'ForeignKey("issue_signatures.id", ondelete="CASCADE"),'),
+    # Covered by 0054_error_signature_unique (ALTER on the existing table —
+    # nothing wrote to error_signatures before the D1 fingerprinting pass).
+    ('error_signature.py',
+     'UniqueConstraint("tenant_id", "signature_key", name="uq_error_signature_key"),'),
     ('issue_signature.py',
      'UniqueConstraint("tenant_id", "signature_key", name="uq_issue_signature_key"),'),
     ('issue_signature.py',

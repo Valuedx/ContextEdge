@@ -393,6 +393,27 @@ async def _normalize(db: AsyncSession, raw_object_id: str, tenant_id: uuid.UUID)
                 error=str(mf_exc),
             )
 
+    # Error-signature fingerprints (diagnosis roadmap D1). Deterministic
+    # regex normalization — no LLM — so it runs on every item, including
+    # ones the relevance gate skips: a confidently-irrelevant thread can
+    # still carry a pasted stack trace worth indexing.
+    try:
+        from contextedge.services.error_signature_service import fingerprint_evidence
+
+        fp_counts = await fingerprint_evidence(db, tenant_id, ev)
+        if fp_counts["signatures"]:
+            logger.info(
+                "error_signature.fingerprinted",
+                evidence_id=str(ev.id),
+                **fp_counts,
+            )
+    except Exception as fp_exc:
+        logger.warning(
+            "error_signature_fingerprint_failed",
+            evidence_id=str(ev.id),
+            error=str(fp_exc),
+        )
+
     identity_count = 0
     decision_count = 0
     embedded = False

@@ -120,6 +120,11 @@ MAF_RELATIONSHIP_TYPES = frozenset(
         # affects_ci spends on topology an agent can actually reason over.
         "affects_ci",
         "assigned_to_group",
+        # evidence -> error_signature, written deterministically by the D1
+        # fingerprinting pass in error_signature_service. The signature node
+        # type has been hydratable since the profile shipped; this makes the
+        # edges that reach it traversable.
+        "exhibits",
         "derived_from",
         "contradicts",
         "aggregated_by",
