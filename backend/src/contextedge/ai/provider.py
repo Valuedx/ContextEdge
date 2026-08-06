@@ -732,7 +732,11 @@ async def generate_embedding(
 
 
 async def generate_embeddings_batch(
-    texts: list[str], model: str | None = None
+    texts: list[str],
+    model: str | None = None,
+    *,
+    tenant_id: _uuid.UUID | str | None = None,
+    db: Any | None = None,
 ) -> list[list[float]]:
     """Generate embeddings for a batch of texts. Returns 3072-dimensional vectors.
 
@@ -741,14 +745,54 @@ async def generate_embeddings_batch(
     be arbitrarily large — and a provider-side size rejection arrives *after*
     the tokens are spent. Splitting bounds the blast radius of any single
     request; the token cost of the work itself is unchanged.
+
+    ``tenant_id``/``db`` enforce the per-tenant budget gate and attribute the
+    spend, exactly like the single-text path. This mattered: batch embedding is
+    the ingestion pipeline's bulk spend, and without these parameters it both
+    bypassed a blocked tenant's cap and reported as ``tenant_id=unknown`` in
+    cost dashboards — the one workload most worth attributing was the one that
+    wasn't.
     """
     model = model or get_model_for_task("embedding")
+
+    if tenant_id is not None and db is not None:
+        try:
+            tid = tenant_id if isinstance(tenant_id, _uuid.UUID) else _uuid.UUID(str(tenant_id))
+            from contextedge.services.tenant_budget_service import (
+                TenantBudgetExceeded,
+                check_budget,
+            )
+
+            check = await check_budget(db, tid)
+            if not check.allowed and check.action == "block":
+                raise TenantBudgetExceeded(check)
+            if not check.allowed:
+                logger.warning(
+                    "llm.budget_warning",
+                    tenant_id=str(tid),
+                    reason=check.reason,
+                    task="embedding_batch",
+                )
+        except ImportError:
+            pass  # mirrors llm_complete's broken-test-mock tolerance
 
     limit = settings.embedding_max_batch_size
     if len(texts) > limit:
         out: list[list[float]] = []
         for start_idx in range(0, len(texts), limit):
-            out.extend(await generate_embeddings_batch(texts[start_idx : start_idx + limit], model))
+            # tenant context flows into each sub-batch: every slice re-checks
+            # the budget (cheap — the usage read is cached) so a long ingest
+            # that crosses the cap mid-way stops at the next slice instead of
+            # finishing the whole request past the limit, and every slice
+            # records its own attributed usage.
+            out.extend(
+                await generate_embeddings_batch(
+                    texts[start_idx : start_idx + limit],
+                    model,
+                    tenant_id=tenant_id,
+                    db=db,
+                )
+            )
         return out
     # LiteLLM maps 'dimensions' -> outputDimensionality for Vertex AI
     # gemini-embedding-001 supports up to 3072
@@ -780,7 +824,8 @@ async def generate_embeddings_batch(
             # request with aggregated prompt_tokens to keep per-request
             # counters meaningful.
             await record_llm_usage(
-                tenant_id=None,  # batch embedding callers don't carry tenant today
+                tenant_id=tenant_id,
+                db=db,
                 model=model,
                 task="embedding",
                 response=response,

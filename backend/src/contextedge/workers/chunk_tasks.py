@@ -163,7 +163,12 @@ async def _embed_chunks_batch(
         batch = pending[batch_start : batch_start + EMBED_BATCH_SIZE]
         texts = [c.text for c in batch]
         try:
-            embeddings = await generate_embeddings_batch(texts)
+            # tenant_id + db make the budget gate and cost attribution real —
+            # without them this docstring's claim was false: the batch path
+            # skipped the tenant cap entirely and recorded spend as unknown.
+            embeddings = await generate_embeddings_batch(
+                texts, tenant_id=tenant_id, db=db
+            )
         except Exception as exc:
             logger.warning(
                 "chunk_embedding_failed",

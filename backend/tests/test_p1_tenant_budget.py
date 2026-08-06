@@ -309,3 +309,59 @@ async def test_budget_check_result_is_frozen_dataclass():
     )
     with pytest.raises(Exception):
         result.allowed = False  # type: ignore[misc]
+
+
+# --- batch embedding goes through the same gate -------------------------
+
+
+@pytest.mark.asyncio
+async def test_batch_embedding_blocked_tenant_never_reaches_the_provider():
+    """The batch path used to accept no tenant context at all, so ingestion
+    embeddings bypassed a blocked tenant's cap and recorded as unknown spend.
+    With tenant_id/db supplied, a blocked budget must raise BEFORE any
+    provider call."""
+    from contextedge.ai import provider as provider_mod
+
+    blocked = BudgetCheckResult(
+        allowed=False,
+        action="block",
+        reason="token_limit_exceeded",
+        current_tokens=999,
+        current_cost_usd=1.0,
+        token_limit=100,
+        cost_cap_usd=None,
+    )
+    aembedding = AsyncMock()
+    with (
+        patch(
+            "contextedge.services.tenant_budget_service.check_budget",
+            AsyncMock(return_value=blocked),
+        ),
+        patch.object(provider_mod.litellm, "aembedding", aembedding),
+    ):
+        with pytest.raises(TenantBudgetExceeded):
+            await provider_mod.generate_embeddings_batch(
+                ["some text"], tenant_id=uuid4(), db=SimpleNamespace()
+            )
+    aembedding.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_batch_embedding_without_tenant_context_still_works():
+    """Legacy callers (no tenant kwargs) keep functioning — unattributed,
+    but never broken by the new gate."""
+    from contextedge.ai import provider as provider_mod
+
+    response = SimpleNamespace(
+        data=[{"embedding": [0.0] * 3072}], usage=None
+    )
+    with (
+        patch.object(
+            provider_mod.litellm, "aembedding", AsyncMock(return_value=response)
+        ),
+        patch(
+            "contextedge.ai.provider.record_llm_usage", AsyncMock()
+        ),
+    ):
+        out = await provider_mod.generate_embeddings_batch(["some text"])
+    assert len(out) == 1 and len(out[0]) == 3072

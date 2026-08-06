@@ -244,11 +244,31 @@ async def _normalize(db: AsyncSession, raw_object_id: str, tenant_id: uuid.UUID)
             "attachment_ids": [str(artifact.id) for artifact in attachments],
         }
 
+    # Scope is copied from the SOURCE the evidence came through, at ingest.
+    # New evidence used to land with workspace_id/domain_id both NULL — and
+    # the graph layer treats a NULL domain as eligible under *every*
+    # domain-scoped query, because NULL is the deliberate encoding for
+    # reviewed tenant-global knowledge. Unassigned ingest riding that
+    # convention meant a domain-limited agent could see evidence nobody had
+    # scoped yet. The source's workspace always applies; its domain applies
+    # when unambiguous (exactly one configured). A multi-domain source's
+    # evidence stays domain-NULL — that case genuinely is tenant-wide until
+    # a human or the correlation layer narrows it.
+    # getattr, not attribute access: normalization must degrade to unscoped
+    # evidence on any unexpected source shape, never crash the ingest.
+    src = await db.get(Source, raw.source_id) if raw.source_id else None
+    source_domain_ids = list(getattr(src, "domain_ids", None) or [])
     ev = EvidenceItem(
         tenant_id=tenant_id,
         source_id=raw.source_id,
         source_object_id=raw.source_object_id,
         raw_object_ref=raw.id,
+        workspace_id=getattr(src, "workspace_id", None),
+        domain_id=(
+            uuid.UUID(str(source_domain_ids[0]))
+            if len(source_domain_ids) == 1
+            else None
+        ),
         # Derived from what the connector actually fetched, not read off
         # the payload with a "message" default — no connector but
         # zoho_desk ever set the field, so a ServiceNow KB article and a

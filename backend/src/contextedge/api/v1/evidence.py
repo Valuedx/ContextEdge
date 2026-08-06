@@ -284,7 +284,16 @@ async def bulk_delete_evidence(
     db: DbSession,
     user: AuthUser,
 ):
-    """Permanently delete multiple evidence items."""
+    """Permanently delete multiple evidence items.
+
+    Authorization happens on the RESOLVED set, not the request: dependency
+    deletion used to run against caller-supplied UUIDs before any tenant
+    check, so a caller could delete another tenant's correlation edges and
+    attachments by guessing (or leaking) evidence ids. Every id must resolve
+    inside the caller's tenant before anything is touched, and evidence under
+    legal hold refuses deletion outright — a hold that can be cleared by the
+    delete button is not a hold.
+    """
     user.require_role("domain_admin")
 
     from sqlalchemy import delete, or_
@@ -296,25 +305,51 @@ async def bulk_delete_evidence(
     if not ids:
         return None
 
-    # 1. Delete Correlation Edges
+    # 1. Resolve and authorize FIRST. The delete targets are the ids that
+    # exist inside this tenant — nothing else is ever passed to a delete.
+    resolved = (
+        await db.execute(
+            select(EvidenceItem.id, EvidenceItem.sensitivity_label).where(
+                EvidenceItem.id.in_(ids),
+                EvidenceItem.tenant_id == user.tenant_id,
+            )
+        )
+    ).all()
+    if len(resolved) != len(set(ids)):
+        # At least one id is unknown or belongs to another tenant. Refuse the
+        # whole request rather than partially applying it: a bulk delete that
+        # silently skips some ids reads as success and leaves the caller
+        # believing gone things still exist — and the 404 does not disclose
+        # which ids were foreign.
+        raise HTTPException(status_code=404, detail="One or more evidence items not found")
+
+    held = [str(eid) for eid, label in resolved if label == "legal_hold"]
+    if held:
+        raise HTTPException(
+            status_code=409,
+            detail=f"{len(held)} item(s) are under legal hold and cannot be deleted",
+        )
+    delete_ids = [eid for eid, _ in resolved]
+
+    # 2. Delete Correlation Edges (authorized set only)
     await db.execute(
         delete(CorrelationEdge).where(
             or_(
-                CorrelationEdge.source_evidence_id.in_(ids),
-                CorrelationEdge.target_evidence_id.in_(ids)
+                CorrelationEdge.source_evidence_id.in_(delete_ids),
+                CorrelationEdge.target_evidence_id.in_(delete_ids)
             )
         )
     )
 
-    # 2. Delete Attachment Artifacts
+    # 3. Delete Attachment Artifacts (authorized set only)
     await db.execute(
-        delete(AttachmentArtifact).where(AttachmentArtifact.evidence_id.in_(ids))
+        delete(AttachmentArtifact).where(AttachmentArtifact.evidence_id.in_(delete_ids))
     )
 
-    # 3. Delete Evidence Items
+    # 4. Delete Evidence Items
     await db.execute(
         delete(EvidenceItem).where(
-            EvidenceItem.id.in_(ids),
+            EvidenceItem.id.in_(delete_ids),
             EvidenceItem.tenant_id == user.tenant_id
         )
     )
@@ -344,11 +379,29 @@ async def purge_evidence(db: DbSession, user: AuthUser):
     from contextedge.models.episode import CorrelationEdge
     from contextedge.models.evidence import AttachmentArtifact, RawEvidenceObject
 
-    # 1. Resolve Evidence IDs to delete dependencies
+    # 1. Resolve Evidence IDs to delete dependencies — EXCLUDING legal hold.
+    # A purge that clears held evidence defeats the point of a hold; the held
+    # rows (and their raw objects, attachments, and edges) survive the purge
+    # and the audit event records how many were preserved.
+    from contextedge.services.evidence_filters import exclude_legal_hold
+
     evidence_ids_q = await db.execute(
-        select(EvidenceItem.id).where(EvidenceItem.tenant_id == user.tenant_id)
+        select(EvidenceItem.id).where(
+            EvidenceItem.tenant_id == user.tenant_id,
+            exclude_legal_hold(),
+        )
     )
     evidence_ids = evidence_ids_q.scalars().all()
+
+    held_q = await db.execute(
+        select(EvidenceItem.id, EvidenceItem.raw_object_ref).where(
+            EvidenceItem.tenant_id == user.tenant_id,
+            EvidenceItem.sensitivity_label == "legal_hold",
+        )
+    )
+    held_rows = held_q.all()
+    held_count = len(held_rows)
+    held_raw_refs = [ref for _, ref in held_rows if ref is not None]
 
     if evidence_ids:
         # 2. Delete Correlation Edges
@@ -366,15 +419,22 @@ async def purge_evidence(db: DbSession, user: AuthUser):
             delete(AttachmentArtifact).where(AttachmentArtifact.evidence_id.in_(evidence_ids))
         )
 
-        # 4. Delete Evidence Items
+        # 4. Delete Evidence Items (held rows excluded by the same predicate)
         await db.execute(
-            delete(EvidenceItem).where(EvidenceItem.tenant_id == user.tenant_id)
+            delete(EvidenceItem).where(
+                EvidenceItem.tenant_id == user.tenant_id,
+                exclude_legal_hold(),
+            )
         )
 
-    # 5. Delete Raw Evidence Objects
-    await db.execute(
-        delete(RawEvidenceObject).where(RawEvidenceObject.tenant_id == user.tenant_id)
+    # 5. Delete Raw Evidence Objects — except those backing held evidence,
+    # which must stay recoverable for as long as the hold stands.
+    raw_delete = delete(RawEvidenceObject).where(
+        RawEvidenceObject.tenant_id == user.tenant_id
     )
+    if held_raw_refs:
+        raw_delete = raw_delete.where(RawEvidenceObject.id.not_in(held_raw_refs))
+    await db.execute(raw_delete)
 
     await db.commit()
 
@@ -386,7 +446,10 @@ async def purge_evidence(db: DbSession, user: AuthUser):
         action="evidence.purged",
         resource_type="evidence",
         resource_id="all",
-        details={"message": "Bulk purge of all evidence items and raw objects"},
+        details={
+            "message": "Bulk purge of all evidence items and raw objects",
+            "legal_hold_preserved": held_count,
+        },
     )
     return None
 
@@ -405,6 +468,11 @@ async def delete_evidence(evidence_id: UUID, db: DbSession, user: AuthUser):
     item = result.scalar_one_or_none()
     if not item:
         raise HTTPException(status_code=404, detail="Evidence not found")
+    if item.sensitivity_label == "legal_hold":
+        raise HTTPException(
+            status_code=409,
+            detail="Evidence is under legal hold and cannot be deleted",
+        )
 
     await db.delete(item)
     await db.commit()

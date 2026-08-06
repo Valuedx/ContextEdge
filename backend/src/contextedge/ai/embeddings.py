@@ -64,8 +64,19 @@ async def embed_decision(
     return await generate_embedding(text, tenant_id=tenant_id, db=db)
 
 
-async def embed_evidence_batch(items: list[tuple[str | None, str | None]]) -> list[list[float]]:
-    """Batch embed multiple evidence items."""
+async def embed_evidence_batch(
+    items: list[tuple[str | None, str | None]],
+    *,
+    tenant_id=None,
+    db=None,
+) -> list[list[float]]:
+    """Batch embed multiple evidence items.
+
+    ``tenant_id``/``db`` flow through to the budget gate and cost
+    attribution. Currently uncalled, but the parameters exist so any future
+    caller attributes its spend by default instead of reintroducing the
+    unattributed-batch bypass this signature was widened to close.
+    """
     texts = []
     for title, body in items:
         parts = []
@@ -79,7 +90,9 @@ async def embed_evidence_batch(items: list[tuple[str | None, str | None]]) -> li
     if not non_empty:
         return [[0.0] * 3072 for _ in items]
 
-    embeddings_result = await generate_embeddings_batch([t for _, t in non_empty])
+    embeddings_result = await generate_embeddings_batch(
+        [t for _, t in non_empty], tenant_id=tenant_id, db=db
+    )
 
     result = [[0.0] * 3072 for _ in items]
     for (original_idx, _), emb in zip(non_empty, embeddings_result):
