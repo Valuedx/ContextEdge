@@ -450,6 +450,16 @@ class SQLAlchemyAgentGraphRepository:
         for term in request.entities[:10]:
             await self._seed_entity_term(seeds, scope, term, reason="entity")
 
+        # Layer D — recent changes/events near the incident (roadmap B4).
+        # For every EVIDENCE seed resolved above that looks like an
+        # incident and carries a timestamp: find change/event evidence
+        # touching the SAME CI (affects_ci join) within the window before
+        # it. This is the diagnose-time correlation entry point — the
+        # agent sees the suspect change with its evidence_time fact and
+        # argues the temporal case itself. A hypothesis generator, never
+        # a verdict: nothing here writes a causal edge.
+        await self._seed_preceding_changes(seeds, scope)
+
         deduplicated: dict[str, RankedGraphSeed] = {}
         for seed in seeds:
             current = deduplicated.get(seed.ref.key)
@@ -459,6 +469,95 @@ class SQLAlchemyAgentGraphRepository:
             deduplicated.values(),
             key=lambda item: (-item.relevance, item.ref.type, str(item.ref.id)),
         )[:20]
+
+    # Incident-shaped evidence types that anchor the preceding-change
+    # window. Knowledge/event/change types never anchor it (a change does
+    # not need its own preceding changes).
+    _INCIDENT_EVIDENCE_TYPES = (
+        "ticket",
+        "incident",
+        "servicenow_incident",
+        "alert",
+        "alert_rollup",
+    )
+    PRECEDING_WINDOW_DAYS = 7
+    PRECEDING_SEED_CAP = 4
+
+    async def _seed_preceding_changes(
+        self,
+        seeds: list[RankedGraphSeed],
+        scope: AgentGraphAccessScope,
+    ) -> None:
+        from datetime import timedelta
+
+        from contextedge.models.evidence import EvidenceItem
+        from contextedge.models.pattern import GraphEdge
+
+        evidence_ids = [
+            s.ref.id for s in seeds if s.ref.type == "evidence"
+        ][:8]
+        if not evidence_ids:
+            return
+        anchors = (
+            (
+                await self.db.execute(
+                    select(EvidenceItem.id, EvidenceItem.evidence_time)
+                    .where(
+                        EvidenceItem.id.in_(evidence_ids),
+                        EvidenceItem.tenant_id == scope.tenant_id,
+                        EvidenceItem.evidence_type.in_(self._INCIDENT_EVIDENCE_TYPES),
+                        EvidenceItem.evidence_time.isnot(None),
+                    )
+                )
+            ).all()
+        )
+        if not anchors:
+            return
+        anchor_ids = [a[0] for a in anchors]
+        earliest = min(a[1] for a in anchors) - timedelta(days=self.PRECEDING_WINDOW_DAYS)
+        latest = max(a[1] for a in anchors)
+
+        ci_edge = GraphEdge.__table__.alias("ci_edge")
+        suspect_edge = GraphEdge.__table__.alias("suspect_edge")
+        suspect_q = (
+            select(EvidenceItem.id)
+            .distinct()
+            .select_from(ci_edge)
+            .join(
+                suspect_edge,
+                (suspect_edge.c.target_node_id == ci_edge.c.target_node_id)
+                & (suspect_edge.c.edge_type == "affects_ci")
+                & (suspect_edge.c.valid_to.is_(None)),
+            )
+            .join(EvidenceItem, EvidenceItem.id == suspect_edge.c.source_node_id)
+            .where(
+                ci_edge.c.tenant_id == scope.tenant_id,
+                ci_edge.c.edge_type == "affects_ci",
+                ci_edge.c.valid_to.is_(None),
+                ci_edge.c.source_node_id.in_(anchor_ids),
+                EvidenceItem.tenant_id == scope.tenant_id,
+                EvidenceItem.evidence_type.in_(("change", "event")),
+                EvidenceItem.evidence_time.isnot(None),
+                EvidenceItem.evidence_time >= earliest,
+                EvidenceItem.evidence_time <= latest,
+            )
+            .order_by(EvidenceItem.id)
+            .limit(self.PRECEDING_SEED_CAP)
+        )
+        try:
+            async with self.db.begin_nested():
+                rows = (await self.db.execute(suspect_q)).scalars().all()
+        except Exception:
+            logger.warning("agent_graph.preceding_change_seed_failed")
+            return
+        for evidence_id in rows:
+            seeds.append(
+                RankedGraphSeed(
+                    ref=GraphNodeRef(type="evidence", id=evidence_id),
+                    relevance=0.8,
+                    reason="preceded_by",
+                )
+            )
 
     async def _seed_entity_term(
         self,
