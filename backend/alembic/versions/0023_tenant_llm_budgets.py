@@ -42,43 +42,50 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    op.create_table(
-        "tenant_llm_budgets",
-        sa.Column(
-            "tenant_id",
-            postgresql.UUID(as_uuid=True),
-            sa.ForeignKey("tenants.id", ondelete="CASCADE"),
-            primary_key=True,
-            nullable=False,
-        ),
-        sa.Column("daily_token_limit", sa.BigInteger(), nullable=True),
-        sa.Column("daily_cost_cap_usd", sa.Numeric(12, 4), nullable=True),
-        sa.Column(
-            "action_on_exceed",
-            sa.String(20),
-            nullable=False,
-            server_default="warn",
-        ),
-        sa.Column(
-            "updated_at",
-            sa.DateTime(timezone=True),
-            nullable=False,
-            server_default=sa.func.now(),
-        ),
-        sa.CheckConstraint(
-            "action_on_exceed IN ('block', 'warn')",
-            name="ck_tenant_llm_budgets_action_on_exceed",
-        ),
-        sa.CheckConstraint(
-            "daily_token_limit IS NULL OR daily_token_limit >= 0",
-            name="ck_tenant_llm_budgets_token_limit_nonneg",
-        ),
-        sa.CheckConstraint(
-            "daily_cost_cap_usd IS NULL OR daily_cost_cap_usd >= 0",
-            name="ck_tenant_llm_budgets_cost_cap_nonneg",
-        ),
-    )
+    bind = op.get_bind()
+    inspector = sa.inspect(bind)
+    if not inspector.has_table("tenant_llm_budgets"):
+        op.create_table(
+            "tenant_llm_budgets",
+            sa.Column(
+                "tenant_id",
+                postgresql.UUID(as_uuid=True),
+                sa.ForeignKey("tenants.id", ondelete="CASCADE"),
+                primary_key=True,
+                nullable=False,
+            ),
+            sa.Column("daily_token_limit", sa.BigInteger(), nullable=True),
+            sa.Column("daily_cost_cap_usd", sa.Numeric(12, 4), nullable=True),
+            sa.Column(
+                "action_on_exceed",
+                sa.String(20),
+                nullable=False,
+                server_default="warn",
+            ),
+            sa.Column(
+                "updated_at",
+                sa.DateTime(timezone=True),
+                nullable=False,
+                server_default=sa.func.now(),
+            ),
+            sa.CheckConstraint(
+                "action_on_exceed IN ('block', 'warn')",
+                name="ck_tenant_llm_budgets_action_on_exceed",
+            ),
+            sa.CheckConstraint(
+                "daily_token_limit IS NULL OR daily_token_limit >= 0",
+                name="ck_tenant_llm_budgets_token_limit_nonneg",
+            ),
+            sa.CheckConstraint(
+                "daily_cost_cap_usd IS NULL OR daily_cost_cap_usd >= 0",
+                name="ck_tenant_llm_budgets_cost_cap_nonneg",
+            ),
+        )
 
 
 def downgrade() -> None:
-    op.drop_table("tenant_llm_budgets")
+    bind = op.get_bind()
+    inspector = sa.inspect(bind)
+    if inspector.has_table("tenant_llm_budgets"):
+        op.drop_table("tenant_llm_budgets")
+

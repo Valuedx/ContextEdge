@@ -34,11 +34,20 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    op.add_column(
-        "decisions",
-        sa.Column("embedding", Vector(3072), nullable=True),
-    )
+    bind = op.get_bind()
+    inspector = sa.inspect(bind)
+    existing_cols = {c["name"] for c in inspector.get_columns("decisions")}
+    if "embedding" not in existing_cols:
+        op.add_column(
+            "decisions",
+            sa.Column("embedding", Vector(3072), nullable=True),
+        )
 
 
 def downgrade() -> None:
-    op.drop_column("decisions", "embedding")
+    bind = op.get_bind()
+    inspector = sa.inspect(bind)
+    existing_cols = {c["name"] for c in inspector.get_columns("decisions")}
+    if "embedding" in existing_cols:
+        op.drop_column("decisions", "embedding")
+

@@ -18,17 +18,30 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    op.add_column(
-        "graph_edges",
-        sa.Column("domain_id", postgresql.UUID(as_uuid=True), nullable=True),
-    )
-    op.create_index(
-        "ix_graph_edges_tenant_domain_edge_type",
-        "graph_edges",
-        ["tenant_id", "domain_id", "edge_type"],
-    )
+    bind = op.get_bind()
+    inspector = sa.inspect(bind)
+    existing_cols = {c["name"] for c in inspector.get_columns("graph_edges")}
+    if "domain_id" not in existing_cols:
+        op.add_column(
+            "graph_edges",
+            sa.Column("domain_id", postgresql.UUID(as_uuid=True), nullable=True),
+        )
+    existing_indexes = {i["name"] for i in inspector.get_indexes("graph_edges")}
+    if "ix_graph_edges_tenant_domain_edge_type" not in existing_indexes:
+        op.create_index(
+            "ix_graph_edges_tenant_domain_edge_type",
+            "graph_edges",
+            ["tenant_id", "domain_id", "edge_type"],
+        )
 
 
 def downgrade() -> None:
-    op.drop_index("ix_graph_edges_tenant_domain_edge_type", table_name="graph_edges")
-    op.drop_column("graph_edges", "domain_id")
+    bind = op.get_bind()
+    inspector = sa.inspect(bind)
+    existing_indexes = {i["name"] for i in inspector.get_indexes("graph_edges")}
+    if "ix_graph_edges_tenant_domain_edge_type" in existing_indexes:
+        op.drop_index("ix_graph_edges_tenant_domain_edge_type", table_name="graph_edges")
+    existing_cols = {c["name"] for c in inspector.get_columns("graph_edges")}
+    if "domain_id" in existing_cols:
+        op.drop_column("graph_edges", "domain_id")
+

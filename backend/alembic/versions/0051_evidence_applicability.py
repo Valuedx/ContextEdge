@@ -25,23 +25,34 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.add_column(
-        "evidence_items",
-        sa.Column("applicability", postgresql.JSONB(), nullable=True),
-    )
-    # Partial: only knowledge evidence ever carries this, and it is read
-    # to find the documents still needing extraction.
-    op.create_index(
-        "ix_evidence_items_applicability_pending",
-        "evidence_items",
-        ["tenant_id", "evidence_type"],
-        unique=False,
-        postgresql_where=sa.text("applicability IS NULL"),
-    )
+    bind = op.get_bind()
+    inspector = sa.inspect(bind)
+    existing_cols = {c["name"] for c in inspector.get_columns("evidence_items")}
+    if "applicability" not in existing_cols:
+        op.add_column(
+            "evidence_items",
+            sa.Column("applicability", postgresql.JSONB(), nullable=True),
+        )
+    existing_indexes = {i["name"] for i in inspector.get_indexes("evidence_items")}
+    if "ix_evidence_items_applicability_pending" not in existing_indexes:
+        op.create_index(
+            "ix_evidence_items_applicability_pending",
+            "evidence_items",
+            ["tenant_id", "evidence_type"],
+            unique=False,
+            postgresql_where=sa.text("applicability IS NULL"),
+        )
 
 
 def downgrade() -> None:
-    op.drop_index(
-        "ix_evidence_items_applicability_pending", table_name="evidence_items"
-    )
-    op.drop_column("evidence_items", "applicability")
+    bind = op.get_bind()
+    inspector = sa.inspect(bind)
+    existing_indexes = {i["name"] for i in inspector.get_indexes("evidence_items")}
+    if "ix_evidence_items_applicability_pending" in existing_indexes:
+        op.drop_index(
+            "ix_evidence_items_applicability_pending", table_name="evidence_items"
+        )
+    existing_cols = {c["name"] for c in inspector.get_columns("evidence_items")}
+    if "applicability" in existing_cols:
+        op.drop_column("evidence_items", "applicability")
+
