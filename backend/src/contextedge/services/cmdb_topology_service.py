@@ -146,6 +146,17 @@ async def cache_neighborhood(
     for sid in sorted(all_sys_ids):
         detail = details.get(sid, {})
         ci_class = _display(detail.get("sys_class_name")) or ""
+        # C2: criticality + owning group ride into entity attributes and
+        # from there into the agent projection — blast radius without
+        # criticality cannot be prioritized, and remediation risk on a
+        # Tier-1 CI cannot be assessed.
+        attributes = {"ci_class": ci_class} if ci_class else {}
+        criticality = _display(detail.get("busines_criticality"))
+        if criticality:
+            attributes["criticality"] = criticality
+        support_group = _display(detail.get("support_group.name"))
+        if support_group:
+            attributes["support_group"] = support_group
         entities_by_sys_id[sid] = await _ensure_entity(
             db,
             tenant_id,
@@ -154,7 +165,7 @@ async def cache_neighborhood(
                 name=_display(detail.get("name")) or sid,
                 entity_type=CI_CLASS_ENTITY_TYPES.get(ci_class, "configuration_item"),
                 edge_type="",
-                attributes={"ci_class": ci_class} if ci_class else {},
+                attributes=attributes,
                 traits=extract_ci_traits(detail, prefix=""),
             ),
         )

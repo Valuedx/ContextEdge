@@ -145,6 +145,17 @@ MAF_RELATIONSHIP_TYPES = frozenset(
         "remediated_by_change",
         "child_of_incident",
         "preceded_incident",
+        # CI<->CI topology cached from cmdb_rel_ci by
+        # cmdb_topology_service (roadmap C1) — the blast-radius walk
+        # (incident -> CI -> dependent CIs -> their incidents/changes).
+        # related_to (the unmapped catch-all) stays excluded: unknown
+        # semantics with hub fan-out is exactly what budget dies on.
+        "depends_on",
+        "runs_on",
+        "hosted_on",
+        "contains",
+        "uses",
+        "connected_to",
         "derived_from",
         "contradicts",
         "aggregated_by",

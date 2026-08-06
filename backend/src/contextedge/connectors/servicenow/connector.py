@@ -541,7 +541,12 @@ class ServiceNowConnector(BaseConnector):
                     # B2 traits. os/os_version exist only on computer
                     # subclasses — ServiceNow returns them empty for
                     # other classes, which lands as absent traits.
-                    "manufacturer.name,model_id.name,os,os_version"
+                    # busines_criticality [sic — ServiceNow's own field
+                    # spelling] + support_group feed the C2 criticality/
+                    # owner facts; absent on a class -> absent, never
+                    # guessed.
+                    "manufacturer.name,model_id.name,os,os_version,"
+                    "busines_criticality,support_group.name"
                 ),
                 "sysparm_limit": "200",
             },

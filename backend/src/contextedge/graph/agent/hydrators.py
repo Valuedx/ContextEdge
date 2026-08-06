@@ -482,6 +482,14 @@ def hydrate_node(node_type: str, obj: Any) -> HydratedGraphNode:
             "is_active",
             "last_synced_at",
         )
+        # C2: criticality / owning group / CI class live in the JSONB
+        # attributes (written by CMDB topology caching and reference
+        # enrichment). Selected keys only — the raw attributes blob is
+        # unbounded and carries snapshot internals the agent must not see.
+        attrs = getattr(obj, "attributes", None) or {}
+        for key in ("criticality", "support_group", "ci_class"):
+            if attrs.get(key):
+                facts[key] = _value(attrs[key])
         confidence = _float(obj.confidence)
     elif node_type == "user":
         label = obj.display_name
