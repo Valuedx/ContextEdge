@@ -52,6 +52,7 @@ const sourceSchema = z.object({
   zoho_org_id: z.string().optional().or(z.literal("")),
   zoho_data_center: z.string().optional().or(z.literal("")),
   zoho_modules: z.string().optional().or(z.literal("")),
+  zoho_ticket_status: z.string().optional().or(z.literal("")),
   zoho_per_department: z.boolean().optional(),
   // SapphireIMS specific fields
   sapphire_base_url: z.string().optional().or(z.literal("")),
@@ -136,6 +137,7 @@ export function AddSourceDialog({ open, onOpenChange }: AddSourceDialogProps) {
       zoho_org_id: "",
       zoho_data_center: "com",
       zoho_modules: "",
+      zoho_ticket_status: "",
       zoho_per_department: false,
       sapphire_base_url: "",
       sapphire_api_key: "",
@@ -313,11 +315,21 @@ export function AddSourceDialog({ open, onOpenChange }: AddSourceDialogProps) {
           .split(",")
           .map((m) => m.trim())
           .filter(Boolean);
+        const ticketStatus = values.zoho_ticket_status?.trim();
 
         payload.auth_type = "oauth2";
         payload.config = {
           ...(modules.length > 0 ? { modules } : {}),
           ...(values.zoho_per_department ? { per_department: true } : {}),
+          ...(ticketStatus
+            ? {
+                module_filters: {
+                  tickets: {
+                    status: ticketStatus,
+                  },
+                },
+              }
+            : {}),
         };
         payload.credentials = {
           client_id: clientId,
@@ -757,6 +769,18 @@ export function AddSourceDialog({ open, onOpenChange }: AddSourceDialogProps) {
                   />
                   <p className="text-xs text-muted-foreground">
                     Leave empty to sync every module the token can read.
+                  </p>
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="zoho_ticket_status">Ticket Status Filter (optional)</Label>
+                  <Input
+                    id="zoho_ticket_status"
+                    placeholder="e.g. Closed"
+                    {...register("zoho_ticket_status")}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Filter tickets by status (e.g., <code>Closed</code>). Leave empty to sync all ticket statuses.
                   </p>
                 </div>
 
