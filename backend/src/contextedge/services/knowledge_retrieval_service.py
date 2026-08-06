@@ -464,7 +464,14 @@ async def persist_knowledge_links(
                 "evidence",
                 document.evidence_id,
                 "supported_by",
+                # Both, deliberately: similarity IS the belief in this
+                # relationship (confidence), and a better-matched document
+                # should also matter more in traversal (weight). Setting only
+                # weight — as the first version of this code did — was the
+                # exact weight-as-confidence conflation the graph review
+                # flagged across writers.
                 weight=round(similarity, 4),
+                confidence=round(similarity, 4),
                 metadata={
                     "source": "knowledge_retrieval",
                     "evidence_type": document.evidence_type,

@@ -56,7 +56,18 @@ async def ensure_edge(
     weight: float = 1.0,
     metadata: dict | None = None,
     domain_id: uuid.UUID | None = None,
+    confidence: float | None = None,
 ) -> GraphEdge:
+    """Idempotently ensure an active edge exists.
+
+    ``weight`` is traversal importance; ``confidence`` is belief in the
+    relationship. The schema has carried both since the start, but this
+    helper accepted only ``weight`` — so every writer that had a
+    confidence-like value (identity resolution, similarity scores, fix
+    validation) pushed it through ``weight`` and the distinction the schema
+    encodes was lost at the door. Callers should pass both when they mean
+    both.
+    """
     q = select(GraphEdge).where(
         GraphEdge.tenant_id == tenant_id,
         GraphEdge.source_node_type == source_type,
@@ -89,6 +100,7 @@ async def ensure_edge(
             target_node_id=target_id,
             edge_type=edge_type,
             weight=weight,
+            confidence=confidence,
             metadata_extra=metadata,
             valid_from=datetime.now(UTC),
         )

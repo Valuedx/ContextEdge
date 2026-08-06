@@ -49,6 +49,16 @@ ENTITY_TYPES = (
     # cmdb_ci rows whose class has no richer mapping, and the owning team.
     "configuration_item",
     "assignment_group",
+    # Zoho Desk reference enrichment (zoho_desk_reference_service): the
+    # customer account a ticket belongs to, the KB category an article
+    # documents, and ticket tags. These were being WRITTEN without being
+    # registered here — the exact ontology drift this tuple exists to
+    # prevent, caught by an external review and now pinned by
+    # test_entity_type_registry.py, which fails the moment any reference
+    # service writes a type this registry does not know.
+    "customer_account",
+    "knowledge_category",
+    "topic",
 )
 
 

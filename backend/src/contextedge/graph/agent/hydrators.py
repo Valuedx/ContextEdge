@@ -344,12 +344,20 @@ def hydrate_node(node_type: str, obj: Any) -> HydratedGraphNode:
     elif node_type == "execution_run":
         label = f"Execution {str(obj.id)[:8]}"
         summary = _text(obj.outcome_summary)
+        # verification_status / verified_at included: an agent weighing a past
+        # execution needs to know whether the fix actually HELD — "completed"
+        # and "completed, then verified stable" are different precedents, and
+        # omitting the verification fields collapsed them. The JSONB
+        # verification_details stays out of the projection (unbounded);
+        # the status and timestamp are the decision-relevant part.
         facts = _facts(
             obj,
             "status",
             "automation_mode",
             "max_safety_class",
             "outcome",
+            "verification_status",
+            "verified_at",
             "started_at",
             "completed_at",
         )

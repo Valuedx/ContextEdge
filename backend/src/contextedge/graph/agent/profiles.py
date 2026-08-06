@@ -110,6 +110,16 @@ MAF_RELATIONSHIP_TYPES = frozenset(
         "applies_to",
         "belongs_to",
         "affects",
+        # Written by every ticket connector's reference enrichment
+        # (evidence -> configuration_item / assignment_group) and previously
+        # invisible here: an agent could receive a CI entity as a seed and
+        # never discover which incidents affected it or which team owns it —
+        # the graph knew, the projection didn't. mentions_identity stays
+        # deliberately EXCLUDED: it fans out at 40-70 edges per handful of
+        # tickets (measured), and identity hubs would eat the budget that
+        # affects_ci spends on topology an agent can actually reason over.
+        "affects_ci",
+        "assigned_to_group",
         "derived_from",
         "contradicts",
         "aggregated_by",
