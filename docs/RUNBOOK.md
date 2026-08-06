@@ -248,6 +248,36 @@ Worker queues currently used:
 - `pattern`
 - `evaluation` (also handles contradiction scans)
 
+### Worker topology (Windows)
+
+Run **two** workers with different pools, plus exactly one beat:
+
+```powershell
+# Worker A — the parallel one. Ticket processing is ~95% waiting on the LLM,
+# so a threads pool gives near-linear speedup. Prefork is not usable on Windows.
+python -m celery -A contextedge.workers.celery_app worker -l INFO -n workerA@%h -Q extraction,hydration,default -P threads -c 8
+
+# Worker B — the serialized one. Clustering and playbook generation operate on
+# the whole graph and have no advisory lock (unlike sync), so two concurrent
+# runs could mint duplicate patterns. Solo costs nothing here — these tasks are rare.
+python -m celery -A contextedge.workers.celery_app worker -l INFO -n workerB@%h -Q sync,pattern,evaluation -P solo
+
+# Beat — ONE instance only. A second beat double-dispatches every scheduled task.
+python -m celery -A contextedge.workers.celery_app beat -l INFO
+```
+
+Via the launcher (`dev.py` defers to a caller-supplied `-P`/`-Q`):
+
+```powershell
+python dev.py worker -Q extraction,hydration,default -P threads -c 8   # Worker A
+python dev.py worker -Q sync,pattern,evaluation                        # Worker B (solo default)
+python dev.py beat
+```
+
+Why this split is safe: every task runs `asyncio.run` with its own fresh NullPool engine (`workers/asyncio_runner.py`) — no loop or connection is shared across threads; syncs take a per-source Postgres advisory lock (`acquire_sync_lock`) so concurrent workers skip rather than race a checkpoint; `task_acks_late=True` re-delivers a crashed thread's task.
+
+Limits to respect before raising `-c`: 8 concurrent Gemini calls ≈ 60–120 requests/min against the Vertex quota, and concurrent hydration hits the source connector's rate limits (move `hydration` to Worker B if Zoho starts returning 429s). NullPool means each running task holds its own DB connections (~2–3 × `-c` total).
+
 Celery beat scheduled tasks:
 
 | Task | Frequency | Queue |

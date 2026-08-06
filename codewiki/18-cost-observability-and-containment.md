@@ -35,6 +35,16 @@ Four ceilings, all in `config.py`, all overridable via env (documented in `.env.
 
 6. **Vision goes through the same gate** — `llm_complete(images=...)` is a parameter, not a separate client, precisely so the most expensive call type cannot bypass budget, recording, breaker, or clamp.
 
+### Thinking budgets: why only `relevance` is capped
+
+`llm_thinking_budgets` (config.py, keyed by prompt name) can cap Gemini's reasoning tokens per prompt. It ships configured for exactly one prompt — `relevance: 0` — and live A/B runs (2026-08-06, real tickets from the dev graph) confirmed that stopping there is correct, not cautious:
+
+- **`episode` at 1024**: thinking dropped 2,601 → 784 on multi-evidence reconstruct chunks, but the *segmentation changed* — the same 20-evidence group produced 1 episode dynamically and 2 episodes capped, and step counts doubled on another group. A cap that redraws episode boundaries is a quality change, not a cost change.
+- **`identity` at 1024**: extracted entity sets were identical (good), but typical tickets only think ~590 tokens dynamically — the cap never binds where the volume is, and the heavy calls where it would bind are exactly the untested ones.
+- **`identity_adjudication` / `identity_reconciliation` / `message_function`**: confidence-threshold-coupled (`AUTO_LINK_THRESHOLDS` 0.95, reconciliation `MIN_CONFIDENCE` 0.95, `CLASSIFIER_TRUST_FLOOR`). A measured run showed capping adjudication moved confidence 0.95 → 0.80 at unchanged verdicts — capping silently converts auto-links into review-queue items unless thresholds are re-tuned in the same change (see `test_thinking_budget.py`).
+
+Also measured: Vertex per-call latency varies 3–4× at identical token counts, so thinking caps are a **cost** lever, not a latency lever. Per-ticket latency comes from worker concurrency (RUNBOOK), not from trimming reasoning.
+
 ### What batching is and is not for
 
 Batch APIs (~50% discount, minutes-to-hours latency) fit the **ingestion pipeline** — classification, extraction, pattern synthesis, playbook generation, embeddings, eval runs — where nobody is waiting. They do not fit the serving path. Adopting them means restructuring Celery tasks around submit-then-poll and is scoped as its own piece of work.

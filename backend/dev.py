@@ -106,7 +106,18 @@ def main() -> int:
             "INFO",
             "-Q",
             DEFAULT_QUEUES,
-            *(["-P", "solo"] if os.name == "nt" else []),
+            # Windows default; skipped when the caller picks a pool (threads
+            # works fine on Windows for I/O-bound queues — see RUNBOOK
+            # "Worker topology"). Prefork remains unusable on Windows.
+            *(
+                ["-P", "solo"]
+                if os.name == "nt"
+                and not any(
+                    a in ("-P", "--pool") or a.startswith("--pool=")
+                    for a in extra_args
+                )
+                else []
+            ),
             *extra_args,
         ],
         "beat": [
