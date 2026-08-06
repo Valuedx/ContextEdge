@@ -1,6 +1,6 @@
 # Incident-diagnosis roadmap: evolving the context graph from memory to diagnostic instrument
 
-**Status:** proposed — design discussion of 2026-08-06/07, grounded in measurements against the live dev graph.
+**Status:** implemented 2026-08-07 (commits `8142ad1`..`55d361e`, one per item, each with its measurements in the commit message). Notable outcomes: the F4 thread flipped to operational at 0.95 with a faithful summary (A1/A2); 17 error signatures with 5 day-one recurrence hits (D1); signature-first entry validated live end-to-end (D2); 36 change records ingested (B1); the browser-upgrade change class caught by inventory diff (B3); a threads-pool event-loop lock bug found and fixed by the A3 sweep. Two negative results recorded and enforced by tests: claims-in-the-gate-call failed label stability 4/8, so relevance v3 is registered but NOT default (A4 ships dormant); thinking-budget caps remain relevance-only. Remaining follow-ups live in KNOWN_GAPS.
 **Scope:** what to add or change in the graph, ingestion, and `maf.v1` projection so a MAF agent can *diagnose and resolve incidents*, not just recall similar ones.
 **Companion docs:** [09-graph-and-correlation](09-graph-and-correlation.md), [docs/08_Context_Graph](../docs/08_Context_Graph.md), [18-cost-observability-and-containment](18-cost-observability-and-containment.md), [KNOWN_GAPS](KNOWN_GAPS.md).
 
