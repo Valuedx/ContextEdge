@@ -318,6 +318,14 @@ class ZohoDeskConnector(BaseConnector):
             self.max_pages = max(1, int(config.get("max_pages", DEFAULT_MAX_PAGES)))
         except (TypeError, ValueError):
             self.max_pages = DEFAULT_MAX_PAGES
+        try:
+            self.max_days = int(config.get("max_days")) if config.get("max_days") is not None else None
+        except (TypeError, ValueError):
+            self.max_days = None
+        try:
+            self.max_records = int(config.get("max_records")) if config.get("max_records") is not None else None
+        except (TypeError, ValueError):
+            self.max_records = None
         self.type_kind_map = {
             str(k).strip().lower(): str(v)
             for k, v in {
@@ -829,6 +837,10 @@ class ZohoDeskConnector(BaseConnector):
                     reached_checkpoint = True
                     break
                 collected.append(row)
+                if self.max_records is not None and len(collected) >= self.max_records:
+                    collected = collected[:self.max_records]
+                    reached_checkpoint = True
+                    break
 
             offset += len(rows)
             if reached_checkpoint or len(rows) < PAGE_SIZE:
@@ -930,6 +942,11 @@ class ZohoDeskConnector(BaseConnector):
             raise ValueError(f"Unknown Zoho Desk module: {module}")
 
         stop_at_time, stop_at_ids = _read_checkpoint(checkpoint.data)
+        older_than_start = (
+            datetime.now(UTC) - timedelta(days=self.max_days)
+            if self.max_days is not None and self.max_days > 0
+            else None
+        )
 
         rows, max_time, ids_at_max, _hit_budget, _offset = await self._walk_desc(
             module,
@@ -937,7 +954,7 @@ class ZohoDeskConnector(BaseConnector):
             stop_at_time=stop_at_time,
             stop_at_ids=stop_at_ids,
             newer_than_end=None,
-            older_than_start=None,
+            older_than_start=older_than_start,
         )
         rows = await self._hydrate_rows(module, rows)
         events = [self._event(module, row, department_id) for row in rows]

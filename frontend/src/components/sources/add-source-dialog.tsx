@@ -53,6 +53,8 @@ const sourceSchema = z.object({
   zoho_data_center: z.string().optional().or(z.literal("")),
   zoho_modules: z.string().optional().or(z.literal("")),
   zoho_ticket_status: z.string().optional().or(z.literal("")),
+  zoho_max_days: z.string().optional().or(z.literal("")),
+  zoho_max_records: z.string().optional().or(z.literal("")),
   zoho_per_department: z.boolean().optional(),
   // SapphireIMS specific fields
   sapphire_base_url: z.string().optional().or(z.literal("")),
@@ -138,6 +140,8 @@ export function AddSourceDialog({ open, onOpenChange }: AddSourceDialogProps) {
       zoho_data_center: "com",
       zoho_modules: "",
       zoho_ticket_status: "",
+      zoho_max_days: "",
+      zoho_max_records: "",
       zoho_per_department: false,
       sapphire_base_url: "",
       sapphire_api_key: "",
@@ -316,11 +320,15 @@ export function AddSourceDialog({ open, onOpenChange }: AddSourceDialogProps) {
           .map((m) => m.trim())
           .filter(Boolean);
         const ticketStatus = values.zoho_ticket_status?.trim();
+        const maxDays = values.zoho_max_days?.trim() ? Number.parseInt(values.zoho_max_days.trim(), 10) : undefined;
+        const maxRecords = values.zoho_max_records?.trim() ? Number.parseInt(values.zoho_max_records.trim(), 10) : undefined;
 
         payload.auth_type = "oauth2";
         payload.config = {
           ...(modules.length > 0 ? { modules } : {}),
           ...(values.zoho_per_department ? { per_department: true } : {}),
+          ...(maxDays && !Number.isNaN(maxDays) ? { max_days: maxDays } : {}),
+          ...(maxRecords && !Number.isNaN(maxRecords) ? { max_records: maxRecords } : {}),
           ...(ticketStatus
             ? {
                 module_filters: {
@@ -782,6 +790,34 @@ export function AddSourceDialog({ open, onOpenChange }: AddSourceDialogProps) {
                   <p className="text-xs text-muted-foreground">
                     Filter tickets by status (e.g., <code>Closed</code>). Leave empty to sync all ticket statuses.
                   </p>
+                </div>
+
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <div className="space-y-2">
+                    <Label htmlFor="zoho_max_days">Max Age in Days (optional)</Label>
+                    <Input
+                      id="zoho_max_days"
+                      type="number"
+                      placeholder="e.g. 30"
+                      {...register("zoho_max_days")}
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Only sync tickets modified within the last X days.
+                    </p>
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label htmlFor="zoho_max_records">Max Record Count (optional)</Label>
+                    <Input
+                      id="zoho_max_records"
+                      type="number"
+                      placeholder="e.g. 500"
+                      {...register("zoho_max_records")}
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Limit total count of tickets to fetch per sync.
+                    </p>
+                  </div>
                 </div>
 
                 <div className="flex items-start gap-2">
