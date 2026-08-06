@@ -442,7 +442,23 @@ async def _normalize(db: AsyncSession, raw_object_id: str, tenant_id: uuid.UUID)
     # Only populated for evidence types that carry a _thread_id (tickets,
     # email), so conversational sources get their threads hydrated
     # automatically rather than waiting for a manual "Hydrate thread" click.
-    thread_ext_id = (payload or {}).get("_thread_id")
+    #
+    # Only the PARENT record may ask for hydration. Hydration stamps
+    # `_thread_id` onto every message it writes, so keying the dispatch on
+    # "payload carries a thread id" makes each hydrated message re-hydrate
+    # the thread it just came from: 341 rows carry one across 34 threads on
+    # the current graph, a 10x amplification, and 50x on the largest ticket.
+    #
+    # It terminates — the re-fetch finds no new raw objects, so nothing
+    # recurses further — but every redundant pass still costs a /threads
+    # list call, up to THREAD_FETCH_LIMIT detail calls and a /comments call
+    # against an API that answers throttling with EMPTY RESULTS rather than
+    # an error. That is the failure mode that stored 11 of 20 tickets as
+    # empty while reporting success.
+    is_hydrated_message = (
+        (payload or {}).get("_connector_object_type") == "hydrated_message"
+    )
+    thread_ext_id = None if is_hydrated_message else (payload or {}).get("_thread_id")
 
     return {
         "evidence_id": str(ev.id),
