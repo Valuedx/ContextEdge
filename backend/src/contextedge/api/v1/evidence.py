@@ -162,11 +162,13 @@ async def _attach_source_references(db, items: list[EvidenceItem]) -> list:
                     ) AS display_id,
                     COALESCE(
                         t.raw_payload->>'web_url',
+                        t.raw_payload->>'webUrl',
                         t.raw_payload->>'url',
                         t.raw_payload->>'permalink',
                         t.raw_payload->>'link',
                         t.raw_payload->>'portal_url',
                         p.raw_payload->>'web_url',
+                        p.raw_payload->>'webUrl',
                         p.raw_payload->>'url'
                     ) AS url
                 FROM target_objects t
@@ -185,11 +187,16 @@ async def _attach_source_references(db, items: list[EvidenceItem]) -> list:
         if row is None:
             continue
         url = row.url if (row.url or "").startswith(("http://", "https://")) else None
+        source_type = getattr(item, "source_type", None)
+        if not url and source_type == "zoho_desk" and row.external_id:
+            raw_ext = str(row.external_id)
+            clean_id = raw_ext.split(":")[1] if raw_ext.startswith("zoho_ticket:") else raw_ext
+            url = f"https://support.automationedge.com/support/automationedge/ShowHomePage.do#Cases/dv/{clean_id}"
         item.source_reference = SourceReference(
             external_id=row.external_id,
             display_id=row.display_id or row.external_id,
             url=url,
-            source_type=getattr(item, "source_type", None),
+            source_type=source_type,
         )
     return items
 

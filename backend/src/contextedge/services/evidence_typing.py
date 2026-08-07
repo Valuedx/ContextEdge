@@ -174,7 +174,7 @@ _DISPLAY_ID_KEYS = (
 )
 
 # And the deep link back into the source system.
-_URL_KEYS = ("web_url", "url", "permalink", "link", "portal_url", "href")
+_URL_KEYS = ("web_url", "webUrl", "url", "permalink", "link", "portal_url", "href")
 
 
 def source_reference_from_payload(
