@@ -99,6 +99,86 @@ class ContextGraphTools:
         return subset.model_dump(mode="json")
 
 
+class CohortTools:
+    def __init__(self, client: Any):
+        self.client = client
+
+    @tool(
+        name="get_cohort_shared_attributes",
+        description=(
+            "Cohort analysis: given the evidence UUIDs of a set of similar "
+            "incidents, compute what the affected configuration items share "
+            "(model, OS/version, class, criticality, owning group, "
+            "environment). A shared attribute localizes the cause to that "
+            "layer. Empty 'shared' means no attribute covers >=60% of a "
+            "cohort of >=3 CIs — do NOT invent a pattern below that floor."
+        ),
+    )
+    async def get_cohort_shared_attributes(
+        self,
+        evidence_ids: Annotated[
+            list[str],
+            Field(description="Evidence UUIDs of the cohort's incidents (max 200)."),
+        ],
+        context: FunctionInvocationContext | None = None,
+    ) -> dict[str, Any]:
+        del context
+        parsed = []
+        for index, raw in enumerate((evidence_ids or [])[:200]):
+            try:
+                parsed.append(UUID(str(raw)))
+            except ValueError:
+                return {"error": {"code": "invalid_evidence_id",
+                                  "message": f"Item #{index} is not a UUID."}}
+        if not parsed:
+            return {"error": {"code": "empty_cohort", "message": "Provide evidence UUIDs."}}
+        try:
+            return await self.client.shared_attributes(parsed)
+        except Exception as exc:
+            return {"error": {"code": "cohort_unavailable",
+                              "message": f"Cohort analysis failed ({type(exc).__name__})."}}
+
+
+class EdgeProposalTools:
+    def __init__(self, client: Any):
+        self.client = client
+
+    @tool(
+        name="propose_dependency",
+        description=(
+            "Record a dependency you DISCOVERED during this investigation "
+            "(e.g. 'OrderHub actually calls the pricing API') as a "
+            "reviewable proposal in the context graph. The proposal cites "
+            "your evidence and does NOT become authored topology until a "
+            "human reviews it — use only for dependencies confirmed by "
+            "tool-returned evidence, never for guesses."
+        ),
+    )
+    async def propose_dependency(
+        self,
+        source_ci: Annotated[str, Field(description="The CI that depends (name or sys_id).")],
+        target_ci: Annotated[str, Field(description="The CI depended upon (name or sys_id).")],
+        rationale: Annotated[str, Field(description="One sentence: the evidence for this dependency.")],
+        evidence_ids: Annotated[
+            list[str] | None,
+            Field(description="Evidence UUIDs supporting the discovery (max 10)."),
+        ] = None,
+        context: FunctionInvocationContext | None = None,
+    ) -> dict[str, Any]:
+        del context
+        src = " ".join(str(source_ci or "").split())[:500]
+        dst = " ".join(str(target_ci or "").split())[:500]
+        if not src or not dst:
+            return {"error": {"code": "invalid_ci", "message": "Provide both CI names."}}
+        try:
+            return await self.client.propose(
+                src, dst, str(rationale or "")[:500], list(evidence_ids or [])[:10]
+            )
+        except Exception as exc:
+            return {"error": {"code": "proposal_failed",
+                              "message": f"Dependency proposal failed ({type(exc).__name__})."}}
+
+
 class CmdbTopologyTools:
     def __init__(self, client: CmdbTopologyClient):
         self.client = client

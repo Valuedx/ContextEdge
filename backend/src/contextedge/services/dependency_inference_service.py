@@ -95,4 +95,56 @@ async def infer_co_failure_edges(db, tenant_id: uuid.UUID) -> dict:
     logger.info(
         "dependency_inference.swept", tenant_id=str(tenant_id), **counts
     )
+    counts["monitored_cis"] = await index_monitoring_sources(db, tenant_id)
     return counts
+
+
+# Alert-shaped evidence types whose affects_ci link tells us "this CI
+# has coverage from that source" — the blueprint's telemetry index
+# (layer 5), derived from data already ingested. Stored as an entity
+# ATTRIBUTE rather than edges to a monitoring-source node: a source
+# node would be a hub with every covered CI one hop away, exactly the
+# fan-out shape the projection budget dies on.
+_ALERT_EVIDENCE_TYPES = ("alert", "alert_rollup", "em_alert", "splunk_log", "event")
+
+_MONITOR_SQL = text(
+    """
+    SELECT ge.target_node_id AS ci, array_agg(DISTINCT e.source_type) AS sources
+    FROM graph_edges ge
+    JOIN evidence_items e ON e.id = ge.source_node_id
+    WHERE ge.tenant_id = :tenant_id
+      AND ge.edge_type = 'affects_ci'
+      AND ge.valid_to IS NULL
+      AND e.evidence_type = ANY(:alert_types)
+      AND e.source_type IS NOT NULL
+    GROUP BY 1
+    """
+)
+
+
+async def index_monitoring_sources(db, tenant_id: uuid.UUID) -> int:
+    """Stamp each CI's observed monitoring coverage into its attributes
+    (projected as an entity fact), answering "where can I look for
+    telemetry on this CI" without new connectors."""
+    from contextedge.models.entity import Entity
+
+    rows = (
+        await db.execute(
+            _MONITOR_SQL,
+            {"tenant_id": tenant_id, "alert_types": list(_ALERT_EVIDENCE_TYPES)},
+        )
+    ).all()
+    updated = 0
+    for ci_id, sources in rows:
+        entity = await db.get(Entity, ci_id)
+        if entity is None or entity.tenant_id != tenant_id:
+            continue
+        attributes = dict(entity.attributes or {})
+        merged = sorted(set(attributes.get("monitoring_sources") or []) | set(sources))
+        if attributes.get("monitoring_sources") != merged:
+            attributes["monitoring_sources"] = merged
+            entity.attributes = attributes
+            updated += 1
+    if updated:
+        await db.flush()
+    return updated

@@ -172,6 +172,75 @@ class HttpContextGraphClient:
                 await client.aclose()
 
 
+class CohortClient(Protocol):
+    """Port for get_cohort_shared_attributes (blueprint §1.6 #2)."""
+
+    async def shared_attributes(self, evidence_ids: list) -> dict: ...
+
+
+class InProcessCohortClient:
+    def __init__(self, session_factory, tenant_id):
+        self.session_factory = session_factory
+        self.tenant_id = tenant_id
+
+    async def shared_attributes(self, evidence_ids: list) -> dict:
+        from contextedge.services.cohort_service import get_cohort_shared_attributes
+
+        async with self.session_factory() as db:
+            # Read-only — nothing to commit.
+            return await get_cohort_shared_attributes(db, self.tenant_id, evidence_ids)
+
+
+class EdgeProposalClient(Protocol):
+    """Port for propose_dependency: agent-discovered topology enters as
+    a REVIEWABLE proposal (proposed_depends_on, not in the maf.v1
+    allowlist), never as authored fact."""
+
+    async def propose(self, source_ci: str, target_ci: str, rationale: str, evidence_ids: list) -> dict: ...
+
+
+class InProcessEdgeProposalClient:
+    def __init__(self, session_factory, tenant_id):
+        self.session_factory = session_factory
+        self.tenant_id = tenant_id
+
+    async def propose(self, source_ci: str, target_ci: str, rationale: str, evidence_ids: list) -> dict:
+        from contextedge.graph.builder import ensure_edge
+        from contextedge.services.cmdb_topology_service import resolve_ci_entity
+
+        async with self.session_factory() as db:
+            try:
+                src = await resolve_ci_entity(db, self.tenant_id, source_ci)
+                dst = await resolve_ci_entity(db, self.tenant_id, target_ci)
+                if src is None or dst is None:
+                    missing = source_ci if src is None else target_ci
+                    return {"error": {"code": "ci_not_found", "message": f"No CI matches {missing!r}."}}
+                if src.id == dst.id:
+                    return {"error": {"code": "self_edge", "message": "A CI cannot depend on itself."}}
+                edge = await ensure_edge(
+                    db,
+                    self.tenant_id,
+                    source_type="entity",
+                    source_id=src.id,
+                    target_type="entity",
+                    target_id=dst.id,
+                    edge_type="proposed_depends_on",
+                    weight=1.0,
+                    confidence=0.3,
+                    metadata={
+                        "origin": "agent_discovered",
+                        "rationale": str(rationale)[:500],
+                        "evidence_ids": [str(e) for e in evidence_ids[:10]],
+                    },
+                )
+                await db.commit()
+                return {"status": "proposed", "edge_id": str(edge.id),
+                        "source": src.name, "target": dst.name}
+            except Exception:
+                await db.rollback()
+                raise
+
+
 class DecisionWritebackClient(Protocol):
     """Port for F1 agent decision write-back: the MAF agent's diagnostic
     trail flows back into ContextEdge through the SAME decisions path
