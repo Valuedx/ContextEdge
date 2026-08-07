@@ -1,7 +1,7 @@
 import uuid
 
 import structlog
-from sqlalchemy import select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import selectinload
 
 from contextedge.ai.extractors.pattern_extractor import (
