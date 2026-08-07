@@ -36,7 +36,10 @@ Start with the system architecture, then follow the numbered deep dives:
 | [00-business-capability-map.md](./00-business-capability-map.md) | Business-first map of personas, outcomes, and product capabilities |
 | [CHUNKING_DESIGN.md](./CHUNKING_DESIGN.md) | Evidence chunking pipeline (`0030`): sibling-table design, per-source chunker strategy, search-rollup plan, backfill, redaction interaction |
 | [EDITORIAL-GUIDE.md](./EDITORIAL-GUIDE.md) | Voice, template, vocabulary, example format, and the Acme VPN scenario |
+| [BLUEPRINT_ALIGNMENT.md](./BLUEPRINT_ALIGNMENT.md) | Incident Intelligence Blueprint vs ContextEdge: seven-layer verdict table, what was built in response, remaining connector-shaped gaps |
+| [E2E_EXPERIMENT_STORY.md](./E2E_EXPERIMENT_STORY.md) | The 84-ticket isolated pipeline run told as a story: what broke, what it cost ($12.63), and what each observation changed |
 | [INCIDENT_DIAGNOSIS_ROADMAP.md](./INCIDENT_DIAGNOSIS_ROADMAP.md) | Measured gaps and sequenced plan for making the graph a diagnostic instrument: granularity, change/event awareness, topology, signature-first entry, remediation trust, agent write-back |
+| [LESSONS_LEARNED.md](./LESSONS_LEARNED.md) | Ten plain-English lessons from the build-measure-break cycle: measure first, concurrency bugs, head-truncation, guardrails, fast lanes, cold-start economics |
 | [KNOWN_GAPS.md](./KNOWN_GAPS.md) | Implementation caveats, UI gaps, and operational footnotes |
 | [PLAN.md](./PLAN.md) | Scope table, cross-links, maintenance, and article ordering |
 | [ZOHO_DESK_CONNECTOR.md](./ZOHO_DESK_CONNECTOR.md) | Zoho Desk connector: tickets + KB articles, the live-verified API findings, and why its sync strategy differs from ServiceNow's |
