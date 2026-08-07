@@ -223,8 +223,7 @@ async def create_episodes_from_evidence(
                             tenant_id=tenant_id,
                             episode_id=existing_ep.id,
                             evidence_id=evidence_id,
-                            link_reason=why or "evidence_merged",
-                            membership_source=membership_source,
+                            link_reason=why or membership_source or "evidence_merged",
                         )
                     )
             created_episodes.append(existing_ep)

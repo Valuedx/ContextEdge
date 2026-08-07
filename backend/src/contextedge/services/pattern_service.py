@@ -243,7 +243,7 @@ async def deduplicate_evidence_items(db: AsyncSession, tenant_id: uuid.UUID) -> 
     group_stmt = text("""
         SELECT title, evidence_type, COUNT(*)
         FROM evidence_items
-        WHERE tenant_id = :tenant_id AND title IS NOT NULL
+        WHERE tenant_id = :tenant_id AND title IS NOT NULL AND evidence_type != 'thread_message'
         GROUP BY title, evidence_type
         HAVING COUNT(*) > 1
     """)

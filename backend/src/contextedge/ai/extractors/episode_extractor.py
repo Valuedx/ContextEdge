@@ -63,7 +63,13 @@ def _format_evidence_block(evidence_items: list[dict]) -> str:
             out += f"Time: {item['timestamp']}\n"
         if item.get("title"):
             out += f"Title: {item['title']}\n"
-        out += f"Content: {salient_slice(item.get('body', '') or '', PER_ITEM_CHAR_LIMIT)}\n"
+        content_val = (
+            item.get("body")
+            or item.get("body_text")
+            or item.get("body_summary")
+            or ""
+        )
+        out += f"Content: {salient_slice(content_val, PER_ITEM_CHAR_LIMIT)}\n"
     return out
 
 

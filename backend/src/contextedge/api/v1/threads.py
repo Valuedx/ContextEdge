@@ -32,12 +32,25 @@ async def list_threads(
 
 @router.get("/{thread_id}", response_model=ThreadResponse)
 async def get_thread(thread_id: UUID, db: DbSession, user: AuthUser):
+    from sqlalchemy import func
     result = await db.execute(
         select(Thread).where(Thread.id == thread_id, Thread.tenant_id == user.tenant_id)
     )
     thread = result.scalar_one_or_none()
     if not thread:
         raise HTTPException(status_code=404, detail="Thread not found")
+
+    count_res = await db.execute(
+        select(func.count()).select_from(EvidenceItem).where(
+            EvidenceItem.thread_id == thread_id,
+            EvidenceItem.tenant_id == user.tenant_id,
+        )
+    )
+    actual_count = count_res.scalar_one()
+    if actual_count > 0:
+        thread.message_count = actual_count
+        thread.hydration_status = "complete"
+
     return thread
 
 
