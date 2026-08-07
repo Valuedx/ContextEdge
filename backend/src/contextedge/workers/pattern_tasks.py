@@ -294,12 +294,24 @@ async def _cluster(db, tid: uuid.UUID, did: uuid.UUID | None) -> dict:
 
                 # Call AI to synthesize pattern from the cluster
                 synthesis = await synthesize_pattern(ep_data, tenant_id=tid, db=db)
+                syn_title = synthesis.get("title") or f"Synthesized: {cluster[0].title[:50]}"
+                syn_title_lower = syn_title.strip().lower()
+
+                # Gate: skip persisting if LLM determined there is no operational incident/pattern
+                if any(p in syn_title_lower for p in ["no incident", "no pattern", "no operational pattern", "no recurring pattern"]):
+                    logger.info(
+                        "pattern_synthesis_rejected_no_incident",
+                        title=syn_title,
+                        episodes=[str(e.id) for e in cluster_with_steps],
+                    )
+                    assigned_ids.update(e.id for e in cluster)
+                    continue
 
                 await create_pattern_from_episodes(
                     db,
                     tenant_id=tid,
                     domain_id=did,
-                    title=synthesis.get("title") or f"Synthesized: {cluster[0].title[:50]}",
+                    title=syn_title,
                     episode_ids=[e.id for e in cluster_with_steps],
                     confidence=float(synthesis.get("confidence") or 0.8),
                     description=synthesis.get("description"),
