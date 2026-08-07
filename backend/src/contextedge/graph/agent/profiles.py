@@ -156,6 +156,11 @@ MAF_RELATIONSHIP_TYPES = frozenset(
         "contains",
         "uses",
         "connected_to",
+        # Inferred, symmetric, deliberately weaker than authored
+        # topology: co-occurrence across >=3 distinct cases
+        # (dependency_inference_service). Carries shared_cases metadata
+        # so the agent can weigh the inference.
+        "co_fails_with",
         "derived_from",
         "contradicts",
         "aggregated_by",
@@ -201,6 +206,7 @@ MAF_V1 = AgentGraphProjectionProfile(
         "caused_by_change": 1.2,
     },
     relationship_metadata={
+        "co_fails_with": frozenset({"shared_cases", "origin"}),
         "approved_by": frozenset({"status"}),
         "denied_by": frozenset({"status", "reason_code"}),
         "modified_by": frozenset({"status", "reason_code"}),

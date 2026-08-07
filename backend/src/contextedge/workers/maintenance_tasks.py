@@ -43,6 +43,31 @@ MAX_BATCH = 500
     bind=True,
     max_retries=1,
     default_retry_delay=60,
+    name="maintenance.infer_ci_relatedness",
+)
+def infer_ci_relatedness_task(self, tenant_id: str):
+    """Blueprint §1.5 dependency auto-construction: co-occurring CI
+    pairs (>=3 shared canonical cases) gain symmetric co_fails_with
+    edges. Idempotent; re-runs refresh confidence in place."""
+    tid = uuid.UUID(tenant_id)
+
+    async def work(db):
+        from contextedge.services.dependency_inference_service import (
+            infer_co_failure_edges,
+        )
+
+        return await infer_co_failure_edges(db, tid)
+
+    try:
+        return run_async(work)
+    except Exception as exc:
+        raise self.retry(exc=exc) from exc
+
+
+@celery_app.task(
+    bind=True,
+    max_retries=1,
+    default_retry_delay=60,
     name="maintenance.reclassify_stale_evidence",
 )
 def reclassify_stale_evidence_task(
