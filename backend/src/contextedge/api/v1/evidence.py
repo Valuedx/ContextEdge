@@ -138,25 +138,41 @@ async def _attach_source_references(db, items: list[EvidenceItem]) -> list:
         await db.execute(
             text(
                 """
-                select id,
-                       external_id,
-                       coalesce(
-                           nullif(raw_payload->>'ticket_number', ''),
-                           nullif(raw_payload->>'number', ''),
-                           nullif(raw_payload->>'display_id', ''),
-                           nullif(raw_payload->>'record_number', ''),
-                           nullif(raw_payload->>'key', ''),
-                           nullif(raw_payload->>'incident_number', '')
-                       ) as display_id,
-                       coalesce(
-                           raw_payload->>'web_url',
-                           raw_payload->>'url',
-                           raw_payload->>'permalink',
-                           raw_payload->>'link',
-                           raw_payload->>'portal_url'
-                       ) as url
-                from raw_evidence_objects
-                where id = any(:ids)
+                WITH target_objects AS (
+                    SELECT id, external_id, raw_payload
+                    FROM raw_evidence_objects
+                    WHERE id = ANY(:ids)
+                )
+                SELECT 
+                    t.id,
+                    t.external_id,
+                    COALESCE(
+                        NULLIF(t.raw_payload->>'ticket_number', ''),
+                        NULLIF(t.raw_payload->>'ticketNumber', ''),
+                        NULLIF(t.raw_payload->>'number', ''),
+                        NULLIF(t.raw_payload->>'display_id', ''),
+                        NULLIF(t.raw_payload->>'record_number', ''),
+                        NULLIF(t.raw_payload->>'key', ''),
+                        NULLIF(t.raw_payload->>'incident_number', ''),
+                        NULLIF(t.raw_payload->>'caseNumber', ''),
+                        NULLIF(t.raw_payload->>'case_number', ''),
+                        NULLIF(p.raw_payload->>'ticket_number', ''),
+                        NULLIF(p.raw_payload->>'ticketNumber', ''),
+                        NULLIF(p.raw_payload->>'number', '')
+                    ) AS display_id,
+                    COALESCE(
+                        t.raw_payload->>'web_url',
+                        t.raw_payload->>'url',
+                        t.raw_payload->>'permalink',
+                        t.raw_payload->>'link',
+                        t.raw_payload->>'portal_url',
+                        p.raw_payload->>'web_url',
+                        p.raw_payload->>'url'
+                    ) AS url
+                FROM target_objects t
+                LEFT JOIN raw_evidence_objects p ON (
+                    t.external_id LIKE 'zoho_ticket:%:msg:%' AND p.external_id = split_part(t.external_id, ':', 2)
+                )
                 """
             ),
             {"ids": list(raw_refs)},

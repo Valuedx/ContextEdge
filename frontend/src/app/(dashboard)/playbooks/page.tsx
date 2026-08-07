@@ -1,15 +1,17 @@
 "use client";
 
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { usePagination } from "@/lib/hooks/use-pagination";
 import { PaginationControls } from "@/components/common/pagination-controls";
 import { ColumnDef } from "@tanstack/react-table";
-import { Plus } from "lucide-react";
+import { Plus, Search, X } from "lucide-react";
 
 import { PageHeader } from "@/components/common/page-header";
 import { DataTable } from "@/components/common/data-table";
 import { DataTableSkeleton } from "@/components/common/data-table-skeleton";
 import { StatusBadge } from "@/components/common/status-badge";
+import { Input } from "@/components/ui/input";
 import { buttonVariants } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { api } from "@/lib/api";
@@ -58,9 +60,16 @@ const columns: ColumnDef<Playbook>[] = [
 
 export default function PlaybooksPage() {
   const pg = usePagination(50);
+  const [searchQuery, setSearchQuery] = useState("");
+
+  const params: Record<string, string> = { ...pg.params };
+  if (searchQuery.trim()) {
+    params.q = searchQuery.trim();
+  }
+
   const { data = [], isLoading } = useQuery<Playbook[]>({
-    queryKey: ["playbooks", pg.page],
-    queryFn: () => api.get("/playbooks", pg.params),
+    queryKey: ["playbooks", pg.page, searchQuery],
+    queryFn: () => api.get("/playbooks", params),
   });
 
   return (
@@ -75,6 +84,28 @@ export default function PlaybooksPage() {
           </Link>
         }
       />
+
+      {/* Advanced Search Bar */}
+      <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
+        <div className="relative flex-1">
+          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            placeholder="Search playbooks by issue, description, title, or ticket # (e.g. 408801)..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="pl-9 pr-9"
+          />
+          {searchQuery && (
+            <button
+              onClick={() => setSearchQuery("")}
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          )}
+        </div>
+      </div>
+
       {isLoading ? (
         <DataTableSkeleton columns={5} />
       ) : (

@@ -163,11 +163,14 @@ def is_knowledge_evidence(evidence_type: str | None) -> bool:
 # on the ticket, whichever connector produced it.
 _DISPLAY_ID_KEYS = (
     "ticket_number",
+    "ticketNumber",
     "number",
     "display_id",
     "record_number",
     "key",
     "incident_number",
+    "caseNumber",
+    "case_number",
 )
 
 # And the deep link back into the source system.

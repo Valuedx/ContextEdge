@@ -35,6 +35,7 @@ from contextedge.services.playbook_service import (
     transition_playbook,
 )
 from contextedge.services.policy_assignment import assert_policy_assignment
+from contextedge.api.v1.evidence import _attach_source_references
 
 router = APIRouter()
 logger = structlog.get_logger()
@@ -83,24 +84,78 @@ async def list_playbooks(
     user: AuthUser,
     lifecycle_state: str | None = None,
     domain_id: UUID | None = None,
+    q: str | None = None,
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
 ):
-    q = select(Playbook).where(Playbook.tenant_id == user.tenant_id)
+    query_stmt = select(Playbook).where(Playbook.tenant_id == user.tenant_id)
     if lifecycle_state:
-        q = q.where(Playbook.lifecycle_state == lifecycle_state)
+        query_stmt = query_stmt.where(Playbook.lifecycle_state == lifecycle_state)
     if domain_id:
-        q = q.where(Playbook.domain_id == domain_id)
+        query_stmt = query_stmt.where(Playbook.domain_id == domain_id)
+
+    if q and q.strip():
+        query_clean = q.strip().lstrip('#').strip()
+        from sqlalchemy import or_
+        from contextedge.models.playbook import PlaybookEvidenceLink
+        from contextedge.models.pattern import PatternEvidenceLink
+        from contextedge.models.episode import EpisodeEvidenceLink
+        from contextedge.models.evidence import EvidenceItem, RawEvidenceObject
+
+        pb_direct = select(Playbook.id).where(
+            Playbook.tenant_id == user.tenant_id,
+            or_(
+                Playbook.title.ilike(f"%{query_clean}%"),
+                Playbook.description.ilike(f"%{query_clean}%"),
+                Playbook.stable_key.ilike(f"%{query_clean}%"),
+            )
+        )
+
+        raw_ticket_ids = select(RawEvidenceObject.id).where(
+            or_(
+                RawEvidenceObject.raw_payload["ticket_number"].astext.ilike(f"%{query_clean}%"),
+                RawEvidenceObject.raw_payload["ticketNumber"].astext.ilike(f"%{query_clean}%"),
+                RawEvidenceObject.raw_payload["number"].astext.ilike(f"%{query_clean}%"),
+                RawEvidenceObject.raw_payload["display_id"].astext.ilike(f"%{query_clean}%"),
+                RawEvidenceObject.external_id.ilike(f"%{query_clean}%"),
+            )
+        )
+
+        matching_ev_ids = select(EvidenceItem.id).where(
+            EvidenceItem.tenant_id == user.tenant_id,
+            or_(
+                EvidenceItem.title.ilike(f"%{query_clean}%"),
+                EvidenceItem.raw_object_ref.in_(raw_ticket_ids),
+            )
+        )
+
+        pb_via_ver_link = select(PlaybookVersion.playbook_id).join(
+            PlaybookEvidenceLink, PlaybookEvidenceLink.playbook_version_id == PlaybookVersion.id
+        ).where(
+            PlaybookEvidenceLink.evidence_id.in_(matching_ev_ids)
+        )
+
+        matching_ep_ids = select(EpisodeEvidenceLink.episode_id).where(
+            EpisodeEvidenceLink.evidence_id.in_(matching_ev_ids)
+        )
+        matching_pat_ids = select(PatternEvidenceLink.pattern_id).where(
+            PatternEvidenceLink.episode_id.in_(matching_ep_ids)
+        )
+        pb_via_pattern = select(Playbook.id).where(
+            Playbook.pattern_id.in_(matching_pat_ids)
+        )
+
+        query_stmt = query_stmt.where(
+            or_(
+                Playbook.id.in_(pb_direct),
+                Playbook.id.in_(pb_via_ver_link),
+                Playbook.id.in_(pb_via_pattern),
+            )
+        )
+
     if lifecycle_state == "candidate":
-        # The review queue. Ordered by the generator's own confidence rather
-        # than recency, because approval is what makes a playbook visible to
-        # agents — and with 30+ candidates pending, recency ordering buries
-        # the well-grounded ones (confidence 0.9, every step sourced) beneath
-        # whatever was generated last. Reviewing the best first converts the
-        # strongest content into agent-visible content fastest; the hollow
-        # tail can wait, or age out.
-        q = (
-            q.outerjoin(
+        query_stmt = (
+            query_stmt.outerjoin(
                 PlaybookVersion, PlaybookVersion.id == Playbook.current_version_id
             )
             .order_by(
@@ -109,9 +164,10 @@ async def list_playbooks(
             )
         )
     else:
-        q = q.order_by(Playbook.updated_at.desc())
-    q = q.limit(limit).offset(offset)
-    result = await db.execute(q)
+        query_stmt = query_stmt.order_by(Playbook.updated_at.desc())
+
+    query_stmt = query_stmt.limit(limit).offset(offset)
+    result = await db.execute(query_stmt)
     playbooks = list(result.scalars().all())
     if not playbooks:
         return []
@@ -280,33 +336,33 @@ async def get_playbook_references(playbook_id: UUID, db: DbSession, user: AuthUs
                 pass
 
         if ep_uuids:
-            ev_link_res = await db.execute(
-                select(EvidenceItem, RawEvidenceObject.raw_payload)
-                .outerjoin(RawEvidenceObject, RawEvidenceObject.id == EvidenceItem.raw_object_ref)
+            ev_items_res = await db.execute(
+                select(EvidenceItem)
                 .join(EpisodeEvidenceLink, EpisodeEvidenceLink.evidence_id == EvidenceItem.id)
                 .where(
                     EpisodeEvidenceLink.episode_id.in_(ep_uuids),
                     EvidenceItem.tenant_id == user.tenant_id,
                 )
             )
-            seen_ev = set()
-            for row in ev_link_res.all():
-                ev, raw_payload = row[0], row[1]
-                if ev.id not in seen_ev:
-                    seen_ev.add(ev.id)
-                    ref_disp = raw_payload.get("ticket_number") if isinstance(raw_payload, dict) else None
-                    evidence_list.append({
-                        "id": str(ev.id),
-                        "title": ev.title or "Untitled",
-                        "evidence_type": ev.evidence_type,
-                        "source_type": ev.source_type,
-                        "display_id": ref_disp,
-                    })
+            ev_items = list(ev_items_res.scalars().all())
+            if ev_items:
+                await _attach_source_references(db, ev_items)
+                seen_ev = set()
+                for ev in ev_items:
+                    if ev.id not in seen_ev:
+                        seen_ev.add(ev.id)
+                        ref_disp = getattr(ev.source_reference, "display_id", None) if getattr(ev, "source_reference", None) else None
+                        evidence_list.append({
+                            "id": str(ev.id),
+                            "title": ev.title or "Untitled",
+                            "evidence_type": ev.evidence_type,
+                            "source_type": ev.source_type,
+                            "display_id": ref_disp,
+                        })
 
     if not evidence_list:
-        ev_res = await db.execute(
-            select(EvidenceItem, RawEvidenceObject.raw_payload)
-            .outerjoin(RawEvidenceObject, RawEvidenceObject.id == EvidenceItem.raw_object_ref)
+        ev_items_res = await db.execute(
+            select(EvidenceItem)
             .where(
                 EvidenceItem.tenant_id == user.tenant_id,
                 EvidenceItem.evidence_type != "thread_message",
@@ -314,16 +370,18 @@ async def get_playbook_references(playbook_id: UUID, db: DbSession, user: AuthUs
             .order_by(EvidenceItem.created_at_source.desc().nullslast())
             .limit(10)
         )
-        for row in ev_res.all():
-            ev, raw_payload = row[0], row[1]
-            ref_disp = raw_payload.get("ticket_number") if isinstance(raw_payload, dict) else None
-            evidence_list.append({
-                "id": str(ev.id),
-                "title": ev.title or "Untitled",
-                "evidence_type": ev.evidence_type,
-                "source_type": ev.source_type,
-                "display_id": ref_disp,
-            })
+        ev_items = list(ev_items_res.scalars().all())
+        if ev_items:
+            await _attach_source_references(db, ev_items)
+            for ev in ev_items:
+                ref_disp = getattr(ev.source_reference, "display_id", None) if getattr(ev, "source_reference", None) else None
+                evidence_list.append({
+                    "id": str(ev.id),
+                    "title": ev.title or "Untitled",
+                    "evidence_type": ev.evidence_type,
+                    "source_type": ev.source_type,
+                    "display_id": ref_disp,
+                })
 
     return {
         "pattern": pattern_info,

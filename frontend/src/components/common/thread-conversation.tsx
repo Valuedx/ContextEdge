@@ -138,17 +138,22 @@ export function ThreadConversation({
                   <div className="min-w-0 flex-1">
                     <p
                       className={cn(
-                        "truncate text-sm",
-                        isCurrent ? "font-semibold text-slate-100" : "text-slate-200",
+                        "text-sm font-medium",
+                        isCurrent ? "font-semibold text-indigo-300" : "text-slate-200",
                       )}
                     >
                       {message.title || "Untitled message"}
                     </p>
-                    <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-500">
+                    {(message.body_text || message.body_summary) && (
+                      <p className="mt-1.5 text-xs text-slate-300 line-clamp-4 whitespace-pre-wrap bg-slate-950/60 p-2.5 rounded-md border border-slate-800/80 font-sans">
+                        {message.body_text || message.body_summary}
+                      </p>
+                    )}
+                    <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-slate-500">
                       <span>{timeLabel(message)}</span>
                       <StatusBadge status={message.relevance_state} />
                       {isCurrent && (
-                        <span className="text-indigo-400">· viewing</span>
+                        <span className="text-indigo-400 font-semibold">· currently viewing</span>
                       )}
                     </div>
                   </div>

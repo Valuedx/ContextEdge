@@ -105,6 +105,7 @@ async def put_tenant_budget(
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    await db.refresh(budget)
     return _serialise_budget(budget)
 
 

@@ -235,17 +235,80 @@ async def add_episode_to_pattern(
     return pattern
 
 
+async def deduplicate_evidence_items(db: AsyncSession, tenant_id: uuid.UUID) -> int:
+    """Merge duplicate evidence items sharing identical title and evidence_type."""
+    from sqlalchemy import text, delete, func
+    from contextedge.models.evidence import EvidenceItem, RawEvidenceObject
+
+    group_stmt = text("""
+        SELECT title, evidence_type, COUNT(*)
+        FROM evidence_items
+        WHERE tenant_id = :tenant_id AND title IS NOT NULL
+        GROUP BY title, evidence_type
+        HAVING COUNT(*) > 1
+    """)
+    groups = (await db.execute(group_stmt, {"tenant_id": tenant_id})).all()
+
+    merged_evidence_count = 0
+
+    for title, ev_type, _cnt in groups:
+        ev_stmt = (
+            select(EvidenceItem)
+            .where(
+                EvidenceItem.tenant_id == tenant_id,
+                EvidenceItem.title == title,
+                EvidenceItem.evidence_type == ev_type,
+            )
+            .order_by(EvidenceItem.ingested_at.asc())
+        )
+        items = (await db.execute(ev_stmt)).scalars().all()
+        if len(items) <= 1:
+            continue
+
+        canonical = items[0]
+        duplicates = items[1:]
+
+        for dup in duplicates:
+            for query_str in (
+                "UPDATE case_links SET evidence_id = :can_id WHERE evidence_id = :dup_id",
+                "DELETE FROM evidence_identity_links WHERE evidence_id = :dup_id",
+                "UPDATE episode_evidence_links SET evidence_id = :can_id WHERE evidence_id = :dup_id AND episode_id NOT IN (SELECT episode_id FROM episode_evidence_links WHERE evidence_id = :can_id)",
+                "DELETE FROM episode_evidence_links WHERE evidence_id = :dup_id",
+                "UPDATE pattern_evidence_links SET evidence_id = :can_id WHERE evidence_id = :dup_id AND pattern_id NOT IN (SELECT pattern_id FROM pattern_evidence_links WHERE evidence_id = :can_id)",
+                "DELETE FROM pattern_evidence_links WHERE evidence_id = :dup_id",
+                "UPDATE playbook_evidence_links SET evidence_id = :can_id WHERE evidence_id = :dup_id AND playbook_version_id NOT IN (SELECT playbook_version_id FROM playbook_evidence_links WHERE evidence_id = :can_id)",
+                "DELETE FROM playbook_evidence_links WHERE evidence_id = :dup_id",
+            ):
+                try:
+                    await db.execute(text(query_str), {"can_id": canonical.id, "dup_id": dup.id})
+                except Exception:
+                    pass
+
+            await db.execute(delete(EvidenceItem).where(EvidenceItem.id == dup.id))
+
+            if dup.raw_object_ref:
+                ref_cnt = (await db.execute(select(func.count()).select_from(EvidenceItem).where(EvidenceItem.raw_object_ref == dup.raw_object_ref))).scalar_one()
+                if ref_cnt == 0:
+                    await db.execute(delete(RawEvidenceObject).where(RawEvidenceObject.id == dup.raw_object_ref))
+
+            merged_evidence_count += 1
+
+    await db.flush()
+    return merged_evidence_count
+
+
 async def deduplicate_patterns_and_playbooks(
     db: AsyncSession,
     tenant_id: uuid.UUID,
 ) -> dict[str, int]:
-    """Scan and merge duplicate Episodes, Patterns, and Playbooks for a tenant."""
+    """Scan and merge duplicate Evidence Items, Episodes, Patterns, and Playbooks for a tenant."""
     from sqlalchemy import func
     from contextedge.models.pattern import GraphEdge
     from contextedge.models.playbook import Playbook, PlaybookVersion
     from contextedge.services.episode_service import deduplicate_episodes
 
-    # 0. Deduplicate Episodes first
+    # 0. Deduplicate Evidence Items & Episodes first
+    merged_evidence_count = await deduplicate_evidence_items(db, tenant_id)
     merged_episodes_count = await deduplicate_episodes(db, tenant_id)
 
     # 1. Group patterns by normalized title
@@ -423,6 +486,7 @@ async def deduplicate_patterns_and_playbooks(
 
     await db.flush()
     return {
+        "merged_evidence": merged_evidence_count,
         "merged_episodes": merged_episodes_count,
         "merged_patterns": merged_patterns_count,
         "merged_playbooks": merged_playbooks_count,

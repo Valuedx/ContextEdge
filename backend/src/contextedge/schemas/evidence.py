@@ -28,6 +28,7 @@ class EvidenceItemResponse(BaseModel):
     evidence_type: str
     title: str | None
     body_summary: str | None
+    body_text: str | None = None
     relevance_state: str
     relevance_score: float | None
     delta_signal: str | None = None

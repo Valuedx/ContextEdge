@@ -367,5 +367,6 @@ async def upsert_budget(
         existing.daily_cost_cap_usd = cost_value
         existing.action_on_exceed = action_on_exceed
     await db.flush()
+    await db.refresh(existing)
     invalidate_cache(tenant_id)
     return existing
