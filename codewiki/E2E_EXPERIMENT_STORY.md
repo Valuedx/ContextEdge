@@ -62,6 +62,33 @@ identities with 1,029 learned aliases (the dedup flywheel — Lesson 6),
 9 error signatures, 2,101 graph edges. Health: 99.3% LLM call success,
 exactly one rate-limit event at 16-wide concurrency, zero fallbacks.
 
+## Cleaning up after the race (one-time repair)
+
+Any deployment that ran pre-lock code (before `3f76a89`) carries the
+duplicate episodes. The repair is one governed UPDATE — supersede, not
+delete; keep one per fingerprint (approved first, then most evidence,
+then newest):
+
+```sql
+WITH ranked AS (
+    SELECT id, row_number() OVER (
+        PARTITION BY tenant_id, cluster_fingerprint
+        ORDER BY (reviewer_state = 'approved') DESC,
+                 jsonb_array_length(evidence_ids) DESC,
+                 created_at DESC
+    ) AS rn
+    FROM episodes
+    WHERE cluster_fingerprint IS NOT NULL
+      AND reviewer_state NOT IN ('superseded', 'rejected')
+)
+UPDATE episodes e SET reviewer_state = 'superseded'
+FROM ranked r WHERE e.id = r.id AND r.rn > 1;
+```
+
+Run 2026-08-07: production superseded 114 (19 of them duplicate
+*approved* episodes, so projections deduplicated too); the e2e database
+superseded 851 — 84% of its episodes were race duplicates.
+
 ## Why this experiment mattered
 
 Every fix in commit `3f76a89` — the reconstruction lock, the singleton
