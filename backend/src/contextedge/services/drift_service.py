@@ -49,12 +49,24 @@ async def list_drift_alerts(
         if neg_count >= 3:
             issues.append(f"high_negative_feedback_{neg_count}")
 
+        # Check if source pattern had new nodes/episodes added after playbook was generated
+        if pb.pattern_id:
+            from contextedge.models.pattern import Pattern
+
+            pat_res = await db.execute(
+                select(Pattern).where(Pattern.id == pb.pattern_id)
+            )
+            pat = pat_res.scalar_one_or_none()
+            if pat and pat.updated_at and pb.updated_at and (pat.updated_at - pb.updated_at).total_seconds() > 5:
+                issues.append("pattern_nodes_added_drift")
+
         if issues:
             alerts.append({
                 "playbook_id": str(pb.id),
+                "pattern_id": str(pb.pattern_id) if pb.pattern_id else None,
                 "title": pb.title,
                 "issues": issues,
-                "severity": "high" if "past_expiry" in issues else "medium",
+                "severity": "high" if "past_expiry" in issues else ("medium" if "pattern_nodes_added_drift" in issues else "low"),
             })
 
     return alerts

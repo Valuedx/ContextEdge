@@ -91,6 +91,7 @@ _BOUNCE_PHRASES = (
     re.compile(r"delivery status notification", re.IGNORECASE),
     re.compile(r"non-?delivery report", re.IGNORECASE),
     re.compile(r"recipient address rejected|user unknown|unknown to address", re.IGNORECASE),
+    re.compile(r"rejected (the|your) email|access denied policy|mail server .* rejected", re.IGNORECASE),
     re.compile(r"\bhow to fix it\b", re.IGNORECASE),
     re.compile(r"automatic reply|out of (the )?office", re.IGNORECASE),
 )

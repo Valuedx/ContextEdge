@@ -3,7 +3,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import { api } from "@/lib/api";
-import { Loader2, Info, Network, HelpCircle, FileText, Activity, BookOpen, Layers } from "lucide-react";
+import { Loader2, Info, Network, HelpCircle, FileText, Activity, BookOpen, Layers, ExternalLink, X } from "lucide-react";
 import { useEffect, useCallback, useState } from "react";
 import { toast } from "sonner";
 import {
@@ -25,7 +25,7 @@ import dagre from "dagre";
 import { getNodeClassName, edgeColors } from "@/components/graph/graph-constants";
 import type { PatternSubgraph } from "@/lib/types";
 
-// ── Node Descriptions for Hover Tooltips & Guidance ───────────────────────────
+// ── Node Descriptions for Hover & Selected Node Inspector ────────────────────
 
 const NODE_DESCRIPTIONS: Record<string, { label: string; desc: string; icon: string }> = {
   playbook: {
@@ -45,7 +45,7 @@ const NODE_DESCRIPTIONS: Record<string, { label: string; desc: string; icon: str
   },
   evidence: {
     label: "EVIDENCE (Raw Proof)",
-    desc: "Original raw ticket/log message pulled directly from ServiceNow, Jira, or email.",
+    desc: "Original raw ticket or log message pulled directly from Zoho Desk, ServiceNow, or email.",
     icon: "📄",
   },
   entity: {
@@ -53,9 +53,29 @@ const NODE_DESCRIPTIONS: Record<string, { label: string; desc: string; icon: str
     desc: "Operational noun (Hostname, IP address, or application name).",
     icon: "🏷️",
   },
+  identity: {
+    label: "IDENTITY (User / Service Account)",
+    desc: "Unique identifier for user, service account, host, or system principal.",
+    icon: "👤",
+  },
+  step: {
+    label: "STEP (Resolution Step)",
+    desc: "Specific diagnostic action or resolution step executed during incident.",
+    icon: "📋",
+  },
+  root_cause: {
+    label: "ROOT CAUSE (Failure Reason)",
+    desc: "Core underlying failure driver or root cause identified for this incident.",
+    icon: "🔍",
+  },
+  trigger_condition: {
+    label: "TRIGGER (Activation Event)",
+    desc: "Symptom, error message, or condition that activates this pattern.",
+    icon: "⚡",
+  },
   policy: {
     label: "POLICY (Governance Rule)",
-    desc: "Access control or approval gate policy rule.",
+    desc: "Access control, risk tier, or approval gate policy rule.",
     icon: "🛡️",
   },
 };
@@ -116,8 +136,15 @@ function FlowCanvas({
   hasData: boolean;
 }) {
   const { fitView } = useReactFlow();
+  const router = useRouter();
   const [hoveredNodeType, setHoveredNodeType] = useState<string | null>(null);
   const [hoveredNodeLabel, setHoveredNodeLabel] = useState<string | null>(null);
+  const [selectedNodeData, setSelectedNodeData] = useState<{
+    id: string;
+    type: string;
+    rawId: string;
+    label: string;
+  } | null>(null);
 
   // Re-fit viewport whenever the node set changes
   useEffect(() => {
@@ -139,7 +166,22 @@ function FlowCanvas({
     setHoveredNodeLabel(null);
   };
 
+  const handleCanvasNodeClick = (e: React.MouseEvent, node: Node) => {
+    const [type, ...idParts] = node.id.split(":");
+    const rawId = idParts.join(":");
+    const label = String(node.data?.label || "");
+    setSelectedNodeData({ id: node.id, type, rawId, label });
+    onNodeClick(e, node);
+  };
+
+  const activeNodeType = selectedNodeData ? selectedNodeData.type : hoveredNodeType;
+  const activeNodeLabel = selectedNodeData ? selectedNodeData.label : hoveredNodeLabel;
+  const activeInfo = activeNodeType ? NODE_DESCRIPTIONS[activeNodeType] : null;
   const hoveredInfo = hoveredNodeType ? NODE_DESCRIPTIONS[hoveredNodeType] : null;
+
+  const redirectRoute = selectedNodeData && NODE_ROUTES[selectedNodeData.type]
+    ? `${NODE_ROUTES[selectedNodeData.type]}/${selectedNodeData.rawId}`
+    : null;
 
   return (
     <ReactFlow
@@ -147,7 +189,7 @@ function FlowCanvas({
       edges={edges}
       onNodesChange={onNodesChange}
       onEdgesChange={onEdgesChange}
-      onNodeClick={onNodeClick}
+      onNodeClick={handleCanvasNodeClick}
       onNodeMouseEnter={handleNodeMouseEnter}
       onNodeMouseLeave={handleNodeMouseLeave}
       fitView
@@ -159,14 +201,51 @@ function FlowCanvas({
         className="bg-slate-900 border-slate-700 fill-slate-200"
       />
 
-      {/* Top Left: Interactive Node Explanation Panel (Shown on Cursor Hover) */}
+      {/* Top Left: Interactive Node Details & Guidance Panel */}
       {hasData && (
         <Panel
           position="top-left"
-          className="bg-slate-900/95 border border-slate-700 p-3 rounded-xl max-w-md backdrop-blur-md shadow-2xl transition-all duration-200"
+          className="bg-slate-900/95 border border-indigo-500/40 p-4 rounded-xl max-w-md backdrop-blur-md shadow-2xl transition-all duration-200"
         >
-          {hoveredInfo ? (
-            <div className="space-y-1">
+          {selectedNodeData && activeInfo ? (
+            <div className="space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2 text-indigo-400 font-bold text-xs uppercase tracking-wider">
+                  <span>{activeInfo.icon}</span>
+                  <span>{activeInfo.label}</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setSelectedNodeData(null)}
+                  className="text-slate-400 hover:text-slate-200 p-0.5 rounded"
+                  title="Close Selection"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </div>
+              <h4 className="text-sm font-semibold text-slate-100 leading-snug">
+                "{activeNodeLabel}"
+              </h4>
+              <p className="text-xs text-slate-300 leading-relaxed">
+                {activeInfo.desc}
+              </p>
+              {redirectRoute ? (
+                <button
+                  type="button"
+                  onClick={() => router.push(redirectRoute)}
+                  className="mt-2 inline-flex items-center gap-1.5 rounded-md bg-indigo-600 hover:bg-indigo-500 px-3 py-1.5 text-xs font-medium text-white transition-colors"
+                >
+                  <span>View Details & Redirect</span>
+                  <ExternalLink className="h-3.5 w-3.5" />
+                </button>
+              ) : (
+                <p className="text-[11px] text-amber-400/90 italic pt-1">
+                  Enrichment concept node — inspect connected Episodes or Patterns for deep details.
+                </p>
+              )}
+            </div>
+          ) : hoveredInfo ? (
+            <div className="space-y-1.5">
               <div className="flex items-center gap-2 text-indigo-400 font-bold text-xs">
                 <span>{hoveredInfo.icon}</span>
                 <span>{hoveredInfo.label}</span>
@@ -179,9 +258,9 @@ function FlowCanvas({
               </p>
             </div>
           ) : (
-            <div className="flex items-center gap-2 text-xs text-slate-400">
+            <div className="flex items-center gap-2 text-xs text-slate-300">
               <HelpCircle className="h-4 w-4 text-indigo-400 shrink-0" />
-              <span>Hover your cursor over any node to see what it means.</span>
+              <span>Click any node on the graph to inspect details and open its direct record.</span>
             </div>
           )}
         </Panel>
@@ -191,11 +270,11 @@ function FlowCanvas({
       {hasData && (
         <Panel
           position="bottom-center"
-          className="bg-slate-900/90 border border-slate-800 px-3 py-1.5 rounded-full text-[11px] backdrop-blur-sm shadow-lg flex items-center gap-4 text-slate-300"
+          className="bg-slate-900/90 border border-slate-800 px-3.5 py-1.5 rounded-full text-[11px] backdrop-blur-sm shadow-lg flex flex-wrap items-center gap-4 text-slate-300"
         >
           <div className="flex items-center gap-1.5">
             <span className="h-2 w-2 rounded-full bg-blue-500"></span>
-            <span className="font-semibold text-blue-400">Playbook:</span> Verified Fix
+            <span className="font-semibold text-blue-400">Playbook:</span> Fix Guide
           </div>
           <div className="flex items-center gap-1.5">
             <span className="h-2 w-2 rounded-full bg-indigo-500"></span>
@@ -203,7 +282,11 @@ function FlowCanvas({
           </div>
           <div className="flex items-center gap-1.5">
             <span className="h-2 w-2 rounded-full bg-emerald-500"></span>
-            <span className="font-semibold text-emerald-400">Episode:</span> AI Summary
+            <span className="font-semibold text-emerald-400">Episode:</span> Incident Summary
+          </div>
+          <div className="flex items-center gap-1.5">
+            <span className="h-2 w-2 rounded-full bg-purple-400"></span>
+            <span className="font-semibold text-purple-300">Identity:</span> User / Host
           </div>
           <div className="flex items-center gap-1.5">
             <span className="h-2 w-2 rounded-full bg-slate-400"></span>
@@ -270,9 +353,14 @@ export function PatternGraph({ patternId }: { patternId: string }) {
         ? `${descObj.label}: ${descObj.desc}`
         : `${n.type.toUpperCase()}: ${n.title || ""}`;
 
+      const displayLabel =
+        n.title && n.title.toUpperCase() !== n.type.toUpperCase()
+          ? n.title
+          : `${n.type.toUpperCase()} (${n.id.slice(0, 8)})`;
+
       return {
         id: `${n.type}:${n.id}`,
-        data: { label: n.title || n.type.toUpperCase() },
+        data: { label: displayLabel },
         className: `px-4 py-2 border-2 rounded-lg text-sm transition-all cursor-pointer hover:scale-105 ${
           getNodeClassName(n.type)
         }${n.type === "pattern" ? " font-bold shadow-[0_0_15px_rgba(99,102,241,0.5)]" : ""}`,

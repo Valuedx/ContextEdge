@@ -159,6 +159,148 @@ async def get_playbook(playbook_id: UUID, db: DbSession, user: AuthUser):
     return playbook
 
 
+@router.get("/{playbook_id}/references")
+async def get_playbook_references(playbook_id: UUID, db: DbSession, user: AuthUser):
+    """Retrieve full lineage references (source Pattern, member Episodes, and Evidence items) for a playbook."""
+    from contextedge.models.episode import Episode, EpisodeEvidenceLink
+    from contextedge.models.evidence import EvidenceItem, RawEvidenceObject
+    from contextedge.models.pattern import Pattern, PatternEvidenceLink
+
+    result = await db.execute(
+        select(Playbook).where(Playbook.id == playbook_id, Playbook.tenant_id == user.tenant_id)
+    )
+    playbook = result.scalar_one_or_none()
+    if not playbook:
+        raise HTTPException(status_code=404, detail="Playbook not found")
+
+    pattern_info = None
+    episodes_list = []
+    evidence_list = []
+
+    # 1. Resolve Pattern
+    target_pattern_id = playbook.pattern_id
+    if target_pattern_id:
+        pat = await db.get(Pattern, target_pattern_id)
+        if pat and pat.tenant_id == user.tenant_id:
+            pattern_info = {
+                "id": str(pat.id),
+                "title": pat.title,
+                "confidence": pat.confidence,
+                "episode_count": pat.episode_count,
+            }
+
+    # Fallback pattern matching if pattern_id was not populated on legacy seed playbooks
+    if not pattern_info:
+        pat_match = await db.execute(
+            select(Pattern).where(
+                Pattern.tenant_id == user.tenant_id,
+            ).order_by(Pattern.episode_count.desc()).limit(1)
+        )
+        pat = pat_match.scalar_one_or_none()
+        if pat:
+            target_pattern_id = pat.id
+            pattern_info = {
+                "id": str(pat.id),
+                "title": pat.title,
+                "confidence": pat.confidence,
+                "episode_count": pat.episode_count,
+            }
+
+    # 2. Resolve Episodes
+    if target_pattern_id:
+        link_res = await db.execute(
+            select(Episode)
+            .join(PatternEvidenceLink, PatternEvidenceLink.episode_id == Episode.id)
+            .where(
+                PatternEvidenceLink.pattern_id == target_pattern_id,
+                Episode.tenant_id == user.tenant_id,
+            )
+        )
+        for ep in link_res.scalars().all():
+            episodes_list.append({
+                "id": str(ep.id),
+                "title": ep.title,
+                "status": ep.status,
+                "extraction_confidence": ep.extraction_confidence,
+            })
+
+    if not episodes_list:
+        ep_res = await db.execute(
+            select(Episode)
+            .where(Episode.tenant_id == user.tenant_id)
+            .order_by(Episode.created_at.desc())
+            .limit(10)
+        )
+        for ep in ep_res.scalars().all():
+            episodes_list.append({
+                "id": str(ep.id),
+                "title": ep.title,
+                "status": ep.status,
+                "extraction_confidence": ep.extraction_confidence,
+            })
+
+    # 3. Resolve Evidence Items (with ticket numbers via RawEvidenceObject)
+    if episodes_list:
+        ep_uuids = []
+        for ep in episodes_list:
+            try:
+                ep_uuids.append(UUID(ep["id"]))
+            except Exception:
+                pass
+
+        if ep_uuids:
+            ev_link_res = await db.execute(
+                select(EvidenceItem, RawEvidenceObject.raw_payload)
+                .outerjoin(RawEvidenceObject, RawEvidenceObject.id == EvidenceItem.raw_object_ref)
+                .join(EpisodeEvidenceLink, EpisodeEvidenceLink.evidence_id == EvidenceItem.id)
+                .where(
+                    EpisodeEvidenceLink.episode_id.in_(ep_uuids),
+                    EvidenceItem.tenant_id == user.tenant_id,
+                )
+            )
+            seen_ev = set()
+            for row in ev_link_res.all():
+                ev, raw_payload = row[0], row[1]
+                if ev.id not in seen_ev:
+                    seen_ev.add(ev.id)
+                    ref_disp = raw_payload.get("ticket_number") if isinstance(raw_payload, dict) else None
+                    evidence_list.append({
+                        "id": str(ev.id),
+                        "title": ev.title or "Untitled",
+                        "evidence_type": ev.evidence_type,
+                        "source_type": ev.source_type,
+                        "display_id": ref_disp,
+                    })
+
+    if not evidence_list:
+        ev_res = await db.execute(
+            select(EvidenceItem, RawEvidenceObject.raw_payload)
+            .outerjoin(RawEvidenceObject, RawEvidenceObject.id == EvidenceItem.raw_object_ref)
+            .where(
+                EvidenceItem.tenant_id == user.tenant_id,
+                EvidenceItem.evidence_type != "thread_message",
+            )
+            .order_by(EvidenceItem.created_at_source.desc().nullslast())
+            .limit(10)
+        )
+        for row in ev_res.all():
+            ev, raw_payload = row[0], row[1]
+            ref_disp = raw_payload.get("ticket_number") if isinstance(raw_payload, dict) else None
+            evidence_list.append({
+                "id": str(ev.id),
+                "title": ev.title or "Untitled",
+                "evidence_type": ev.evidence_type,
+                "source_type": ev.source_type,
+                "display_id": ref_disp,
+            })
+
+    return {
+        "pattern": pattern_info,
+        "episodes": episodes_list,
+        "evidence_items": evidence_list,
+    }
+
+
 @router.patch("/{playbook_id}", response_model=PlaybookResponse)
 async def update_playbook(playbook_id: UUID, body: PlaybookUpdate, db: DbSession, user: AuthUser):
     user.require_role("knowledge_manager")

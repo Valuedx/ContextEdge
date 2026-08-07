@@ -559,6 +559,15 @@ class ZohoDeskConnector(BaseConnector):
         comes back. Only keys the row actually carries are compared, so
         param-style filters with no row counterpart (sortBy, fields)
         never drop anything."""
+        min_thread_count = (self.source_config or {}).get("min_thread_count")
+        if min_thread_count is not None and module == "tickets":
+            tc = row.get("threadCount")
+            if tc is not None:
+                try:
+                    if int(tc) < int(min_thread_count):
+                        return False
+                except (TypeError, ValueError):
+                    pass
         module_filter = self.module_filters.get(module)
         if not isinstance(module_filter, dict):
             return True
@@ -566,7 +575,13 @@ class ZohoDeskConnector(BaseConnector):
             actual = row.get(str(key))
             if actual is None or not isinstance(expected, (str, int, float, bool)):
                 continue
-            if str(actual).strip().lower() != str(expected).strip().lower():
+            exp_str = str(expected).strip().lower()
+            act_str = str(actual).strip().lower()
+            if "," in exp_str:
+                allowed = [s.strip() for s in exp_str.split(",") if s.strip()]
+                if act_str not in allowed:
+                    return False
+            elif act_str != exp_str:
                 return False
         return True
 
@@ -1445,7 +1460,7 @@ def _modified_time(row: dict) -> str:
     sorts chronologically, so string comparison matches the order the
     API returns without parsing every row.
     """
-    return str(row.get("modifiedTime") or "")
+    return str(row.get("modifiedTime") or row.get("closedTime") or row.get("createdTime") or "")
 
 
 def _read_checkpoint(data: dict | None) -> tuple[str, set[str]]:

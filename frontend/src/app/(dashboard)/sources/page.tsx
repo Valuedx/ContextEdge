@@ -100,7 +100,7 @@ function createColumns(onEdit: (source: Source) => void): ColumnDef<Source>[] {
     {
       accessorKey: "created_at",
       header: "Created",
-      cell: ({ row }) => new Date(row.getValue("created_at")).toLocaleDateString(),
+      cell: ({ row }) => new Date(row.getValue("created_at")).toLocaleString(),
     },
     {
       id: "actions",

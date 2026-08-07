@@ -76,6 +76,23 @@ async def create_pattern_from_episodes(
 ) -> Pattern:
     """Create a pattern from a cluster of episodes."""
     await _assert_domain_safe_membership(db, tenant_id, domain_id, episode_ids)
+
+    # Preventive Deduplication: Merge into existing pattern if title matches
+    from sqlalchemy import func
+    clean_title = title.strip()
+    existing_pattern_res = await db.execute(
+        select(Pattern).where(
+            Pattern.tenant_id == tenant_id,
+            func.lower(Pattern.title) == clean_title.lower(),
+        ).limit(1)
+    )
+    existing_pattern = existing_pattern_res.scalar_one_or_none()
+
+    if existing_pattern:
+        for ep_id in episode_ids:
+            await add_episode_to_pattern(db, tenant_id, existing_pattern.id, ep_id)
+        return existing_pattern
+
     pattern = Pattern(
         tenant_id=tenant_id,
         domain_id=domain_id,
@@ -163,3 +180,251 @@ async def create_pattern_from_episodes(
         )
 
     return pattern
+
+
+async def add_episode_to_pattern(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    pattern_id: uuid.UUID,
+    episode_id: uuid.UUID,
+) -> Pattern:
+    """Add a new episode to an existing pattern, update count/graph/memory, and auto-enqueue playbook regeneration."""
+    pattern = await db.get(Pattern, pattern_id)
+    if not pattern or pattern.tenant_id != tenant_id:
+        raise ValueError(f"Pattern {pattern_id} not found")
+
+    await _assert_domain_safe_membership(db, tenant_id, pattern.domain_id, [episode_id])
+
+    existing_link = (
+        await db.execute(
+            select(PatternEvidenceLink).where(
+                PatternEvidenceLink.pattern_id == pattern_id,
+                PatternEvidenceLink.episode_id == episode_id,
+            )
+        )
+    ).scalar_one_or_none()
+
+    if not existing_link:
+        link = PatternEvidenceLink(
+            pattern_id=pattern.id,
+            episode_id=episode_id,
+            link_type="member",
+        )
+        db.add(link)
+        pattern.episode_count += 1
+        await db.flush()
+
+        ep = await db.get(Episode, episode_id)
+        if ep:
+            await build_episode_graph(
+                db,
+                tenant_id,
+                ep.id,
+                pattern.id,
+                identity_ids_from_refs(ep.entity_refs),
+                domain_id=pattern.domain_id,
+            )
+
+        try:
+            from contextedge.workers.pattern_tasks import generate_playbook_candidate
+
+            generate_playbook_candidate.delay(str(pattern.id), str(tenant_id))
+        except Exception:
+            pass
+
+    return pattern
+
+
+async def deduplicate_patterns_and_playbooks(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+) -> dict[str, int]:
+    """Scan and merge duplicate Episodes, Patterns, and Playbooks for a tenant."""
+    from sqlalchemy import func
+    from contextedge.models.pattern import GraphEdge
+    from contextedge.models.playbook import Playbook, PlaybookVersion
+    from contextedge.services.episode_service import deduplicate_episodes
+
+    # 0. Deduplicate Episodes first
+    merged_episodes_count = await deduplicate_episodes(db, tenant_id)
+
+    # 1. Group patterns by normalized title
+    pats = (
+        await db.execute(
+            select(Pattern).where(Pattern.tenant_id == tenant_id)
+        )
+    ).scalars().all()
+
+    grouped_patterns: dict[str, list[Pattern]] = {}
+    for p in pats:
+        key = p.title.strip().lower()
+        grouped_patterns.setdefault(key, []).append(p)
+
+    merged_patterns_count = 0
+    for key, group in grouped_patterns.items():
+        if len(group) <= 1:
+            continue
+
+        # Sort by episode count desc, then earliest created
+        group.sort(key=lambda x: (x.episode_count, x.created_at or 0), reverse=True)
+        canonical = group[0]
+        duplicates = group[1:]
+
+        for dup in duplicates:
+            # Re-link member episodes
+            dup_links = (
+                await db.execute(
+                    select(PatternEvidenceLink).where(
+                        PatternEvidenceLink.pattern_id == dup.id
+                    )
+                )
+            ).scalars().all()
+
+            for link in dup_links:
+                existing_link = (
+                    await db.execute(
+                        select(PatternEvidenceLink).where(
+                            PatternEvidenceLink.pattern_id == canonical.id,
+                            PatternEvidenceLink.episode_id == link.episode_id,
+                        )
+                    )
+                ).scalar_one_or_none()
+
+                if not existing_link:
+                    link.pattern_id = canonical.id
+                else:
+                    await db.delete(link)
+
+            # Re-link graph edges safely
+            edges = (
+                await db.execute(
+                    select(GraphEdge).where(
+                        (GraphEdge.source_node_id == dup.id)
+                        | (GraphEdge.target_node_id == dup.id)
+                    )
+                )
+            ).scalars().all()
+
+            for edge in edges:
+                new_src = (
+                    canonical.id
+                    if edge.source_node_id == dup.id
+                    else edge.source_node_id
+                )
+                new_tgt = (
+                    canonical.id
+                    if edge.target_node_id == dup.id
+                    else edge.target_node_id
+                )
+
+                existing_edge = (
+                    await db.execute(
+                        select(GraphEdge).where(
+                            GraphEdge.tenant_id == edge.tenant_id,
+                            GraphEdge.source_node_type == edge.source_node_type,
+                            GraphEdge.source_node_id == new_src,
+                            GraphEdge.target_node_type == edge.target_node_type,
+                            GraphEdge.target_node_id == new_tgt,
+                            GraphEdge.edge_type == edge.edge_type,
+                        )
+                    )
+                ).scalar_one_or_none()
+
+                if existing_edge and existing_edge.id != edge.id:
+                    await db.delete(edge)
+                else:
+                    edge.source_node_id = new_src
+                    edge.target_node_id = new_tgt
+
+            # Re-link playbooks
+            pbs = (
+                await db.execute(
+                    select(Playbook).where(Playbook.pattern_id == dup.id)
+                )
+            ).scalars().all()
+            for pb in pbs:
+                pb.pattern_id = canonical.id
+
+            await db.delete(dup)
+            merged_patterns_count += 1
+
+        count_res = await db.execute(
+            select(func.count(PatternEvidenceLink.id)).where(
+                PatternEvidenceLink.pattern_id == canonical.id
+            )
+        )
+        canonical.episode_count = count_res.scalar() or 0
+
+    await db.flush()
+
+    # 2. Deduplicate Playbooks per pattern or normalized title
+    pbs = (
+        await db.execute(
+            select(Playbook).where(Playbook.tenant_id == tenant_id)
+        )
+    ).scalars().all()
+
+    grouped_playbooks: dict[tuple, list[Playbook]] = {}
+    for pb in pbs:
+        pb_key = (pb.tenant_id, pb.pattern_id or pb.title.strip().lower())
+        grouped_playbooks.setdefault(pb_key, []).append(pb)
+
+    merged_playbooks_count = 0
+    for pb_key, group in grouped_playbooks.items():
+        if len(group) <= 1:
+            continue
+
+        group.sort(key=lambda x: x.updated_at or x.created_at or 0, reverse=True)
+        canonical_pb = group[0]
+        duplicates_pb = group[1:]
+
+        for dup_pb in duplicates_pb:
+            from sqlalchemy import update, delete
+            from contextedge.models.playbook import PlaybookEvidenceLink
+
+            dup_versions = (
+                await db.execute(
+                    select(PlaybookVersion).where(
+                        PlaybookVersion.playbook_id == dup_pb.id
+                    )
+                )
+            ).scalars().all()
+
+            for v in dup_versions:
+                existing_ver = (
+                    await db.execute(
+                        select(PlaybookVersion).where(
+                            PlaybookVersion.playbook_id == canonical_pb.id,
+                            PlaybookVersion.semantic_version == v.semantic_version,
+                        )
+                    )
+                ).scalar_one_or_none()
+
+                if not existing_ver:
+                    await db.execute(
+                        update(PlaybookVersion)
+                        .where(PlaybookVersion.id == v.id)
+                        .values(playbook_id=canonical_pb.id)
+                    )
+                else:
+                    await db.execute(
+                        delete(PlaybookEvidenceLink).where(
+                            PlaybookEvidenceLink.playbook_version_id == v.id
+                        )
+                    )
+                    await db.execute(
+                        delete(PlaybookVersion).where(PlaybookVersion.id == v.id)
+                    )
+
+            await db.execute(
+                delete(Playbook).where(Playbook.id == dup_pb.id)
+            )
+            merged_playbooks_count += 1
+
+    await db.flush()
+    return {
+        "merged_episodes": merged_episodes_count,
+        "merged_patterns": merged_patterns_count,
+        "merged_playbooks": merged_playbooks_count,
+    }
+

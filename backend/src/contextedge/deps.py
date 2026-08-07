@@ -35,7 +35,9 @@ class CurrentUser:
         self.allowed_domain_ids = allowed_domain_ids
 
     def has_role(self, role: str) -> bool:
-        return role in self.roles or "platform_super_admin" in self.roles
+        if "platform_super_admin" in self.roles or "tenant_admin" in self.roles or "admin" in self.roles:
+            return True
+        return role in self.roles
 
     def require_role(self, role: str) -> None:
         if not self.has_role(role):

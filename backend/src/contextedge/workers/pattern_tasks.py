@@ -4,7 +4,10 @@ import structlog
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
-from contextedge.ai.extractors.pattern_extractor import synthesize_pattern
+from contextedge.ai.extractors.pattern_extractor import (
+    synthesize_pattern,
+    validate_pattern_match,
+)
 from contextedge.ai.generators import playbook_generator
 from contextedge.ai.provider import generate_embedding
 from contextedge.graph.builder import ensure_edge, link_node_to_identities
@@ -13,7 +16,10 @@ from contextedge.models.pattern import NegativeKnowledgeItem, Pattern, PatternEv
 from contextedge.models.playbook import Playbook
 from contextedge.models.tenant import User
 from contextedge.services.identity_service import identity_ids_from_refs
-from contextedge.services.pattern_service import create_pattern_from_episodes
+from contextedge.services.pattern_service import (
+    add_episode_to_pattern,
+    create_pattern_from_episodes,
+)
 from contextedge.services.playbook_service import create_playbook_version
 from contextedge.workers.asyncio_runner import run_async
 from contextedge.workers.celery_app import celery_app
@@ -191,6 +197,58 @@ async def _cluster(db, tid: uuid.UUID, did: uuid.UUID | None) -> dict:
             if ep.id in assigned_ids:
                 continue
 
+            # First, check if candidate episode is close (cosine distance < 0.35) to an EXISTING pattern
+            match_r = await db.execute(
+                select(PatternEvidenceLink.pattern_id)
+                .join(Episode, Episode.id == PatternEvidenceLink.episode_id)
+                .join(Pattern, Pattern.id == PatternEvidenceLink.pattern_id)
+                .where(
+                    Pattern.tenant_id == tid,
+                    _domain_predicate(did),
+                    Episode.embedding.is_not(None),
+                    Episode.embedding.cosine_distance(ep.embedding) < 0.35,
+                )
+                .limit(1)
+            )
+            matched_pattern_id = match_r.scalar_one_or_none()
+
+            if matched_pattern_id:
+                try:
+                    pat = await db.get(Pattern, matched_pattern_id)
+                    ep_info = {
+                        "title": ep.title,
+                        "root_cause_summary": ep.root_cause_summary,
+                        "final_outcome": ep.final_outcome,
+                    }
+                    pat_info = {
+                        "title": pat.title if pat else "",
+                        "description": pat.description if pat else "",
+                        "root_causes": pat.root_causes if pat else [],
+                        "resolution_steps": pat.resolution_steps if pat else [],
+                    }
+                    # Validate match with AI before associating
+                    ai_val = await validate_pattern_match(ep_info, pat_info, tenant_id=tid, db=db)
+
+                    if ai_val.get("is_match"):
+                        await add_episode_to_pattern(db, tid, matched_pattern_id, ep.id)
+                        assigned_ids.add(ep.id)
+                        logger.info(
+                            "episode_matched_existing_pattern_ai_validated",
+                            episode_id=str(ep.id),
+                            pattern_id=str(matched_pattern_id),
+                            confidence=ai_val.get("confidence"),
+                        )
+                        continue
+                    else:
+                        logger.info(
+                            "episode_pattern_match_rejected_by_ai",
+                            episode_id=str(ep.id),
+                            pattern_id=str(matched_pattern_id),
+                            reason=ai_val.get("reason"),
+                        )
+                except Exception as exc:
+                    logger.warning("add_episode_to_pattern_failed", error=str(exc))
+
             # Find similar episodes using vector distance (threshold 0.20)
             # — same domain scope as the candidates: similarity must never
             # pull another domain's episode into this cluster.
@@ -267,10 +325,16 @@ async def _cluster(db, tid: uuid.UUID, did: uuid.UUID | None) -> dict:
             created += 1
             assigned_ids.update(e.id for e in cluster)
 
+        from contextedge.services.pattern_service import deduplicate_patterns_and_playbooks
+        dedup_stats = await deduplicate_patterns_and_playbooks(db, tid)
+        await db.commit()
+
         return {
+            "status": "success",
             "patterns_created": created,
             "episodes_considered": total_considered,
             "embeddings_repaired": repaired,
+            "dedup_merged": dedup_stats,
         }
 
 
@@ -315,8 +379,15 @@ def generate_playbook_candidate(self, pattern_id: str, tenant_id: str):
         if not pattern:
             return {"status": "skipped", "reason": "pattern_not_found"}
 
+        from sqlalchemy import func
         existing = await db.execute(
-            select(Playbook).where(Playbook.tenant_id == tid, Playbook.pattern_id == pid)
+            select(Playbook).where(
+                Playbook.tenant_id == tid,
+                or_(
+                    Playbook.pattern_id == pid,
+                    func.lower(Playbook.title) == pattern.title.strip().lower(),
+                ),
+            )
         )
         if existing.scalar_one_or_none():
             return {"status": "skipped", "reason": "playbook_already_exists"}

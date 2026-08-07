@@ -101,6 +101,9 @@ class PatternResponse(BaseModel):
     evidence_summary: dict | None = None
     created_at: datetime
     updated_at: datetime
+    has_playbook: bool = False
+    playbook_id: UUID | None = None
+    playbook_status: str | None = None
 
     model_config = {"from_attributes": True}
 
@@ -120,6 +123,7 @@ class PlaybookResponse(BaseModel):
     reviewer_user_id: UUID | None
     approver_user_id: UUID | None
     current_version_id: UUID | None
+    pattern_id: UUID | None = None
     last_validated_at: datetime | None
     expiry_at: datetime | None
     created_at: datetime

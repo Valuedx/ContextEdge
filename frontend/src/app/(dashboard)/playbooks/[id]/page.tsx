@@ -45,7 +45,174 @@ import type {
 } from "@/lib/types";
 import { useAuthStore } from "@/lib/stores/auth-store";
 import { canEditAutomationMode, canTransitionPlaybook } from "@/lib/roles";
-import { GitCompare, RotateCcw } from "lucide-react";
+import { GitCompare, RotateCcw, GitFork, Sparkles, ListChecks, FileText, ChevronDown, ChevronUp, Search } from "lucide-react";
+
+function PlaybookLineageReferencesPanel({ playbookId }: { playbookId: string }) {
+  const [showAllEpisodes, setShowAllEpisodes] = useState(false);
+  const [showAllEvidence, setShowAllEvidence] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+
+  const { data, isLoading } = useQuery<{
+    pattern: { id: string; title: string; confidence: number; episode_count: number } | null;
+    episodes: Array<{ id: string; title: string; status: string; extraction_confidence: number }>;
+    evidence_items: Array<{ id: string; title: string; evidence_type: string; source_type: string; display_id: string | null }>;
+  }>({
+    queryKey: ["playbook-references", playbookId],
+    queryFn: () => api.get(`/playbooks/${playbookId}/references`),
+  });
+
+  if (isLoading) {
+    return <Skeleton className="h-32 w-full rounded-lg" />;
+  }
+
+  if (!data || (!data.pattern && (!data.episodes || data.episodes.length === 0) && (!data.evidence_items || data.evidence_items.length === 0))) {
+    return null;
+  }
+
+  const q = searchQuery.toLowerCase().trim();
+
+  const filteredEpisodes = (data.episodes || []).filter(
+    (ep) => !q || ep.title.toLowerCase().includes(q)
+  );
+
+  const filteredEvidence = (data.evidence_items || []).filter(
+    (ev) =>
+      !q ||
+      ev.title.toLowerCase().includes(q) ||
+      (ev.display_id && ev.display_id.toLowerCase().includes(q))
+  );
+
+  const visibleEpisodes = showAllEpisodes ? filteredEpisodes : filteredEpisodes.slice(0, 6);
+  const visibleEvidence = showAllEvidence ? filteredEvidence : filteredEvidence.slice(0, 6);
+
+  const totalItems = (data.episodes?.length ?? 0) + (data.evidence_items?.length ?? 0);
+
+  return (
+    <Card className="border-indigo-500/20 bg-indigo-500/5 dark:bg-indigo-950/20 shadow-sm">
+      <CardHeader className="pb-3">
+        <CardTitle className="text-base font-semibold flex flex-wrap items-center justify-between gap-2">
+          <span className="flex items-center gap-2">
+            <GitFork className="h-4 w-4 text-indigo-500" />
+            Playbook Grounding & Lineage Trace
+          </span>
+          <div className="flex items-center gap-3">
+            {totalItems > 6 && (
+              <div className="relative">
+                <Search className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-muted-foreground" />
+                <input
+                  type="text"
+                  placeholder="Filter references…"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="h-8 w-44 rounded-md border border-black/10 bg-background pl-8 pr-3 text-xs focus:border-indigo-500 focus:outline-none dark:border-white/10"
+                />
+              </div>
+            )}
+            <span className="text-xs text-muted-foreground font-normal hidden sm:inline">
+              Click any item to view source record
+            </span>
+          </div>
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-4 text-sm">
+        {/* 1. Source Pattern Reference */}
+        {data.pattern ? (
+          <div>
+            <span className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider block mb-1.5">
+              Source Pattern Reference
+            </span>
+            <Link
+              href={`/patterns/${data.pattern.id}`}
+              className="inline-flex items-center gap-2 rounded-md border border-indigo-500/30 bg-background px-3 py-1.5 font-medium text-indigo-600 dark:text-indigo-400 hover:bg-indigo-500/10 hover:underline transition-colors"
+            >
+              <Sparkles className="h-4 w-4 text-indigo-500" />
+              <span>{data.pattern.title}</span>
+              <span className="rounded bg-indigo-500/20 px-1.5 py-0.5 text-[11px] text-indigo-600 dark:text-indigo-300 font-normal">
+                {(data.pattern.confidence * 100).toFixed(0)}% confidence
+              </span>
+            </Link>
+          </div>
+        ) : null}
+
+        {/* 2. Contributing Episodes Reference List */}
+        {data.episodes && data.episodes.length > 0 ? (
+          <div>
+            <div className="flex items-center justify-between mb-1.5">
+              <span className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">
+                Contributing Episodes ({filteredEpisodes.length} of {data.episodes.length})
+              </span>
+              {filteredEpisodes.length > 6 && (
+                <button
+                  type="button"
+                  onClick={() => setShowAllEpisodes(!showAllEpisodes)}
+                  className="text-xs text-indigo-500 hover:underline font-medium flex items-center gap-1"
+                >
+                  {showAllEpisodes ? (
+                    <>Show Less <ChevronUp className="h-3 w-3" /></>
+                  ) : (
+                    <>+{filteredEpisodes.length - 6} more episodes <ChevronDown className="h-3 w-3" /></>
+                  )}
+                </button>
+              )}
+            </div>
+            <div className={`flex flex-wrap gap-2 ${showAllEpisodes ? "max-h-64 overflow-y-auto pr-1" : ""}`}>
+              {visibleEpisodes.map((ep) => (
+                <Link
+                  key={ep.id}
+                  href={`/episodes/${ep.id}`}
+                  className="inline-flex items-center gap-1.5 rounded-md border bg-background px-2.5 py-1 text-xs hover:border-primary hover:text-primary transition-colors"
+                >
+                  <ListChecks className="h-3.5 w-3.5 text-muted-foreground" />
+                  <span className="font-medium">{ep.title}</span>
+                  <StatusBadge status={ep.status} />
+                </Link>
+              ))}
+            </div>
+          </div>
+        ) : null}
+
+        {/* 3. Source Evidence Items Reference List */}
+        {data.evidence_items && data.evidence_items.length > 0 ? (
+          <div>
+            <div className="flex items-center justify-between mb-1.5">
+              <span className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">
+                Grounded Evidence Items ({filteredEvidence.length} of {data.evidence_items.length})
+              </span>
+              {filteredEvidence.length > 6 && (
+                <button
+                  type="button"
+                  onClick={() => setShowAllEvidence(!showAllEvidence)}
+                  className="text-xs text-indigo-500 hover:underline font-medium flex items-center gap-1"
+                >
+                  {showAllEvidence ? (
+                    <>Show Less <ChevronUp className="h-3 w-3" /></>
+                  ) : (
+                    <>+{filteredEvidence.length - 6} more evidence <ChevronDown className="h-3 w-3" /></>
+                  )}
+                </button>
+              )}
+            </div>
+            <div className={`flex flex-wrap gap-2 ${showAllEvidence ? "max-h-64 overflow-y-auto pr-1" : ""}`}>
+              {visibleEvidence.map((ev) => (
+                <Link
+                  key={ev.id}
+                  href={`/evidence/${ev.id}`}
+                  className="inline-flex items-center gap-1.5 rounded-md border bg-background px-2.5 py-1 text-xs hover:border-primary hover:text-primary transition-colors"
+                >
+                  <FileText className="h-3.5 w-3.5 text-muted-foreground" />
+                  {ev.display_id ? (
+                    <span className="font-mono text-primary font-semibold">#{ev.display_id}</span>
+                  ) : null}
+                  <span className="truncate max-w-[15rem]">{ev.title}</span>
+                </Link>
+              ))}
+            </div>
+          </div>
+        ) : null}
+      </CardContent>
+    </Card>
+  );
+}
 
 // Allowed transitions come from the API (`playbook.allowed_transitions`).
 //
@@ -783,6 +950,7 @@ export default function PlaybookDetailPage() {
         )}
       </div>
 
+      <PlaybookLineageReferencesPanel playbookId={playbook.id} />
       <GovernancePanel playbook={playbook} />
       {latest && <KnowledgeSourcesPanel version={latest} />}
       {latest && <ConflictsPanel version={latest} />}

@@ -38,13 +38,13 @@ const columns: ColumnDef<Playbook>[] = [
     header: "Validated",
     cell: ({ row }) => {
       const val = row.getValue("last_validated_at");
-      return val ? new Date(val as string).toLocaleDateString() : "Never";
+      return val ? new Date(val as string).toLocaleString() : "Never";
     },
   },
   {
     accessorKey: "updated_at",
     header: "Updated",
-    cell: ({ row }) => new Date(row.getValue("updated_at")).toLocaleDateString(),
+    cell: ({ row }) => new Date(row.getValue("updated_at")).toLocaleString(),
   },
 ];
 

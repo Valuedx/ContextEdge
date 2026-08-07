@@ -26,7 +26,14 @@ async def audit_pattern_domains_endpoint(db: DbSession, user: AuthUser):
     from contextedge.services.pattern_audit_service import audit_pattern_domains
 
     return await audit_pattern_domains(db, user.tenant_id)
-logger = structlog.get_logger()
+@router.post("/deduplicate")
+async def deduplicate_patterns_endpoint(db: DbSession, user: AuthUser):
+    """Scan and merge duplicate patterns and playbooks for the user's tenant."""
+    from contextedge.services.pattern_service import deduplicate_patterns_and_playbooks
+
+    result = await deduplicate_patterns_and_playbooks(db, user.tenant_id)
+    await db.commit()
+    return {"status": "success", "data": result}
 
 
 @router.get("", response_model=list[PatternResponse])
@@ -45,7 +52,38 @@ async def list_patterns(
         q = q.where(Pattern.active_flag.is_(True))
     q = q.order_by(Pattern.episode_count.desc()).limit(limit).offset(offset)
     result = await db.execute(q)
-    return result.scalars().all()
+    patterns = list(result.scalars().all())
+    if not patterns:
+        return []
+
+    from contextedge.models.playbook import Playbook
+
+    pat_ids = [p.id for p in patterns]
+    pb_result = await db.execute(
+        select(Playbook.id, Playbook.pattern_id, Playbook.updated_at).where(
+            Playbook.tenant_id == user.tenant_id,
+            Playbook.pattern_id.in_(pat_ids),
+        )
+    )
+    pb_map = {row[1]: (row[0], row[2]) for row in pb_result.all()}
+
+    response_list = []
+    for pat in patterns:
+        resp = PatternResponse.model_validate(pat)
+        if pat.id in pb_map:
+            pb_id, pb_updated_at = pb_map[pat.id]
+            resp.has_playbook = True
+            resp.playbook_id = pb_id
+            if pb_updated_at and pat.updated_at and (pat.updated_at - pb_updated_at).total_seconds() > 5:
+                resp.playbook_status = "review_needed"
+            else:
+                resp.playbook_status = "generated"
+        else:
+            resp.has_playbook = False
+            resp.playbook_status = "none"
+        response_list.append(resp)
+
+    return response_list
 
 
 @router.get("/{pattern_id}", response_model=PatternResponse)
@@ -56,7 +94,30 @@ async def get_pattern(pattern_id: UUID, db: DbSession, user: AuthUser):
     pattern = result.scalar_one_or_none()
     if not pattern:
         raise HTTPException(status_code=404, detail="Pattern not found")
-    return pattern
+
+    from contextedge.models.playbook import Playbook
+
+    pb_result = await db.execute(
+        select(Playbook.id, Playbook.updated_at).where(
+            Playbook.tenant_id == user.tenant_id,
+            Playbook.pattern_id == pattern.id,
+        ).limit(1)
+    )
+    pb_row = pb_result.first()
+
+    resp = PatternResponse.model_validate(pattern)
+    if pb_row:
+        resp.has_playbook = True
+        resp.playbook_id = pb_row[0]
+        if pb_row[1] and pattern.updated_at and (pattern.updated_at - pb_row[1]).total_seconds() > 5:
+            resp.playbook_status = "review_needed"
+        else:
+            resp.playbook_status = "generated"
+    else:
+        resp.has_playbook = False
+        resp.playbook_status = "none"
+
+    return resp
 
 
 @router.post("/{pattern_id}/approve", response_model=PatternResponse)

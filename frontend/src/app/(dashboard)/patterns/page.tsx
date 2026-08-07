@@ -2,10 +2,9 @@
 
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { ColumnDef } from "@tanstack/react-table";
-import { BookOpen, Loader2, Network, List, Trash2 } from "lucide-react";
+import { BookOpen, Loader2, Network, List, Trash2, BookCheck, RefreshCw } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useQueryClient } from "@tanstack/react-query";
-import { format } from "date-fns";
 
 import { PageHeader } from "@/components/common/page-header";
 import { DataTable } from "@/components/common/data-table";
@@ -20,14 +19,16 @@ import { PatternGraph } from "@/components/patterns/pattern-graph";
 import { usePagination } from "@/lib/hooks/use-pagination";
 import { PaginationControls } from "@/components/common/pagination-controls";
 
-function PatternActions({ patternId, title }: { patternId: string; title: string }) {
+function PatternActions({ pattern }: { pattern: Pattern }) {
   const router = useRouter();
   const queryClient = useQueryClient();
 
   const generateMutation = useMutation({
-    mutationFn: () => api.post("/playbooks/generate", { pattern_id: patternId }),
+    mutationFn: () => api.post("/playbooks/generate", { pattern_id: pattern.id }),
     onSuccess: () => {
-      toast.success("Playbook candidate generated!");
+      toast.success("Playbook candidate updated!");
+      queryClient.invalidateQueries({ queryKey: ["patterns"] });
+      queryClient.invalidateQueries({ queryKey: ["playbooks"] });
       router.push("/playbooks");
     },
     onError: (err: Error) => {
@@ -36,9 +37,9 @@ function PatternActions({ patternId, title }: { patternId: string; title: string
   });
 
   const deleteMutation = useMutation({
-    mutationFn: () => api.delete(`/patterns/${patternId}`),
+    mutationFn: () => api.delete(`/patterns/${pattern.id}`),
     onSuccess: () => {
-      toast.success(`Pattern "${title}" deleted`);
+      toast.success(`Pattern "${pattern.title}" deleted`);
       queryClient.invalidateQueries({ queryKey: ["patterns"] });
     },
     onError: (err: Error) => {
@@ -47,40 +48,74 @@ function PatternActions({ patternId, title }: { patternId: string; title: string
   });
 
   const handleDelete = () => {
-    if (confirm(`Are you sure you want to delete pattern "${title}"?`)) {
+    if (confirm(`Are you sure you want to delete pattern "${pattern.title}"?`)) {
       deleteMutation.mutate();
     }
   };
 
   return (
-    <div className="flex items-center gap-1">
-      <Button
-        variant="ghost"
-        size="icon"
-        className="text-muted-foreground hover:text-indigo-500"
-        title="Generate Playbook"
-        onClick={() => generateMutation.mutate()}
-        disabled={generateMutation.isPending}
-      >
-        {generateMutation.isPending ? (
-          <Loader2 className="h-4 w-4 animate-spin" />
-        ) : (
-          <BookOpen className="h-4 w-4" />
-        )}
-      </Button>
+    <div className="flex items-center gap-1.5">
+      {pattern.has_playbook ? (
+        <>
+          {pattern.playbook_status === "review_needed" ? (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="text-amber-500 hover:text-amber-400 hover:bg-amber-500/10 gap-1 font-normal text-xs"
+              title="New episodes added — click to update Playbook"
+              onClick={() => generateMutation.mutate()}
+              disabled={generateMutation.isPending}
+            >
+              {generateMutation.isPending ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <RefreshCw className="h-3.5 w-3.5" />
+              )}
+              Update Playbook
+            </Button>
+          ) : null}
+
+          <Button
+            variant="ghost"
+            size="sm"
+            className="text-emerald-500 hover:text-emerald-400 hover:bg-emerald-500/10 gap-1 font-normal text-xs"
+            title="Playbook Generated — Click to View"
+            onClick={() => router.push(pattern.playbook_id ? `/playbooks/${pattern.playbook_id}` : "/playbooks")}
+          >
+            <BookCheck className="h-3.5 w-3.5 text-emerald-500" />
+            View Playbook
+          </Button>
+        </>
+      ) : (
+        <Button
+          variant="ghost"
+          size="sm"
+          className="text-muted-foreground hover:text-indigo-500 gap-1 font-normal text-xs"
+          title="Generate Playbook from this pattern"
+          onClick={() => generateMutation.mutate()}
+          disabled={generateMutation.isPending}
+        >
+          {generateMutation.isPending ? (
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          ) : (
+            <BookOpen className="h-3.5 w-3.5" />
+          )}
+          Generate Playbook
+        </Button>
+      )}
 
       <Button
         variant="ghost"
         size="icon"
-        className="text-muted-foreground hover:text-red-500"
+        className="text-muted-foreground hover:text-red-500 h-8 w-8"
         title="Delete Pattern"
         onClick={handleDelete}
         disabled={deleteMutation.isPending}
       >
         {deleteMutation.isPending ? (
-          <Loader2 className="h-4 w-4 animate-spin" />
+          <Loader2 className="h-3.5 w-3.5 animate-spin" />
         ) : (
-          <Trash2 className="h-4 w-4" />
+          <Trash2 className="h-3.5 w-3.5" />
         )}
       </Button>
     </div>
@@ -105,31 +140,33 @@ const columns: ColumnDef<Pattern>[] = [
     cell: ({ row }) => ((row.getValue("confidence") as number) * 100).toFixed(0) + "%",
   },
   {
-    accessorKey: "contradiction_score",
-    header: "Contradictions",
-    cell: ({ row }) => ((row.getValue("contradiction_score") as number) * 100).toFixed(0) + "%",
-  },
-  {
-    accessorKey: "freshness_score",
-    header: "Freshness",
-    cell: ({ row }) => ((row.getValue("freshness_score") as number) * 100).toFixed(0) + "%",
+    accessorKey: "playbook_status",
+    header: "Playbook Status",
+    cell: ({ row }) => {
+      const p = row.original;
+      if (!p.has_playbook) {
+        return <span className="text-xs text-muted-foreground">Not Generated</span>;
+      }
+      if (p.playbook_status === "review_needed") {
+        return <span className="inline-flex items-center rounded-full bg-amber-500/10 px-2 py-0.5 text-xs font-medium text-amber-500 border border-amber-500/20">Needs Sync</span>;
+      }
+      return <span className="inline-flex items-center rounded-full bg-emerald-500/10 px-2 py-0.5 text-xs font-medium text-emerald-500 border border-emerald-500/20">Generated</span>;
+    },
   },
   {
     accessorKey: "created_at",
-    header: "Date",
+    header: "Created",
     cell: ({ row }) => {
-      try {
-        return format(new Date(row.getValue("created_at")), "MMM dd, yyyy");
-      } catch (e) {
-        return "N/A";
-      }
+      const val = row.getValue("created_at");
+      return val ? new Date(val as string).toLocaleString() : "N/A";
     },
   },
   {
     id: "actions",
+    enableSorting: false,
     cell: ({ row }) => (
       <div className="flex justify-end">
-        <PatternActions patternId={row.original.id} title={row.original.title} />
+        <PatternActions pattern={row.original} />
       </div>
     ),
   },
@@ -137,14 +174,50 @@ const columns: ColumnDef<Pattern>[] = [
 
 export default function PatternsPage() {
   const pg = usePagination(50);
+  const queryClient = useQueryClient();
+
   const { data = [], isLoading } = useQuery<Pattern[]>({
     queryKey: ["patterns", pg.page],
     queryFn: () => api.get("/patterns", pg.params),
   });
 
+  const dedupMutation = useMutation({
+    mutationFn: () => api.post("/patterns/deduplicate", {}),
+    onSuccess: (res: any) => {
+      const mergedEps = res?.data?.merged_episodes || 0;
+      const mergedPats = res?.data?.merged_patterns || 0;
+      const mergedPbs = res?.data?.merged_playbooks || 0;
+      toast.success(
+        `Deduplication complete! Merged ${mergedEps} duplicate episodes, ${mergedPats} patterns, and ${mergedPbs} playbooks.`
+      );
+      queryClient.invalidateQueries({ queryKey: ["episodes"] });
+      queryClient.invalidateQueries({ queryKey: ["patterns"] });
+      queryClient.invalidateQueries({ queryKey: ["playbooks"] });
+    },
+    onError: (err: Error) => {
+      toast.error(err.message || "Failed to deduplicate patterns");
+    },
+  });
+
   return (
     <div className="space-y-6">
-      <PageHeader title="Patterns" description="Operational patterns derived from episode clusters." />
+      <div className="flex items-center justify-between">
+        <PageHeader title="Patterns" description="Operational patterns derived from episode clusters." />
+        <Button
+          variant="outline"
+          size="sm"
+          className="gap-2 text-xs border-indigo-500/30 text-indigo-400 hover:bg-indigo-500/10"
+          onClick={() => dedupMutation.mutate()}
+          disabled={dedupMutation.isPending}
+        >
+          {dedupMutation.isPending ? (
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          ) : (
+            <RefreshCw className="h-3.5 w-3.5" />
+          )}
+          Clean & Deduplicate 🧹
+        </Button>
+      </div>
       
       <Tabs defaultValue="list" className="w-full">
         <div className="flex justify-start mb-4">

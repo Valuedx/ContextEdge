@@ -13,6 +13,7 @@ from contextedge.models.evidence import EvidenceItem
 from contextedge.models.pattern import Pattern, PatternEvidenceLink
 from contextedge.schemas.common import TaskDispatchResponse
 from contextedge.schemas.evidence import (
+    EpisodeBulkApproveRequest,
     EpisodeDetail,
     EpisodeResponse,
     EpisodeStepResponse,
@@ -239,7 +240,69 @@ async def approve_episode(episode_id: UUID, db: DbSession, user: AuthUser):
         extract_issue_signature_task.delay(str(episode.id), str(user.tenant_id))
     except Exception:  # broker down must not fail the approval
         logger.warning("issue_signature.dispatch_failed", episode_id=str(episode.id))
+
+    # Auto-trigger pattern construction & playbook update on episode approval
+    try:
+        from contextedge.workers.pattern_tasks import cluster_episodes
+
+        did = str(episode.domain_id) if episode.domain_id else None
+        cluster_episodes.delay(did, str(user.tenant_id))
+    except Exception as exc:
+        logger.warning("episode_approve.pattern_cluster_dispatch_failed", error=str(exc))
+
     return episode
+
+
+@router.post("/bulk-approve")
+async def bulk_approve_episodes(body: EpisodeBulkApproveRequest, db: DbSession, user: AuthUser):
+    user.require_role("knowledge_manager")
+    result = await db.execute(
+        select(Episode).where(
+            Episode.id.in_(body.ids),
+            Episode.tenant_id == user.tenant_id,
+        )
+    )
+    episodes = list(result.scalars().all())
+    if not episodes:
+        return {"approved_count": 0}
+
+    domain_ids: set[str | None] = set()
+    for ep in episodes:
+        ep.status = "approved"
+        ep.reviewer_state = "approved"
+        ep.reviewer_user_id = user.user_id
+        domain_ids.add(str(ep.domain_id) if ep.domain_id else None)
+
+    await db.flush()
+
+    for ep in episodes:
+        await log_audit_event(
+            db,
+            tenant_id=user.tenant_id,
+            actor_id=user.user_id,
+            actor_email=user.email,
+            action="episode.approved",
+            resource_type="episode",
+            resource_id=str(ep.id),
+        )
+
+        try:
+            from contextedge.workers.signature_tasks import extract_issue_signature_task
+
+            extract_issue_signature_task.delay(str(ep.id), str(user.tenant_id))
+        except Exception:
+            pass
+
+    # Trigger pattern clustering automatically for all affected domains
+    try:
+        from contextedge.workers.pattern_tasks import cluster_episodes
+
+        for did in domain_ids:
+            cluster_episodes.delay(did, str(user.tenant_id))
+    except Exception as exc:
+        logger.warning("bulk_approve.pattern_cluster_dispatch_failed", error=str(exc))
+
+    return {"approved_count": len(episodes)}
 
 
 @router.post(

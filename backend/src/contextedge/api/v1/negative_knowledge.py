@@ -23,7 +23,6 @@ async def list_negative_knowledge(
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
 ):
-    user.require_role("knowledge_manager")
     stmt = select(NegativeKnowledgeItem).where(NegativeKnowledgeItem.tenant_id == user.tenant_id)
     if domain_id is not None:
         stmt = stmt.where(NegativeKnowledgeItem.domain_id == domain_id)

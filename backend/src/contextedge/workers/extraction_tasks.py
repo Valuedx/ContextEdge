@@ -161,7 +161,13 @@ async def _normalize(db: AsyncSession, raw_object_id: str, tenant_id: uuid.UUID)
     )
 
     source_ts = None
-    if payload.get("_source_timestamp"):
+    closed_str = payload.get("closedTime") or payload.get("closed_time")
+    if closed_str:
+        try:
+            source_ts = datetime.fromisoformat(str(closed_str).replace("Z", "+00:00"))
+        except (ValueError, TypeError):
+            pass
+    elif payload.get("_source_timestamp"):
         try:
             source_ts = datetime.fromisoformat(payload["_source_timestamp"])
         except (ValueError, TypeError):

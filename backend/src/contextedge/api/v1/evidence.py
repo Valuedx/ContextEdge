@@ -34,6 +34,7 @@ async def search_evidence(
     source_id: UUID | None = None,
     relevance_state: str | None = None,
     evidence_type: str | None = None,
+    source_type: str | None = None,
     domain_id: UUID | None = None,
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
@@ -49,6 +50,9 @@ async def search_evidence(
             query.strip(),
             limit=limit,
             exclude_policy_ids=excluded_policy_ids,
+            relevance_state=relevance_state,
+            evidence_type=evidence_type,
+            source_type=source_type,
         )
         return await _attach_source_references(
             db, [item for item, _rank in fts_results]
@@ -75,9 +79,11 @@ async def search_evidence(
         # GET /threads/{thread_id}/evidence), not as top-level items.
         # Callers can still fetch them by passing evidence_type=thread_message.
         q = q.where(EvidenceItem.evidence_type != "thread_message")
+    if source_type:
+        q = q.where(EvidenceItem.source_type == source_type)
     if domain_id:
         q = q.where(EvidenceItem.domain_id == domain_id)
-    q = q.order_by(EvidenceItem.ingested_at.desc()).limit(limit).offset(offset)
+    q = q.order_by(EvidenceItem.created_at_source.desc().nullslast(), EvidenceItem.ingested_at.desc()).limit(limit).offset(offset)
     result = await db.execute(q)
     return await _attach_source_references(db, list(result.scalars().all()))
 

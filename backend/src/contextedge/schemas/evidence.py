@@ -188,6 +188,10 @@ class EvidenceBulkDeleteRequest(BaseModel):
     ids: list[UUID] = Field(..., min_length=1, description="List of evidence item IDs to delete")
 
 
+class EpisodeBulkApproveRequest(BaseModel):
+    ids: list[UUID] = Field(..., min_length=1, description="List of episode IDs to approve")
+
+
 class EvidenceContextResponse(BaseModel):
     source_name: str | None = None
     domain_name: str | None = None

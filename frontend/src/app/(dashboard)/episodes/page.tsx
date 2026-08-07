@@ -2,7 +2,7 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ColumnDef } from "@tanstack/react-table";
-import { Sparkles, Loader2, Trash2 } from "lucide-react";
+import { Sparkles, Loader2, Trash2, CheckCircle2 } from "lucide-react";
 
 import { PageHeader } from "@/components/common/page-header";
 import { DataTable } from "@/components/common/data-table";
@@ -17,8 +17,21 @@ import { toast } from "sonner";
 import { usePagination } from "@/lib/hooks/use-pagination";
 import { PaginationControls } from "@/components/common/pagination-controls";
 
-function EpisodeActions({ episodeId, title }: { episodeId: string; title: string }) {
+function EpisodeActions({ episodeId, title, isApproved }: { episodeId: string; title: string; isApproved: boolean }) {
   const queryClient = useQueryClient();
+
+  const approveMutation = useMutation({
+    mutationFn: () => api.post(`/episodes/${episodeId}/approve`, {}),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["episodes"] });
+      queryClient.invalidateQueries({ queryKey: ["patterns"] });
+      queryClient.invalidateQueries({ queryKey: ["playbooks"] });
+      toast.success(`Episode "${title}" approved! Pattern construction & playbook update triggered.`);
+    },
+    onError: (err: Error) => {
+      toast.error(err.message || "Failed to approve episode");
+    },
+  });
 
   const deleteMutation = useMutation({
     mutationFn: () => api.delete(`/episodes/${episodeId}`),
@@ -32,7 +45,24 @@ function EpisodeActions({ episodeId, title }: { episodeId: string; title: string
   });
 
   return (
-    <div className="flex gap-2">
+    <div className="flex items-center gap-1">
+      <Button
+        variant="ghost"
+        size="icon"
+        className={isApproved ? "text-emerald-500 hover:text-emerald-600" : "text-muted-foreground hover:text-emerald-500"}
+        title={isApproved ? "Re-Approve & Update Pattern/Playbook" : "Approve Episode"}
+        onClick={(e) => {
+          e.stopPropagation();
+          approveMutation.mutate();
+        }}
+        disabled={approveMutation.isPending}
+      >
+        {approveMutation.isPending ? (
+          <Loader2 className="h-4 w-4 animate-spin" />
+        ) : (
+          <CheckCircle2 className="h-4 w-4" />
+        )}
+      </Button>
       <Button
         variant="ghost"
         size="icon"
@@ -57,6 +87,29 @@ function EpisodeActions({ episodeId, title }: { episodeId: string; title: string
 }
 
 const columns: ColumnDef<Episode>[] = [
+  {
+    id: "select",
+    header: ({ table }) => (
+      <input
+        type="checkbox"
+        className="h-4 w-4 rounded border-black/20 bg-white/50 text-primary focus:ring-primary dark:border-white/20 dark:bg-white/5"
+        checked={table.getIsAllPageRowsSelected()}
+        onChange={(e) => table.toggleAllPageRowsSelected(!!e.target.checked)}
+        aria-label="Select all"
+      />
+    ),
+    cell: ({ row }) => (
+      <input
+        type="checkbox"
+        className="h-4 w-4 rounded border-black/20 bg-white/50 text-primary focus:ring-primary dark:border-white/20 dark:bg-white/5"
+        checked={row.getIsSelected()}
+        onChange={(e) => row.toggleSelected(!!e.target.checked)}
+        aria-label="Select row"
+      />
+    ),
+    enableSorting: false,
+    enableHiding: false,
+  },
   {
     accessorKey: "title",
     header: "Title",
@@ -84,13 +137,18 @@ const columns: ColumnDef<Episode>[] = [
   {
     accessorKey: "created_at",
     header: "Created",
-    cell: ({ row }) => new Date(row.getValue("created_at")).toLocaleDateString(),
+    cell: ({ row }) => new Date(row.getValue("created_at")).toLocaleString(),
   },
   {
     id: "actions",
+    enableSorting: false,
     cell: ({ row }) => (
       <div className="flex justify-end">
-        <EpisodeActions episodeId={row.original.id} title={row.original.title} />
+        <EpisodeActions 
+          episodeId={row.original.id} 
+          title={row.original.title} 
+          isApproved={row.original.reviewer_state === "approved"} 
+        />
       </div>
     ),
   },
@@ -99,11 +157,28 @@ const columns: ColumnDef<Episode>[] = [
 export default function EpisodesPage() {
   const [isReconstructing, setIsReconstructing] = useState(false);
   const [isClustering, setIsClustering] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+
   const pg = usePagination(50);
+  const queryClient = useQueryClient();
 
   const { data = [], isLoading } = useQuery<Episode[]>({
     queryKey: ["episodes", pg.page],
     queryFn: () => api.get("/episodes", pg.params),
+  });
+
+  const bulkApproveMutation = useMutation({
+    mutationFn: (ids: string[]) => api.post("/episodes/bulk-approve", { ids }),
+    onSuccess: (res: any) => {
+      queryClient.invalidateQueries({ queryKey: ["episodes"] });
+      queryClient.invalidateQueries({ queryKey: ["patterns"] });
+      queryClient.invalidateQueries({ queryKey: ["playbooks"] });
+      toast.success(`${res.approved_count ?? selectedIds.length} episodes approved! Auto pattern creation & playbook updates triggered.`);
+      setSelectedIds([]);
+    },
+    onError: (err: Error) => {
+      toast.error(err.message || "Bulk approval failed");
+    },
   });
 
   const handleReconstruct = async () => {
@@ -143,7 +218,26 @@ export default function EpisodesPage() {
         title="Episodes" 
         description="Reconstructed troubleshooting episodes from correlated evidence." 
         actions={
-          <div className="flex gap-3">
+          <div className="flex flex-wrap items-center gap-3">
+            {selectedIds.length > 0 && (
+              <Button
+                type="button"
+                variant="default"
+                className="bg-emerald-600 hover:bg-emerald-700 text-white"
+                onClick={() => {
+                  bulkApproveMutation.mutate(selectedIds);
+                }}
+                disabled={bulkApproveMutation.isPending}
+              >
+                {bulkApproveMutation.isPending ? (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                ) : (
+                  <CheckCircle2 className="mr-2 h-4 w-4" />
+                )}
+                Approve Selected ({selectedIds.length})
+              </Button>
+            )}
+
             <Button 
               onClick={handleConstructPattern} 
               disabled={isClustering}
@@ -173,10 +267,14 @@ export default function EpisodesPage() {
         }
       />
       {isLoading ? (
-        <DataTableSkeleton columns={5} />
+        <DataTableSkeleton columns={6} />
       ) : (
         <>
-          <DataTable columns={columns} data={data} />
+          <DataTable 
+            columns={columns} 
+            data={data} 
+            onSelectionChange={setSelectedIds}
+          />
           <PaginationControls
             page={pg.page}
             pageSize={pg.pageSize}

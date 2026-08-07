@@ -250,6 +250,9 @@ export interface Pattern {
   evidence_summary?: Record<string, number> | null;
   created_at: string;
   updated_at: string;
+  has_playbook?: boolean;
+  playbook_id?: string | null;
+  playbook_status?: "generated" | "review_needed" | "none" | string | null;
 }
 
 export interface Playbook {
@@ -426,6 +429,7 @@ export type PolicyType = "retention" | "classification" | "access" | "approval";
 /** GET /drift/alerts */
 export interface DriftAlert {
   playbook_id: string;
+  pattern_id?: string | null;
   title: string;
   issues: string[];
   severity: string;

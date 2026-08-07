@@ -230,19 +230,32 @@ async def get_pattern_subgraph(
                         "weight": link.weight,
                     })
 
-    # 3. Decorate episode & evidence node titles in two batched,
-    # tenant-filtered queries (never one query per node).
+    # 3. Decorate node titles across all types (episodes, evidence, identities, playbooks, patterns).
+    from contextedge.models.episode import CanonicalIdentity
+    from contextedge.models.playbook import Playbook
+
     episode_ids: list[uuid.UUID] = []
     evidence_ids: list[uuid.UUID] = []
+    identity_ids: list[uuid.UUID] = []
+    playbook_ids: list[uuid.UUID] = []
+    pattern_ids: list[uuid.UUID] = []
+
     for n in nodes.values():
         try:
             nid_uuid = uuid.UUID(n["id"])
         except (ValueError, AttributeError, TypeError):
             continue
-        if n["type"] == "episode":
+        ntype = n["type"]
+        if ntype == "episode":
             episode_ids.append(nid_uuid)
-        elif n["type"] == "evidence":
+        elif ntype == "evidence":
             evidence_ids.append(nid_uuid)
+        elif ntype in ("identity", "entity"):
+            identity_ids.append(nid_uuid)
+        elif ntype == "playbook":
+            playbook_ids.append(nid_uuid)
+        elif ntype == "pattern":
+            pattern_ids.append(nid_uuid)
 
     ep_by_id: dict[str, object] = {}
     if episode_ids:
@@ -262,9 +275,37 @@ async def get_pattern_subgraph(
         )
         ev_by_id = {str(ev.id): ev for ev in ev_res.scalars().all()}
 
+    ident_by_id: dict[str, object] = {}
+    if identity_ids:
+        ident_res = await db.execute(
+            select(CanonicalIdentity).where(
+                CanonicalIdentity.id.in_(identity_ids)
+            )
+        )
+        ident_by_id = {str(ident.id): ident for ident in ident_res.scalars().all()}
+
+    pb_by_id: dict[str, object] = {}
+    if playbook_ids:
+        pb_res = await db.execute(
+            select(Playbook).where(
+                Playbook.id.in_(playbook_ids)
+            )
+        )
+        pb_by_id = {str(pb.id): pb for pb in pb_res.scalars().all()}
+
+    pat_by_id: dict[str, object] = {}
+    if pattern_ids:
+        pat_res = await db.execute(
+            select(Pattern).where(
+                Pattern.id.in_(pattern_ids)
+            )
+        )
+        pat_by_id = {str(pat.id): pat for pat in pat_res.scalars().all()}
+
     for n in nodes.values():
         nid_str = n["id"]
-        if n["type"] == "episode":
+        ntype = n["type"]
+        if ntype == "episode":
             ep_obj = ep_by_id.get(nid_str)
             if ep_obj:
                 base_title = ep_obj.title or ep_obj.root_cause_summary or f"Episode {nid_str[:8]}"
@@ -274,7 +315,7 @@ async def get_pattern_subgraph(
                     n["title"] = base_title
             elif not n.get("title"):
                 n["title"] = f"Episode {nid_str[:8]}"
-        elif n["type"] == "evidence":
+        elif ntype == "evidence":
             ev_obj = ev_by_id.get(nid_str)
             if ev_obj:
                 base_title = ev_obj.title or f"Evidence {nid_str[:8]}"
@@ -284,6 +325,24 @@ async def get_pattern_subgraph(
                     n["title"] = base_title
             elif not n.get("title"):
                 n["title"] = f"Evidence {nid_str[:8]}"
+        elif ntype in ("identity", "entity"):
+            ident_obj = ident_by_id.get(nid_str)
+            if ident_obj:
+                n["title"] = f"{ident_obj.canonical_name} ({ident_obj.entity_type})"
+            elif not n.get("title"):
+                n["title"] = f"Identity {nid_str[:8]}"
+        elif ntype == "playbook":
+            pb_obj = pb_by_id.get(nid_str)
+            if pb_obj:
+                n["title"] = pb_obj.title
+            elif not n.get("title"):
+                n["title"] = f"Playbook {nid_str[:8]}"
+        elif ntype == "pattern":
+            pat_obj = pat_by_id.get(nid_str)
+            if pat_obj:
+                n["title"] = pat_obj.title
+            elif not n.get("title"):
+                n["title"] = f"Pattern {nid_str[:8]}"
 
     return {
         "nodes": list(nodes.values()),
@@ -360,6 +419,122 @@ async def get_entity_subgraph(
                     visited.add(neighbor)
                     next_frontier.append(neighbor)
         frontier = next_frontier
+
+    # Decorate node titles across all types (episodes, evidence, identities, playbooks, patterns).
+    from contextedge.models.episode import CanonicalIdentity, Episode
+    from contextedge.models.evidence import EvidenceItem
+    from contextedge.models.pattern import Pattern
+    from contextedge.models.playbook import Playbook
+
+    episode_ids: list[uuid.UUID] = []
+    evidence_ids: list[uuid.UUID] = []
+    identity_ids: list[uuid.UUID] = []
+    playbook_ids: list[uuid.UUID] = []
+    pattern_ids: list[uuid.UUID] = []
+
+    for n in nodes.values():
+        try:
+            nid_uuid = uuid.UUID(n["id"])
+        except (ValueError, AttributeError, TypeError):
+            continue
+        ntype = n["type"]
+        if ntype == "episode":
+            episode_ids.append(nid_uuid)
+        elif ntype == "evidence":
+            evidence_ids.append(nid_uuid)
+        elif ntype in ("identity", "entity"):
+            identity_ids.append(nid_uuid)
+        elif ntype == "playbook":
+            playbook_ids.append(nid_uuid)
+        elif ntype == "pattern":
+            pattern_ids.append(nid_uuid)
+
+    ep_by_id: dict[str, object] = {}
+    if episode_ids:
+        ep_res = await db.execute(
+            select(Episode).where(
+                Episode.id.in_(episode_ids), Episode.tenant_id == tenant_id
+            )
+        )
+        ep_by_id = {str(ep.id): ep for ep in ep_res.scalars().all()}
+
+    ev_by_id: dict[str, object] = {}
+    if evidence_ids:
+        ev_res = await db.execute(
+            select(EvidenceItem).where(
+                EvidenceItem.id.in_(evidence_ids), EvidenceItem.tenant_id == tenant_id
+            )
+        )
+        ev_by_id = {str(ev.id): ev for ev in ev_res.scalars().all()}
+
+    ident_by_id: dict[str, object] = {}
+    if identity_ids:
+        ident_res = await db.execute(
+            select(CanonicalIdentity).where(
+                CanonicalIdentity.id.in_(identity_ids)
+            )
+        )
+        ident_by_id = {str(ident.id): ident for ident in ident_res.scalars().all()}
+
+    pb_by_id: dict[str, object] = {}
+    if playbook_ids:
+        pb_res = await db.execute(
+            select(Playbook).where(
+                Playbook.id.in_(playbook_ids)
+            )
+        )
+        pb_by_id = {str(pb.id): pb for pb in pb_res.scalars().all()}
+
+    pat_by_id: dict[str, object] = {}
+    if pattern_ids:
+        pat_res = await db.execute(
+            select(Pattern).where(
+                Pattern.id.in_(pattern_ids)
+            )
+        )
+        pat_by_id = {str(pat.id): pat for pat in pat_res.scalars().all()}
+
+    for n in nodes.values():
+        nid_str = n["id"]
+        ntype = n["type"]
+        if ntype == "episode":
+            ep_obj = ep_by_id.get(nid_str)
+            if ep_obj:
+                base_title = ep_obj.title or ep_obj.root_cause_summary or f"Episode {nid_str[:8]}"
+                if ep_obj.created_at:
+                    n["title"] = f"{base_title} ({ep_obj.created_at.strftime('%b %d, %Y')})"
+                else:
+                    n["title"] = base_title
+            elif not n.get("title"):
+                n["title"] = f"Episode {nid_str[:8]}"
+        elif ntype == "evidence":
+            ev_obj = ev_by_id.get(nid_str)
+            if ev_obj:
+                base_title = ev_obj.title or f"Evidence {nid_str[:8]}"
+                if ev_obj.ingested_at:
+                    n["title"] = f"{base_title} ({ev_obj.ingested_at.strftime('%b %d, %Y')})"
+                else:
+                    n["title"] = base_title
+            elif not n.get("title"):
+                n["title"] = f"Evidence {nid_str[:8]}"
+        elif ntype in ("identity", "entity"):
+            ident_obj = ident_by_id.get(nid_str)
+            if ident_obj:
+                n["title"] = f"{ident_obj.canonical_name} ({ident_obj.entity_type})"
+            elif not n.get("title"):
+                n["title"] = f"Identity {nid_str[:8]}"
+        elif ntype == "playbook":
+            pb_obj = pb_by_id.get(nid_str)
+            if pb_obj:
+                n["title"] = pb_obj.title
+            elif not n.get("title"):
+                n["title"] = f"Playbook {nid_str[:8]}"
+        elif ntype == "pattern":
+            pat_obj = pat_by_id.get(nid_str)
+            if pat_obj:
+                n["title"] = pat_obj.title
+            elif not n.get("title"):
+                n["title"] = f"Pattern {nid_str[:8]}"
 
     return {
         "nodes": list(nodes.values()),

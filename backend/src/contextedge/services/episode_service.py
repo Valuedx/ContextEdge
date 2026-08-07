@@ -196,6 +196,40 @@ async def create_episodes_from_evidence(
             logger.warning("episode_embedding_failed", ep_title=title)
             embedding = None
 
+        # Preventive Episode Deduplication: Check if Episode with matching title already exists
+        from sqlalchemy import func
+        clean_title = title.strip().lower()
+        existing_ep_res = await db.execute(
+            select(Episode).where(
+                Episode.tenant_id == tenant_id,
+                func.lower(Episode.title) == clean_title,
+            ).limit(1)
+        )
+        existing_ep = existing_ep_res.scalar_one_or_none()
+        if existing_ep:
+            for evidence_id in episode_evidence_ids:
+                link_exists = (
+                    await db.execute(
+                        select(EpisodeEvidenceLink).where(
+                            EpisodeEvidenceLink.episode_id == existing_ep.id,
+                            EpisodeEvidenceLink.evidence_id == evidence_id,
+                        )
+                    )
+                ).scalar_one_or_none()
+                if not link_exists:
+                    why = (cluster_reasons or {}).get(str(evidence_id))
+                    db.add(
+                        EpisodeEvidenceLink(
+                            tenant_id=tenant_id,
+                            episode_id=existing_ep.id,
+                            evidence_id=evidence_id,
+                            link_reason=why or "evidence_merged",
+                            membership_source=membership_source,
+                        )
+                    )
+            created_episodes.append(existing_ep)
+            continue
+
         episode = Episode(
             tenant_id=tenant_id,
             domain_id=domain_id,
@@ -264,10 +298,142 @@ async def create_episodes_from_evidence(
             episode_id=str(episode.id),
             steps_total=len(steps),
             steps_ungrounded=ungrounded,
-            unsupported_step_rate=(
-                round(ungrounded / len(steps), 3) if steps else None
-            ),
-            contradiction_count=len(ep_data.get("contradictions") or []),
+            ungrounded_ratio=(ungrounded / len(steps)) if steps else 0.0,
         )
 
     return created_episodes
+
+
+async def deduplicate_episodes(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+) -> int:
+    """Merge duplicate episodes with matching normalized titles for a tenant."""
+    from sqlalchemy import func
+    from contextedge.models.pattern import PatternEvidenceLink, GraphEdge
+    from contextedge.models.episode import EpisodeStep
+
+    eps = (
+        await db.execute(
+            select(Episode).where(Episode.tenant_id == tenant_id)
+        )
+    ).scalars().all()
+
+    grouped_episodes: dict[str, list[Episode]] = {}
+    for ep in eps:
+        key = ep.title.strip().lower()
+        grouped_episodes.setdefault(key, []).append(ep)
+
+    merged_count = 0
+    for key, group in grouped_episodes.items():
+        if len(group) <= 1:
+            continue
+
+        # Keep approved / highest confidence / earliest created
+        group.sort(
+            key=lambda x: (
+                1 if x.reviewer_state == "approved" else 0,
+                x.extraction_confidence or 0,
+                -(x.created_at.timestamp() if x.created_at else 0),
+            ),
+            reverse=True,
+        )
+        canonical = group[0]
+        duplicates = group[1:]
+
+        for dup in duplicates:
+            # 1. Re-link EpisodeEvidenceLink
+            dup_ev_links = (
+                await db.execute(
+                    select(EpisodeEvidenceLink).where(
+                        EpisodeEvidenceLink.episode_id == dup.id
+                    )
+                )
+            ).scalars().all()
+
+            for link in dup_ev_links:
+                existing_link = (
+                    await db.execute(
+                        select(EpisodeEvidenceLink).where(
+                            EpisodeEvidenceLink.episode_id == canonical.id,
+                            EpisodeEvidenceLink.evidence_id == link.evidence_id,
+                        )
+                    )
+                ).scalar_one_or_none()
+
+                if not existing_link:
+                    link.episode_id = canonical.id
+                else:
+                    await db.delete(link)
+
+            # 2. Re-link PatternEvidenceLink
+            dup_pat_links = (
+                await db.execute(
+                    select(PatternEvidenceLink).where(
+                        PatternEvidenceLink.episode_id == dup.id
+                    )
+                )
+            ).scalars().all()
+
+            for plink in dup_pat_links:
+                existing_plink = (
+                    await db.execute(
+                        select(PatternEvidenceLink).where(
+                            PatternEvidenceLink.pattern_id == plink.pattern_id,
+                            PatternEvidenceLink.episode_id == canonical.id,
+                        )
+                    )
+                ).scalar_one_or_none()
+
+                if not existing_plink:
+                    plink.episode_id = canonical.id
+                else:
+                    await db.delete(plink)
+
+            # 3. Re-link EpisodeStep
+            steps = (
+                await db.execute(
+                    select(EpisodeStep).where(EpisodeStep.episode_id == dup.id)
+                )
+            ).scalars().all()
+            for step in steps:
+                step.episode_id = canonical.id
+
+            # 4. Re-link Graph edges
+            edges = (
+                await db.execute(
+                    select(GraphEdge).where(
+                        (GraphEdge.source_node_id == dup.id)
+                        | (GraphEdge.target_node_id == dup.id)
+                    )
+                )
+            ).scalars().all()
+
+            for edge in edges:
+                new_src = canonical.id if edge.source_node_id == dup.id else edge.source_node_id
+                new_tgt = canonical.id if edge.target_node_id == dup.id else edge.target_node_id
+
+                existing_edge = (
+                    await db.execute(
+                        select(GraphEdge).where(
+                            GraphEdge.tenant_id == edge.tenant_id,
+                            GraphEdge.source_node_type == edge.source_node_type,
+                            GraphEdge.source_node_id == new_src,
+                            GraphEdge.target_node_type == edge.target_node_type,
+                            GraphEdge.target_node_id == new_tgt,
+                            GraphEdge.edge_type == edge.edge_type,
+                        )
+                    )
+                ).scalar_one_or_none()
+
+                if existing_edge and existing_edge.id != edge.id:
+                    await db.delete(edge)
+                else:
+                    edge.source_node_id = new_src
+                    edge.target_node_id = new_tgt
+
+            await db.delete(dup)
+            merged_count += 1
+
+    await db.flush()
+    return merged_count
