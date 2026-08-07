@@ -49,11 +49,11 @@ class Settings(BaseSettings):
     azure_openai_api_key: str = ""
     azure_openai_endpoint: str = ""
     google_api_key: str = ""
-    location: str = "us-central1"
+    location: str = "global"
     google_application_credentials: str = ""
-    default_llm_provider: str = "openai"
-    default_classification_model: str = "gpt-4o-mini"
-    default_extraction_model: str = "gpt-4o"
+    default_llm_provider: str = "vertex_ai"
+    default_classification_model: str = "vertex_ai/us-central1/gemini-2.5-flash"
+    default_extraction_model: str = "vertex_ai/global/gemini-3.6-flash"
     default_embedding_model: str = "text-embedding-3-small"
     # E1 resilience: when set, a failed primary LLM call is retried once
     # on this model (usage recorded against the model that served).
