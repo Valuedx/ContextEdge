@@ -820,6 +820,37 @@ async def _reconstruct(
     if not cluster.evidence_ids:
         return {"error": "no_evidence_found"}
 
+    if settle and len(cluster.evidence_ids) < 2:
+        # A single-evidence "cluster" has no timeline to reconstruct, and
+        # per-message ingestion makes them the COMMON case: the e2e run
+        # measured episode extraction at 73% of total spend, much of it
+        # on one-message cases. Manual reviewer triggers (settle=False)
+        # may still reconstruct a singleton deliberately.
+        return {"status": "skipped_single_evidence"}
+
+    # Per-cluster advisory lock, same pattern as acquire_sync_lock: the
+    # threads pool runs reconstructs concurrently, and the fingerprint
+    # dedup below this point is read-then-act — 8 concurrent tasks for
+    # one cluster raced past it and minted 8 identical episodes
+    # (measured live: 8 duplicates in 46 seconds). Losers skip without
+    # spending an LLM call; the winner's draft idempotency then works.
+    from sqlalchemy import text as _text
+
+    lock_key = f"episode_reconstruct:{tenant_id}:{cluster.fingerprint}"
+    got_lock = (
+        await db.execute(
+            _text("SELECT pg_try_advisory_xact_lock(hashtext(:key))"),
+            {"key": lock_key},
+        )
+    ).scalar()
+    if not got_lock:
+        logger.info(
+            "episode_reconstruct.skipped_locked",
+            tenant_id=str(tenant_id),
+            cluster_size=len(cluster.evidence_ids),
+        )
+        return {"status": "skipped_locked"}
+
     if settle:
         # Debounce settlement check: if anything in this cluster was
         # ingested within the window, a later-scheduled task (from that

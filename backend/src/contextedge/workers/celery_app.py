@@ -201,6 +201,11 @@ celery_app.conf.update(
     task_routes={
         "sync.*": {"queue": "sync"},
         "hydration.*": {"queue": "hydration"},
+        # Fast lane (e2e finding): a ~2.5s gate call must never queue
+        # behind 20-60s episode/extraction tasks — during the bulk
+        # ingest, 500 classifications starved ~40 minutes in extraction's
+        # FIFO. Routes are matched in order, so this wins the wildcard.
+        "extraction.classify_relevance": {"queue": "default"},
         "extraction.*": {"queue": "extraction"},
         "artifact.*": {"queue": "extraction"},
         "pattern.*": {"queue": "pattern"},

@@ -550,6 +550,26 @@ class ZohoDeskConnector(BaseConnector):
         params.update(extra or {})
         return params
 
+    def _matches_module_filter(self, module: str, row: dict) -> bool:
+        """Client-side verification of module_filters against a returned
+        row. The server-side params above are still sent — this is the
+        backstop for the failure mode the e2e run hit: a filter value the
+        API does not recognise (a custom status, a misspelled key) is
+        silently ignored server-side and the full un-filtered window
+        comes back. Only keys the row actually carries are compared, so
+        param-style filters with no row counterpart (sortBy, fields)
+        never drop anything."""
+        module_filter = self.module_filters.get(module)
+        if not isinstance(module_filter, dict):
+            return True
+        for key, expected in module_filter.items():
+            actual = row.get(str(key))
+            if actual is None or not isinstance(expected, (str, int, float, bool)):
+                continue
+            if str(actual).strip().lower() != str(expected).strip().lower():
+                return False
+        return True
+
     # --- credential validation -------------------------------------------
 
     async def validate_credentials(self) -> CredentialStatus:
@@ -905,6 +925,11 @@ class ZohoDeskConnector(BaseConnector):
             older_than_start=start,
             start_offset=offset,
         )
+        # After the walk, before hydration: dropping non-matching rows
+        # here keeps the time checkpoint honest (it advanced over the
+        # full walked window) while unmatched records never spend a
+        # detail fetch or reach ingestion.
+        rows = [r for r in rows if self._matches_module_filter(module, r)]
         rows = await self._hydrate_rows(module, rows)
         events = [self._event(module, row, department_id) for row in rows]
         events = [e for e in events if e is not None]
@@ -956,6 +981,11 @@ class ZohoDeskConnector(BaseConnector):
             newer_than_end=None,
             older_than_start=older_than_start,
         )
+        # After the walk, before hydration: dropping non-matching rows
+        # here keeps the time checkpoint honest (it advanced over the
+        # full walked window) while unmatched records never spend a
+        # detail fetch or reach ingestion.
+        rows = [r for r in rows if self._matches_module_filter(module, r)]
         rows = await self._hydrate_rows(module, rows)
         events = [self._event(module, row, department_id) for row in rows]
         events = [e for e in events if e is not None]

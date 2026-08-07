@@ -1,4 +1,4 @@
-"""Conversational foundations: reconstruction debounce + Teams metadata."""
+﻿"""Conversational foundations: reconstruction debounce + Teams metadata."""
 
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
@@ -23,7 +23,7 @@ def _scalar_one(value):
 
 @pytest.mark.asyncio
 async def test_reconstruct_defers_while_cluster_is_unsettled():
-    """A cluster still receiving evidence must not spend an LLM call —
+    """A cluster still receiving evidence must not spend an LLM call â€”
     the later-scheduled task from the newer evidence will handle it."""
     from contextedge.services.episode_cluster_service import EpisodeCluster
     from contextedge.workers.extraction_tasks import _reconstruct
@@ -31,7 +31,7 @@ async def test_reconstruct_defers_while_cluster_is_unsettled():
     tenant_id = uuid4()
     seed = uuid4()
     cluster = EpisodeCluster(
-        fingerprint="fp-busy", evidence_ids=[seed], reasons={str(seed): ["seed"]}
+        fingerprint="fp-busy", evidence_ids=[seed, uuid4()], reasons={str(seed): ["seed"]}
     )
     # Newest member ingested 30 seconds ago (inside the window); oldest
     # 5 minutes ago (not yet overdue for the starvation guard).
@@ -49,7 +49,7 @@ async def test_reconstruct_defers_while_cluster_is_unsettled():
         result = await _reconstruct(db, str(seed), tenant_id)
 
     assert result["status"] == "deferred_unsettled"
-    assert db.execute.await_count == 1  # settlement query only, nothing else
+    assert db.execute.await_count == 2  # advisory lock + settlement query
 
 
 @pytest.mark.asyncio
@@ -73,9 +73,9 @@ async def test_reconstruct_settle_bypass_for_manual_triggers():
     ):
         result = await _reconstruct(db, str(seed), tenant_id, settle=False)
 
-    # First (and only) execute is the fingerprint idempotency check.
+    # Executes: advisory lock, then the fingerprint idempotency check.
     assert result["status"] == "duplicate_cluster"
-    assert db.execute.await_count == 1
+    assert db.execute.await_count == 2
 
 
 def test_correlation_dispatch_is_debounced():
@@ -178,7 +178,7 @@ def test_message_content_tolerates_minimal_payloads():
 @pytest.mark.asyncio
 async def test_starvation_guard_forces_synthesis_on_never_quiet_clusters():
     """A channel that never goes quiet must still get its first
-    synthesis within the max delay — a long live incident is exactly
+    synthesis within the max delay â€” a long live incident is exactly
     when episodes matter."""
     from contextedge.services.episode_cluster_service import EpisodeCluster
     from contextedge.workers.extraction_tasks import _reconstruct
@@ -186,7 +186,7 @@ async def test_starvation_guard_forces_synthesis_on_never_quiet_clusters():
     tenant_id = uuid4()
     seed = uuid4()
     cluster = EpisodeCluster(
-        fingerprint="fp-storm", evidence_ids=[seed], reasons={str(seed): ["seed"]}
+        fingerprint="fp-storm", evidence_ids=[seed, uuid4()], reasons={str(seed): ["seed"]}
     )
     bounds_result = Mock()
     # Oldest member 40 minutes old (overdue), newest 10 seconds (unsettled).
@@ -197,7 +197,8 @@ async def test_starvation_guard_forces_synthesis_on_never_quiet_clusters():
     dup_result = Mock()
     dup_result.scalar_one_or_none.return_value = uuid4()  # stop at idempotency
 
-    db = SimpleNamespace(execute=AsyncMock(side_effect=[bounds_result, dup_result]))
+    lock_result = Mock(); lock_result.scalar.return_value = True
+    db = SimpleNamespace(execute=AsyncMock(side_effect=[lock_result, bounds_result, dup_result]))
 
     with patch(
         "contextedge.services.episode_cluster_service.resolve_episode_cluster",

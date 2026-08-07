@@ -365,8 +365,12 @@ async def test_reconstruct_passes_real_source_types_and_supersedes_subset_drafts
         reasons={str(ticket_ev.id): ["seed"], str(teams_ev.id): ["correlation:case_link_match"]},
     )
 
-    async def execute(stmt):
+    async def execute(stmt, params=None):
         text = str(stmt)
+        if "pg_try_advisory_xact_lock" in text:
+            lock = Mock()
+            lock.scalar.return_value = True
+            return lock
         if "cluster_fingerprint = " in text or "cluster_fingerprint =" in text:
             return _scalar_one(None)  # no duplicate draft
         if "domains" in text:

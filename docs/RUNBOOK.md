@@ -266,6 +266,19 @@ python -m celery -A contextedge.workers.celery_app worker -l INFO -n workerB@%h 
 python -m celery -A contextedge.workers.celery_app beat -l INFO
 ```
 
+### Onboarding a new tenant / bulk backfill
+
+Measured on a live 84-ticket Zoho backfill (thread-heavy corpus): a
+cold-start ingest burned through the deployment-default daily budget
+(2M tokens) in roughly two hours and the `block` action froze the
+pipeline mid-run for 9.5 minutes until an operator intervened. Before
+any bulk backfill, **provision a `tenant_llm_budgets` row** for the
+onboarding tenant (sized ~100k tokens per thread-heavy ticket,
+cold-start) or set its action to `warn` for the ingest window, then
+restore. Also set connector filters with the connector's own key
+(`module_filters` for Zoho Desk, `table_filters` for ServiceNow) — the
+wrong key is silently ignored and the whole modified window syncs.
+
 Via the launcher (`dev.py` defers to a caller-supplied `-P`/`-Q`):
 
 ```powershell

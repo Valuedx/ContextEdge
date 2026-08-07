@@ -1,4 +1,4 @@
-"""Regression tests for review findings F-04 and F-23: legal-hold
+﻿"""Regression tests for review findings F-04 and F-23: legal-hold
 evidence must never reach an LLM extractor or scanner.
 
 Both findings share the invariant "any query that ships evidence
@@ -43,11 +43,17 @@ async def test_episode_reconstruct_skips_legal_hold_evidence():
     normal = _evidence_stub(legal_hold=False)
     normal.tenant_id = tenant_id
     normal.source_id = uuid4()
+    # Second visible item: the singleton gate deliberately skips
+    # one-evidence clusters, and this test is about legal-hold
+    # exclusion, not the gate.
+    normal2 = _evidence_stub(legal_hold=False)
+    normal2.tenant_id = tenant_id
+    normal2.source_id = uuid4()
     held = _evidence_stub(legal_hold=True)
     held.tenant_id = tenant_id
     held.source_id = uuid4()
 
-    gets = {normal.id: normal, held.id: held}
+    gets = {normal.id: normal, normal2.id: normal2, held.id: held}
 
     async def fake_get(model, pk):
         return gets.get(pk)
@@ -61,11 +67,14 @@ async def test_episode_reconstruct_skips_legal_hold_evidence():
 
     visibility_sql: list[str] = []
 
-    async def execute(stmt):
+    async def execute(stmt, params=None):
         text = str(stmt)
         result = Mock()
+        if "pg_try_advisory_xact_lock" in text:
+            result.scalar.return_value = True
+            return result
         if "min(evidence_items.ingested_at)" in text:
-            # Settlement bounds: long-settled cluster → synthesis proceeds.
+            # Settlement bounds: long-settled cluster â†’ synthesis proceeds.
             from datetime import UTC, datetime, timedelta
 
             settled = datetime.now(UTC) - timedelta(hours=2)
@@ -75,7 +84,7 @@ async def test_episode_reconstruct_skips_legal_hold_evidence():
             # The cluster resolver's visibility query: the SQL itself
             # excludes legal_hold; the fake returns only the visible row.
             visibility_sql.append(text)
-            result.all.return_value = [(normal.id, None)]
+            result.all.return_value = [(normal.id, None), (normal2.id, None)]
             return result
         if "cluster_fingerprint" in text and "scalar" not in text:
             result.scalar_one_or_none.return_value = None
@@ -83,7 +92,7 @@ async def test_episode_reconstruct_skips_legal_hold_evidence():
             return result
         if "sources" in text:
             # (evidence_id, source_type, source_config, evidence_type)
-            result.all.return_value = [(normal.id, "servicenow", {}, "incident")]
+            result.all.return_value = [(normal.id, "servicenow", {}, "incident"), (normal2.id, "servicenow", {}, "incident")]
             return result
         if "correlation_edges" in text or "case_links" in text:
             result.all.return_value = []
@@ -100,7 +109,7 @@ async def test_episode_reconstruct_skips_legal_hold_evidence():
         flush=AsyncMock(),
     )
 
-    cluster_id = f"{normal.id},{held.id}"
+    cluster_id = f"{normal.id},{normal2.id},{held.id}"
 
     with patch(
         "contextedge.services.episode_service.create_episodes_from_evidence",
