@@ -34,6 +34,14 @@ const columns: ColumnDef<Playbook>[] = [
   { accessorKey: "risk_tier", header: "Risk" },
   { accessorKey: "automation_mode", header: "Automation" },
   {
+    accessorKey: "confidence",
+    header: "Score",
+    cell: ({ row }) => {
+      const val = row.original.confidence;
+      return val !== null && val !== undefined ? (val * 100).toFixed(0) + "%" : "—";
+    },
+  },
+  {
     accessorKey: "last_validated_at",
     header: "Validated",
     cell: ({ row }) => {

@@ -278,6 +278,7 @@ export interface Playbook {
   current_version_id: string | null;
   last_validated_at: string | null;
   expiry_at: string | null;
+  confidence?: number | null;
   created_at: string;
   updated_at: string;
 }

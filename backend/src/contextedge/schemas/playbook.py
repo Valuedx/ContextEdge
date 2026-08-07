@@ -128,6 +128,7 @@ class PlaybookResponse(BaseModel):
     expiry_at: datetime | None
     created_at: datetime
     updated_at: datetime
+    confidence: float | None = None
 
     @computed_field
     @property

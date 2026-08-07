@@ -112,7 +112,38 @@ async def list_playbooks(
         q = q.order_by(Playbook.updated_at.desc())
     q = q.limit(limit).offset(offset)
     result = await db.execute(q)
-    return result.scalars().all()
+    playbooks = list(result.scalars().all())
+    if not playbooks:
+        return []
+
+    from contextedge.models.pattern import Pattern
+
+    pb_ids = [p.id for p in playbooks]
+    ver_result = await db.execute(
+        select(PlaybookVersion.playbook_id, PlaybookVersion.playbook_confidence).where(
+            PlaybookVersion.playbook_id.in_(pb_ids)
+        )
+    )
+    ver_map = {row[0]: row[1] for row in ver_result.all() if row[1] is not None}
+
+    pat_ids = [p.pattern_id for p in playbooks if p.pattern_id]
+    pat_map = {}
+    if pat_ids:
+        pat_result = await db.execute(
+            select(Pattern.id, Pattern.confidence).where(Pattern.id.in_(pat_ids))
+        )
+        pat_map = {row[0]: row[1] for row in pat_result.all() if row[1] is not None}
+
+    resp_list = []
+    for pb in playbooks:
+        r = PlaybookResponse.model_validate(pb)
+        conf = ver_map.get(pb.id)
+        if conf is None and pb.pattern_id:
+            conf = pat_map.get(pb.pattern_id)
+        r.confidence = float(conf) if conf is not None else 0.8
+        resp_list.append(r)
+
+    return resp_list
 
 
 @router.post("", response_model=PlaybookResponse, status_code=status.HTTP_201_CREATED)
