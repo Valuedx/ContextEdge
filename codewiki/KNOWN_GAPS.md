@@ -415,3 +415,24 @@ The hybrid ranker uses a hard-coded `quality_score = 0.5` for all playbooks. A p
   tasks with malformed UUID args (from 2026-08-07 evening testing) cycle
   on bounded retries in workerB's log. Harmless but noisy; they expire at
   max_retries.
+
+## Open items from the 2026-08-09 review cycle
+
+- **Pattern lane routing is dormant**: `pattern_extractor` sends
+  `task="extraction"`, so `pattern_model`/`pattern_location` route
+  nothing. The one-line fix is deliberately parked behind the same
+  measure-first A/B the un-benchmarked 3.6-flash lane defaults need —
+  flipping the task key today would switch pattern synthesis models as
+  a side effect.
+- **`proposed_depends_on` has no approval workflow**: agent-discovered
+  dependencies are written as raw graph edges, kept out of the maf.v1
+  allowlist so agents never consume them unreviewed — but there is no
+  approve/reject/promote path, so proposals accumulate invisibly.
+  Needs a review queue (reuse the reviewer_state lifecycle) before the
+  feature is honest to call review-gated.
+- **Ruff backlog (~360 findings)**: pre-existing style violations
+  (mostly E501) across older modules. The two genuine runtime bugs
+  found in the 2026-08-09 sweep (undefined `logger` in
+  `api/v1/patterns.py`, missing `timedelta` import in the Zoho
+  connector) are fixed; the style backlog is untouched and should be
+  burned down module-by-module, not in one bulk reformat.

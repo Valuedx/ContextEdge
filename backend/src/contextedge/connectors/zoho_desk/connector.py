@@ -73,7 +73,7 @@ import asyncio
 import hashlib
 import time
 import weakref
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import httpx

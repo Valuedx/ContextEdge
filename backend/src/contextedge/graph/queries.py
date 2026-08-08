@@ -230,13 +230,16 @@ async def get_pattern_subgraph(
                         "weight": link.weight,
                     })
 
-    # 3. Decorate node titles across all types (episodes, evidence, identities, playbooks, patterns).
+    # 3. Decorate node titles across all types (episodes, evidence, identities,
+    # entities, playbooks, patterns).
+    from contextedge.models.entity import Entity
     from contextedge.models.episode import CanonicalIdentity
     from contextedge.models.playbook import Playbook
 
     episode_ids: list[uuid.UUID] = []
     evidence_ids: list[uuid.UUID] = []
     identity_ids: list[uuid.UUID] = []
+    entity_ids: list[uuid.UUID] = []
     playbook_ids: list[uuid.UUID] = []
     pattern_ids: list[uuid.UUID] = []
 
@@ -250,8 +253,10 @@ async def get_pattern_subgraph(
             episode_ids.append(nid_uuid)
         elif ntype == "evidence":
             evidence_ids.append(nid_uuid)
-        elif ntype in ("identity", "entity"):
+        elif ntype == "identity":
             identity_ids.append(nid_uuid)
+        elif ntype == "entity":
+            entity_ids.append(nid_uuid)
         elif ntype == "playbook":
             playbook_ids.append(nid_uuid)
         elif ntype == "pattern":
@@ -279,16 +284,26 @@ async def get_pattern_subgraph(
     if identity_ids:
         ident_res = await db.execute(
             select(CanonicalIdentity).where(
-                CanonicalIdentity.id.in_(identity_ids)
+                CanonicalIdentity.id.in_(identity_ids),
+                CanonicalIdentity.tenant_id == tenant_id,
             )
         )
         ident_by_id = {str(ident.id): ident for ident in ident_res.scalars().all()}
+
+    ent_by_id: dict[str, object] = {}
+    if entity_ids:
+        ent_res = await db.execute(
+            select(Entity).where(
+                Entity.id.in_(entity_ids), Entity.tenant_id == tenant_id
+            )
+        )
+        ent_by_id = {str(ent.id): ent for ent in ent_res.scalars().all()}
 
     pb_by_id: dict[str, object] = {}
     if playbook_ids:
         pb_res = await db.execute(
             select(Playbook).where(
-                Playbook.id.in_(playbook_ids)
+                Playbook.id.in_(playbook_ids), Playbook.tenant_id == tenant_id
             )
         )
         pb_by_id = {str(pb.id): pb for pb in pb_res.scalars().all()}
@@ -297,7 +312,7 @@ async def get_pattern_subgraph(
     if pattern_ids:
         pat_res = await db.execute(
             select(Pattern).where(
-                Pattern.id.in_(pattern_ids)
+                Pattern.id.in_(pattern_ids), Pattern.tenant_id == tenant_id
             )
         )
         pat_by_id = {str(pat.id): pat for pat in pat_res.scalars().all()}
@@ -325,12 +340,18 @@ async def get_pattern_subgraph(
                     n["title"] = base_title
             elif not n.get("title"):
                 n["title"] = f"Evidence {nid_str[:8]}"
-        elif ntype in ("identity", "entity"):
+        elif ntype == "identity":
             ident_obj = ident_by_id.get(nid_str)
             if ident_obj:
                 n["title"] = f"{ident_obj.canonical_name} ({ident_obj.entity_type})"
             elif not n.get("title"):
                 n["title"] = f"Identity {nid_str[:8]}"
+        elif ntype == "entity":
+            ent_obj = ent_by_id.get(nid_str)
+            if ent_obj:
+                n["title"] = f"{ent_obj.name} ({ent_obj.entity_type})"
+            elif not n.get("title"):
+                n["title"] = f"Entity {nid_str[:8]}"
         elif ntype == "playbook":
             pb_obj = pb_by_id.get(nid_str)
             if pb_obj:
@@ -420,7 +441,9 @@ async def get_entity_subgraph(
                     next_frontier.append(neighbor)
         frontier = next_frontier
 
-    # Decorate node titles across all types (episodes, evidence, identities, playbooks, patterns).
+    # Decorate node titles across all types (episodes, evidence, identities,
+    # entities, playbooks, patterns).
+    from contextedge.models.entity import Entity
     from contextedge.models.episode import CanonicalIdentity, Episode
     from contextedge.models.evidence import EvidenceItem
     from contextedge.models.pattern import Pattern
@@ -429,6 +452,7 @@ async def get_entity_subgraph(
     episode_ids: list[uuid.UUID] = []
     evidence_ids: list[uuid.UUID] = []
     identity_ids: list[uuid.UUID] = []
+    entity_ids: list[uuid.UUID] = []
     playbook_ids: list[uuid.UUID] = []
     pattern_ids: list[uuid.UUID] = []
 
@@ -442,8 +466,10 @@ async def get_entity_subgraph(
             episode_ids.append(nid_uuid)
         elif ntype == "evidence":
             evidence_ids.append(nid_uuid)
-        elif ntype in ("identity", "entity"):
+        elif ntype == "identity":
             identity_ids.append(nid_uuid)
+        elif ntype == "entity":
+            entity_ids.append(nid_uuid)
         elif ntype == "playbook":
             playbook_ids.append(nid_uuid)
         elif ntype == "pattern":
@@ -471,16 +497,26 @@ async def get_entity_subgraph(
     if identity_ids:
         ident_res = await db.execute(
             select(CanonicalIdentity).where(
-                CanonicalIdentity.id.in_(identity_ids)
+                CanonicalIdentity.id.in_(identity_ids),
+                CanonicalIdentity.tenant_id == tenant_id,
             )
         )
         ident_by_id = {str(ident.id): ident for ident in ident_res.scalars().all()}
+
+    ent_by_id: dict[str, object] = {}
+    if entity_ids:
+        ent_res = await db.execute(
+            select(Entity).where(
+                Entity.id.in_(entity_ids), Entity.tenant_id == tenant_id
+            )
+        )
+        ent_by_id = {str(ent.id): ent for ent in ent_res.scalars().all()}
 
     pb_by_id: dict[str, object] = {}
     if playbook_ids:
         pb_res = await db.execute(
             select(Playbook).where(
-                Playbook.id.in_(playbook_ids)
+                Playbook.id.in_(playbook_ids), Playbook.tenant_id == tenant_id
             )
         )
         pb_by_id = {str(pb.id): pb for pb in pb_res.scalars().all()}
@@ -489,7 +525,7 @@ async def get_entity_subgraph(
     if pattern_ids:
         pat_res = await db.execute(
             select(Pattern).where(
-                Pattern.id.in_(pattern_ids)
+                Pattern.id.in_(pattern_ids), Pattern.tenant_id == tenant_id
             )
         )
         pat_by_id = {str(pat.id): pat for pat in pat_res.scalars().all()}
@@ -517,12 +553,18 @@ async def get_entity_subgraph(
                     n["title"] = base_title
             elif not n.get("title"):
                 n["title"] = f"Evidence {nid_str[:8]}"
-        elif ntype in ("identity", "entity"):
+        elif ntype == "identity":
             ident_obj = ident_by_id.get(nid_str)
             if ident_obj:
                 n["title"] = f"{ident_obj.canonical_name} ({ident_obj.entity_type})"
             elif not n.get("title"):
                 n["title"] = f"Identity {nid_str[:8]}"
+        elif ntype == "entity":
+            ent_obj = ent_by_id.get(nid_str)
+            if ent_obj:
+                n["title"] = f"{ent_obj.name} ({ent_obj.entity_type})"
+            elif not n.get("title"):
+                n["title"] = f"Entity {nid_str[:8]}"
         elif ntype == "playbook":
             pb_obj = pb_by_id.get(nid_str)
             if pb_obj:

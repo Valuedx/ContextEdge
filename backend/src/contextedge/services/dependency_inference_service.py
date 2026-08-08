@@ -57,11 +57,18 @@ def pair_confidence(shared_cases: int) -> float:
 
 
 async def infer_co_failure_edges(db, tenant_id: uuid.UUID) -> dict:
-    """Idempotent sweep: recompute co-occurring CI pairs and ensure the
-    symmetric edge (stored once, a < b ordering) with refreshed
-    confidence. ensure_edge upserts, so growth in shared cases raises
-    confidence on the same edge instead of duplicating it."""
+    """Idempotent sweep: recompute co-occurring CI pairs (stored once,
+    a < b ordering), refresh confidence on edges whose case counts
+    changed, and CLOSE edges for pairs that no longer meet the
+    threshold. The refresh happens here, not in ``ensure_edge`` —
+    ensure_edge returns an existing active edge untouched, so relying
+    on it froze every edge's confidence at first insert."""
+    from datetime import UTC, datetime
+
+    from sqlalchemy import select
+
     from contextedge.graph.builder import ensure_edge
+    from contextedge.models.pattern import GraphEdge
 
     rows = (
         await db.execute(
@@ -73,8 +80,32 @@ async def infer_co_failure_edges(db, tenant_id: uuid.UUID) -> dict:
             },
         )
     ).all()
-    counts = {"pairs": len(rows), "edges": 0}
-    for ci_a, ci_b, shared in rows:
+    computed = {(ci_a, ci_b): int(shared) for ci_a, ci_b, shared in rows}
+
+    existing_res = await db.execute(
+        select(GraphEdge).where(
+            GraphEdge.tenant_id == tenant_id,
+            GraphEdge.edge_type == "co_fails_with",
+            GraphEdge.valid_to.is_(None),
+        )
+    )
+    existing = {
+        (e.source_node_id, e.target_node_id): e
+        for e in existing_res.scalars().all()
+    }
+
+    counts = {"pairs": len(rows), "edges": 0, "refreshed": 0, "expired": 0}
+    for (ci_a, ci_b), shared in computed.items():
+        confidence = pair_confidence(shared)
+        edge = existing.get((ci_a, ci_b))
+        if edge is not None:
+            meta = dict(edge.metadata_extra or {})
+            if edge.confidence != confidence or meta.get("shared_cases") != shared:
+                edge.confidence = confidence
+                meta["shared_cases"] = shared
+                edge.metadata_extra = meta
+                counts["refreshed"] += 1
+            continue
         await ensure_edge(
             db,
             tenant_id,
@@ -84,14 +115,36 @@ async def infer_co_failure_edges(db, tenant_id: uuid.UUID) -> dict:
             target_id=ci_b,
             edge_type="co_fails_with",
             weight=1.0,
-            confidence=pair_confidence(int(shared)),
+            confidence=confidence,
             metadata={
                 "origin": "co_occurrence",
-                "shared_cases": int(shared),
+                "shared_cases": shared,
                 "symmetric": True,
             },
         )
         counts["edges"] += 1
+
+    # Expire (never hard-delete) inferred edges whose pair dropped below
+    # the threshold — e.g. after case memberships are corrected. Only
+    # safe when the pair query was NOT truncated: with a truncated
+    # result, an absent pair may simply be past the LIMIT, and expiring
+    # it would flap the edge on every sweep.
+    if len(rows) < MAX_PAIRS_PER_RUN:
+        now = datetime.now(UTC)
+        for key, edge in existing.items():
+            if key in computed:
+                continue
+            if (edge.metadata_extra or {}).get("origin") != "co_occurrence":
+                continue  # not ours to expire
+            edge.valid_to = now
+            counts["expired"] += 1
+    else:
+        logger.warning(
+            "dependency_inference.expiry_skipped_truncated",
+            tenant_id=str(tenant_id),
+            max_pairs=MAX_PAIRS_PER_RUN,
+        )
+
     logger.info(
         "dependency_inference.swept", tenant_id=str(tenant_id), **counts
     )
@@ -125,7 +178,16 @@ _MONITOR_SQL = text(
 async def index_monitoring_sources(db, tenant_id: uuid.UUID) -> int:
     """Stamp each CI's observed monitoring coverage into its attributes
     (projected as an entity fact), answering "where can I look for
-    telemetry on this CI" without new connectors."""
+    telemetry on this CI" without new connectors.
+
+    RECONCILED, not unioned: the attribute mirrors what the active
+    alert-shaped evidence currently shows. A source that stops covering
+    a CI (or whose evidence is corrected/expired) drops off — a stale
+    "look here for telemetry" pointer misleads exactly when it is
+    needed. CIs absent from the query entirely get the attribute
+    cleared for the same reason."""
+    from sqlalchemy import select
+
     from contextedge.models.entity import Entity
 
     rows = (
@@ -134,17 +196,33 @@ async def index_monitoring_sources(db, tenant_id: uuid.UUID) -> int:
             {"tenant_id": tenant_id, "alert_types": list(_ALERT_EVIDENCE_TYPES)},
         )
     ).all()
+    observed = {ci_id: sorted(set(sources)) for ci_id, sources in rows}
     updated = 0
-    for ci_id, sources in rows:
+    for ci_id, sources in observed.items():
         entity = await db.get(Entity, ci_id)
         if entity is None or entity.tenant_id != tenant_id:
             continue
         attributes = dict(entity.attributes or {})
-        merged = sorted(set(attributes.get("monitoring_sources") or []) | set(sources))
-        if attributes.get("monitoring_sources") != merged:
-            attributes["monitoring_sources"] = merged
+        if attributes.get("monitoring_sources") != sources:
+            attributes["monitoring_sources"] = sources
             entity.attributes = attributes
             updated += 1
+
+    # Clear coverage on CIs no longer observed at all.
+    stale_res = await db.execute(
+        select(Entity).where(
+            Entity.tenant_id == tenant_id,
+            Entity.attributes.has_key("monitoring_sources"),
+        )
+    )
+    for entity in stale_res.scalars().all():
+        if entity.id in observed:
+            continue
+        attributes = dict(entity.attributes or {})
+        attributes.pop("monitoring_sources", None)
+        entity.attributes = attributes
+        updated += 1
+
     if updated:
         await db.flush()
     return updated

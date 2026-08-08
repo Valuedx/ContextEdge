@@ -14,6 +14,8 @@ from contextedge.schemas.playbook import PatternResponse
 from contextedge.schemas.review import PatternEvidenceLinkCreate, PatternEvidenceLinkResponse
 from contextedge.workers.pattern_tasks import cluster_episodes
 
+logger = structlog.get_logger()
+
 router = APIRouter()
 
 

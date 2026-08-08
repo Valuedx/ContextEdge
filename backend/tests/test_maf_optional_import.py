@@ -17,6 +17,7 @@ builtins.__import__ = without_maf
 import contextedge
 import contextedge.graph.agent
 from contextedge.integrations.maf.client import HttpContextGraphClient
+from contextedge.integrations.maf import InProcessCohortClient, InProcessEdgeProposalClient
 print(HttpContextGraphClient.__name__)
 """
     result = subprocess.run(

@@ -55,17 +55,24 @@ _RESOLUTION_RE = re.compile(
     r")\b"
 )
 
-# How much of each evidence item's text the scan reads. Resolution
-# language concentrates in summaries, close notes, and thread tails —
-# body head + summary covers the realistic placements cheaply.
+# How much of each evidence item's text the scan reads: the HEAD and
+# the TAIL, because resolution language concentrates in summaries,
+# close notes, and thread tails. Head-only scanning was Lesson 3
+# (LESSONS_LEARNED: "the fix is at the bottom of the thread") repeated
+# — a resolution past the head slice deferred a resolvable cluster.
 SCAN_CHARS = 4_000
-MAX_ITEMS_SCANNED = 60
+MAX_ITEMS_SCANNED = 200
 
 
 def text_has_resolution_signal(text: str | None) -> bool:
     if not text:
         return False
-    return _RESOLUTION_RE.search(text[:SCAN_CHARS]) is not None
+    if _RESOLUTION_RE.search(text[:SCAN_CHARS]) is not None:
+        return True
+    return (
+        len(text) > SCAN_CHARS
+        and _RESOLUTION_RE.search(text[-SCAN_CHARS:]) is not None
+    )
 
 
 async def cluster_has_resolution_signal(
@@ -75,8 +82,10 @@ async def cluster_has_resolution_signal(
 ) -> bool:
     """True when ANY evidence in the cluster carries a resolution
     signal — in its summary (the strongest, LLM-distilled source), its
-    title, or its body text."""
-    from sqlalchemy import select
+    title, or its body text. Scanned newest-first: the resolution is
+    the END of an incident's timeline, so if the item cap ever binds,
+    the items it drops are the ones least likely to carry the signal."""
+    from sqlalchemy import func, select
 
     from contextedge.models.evidence import EvidenceItem
 
@@ -88,10 +97,17 @@ async def cluster_has_resolution_signal(
                 EvidenceItem.title,
                 EvidenceItem.body_summary,
                 EvidenceItem.body_text,
-            ).where(
-                EvidenceItem.tenant_id == tenant_id,
-                EvidenceItem.id.in_(evidence_ids[:MAX_ITEMS_SCANNED]),
             )
+            .where(
+                EvidenceItem.tenant_id == tenant_id,
+                EvidenceItem.id.in_(evidence_ids),
+            )
+            .order_by(
+                func.coalesce(
+                    EvidenceItem.evidence_time, EvidenceItem.ingested_at
+                ).desc()
+            )
+            .limit(MAX_ITEMS_SCANNED)
         )
     ).all()
     for title, summary, body in rows:

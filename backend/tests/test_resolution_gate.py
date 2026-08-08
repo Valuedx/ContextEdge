@@ -36,6 +36,20 @@ def test_resolution_language_matches():
         assert text_has_resolution_signal(text), text
 
 
+def test_resolution_at_thread_tail_is_found():
+    """Lesson 3: the fix lives at the BOTTOM of long threads. A signal
+    past the head slice must still be found via the tail scan."""
+    filler = "Customer chased for an update on the open case. " * 200
+    assert len(filler) > 2 * 4_000
+    text = filler + "\nIssue was resolved after rotating the API key."
+    assert text_has_resolution_signal(text)
+
+
+def test_long_problem_only_text_stays_negative():
+    filler = "Customer chased for an update on the open case. " * 200
+    assert not text_has_resolution_signal(filler)
+
+
 def test_problem_only_language_does_not_match():
     for text in (
         "Users report the VPN keeps disconnecting since this morning.",

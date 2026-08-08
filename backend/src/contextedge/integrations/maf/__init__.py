@@ -9,19 +9,32 @@ from __future__ import annotations
 from typing import Any
 
 from contextedge.integrations.maf.client import (
+    CohortClient,
     ContextGraphClient,
+    EdgeProposalClient,
     HttpContextGraphClient,
+    InProcessCohortClient,
     InProcessContextGraphClient,
+    InProcessEdgeProposalClient,
 )
 
 __all__ = [
+    "CohortClient",
+    "CohortTools",
     "ContextGraphClient",
     "ContextGraphMAFPlugin",
     "ContextGraphProvider",
     "ContextGraphTools",
+    "EdgeProposalClient",
+    "EdgeProposalTools",
     "HttpContextGraphClient",
+    "InProcessCohortClient",
     "InProcessContextGraphClient",
+    "InProcessEdgeProposalClient",
 ]
+
+# Framework-backed names (need the MAF extra), resolved lazily.
+_LAZY_TOOL_EXPORTS = ("CohortTools", "ContextGraphTools", "EdgeProposalTools")
 
 
 def __getattr__(name: str) -> Any:
@@ -33,8 +46,8 @@ def __getattr__(name: str) -> Any:
         from contextedge.integrations.maf.provider import ContextGraphProvider
 
         return ContextGraphProvider
-    if name == "ContextGraphTools":
-        from contextedge.integrations.maf.tools import ContextGraphTools
+    if name in _LAZY_TOOL_EXPORTS:
+        from contextedge.integrations.maf import tools
 
-        return ContextGraphTools
+        return getattr(tools, name)
     raise AttributeError(name)

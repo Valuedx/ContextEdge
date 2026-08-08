@@ -181,3 +181,31 @@ def test_http_client_rejects_plain_http_by_default():
 
     prod_client = HttpContextGraphClient("https://contextedge.internal")
     assert prod_client.base_url == "https://contextedge.internal"
+
+
+def test_plugin_registers_cohort_and_edge_proposal_tools():
+    """Toolsets that exist but never reach plugin.tools are dead code —
+    the agent can only call what the bundle registers."""
+    from contextedge.integrations.maf.plugin import ContextGraphMAFPlugin
+
+    plugin = ContextGraphMAFPlugin(
+        StubClient(),
+        cohort_client=object(),
+        edge_proposal_client=object(),
+    )
+    assert plugin.cohort_toolset is not None
+    assert plugin.edge_proposal_toolset is not None
+    # The @tool decorator mints a fresh FunctionTool per attribute
+    # access, so registration is checked by name, not identity.
+    names = {t.name for t in plugin.tools}
+    assert "get_cohort_shared_attributes" in names
+    assert "propose_dependency" in names
+
+
+def test_plugin_without_optional_clients_registers_core_tool_only():
+    from contextedge.integrations.maf.plugin import ContextGraphMAFPlugin
+
+    plugin = ContextGraphMAFPlugin(StubClient())
+    assert plugin.cohort_toolset is None
+    assert plugin.edge_proposal_toolset is None
+    assert len(plugin.tools) == 1

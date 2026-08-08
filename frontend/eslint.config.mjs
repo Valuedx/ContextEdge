@@ -12,6 +12,8 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Second dev instance's dist dir (NEXT_DIST_DIR, see next.config.ts).
+    ".next-e2e/**",
   ]),
 ]);
 
