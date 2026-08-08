@@ -392,3 +392,18 @@ Closes the historical "8 KB cliff" where `embed_evidence(title, body[:8000])` ma
 ## `evidence_quality` placeholder in ranker
 
 The hybrid ranker uses a hard-coded `quality_score = 0.5` for all playbooks. A proper evidence-quality signal has not been implemented.
+
+## Open items from the 2026-08-08 review cycle
+
+- **Vertex model-id format unverified**: `06b4279` set
+  `default_extraction_model` to `vertex_ai/global/gemini-3.6-flash` and
+  classification to `vertex_ai/us-central1/gemini-2.5-flash`. LiteLLM's
+  vertex format is `vertex_ai/<model>` with the region supplied
+  separately; the 3-segment form may fail at call time and likely breaks
+  `litellm.supports_reasoning()` matching, which would silently disable
+  the relevance thinking cap. Running deployments are shielded by `.env`
+  overrides; verify with one live call before any fresh deploy.
+- **Poison messages on the pattern queue**: `generate_playbook_candidate`
+  tasks with malformed UUID args (from 2026-08-07 evening testing) cycle
+  on bounded retries in workerB's log. Harmless but noisy; they expire at
+  max_retries.

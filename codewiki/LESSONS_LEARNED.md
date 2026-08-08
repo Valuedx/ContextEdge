@@ -93,3 +93,23 @@ competitive. Feasibility lives in the hardware column.
 Two Celery beats were running (one from a stale launch); every
 scheduled task fired twice for days. Check process inventories, not
 just logs: `ps` told us what the logs never did.
+
+## 11. Labels are not identity
+
+A title-based dedup merged any two episodes sharing a lowercased title,
+tenant-wide. But two different incidents can both be called "Password
+reset issue" - merging them cross-links unrelated evidence, precisely
+the contamination the recurrence system was designed to avoid. The fix:
+dedup on identity signals (shared evidence, cluster fingerprints, same
+domain), never on labels alone. The same rule produced "supersede,
+never hard-delete" as the standing lifecycle for anything governed.
+
+## 12. Do the review passes before pushing, not after
+
+The grounded/best-practice feature shipped with thorough tests and live
+validation but the hostile-diff and blast-radius passes ran only when
+asked. Both would-have-been risks (API schema stripping the new step
+fields; the fixed reason string polluting playbook embeddings) turned
+out safe - by pre-existing design choices, not by our diligence. The
+discipline exists because those risks were plausible; passes go before
+the push.
