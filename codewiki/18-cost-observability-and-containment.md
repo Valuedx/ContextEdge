@@ -31,6 +31,11 @@ Four ceilings, all in `config.py`, all overridable via env (documented in `.env.
 | `embedding_max_batch_size` | 64 | Oversized batches are split in `generate_embeddings_batch`; a giant request otherwise fails *after* the tokens are spent |
 | `default_daily_token_limit` / `default_daily_cost_cap_usd` | 2M / $25, action `block` | Tenants with **no** `tenant_llm_budgets` row. "No row" used to mean "no limit", making the unconfigured tenant — the normal state — the only uncapped one |
 
+Beyond the ceilings, two **spend-avoidance** knobs route or skip work instead of capping it (both default to changing nothing):
+
+- **Per-task model & location routing** (`3f6d3c3`): `pattern_model` / `playbook_model` plus per-task `*_LOCATION` settings let each pipeline lane target its own model and Vertex region (`ai/provider.MODEL_ROUTING` / `LOCATION_ROUTING`) — the lever for pointing high-volume lanes at cheaper models without touching quality lanes. Caveat recorded in [KNOWN_GAPS](./KNOWN_GAPS.md): the code defaults for the two new lanes name `gemini-3.6-flash` with no A/B behind the switch.
+- **Resolution gate** (`EPISODE_RESOLUTION_GATE=cluster`, default `off`): episode synthesis — the costliest lane, 73% of e2e spend — is deferred for clusters carrying no resolution signal anywhere, at zero LLM cost (deterministic scan). Deferred, not dropped; design in [07-episodes-patterns-playbooks](./07-episodes-patterns-playbooks.md).
+
 5. **Budget enforcement path** — `llm_complete` calls `tenant_budget_service.check_budget` before spending. A tenant's own budget row wins when present; otherwise the deployment defaults flow through the *same* evaluation (`_DefaultBudget` carries exactly the attributes `_check_budget_locked` reads — no second implementation of the limit logic to drift). `block` raises `TenantBudgetExceeded` so callers can degrade; `warn` logs, emits an `llm.budget_warning` event, and lets the call through — roll out as `warn`, flip to `block`.
 
 6. **Vision goes through the same gate** — `llm_complete(images=...)` is a parameter, not a separate client, precisely so the most expensive call type cannot bypass budget, recording, breaker, or clamp.

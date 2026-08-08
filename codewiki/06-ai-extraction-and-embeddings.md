@@ -10,7 +10,7 @@ AI reads your tickets and messages faster than any human—but everything it pro
 
 ## Technical walkthrough
 
-1. **Provider abstraction** — `ai/provider.py` configures LiteLLM (API keys, Vertex credentials, retries). `MODEL_ROUTING` picks defaults per **task** key: `classification`, `extraction`, `embedding`. `get_model_for_task` resolves the model id.
+1. **Provider abstraction** — `ai/provider.py` configures LiteLLM (API keys, Vertex credentials, retries). `MODEL_ROUTING` picks defaults per **task** key: `classification`, `extraction`, `embedding`, `pattern`, `playbook`; `get_model_for_task` resolves the model id. Since `3f6d3c3` each task also has a **Vertex location** (`LOCATION_ROUTING` / `get_location_for_task`, env `*_LOCATION`, fallback `LOCATION`) — newer Gemini models may exist only on the `global` endpoint. Vertex calls pass `vertex_project`/`vertex_location` per request (`_vertex_litellm_kwargs`) rather than relying on process-wide env; `_is_vertex_model` also routes bare `gemini-*` ids through Vertex when `DEFAULT_LLM_PROVIDER=vertex_ai` and credentials are set (`gemini/`-prefixed ids stay on the API-key provider).
 
 2. **Completion** — `llm_complete` sends a chat-style `acompletion`; `llm_complete_json` requests `response_format` JSON and parses with error logging on failure.
 
@@ -25,7 +25,7 @@ AI reads your tickets and messages faster than any human—but everything it pro
 
 4. **Relevance classification** — `ai/classifiers/relevance.py` `classify_relevance` builds a short prompt and returns `classification`, `confidence`, `reasoning` via `llm_complete_json`. The Celery task `classify_relevance_task` in `extraction_tasks.py` invokes this to move evidence out of `unclassified`.
 
-5. **Episode reconstruction** — `ai/extractors/episode_extractor.py` `reconstruct_episode` sends ordered evidence text through a large structured prompt; output is a list of episodes with steps and confidence. `episode_service.create_episodes_from_evidence` persists `Episode` and `EpisodeStep` rows. **Large clusters are chunked**: clusters of more than `MAX_ITEMS_PER_CALL` (default 20) evidence items are split into per-chunk LLM calls and the resulting episode lists concatenated. Each evidence body is also truncated to `PER_ITEM_CHAR_LIMIT` (default 2000 chars) before prompt assembly, so a single pathological item can't blow the per-call token budget. Cross-chunk episode dedup is deferred to downstream pattern-mining and correlation services. `chunk_count` is emitted via the `episode_extractor.chunked` structured log for observability.
+5. **Episode reconstruction** — `ai/extractors/episode_extractor.py` `reconstruct_episode` sends ordered evidence text through a large structured prompt; output is a list of episodes with steps and confidence. `episode_service.create_episodes_from_evidence` persists `Episode` and `EpisodeStep` rows. **Large clusters are chunked**: clusters of more than `MAX_ITEMS_PER_CALL` (default 20) evidence items are split into per-chunk LLM calls and the resulting episode lists concatenated. Each evidence body is also truncated to `PER_ITEM_CHAR_LIMIT` (default 2000 chars) before prompt assembly, so a single pathological item can't blow the per-call token budget. Cross-chunk episode dedup is deferred to downstream pattern-mining and correlation services. `chunk_count` is emitted via the `episode_extractor.chunked` structured log for observability. Scheduled reconstruction is also gated *before* any LLM spend: a singleton-cluster skip, the optional **resolution gate** (`EPISODE_RESOLUTION_GATE=cluster` defers clusters with no solution signal anywhere — see [`07-episodes-patterns-playbooks.md`](./07-episodes-patterns-playbooks.md)), and a per-cluster advisory lock.
 
 6. **Other extractors** — `ai/extractors/pattern_extractor.py` and `identity_extractor.py` (pattern and identity flows) follow the same "prompt + JSON" style where used by services.
 
@@ -115,7 +115,7 @@ Every proposed step links back to the evidence that supports it, so reviewers ca
 
 | Concern | Module path | Key symbols | When it runs |
 | --- | --- | --- | --- |
-| LLM + embeddings | `backend/src/contextedge/ai/provider.py` | `llm_complete`, `llm_complete_json`, `llm_complete_json_validated`, `generate_embedding`, `get_model_for_task` | Many services |
+| LLM + embeddings | `backend/src/contextedge/ai/provider.py` | `llm_complete`, `llm_complete_json`, `llm_complete_json_validated`, `generate_embedding`, `get_model_for_task`, `get_location_for_task` | Many services |
 | Observability | `backend/src/contextedge/ai/observability.py` | `record_llm_usage`, `build_messages`, `extract_usage`, `LLM_TOKENS_TOTAL` | Every LLM + embedding call |
 | Prompt registry | `backend/src/contextedge/ai/prompts/__init__.py`, submodules per family | `Prompt`, `register_prompt`, `get_prompt`, `resolve_version` | Import-time registration; per-call resolution |
 | Evidence vectors | `backend/src/contextedge/ai/embeddings.py` | `embed_evidence`, `embed_evidence_batch` | Normalize, batch jobs |

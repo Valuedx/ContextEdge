@@ -279,6 +279,14 @@ restore. Also set connector filters with the connector's own key
 (`module_filters` for Zoho Desk, `table_filters` for ServiceNow) — the
 wrong key is silently ignored and the whole modified window syncs.
 
+Episode synthesis dominates cold-start spend (~73% on the measured
+run). For backfills where many tickets carry no resolution — open
+queues, chat exports — consider `EPISODE_RESOLUTION_GATE=cluster`:
+clusters with no solution signal anywhere defer synthesis at zero LLM
+cost and are re-checked as new evidence joins (deferred, not dropped;
+see `codewiki/07-episodes-patterns-playbooks.md`). For closed-ticket
+backfills the connector status filter is the right gate instead.
+
 Via the launcher (`dev.py` defers to a caller-supplied `-P`/`-Q`):
 
 ```powershell

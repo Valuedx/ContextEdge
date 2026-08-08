@@ -24,7 +24,7 @@ Background processing ensures that heavy work like AI extraction, pattern detect
 
 4. **Representative tasks**
    - **sync:** `run_backfill`, `run_incremental_sync` (`sync_tasks.py`) — historical backfill and incremental pull per source object.
-   - **extraction:** `normalize_evidence` (redacts PII → classifies → embeds → links identities & decisions → dispatches chunking), `classify_relevance_task`, `reconstruct_episode_task` (`extraction_tasks.py`); `chunk_evidence_task`, `embed_chunks_batch_task` (`chunk_tasks.py`) — async chunking for large items + batched chunk embeddings (32 chunks per LLM call).
+   - **extraction:** `normalize_evidence` (redacts PII → classifies → embeds → links identities & decisions → dispatches chunking), `classify_relevance_task`, `reconstruct_episode_task` (`extraction_tasks.py`; scheduled runs pass a singleton-cluster skip, the optional resolution gate, and a per-cluster advisory lock before any LLM spend — statuses `skipped_single_evidence` / `deferred_unresolved` / `skipped_locked`, see codewiki/07); `chunk_evidence_task`, `embed_chunks_batch_task` (`chunk_tasks.py`) — async chunking for large items + batched chunk embeddings (32 chunks per LLM call).
    - **hydration:** `hydrate_thread` (`hydration_tasks.py`) for fuller thread payloads.
    - **correlation:** `correlate_evidence` (`correlation_tasks.py`).
    - **artifacts:** `extract_attachment_artifact` (`artifact_tasks.py`).

@@ -899,6 +899,13 @@ Welcome to the ContextEdge Glossary. This document defines the core concepts, te
 - **Where Used**: `backend/src/contextedge/middleware/`
 - **Related Terms**: Middleware, Audit Log
 
+### Resolution Gate
+- **Term**: Resolution Gate
+- **Simple Definition**: An optional check that skips episode-building for ticket clusters where no solution has been mentioned yet.
+- **Detailed Explanation**: With `EPISODE_RESOLUTION_GATE=cluster`, scheduled episode reconstruction defers any correlation cluster whose evidence carries no resolution signal (status vocabulary, resolution phrasing, or classifier summaries) — saving the pipeline's most expensive LLM lane for content that can actually yield reusable knowledge. Deferred clusters are re-checked automatically as new evidence joins, so a fix that arrives later from a different source still produces an episode. Off by default.
+- **Where Used**: `backend/src/contextedge/services/resolution_signal_service.py`, `workers/extraction_tasks.py`
+- **Related Terms**: Episode, Correlation, Cluster
+
 ### Resolution Session
 - **Term**: Resolution Session
 - **Simple Definition**: A tracked troubleshooting event where a playbook is being actively used.

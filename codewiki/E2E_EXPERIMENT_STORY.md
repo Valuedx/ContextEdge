@@ -52,7 +52,11 @@ duplicate episodes** — 8 identical "pending review" episodes for one
 conversation in 46 seconds, ~4× duplication corpus-wide. Roughly $7 of
 the $12.63 was this bug. The advisory-lock fix shipped the same night
 (Lesson 2), plus a gate so single-message "clusters" never pay for
-episode extraction at all. A re-run would cost a fraction.
+episode extraction at all. A re-run would cost a fraction. A third
+gate followed on 2026-08-09: `EPISODE_RESOLUTION_GATE=cluster`
+(opt-in) defers synthesis for clusters where no solution is mentioned
+anywhere — deferred, not dropped, so a fix arriving later from another
+source still produces the episode.
 
 ## What the graph built from one night
 
