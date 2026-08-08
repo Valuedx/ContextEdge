@@ -143,3 +143,103 @@ async def test_no_thinking_kwarg_when_unconfigured(budgets):
         )
 
     assert "thinking" not in seen[0]
+
+
+@pytest.mark.asyncio
+async def test_vertex_kwargs_are_passed_for_unprefixed_gemini(monkeypatch):
+    """Gemini model IDs are Vertex-routed when Vertex is the configured
+    deployment provider. This matters for newly released models where the
+    global endpoint works but a regional default returns 404."""
+    seen: list[dict] = []
+
+    class _Resp:
+        choices = [type("c", (), {"message": type("m", (), {"content": "ok"})()})()]
+        usage = type("u", (), {"prompt_tokens": 1, "completion_tokens": 1})()
+
+    async def fake_acompletion(**kwargs):
+        seen.append(kwargs)
+        return _Resp()
+
+    from contextedge.ai import provider
+
+    monkeypatch.setattr(provider.settings, "default_llm_provider", "vertex_ai")
+    monkeypatch.setattr(provider.settings, "google_application_credentials", "creds.json")
+    monkeypatch.setattr(provider.settings, "google_cloud_project", "project-1")
+    monkeypatch.setitem(provider.LOCATION_ROUTING, "pattern", "global")
+
+    with (
+        patch.object(provider.litellm, "acompletion", side_effect=fake_acompletion),
+        patch.object(provider, "record_llm_usage", lambda *a, **k: None),
+    ):
+        await provider.llm_complete(
+            "hi",
+            task="pattern",
+            model="gemini-3.6-flash",
+        )
+
+    assert seen
+    assert seen[0]["vertex_project"] == "project-1"
+    assert seen[0]["vertex_location"] == "global"
+
+
+@pytest.mark.asyncio
+async def test_vertex_kwargs_are_passed_for_explicit_vertex_model(monkeypatch):
+    seen: list[dict] = []
+
+    class _Resp:
+        choices = [type("c", (), {"message": type("m", (), {"content": "ok"})()})()]
+        usage = type("u", (), {"prompt_tokens": 1, "completion_tokens": 1})()
+
+    async def fake_acompletion(**kwargs):
+        seen.append(kwargs)
+        return _Resp()
+
+    from contextedge.ai import provider
+
+    monkeypatch.setattr(provider.settings, "google_cloud_project", "project-1")
+    monkeypatch.setitem(provider.LOCATION_ROUTING, "playbook", "global")
+
+    with (
+        patch.object(provider.litellm, "acompletion", side_effect=fake_acompletion),
+        patch.object(provider, "record_llm_usage", lambda *a, **k: None),
+    ):
+        await provider.llm_complete(
+            "hi",
+            task="playbook",
+            model="vertex_ai/gemini-3.6-flash",
+        )
+
+    assert seen
+    assert seen[0]["vertex_project"] == "project-1"
+    assert seen[0]["vertex_location"] == "global"
+
+
+@pytest.mark.asyncio
+async def test_vertex_kwargs_are_not_passed_for_non_vertex_model(monkeypatch):
+    seen: list[dict] = []
+
+    class _Resp:
+        choices = [type("c", (), {"message": type("m", (), {"content": "ok"})()})()]
+        usage = type("u", (), {"prompt_tokens": 1, "completion_tokens": 1})()
+
+    async def fake_acompletion(**kwargs):
+        seen.append(kwargs)
+        return _Resp()
+
+    from contextedge.ai import provider
+
+    monkeypatch.setattr(provider.settings, "default_llm_provider", "openai")
+
+    with (
+        patch.object(provider.litellm, "acompletion", side_effect=fake_acompletion),
+        patch.object(provider, "record_llm_usage", lambda *a, **k: None),
+    ):
+        await provider.llm_complete(
+            "hi",
+            task="classification",
+            model="gpt-4o-mini",
+        )
+
+    assert seen
+    assert "vertex_project" not in seen[0]
+    assert "vertex_location" not in seen[0]

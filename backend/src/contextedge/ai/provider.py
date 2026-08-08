@@ -25,10 +25,15 @@ if settings.google_api_key:
 # Support Vertex AI via service account
 if settings.google_application_credentials:
     os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = settings.google_application_credentials
+    # Set global fallback; per-task location is applied dynamically
+    # before each call via get_location_for_task().
     os.environ["VERTEX_LOCATION"] = settings.location
+    if settings.google_cloud_project:
+        os.environ["VERTEX_PROJECT"] = settings.google_cloud_project
     logger.debug(
         "vertex_ai_credentials_configured",
         path=settings.google_application_credentials,
+        fallback_location=settings.location,
     )
 else:
     logger.debug("vertex_ai_credentials_not_found")
@@ -43,11 +48,70 @@ MODEL_ROUTING = {
     "classification": settings.default_classification_model,
     "extraction": settings.default_extraction_model,
     "embedding": settings.default_embedding_model,
+    "pattern": settings.pattern_model,
+    "playbook": settings.playbook_model,
+}
+
+LOCATION_ROUTING = {
+    "classification": settings.classification_location,
+    "extraction": settings.extraction_location,
+    "pattern": settings.pattern_location,
+    "playbook": settings.playbook_location,
+    "embedding": settings.embedding_location,
 }
 
 
 def get_model_for_task(task: str) -> str:
     return MODEL_ROUTING.get(task, settings.default_extraction_model)
+
+
+def get_location_for_task(task: str) -> str:
+    """Return the Vertex AI location configured for a pipeline task.
+
+    Falls back to the global ``LOCATION`` when no per-task override exists.
+    """
+    return LOCATION_ROUTING.get(task, settings.location)
+
+
+def _is_vertex_model(model: str | None) -> bool:
+    """Whether this LiteLLM call should be routed through Vertex AI.
+
+    The app supports both LiteLLM's explicit ``vertex_ai/gemini-*`` model
+    names and the Google SDK-style ``gemini-*`` names when the deployment's
+    default provider is Vertex AI. Do not treat ``gemini/gemini-*`` this way:
+    that prefix is the Gemini API key provider.
+    """
+    name = (model or "").lower()
+    if name.startswith("vertex_ai/"):
+        return True
+    return (
+        settings.default_llm_provider == "vertex_ai"
+        and bool(settings.google_application_credentials)
+        and name.startswith("gemini-")
+    )
+
+
+def _vertex_litellm_kwargs(task: str, model: str | None) -> dict[str, str]:
+    """Explicit Vertex routing kwargs for LiteLLM.
+
+    LiteLLM accepts ``vertex_location``/``vertex_project`` directly. Passing
+    them per request is safer than relying on process-wide ``VERTEX_LOCATION``:
+    per-task routes can differ, and recent Gemini models such as 3.6 Flash may
+    exist only on the ``global`` endpoint.
+    """
+    if not _is_vertex_model(model):
+        return {}
+
+    location = get_location_for_task(task)
+    if location:
+        os.environ["VERTEX_LOCATION"] = location
+
+    kwargs: dict[str, str] = {}
+    if settings.google_cloud_project:
+        kwargs["vertex_project"] = settings.google_cloud_project
+    if location:
+        kwargs["vertex_location"] = location
+    return kwargs
 
 
 def resolve_thinking_budget(prompt_name: str | None, model: str | None) -> int | None:
@@ -265,6 +329,7 @@ async def llm_complete(
     async def _attempt(attempt_model: str):
         breaker.check(attempt_model)
         attempt_kwargs = {**kwargs, "model": attempt_model}
+        attempt_kwargs.update(_vertex_litellm_kwargs(task, attempt_model))
         budget = resolve_thinking_budget(prompt_name, attempt_model)
         if budget is not None:
             # LiteLLM maps this onto the provider's native control
@@ -694,7 +759,7 @@ async def generate_embedding(
             pass  # mirrors llm_complete's broken-test-mock tolerance
     # LiteLLM maps 'dimensions' -> outputDimensionality for Vertex AI
     # gemini-embedding-001 supports up to 3072
-    kwargs = {"model": model, "input": [text]}
+    kwargs = {"model": model, "input": [text], **_vertex_litellm_kwargs("embedding", model)}
     if "gemini-embedding" not in model:
         kwargs["dimensions"] = 3072
 
@@ -796,7 +861,7 @@ async def generate_embeddings_batch(
         return out
     # LiteLLM maps 'dimensions' -> outputDimensionality for Vertex AI
     # gemini-embedding-001 supports up to 3072
-    kwargs = {"model": model, "input": texts}
+    kwargs = {"model": model, "input": texts, **_vertex_litellm_kwargs("embedding", model)}
     if "gemini-embedding" not in model:
         kwargs["dimensions"] = 3072
 

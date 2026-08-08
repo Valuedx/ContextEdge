@@ -49,12 +49,27 @@ class Settings(BaseSettings):
     azure_openai_api_key: str = ""
     azure_openai_endpoint: str = ""
     google_api_key: str = ""
-    location: str = "us-central1"
     google_application_credentials: str = ""
     default_llm_provider: str = "vertex_ai"
+
+    # Per-task models
     default_classification_model: str = "vertex_ai/gemini-2.5-flash"
     default_extraction_model: str = "vertex_ai/gemini-2.5-flash"
     default_embedding_model: str = "text-embedding-3-small"
+    pattern_model: str = "vertex_ai/gemini-3.6-flash"
+    playbook_model: str = "vertex_ai/gemini-3.6-flash"
+
+    # Per-task locations
+    classification_location: str = "global"
+    extraction_location: str = "global"
+    pattern_location: str = "global"
+    playbook_location: str = "global"
+    embedding_location: str = "global"
+    location: str = "global"  # global fallback
+
+    # Google Cloud
+    google_cloud_project: str = ""
+
     # E1 resilience: when set, a failed primary LLM call is retried once
     # on this model (usage recorded against the model that served).
     llm_fallback_model: str | None = None
