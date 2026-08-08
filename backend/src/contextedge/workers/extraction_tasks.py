@@ -834,6 +834,32 @@ async def _reconstruct(
         # may still reconstruct a singleton deliberately.
         return {"status": "skipped_single_evidence"}
 
+    if settle and settings.episode_resolution_gate == "cluster":
+        # Resolution gate: a cluster with no solution signal ANYWHERE
+        # defers synthesis instead of paying for it. Deferred, not
+        # dropped — evidence, embeddings, and case links all persist, so
+        # when a resolution-bearing item joins the cluster (possibly
+        # from a different source days later), the next dispatch passes.
+        # Fail-open: a gate error must never block synthesis.
+        try:
+            from contextedge.services.resolution_signal_service import (
+                cluster_has_resolution_signal,
+            )
+
+            if not await cluster_has_resolution_signal(
+                db, tenant_id, list(cluster.evidence_ids)
+            ):
+                logger.info(
+                    "episode_reconstruct.deferred_unresolved",
+                    tenant_id=str(tenant_id),
+                    cluster_size=len(cluster.evidence_ids),
+                )
+                return {"status": "deferred_unresolved"}
+        except Exception as gate_exc:  # noqa: BLE001
+            logger.warning(
+                "resolution_gate_failed_open", error=str(gate_exc)
+            )
+
     # Per-cluster advisory lock, same pattern as acquire_sync_lock: the
     # threads pool runs reconstructs concurrently, and the fingerprint
     # dedup below this point is read-then-act — 8 concurrent tasks for

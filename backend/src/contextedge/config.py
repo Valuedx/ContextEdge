@@ -149,6 +149,14 @@ class Settings(BaseSettings):
     # So: `relevance` ships at 0 (binary classifier, verdict unchanged,
     # ~70% fewer output tokens), and everything else keeps dynamic
     # thinking until it has been A/B'd against the eval baseline.
+    # Resolution gate for episode synthesis (see
+    # services/resolution_signal_service.py). "off" keeps current
+    # behaviour; "cluster" defers reconstruction for clusters carrying
+    # no resolution signal anywhere — deferred, not dropped: the next
+    # correlate->reconstruct dispatch re-checks once new evidence joins.
+    # Ticket-level gating for single-source deployments is a connector
+    # concern (module_filters/table_filters on status), not this knob.
+    episode_resolution_gate: str = Field(default="off", pattern="^(off|cluster)$")
     llm_thinking_budgets: dict[str, int] = Field(
         default_factory=lambda: {"relevance": 0}
     )
