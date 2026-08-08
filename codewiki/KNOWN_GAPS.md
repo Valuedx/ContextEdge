@@ -436,3 +436,36 @@ The hybrid ranker uses a hard-coded `quality_score = 0.5` for all playbooks. A p
   `api/v1/patterns.py`, missing `timedelta` import in the Zoho
   connector) are fixed; the style backlog is untouched and should be
   burned down module-by-module, not in one bulk reformat.
+
+## Enterprise-graph blockers (carried from the prior review, re-verified 2026-08-09)
+
+All five re-checked against the tree at `3592bc3` — none has changed.
+Adequate-for-pilot, blocking for authoritative-enterprise-graph status:
+
+- **Inventory CI identity/scoping** (`api/v1/inventory.py`,
+  `inventory_diff_service.observe_inventory`): any authenticated user
+  may report; CIs resolve by `(tenant_id, name)` with `.limit(1)`, so
+  same-named CIs silently merge and unknown names mint domainless
+  `configuration_item` entities. Needs a role gate, an
+  external-id/system disambiguator in the observation schema, and a
+  refuse-or-flag path on ambiguous names.
+- **MAF decision write-back is under-provenanced**
+  (`integrations/maf/provider.py` payload): no session_id, domain_id,
+  evidence references, or confidence; the decision lands `pending`,
+  and graph visibility (`hydrators.py`) hides decisions only when
+  `superseded`/`reverted` — so pending AI diagnoses are visible to
+  later agents. Either exclude `pending` AI decisions from projection
+  or require review before visibility, and enrich the payload.
+- **Outcome/fix flywheel is schema-only** (`models/case_outcome.py`):
+  `CaseOutcome` / `CaseStateTransition` have zero production writers.
+  The roadmap status line now says so explicitly.
+- **`asserted_in` means two different things**: dormant
+  `claim_service` writes it claim→evidence; the materializer writes it
+  claim→session. Settle the vocabulary (materializer's claim→session +
+  `supported_by` for evidence looks right) BEFORE claim population is
+  ever re-enabled, or the two populations will interleave
+  incompatibly.
+- **Temporal/execution lineage partial**: `as_of` filters edges but
+  hydrated node facts are current-state; playbook versions, execution
+  steps, tool invocations, and state transitions are not projected
+  nodes. Known scope, not a regression.
