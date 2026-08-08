@@ -395,14 +395,22 @@ The hybrid ranker uses a hard-coded `quality_score = 0.5` for all playbooks. A p
 
 ## Open items from the 2026-08-08 review cycle
 
-- **Vertex model-id format unverified**: `06b4279` set
-  `default_extraction_model` to `vertex_ai/global/gemini-3.6-flash` and
-  classification to `vertex_ai/us-central1/gemini-2.5-flash`. LiteLLM's
-  vertex format is `vertex_ai/<model>` with the region supplied
-  separately; the 3-segment form may fail at call time and likely breaks
-  `litellm.supports_reasoning()` matching, which would silently disable
-  the relevance thinking cap. Running deployments are shielded by `.env`
-  overrides; verify with one live call before any fresh deploy.
+- ~~**Vertex model-id format unverified**~~ **Resolved by `3f6d3c3`**
+  (2026-08-08): model IDs are back to LiteLLM's 2-segment
+  `vertex_ai/<model>` form, with region supplied per request via
+  `vertex_location`/`vertex_project` kwargs and per-task
+  `*_LOCATION` settings (`get_location_for_task`). The
+  `supports_reasoning()` matching concern goes away with 2-segment IDs.
+- **Pattern/playbook lanes switch models silently on restart**: the same
+  commit added `pattern_model`/`playbook_model` settings defaulting to
+  `vertex_ai/gemini-3.6-flash`. Those env keys are brand new, so every
+  existing `.env` lacks them — on next worker restart, pattern discovery
+  and playbook generation move from 2.5-flash to 3.6-flash with no A/B
+  (the measure-first discipline applies: playbook output is
+  reviewer-facing). Note `.env.example` pins `PATTERN_MODEL`/
+  `PLAYBOOK_MODEL=vertex_ai/gemini-2.5-flash`, diverging from the code
+  default. Either pin the lanes in `.env` or run the A/B before relying
+  on generated output.
 - **Poison messages on the pattern queue**: `generate_playbook_candidate`
   tasks with malformed UUID args (from 2026-08-07 evening testing) cycle
   on bounded retries in workerB's log. Harmless but noisy; they expire at
