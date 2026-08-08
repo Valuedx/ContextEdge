@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+﻿from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 from uuid import uuid4
@@ -132,7 +132,7 @@ async def test_create_pattern_from_episodes_promotes_long_term_memory():
     added = []
     # Service now (a) runs the domain-safety membership check, (b) calls
     # persist_pattern_enrichment_edges, (c) queries db.execute(
-    # select(Episode)…) to fetch episode entity_refs, then (d) calls
+    # select(Episode)â€¦) to fetch episode entity_refs, then (d) calls
     # build_episode_graph per episode. Mock each piece so the test
     # focuses on the memory-promotion contract it originally covered.
     membership_result = SimpleNamespace(
@@ -141,11 +141,16 @@ async def test_create_pattern_from_episodes_promotes_long_term_memory():
     episodes_result = SimpleNamespace(
         scalars=lambda: SimpleNamespace(all=lambda: []),
     )
+    # The title-dedup pre-check (2026-08-07, domain-scoped) runs between
+    # the membership check and the episode fetch; no existing pattern.
+    dedup_result = SimpleNamespace(scalar_one_or_none=lambda: None)
     db = SimpleNamespace(
         add=lambda obj: added.append(obj),
         flush=AsyncMock(),
         refresh=AsyncMock(),
-        execute=AsyncMock(side_effect=[membership_result, episodes_result]),
+        execute=AsyncMock(
+            side_effect=[membership_result, dedup_result, episodes_result]
+        ),
     )
 
     with (

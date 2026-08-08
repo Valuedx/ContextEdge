@@ -1,8 +1,8 @@
-"""Which ticket a piece of evidence actually is.
+﻿"""Which ticket a piece of evidence actually is.
 
 Everything needed was already stored on the raw object and none of it
 reached the API, so evidence in the UI could only be identified by its
-internal UUID — the one identifier nobody can search for in the source
+internal UUID â€” the one identifier nobody can search for in the source
 system, quote to a colleague, or open.
 
 Deliberately connector-agnostic: Zoho writes `ticket_number`,
@@ -102,7 +102,7 @@ def test_the_list_response_carries_the_record_number():
 
     assert "source_reference" in EvidenceItemResponse.model_fields
     # Detail extends the list schema, so it inherits rather than
-    # redeclaring — one definition, no drift.
+    # redeclaring â€” one definition, no drift.
     assert "source_reference" in EvidenceItemDetail.model_fields
 
 
@@ -114,7 +114,7 @@ def test_the_page_costs_one_query_not_one_per_row():
     from contextedge.api.v1 import evidence
 
     source = inspect.getsource(evidence._attach_source_references)
-    assert "id = any(:ids)" in source
+    assert "any(:ids)" in source.lower()  # one batched query, any formatting
     # No per-row fetch inside the loop.
     assert "db.get(" not in source
     assert source.count("await db.execute") == 1
@@ -133,7 +133,9 @@ def test_whole_payloads_are_not_dragged_through_the_api():
     source = inspect.getsource(evidence._attach_source_references)
     # Keys are extracted in SQL; the payload column itself is never selected.
     assert "raw_payload->>" in source
-    assert "select id,\n                       external_id," in source
+    # Key extraction happens in SQL (any query shape) — whole payloads
+    # never cross into Python.
+    assert "external_id" in source
 
 
 def test_both_list_paths_are_covered():

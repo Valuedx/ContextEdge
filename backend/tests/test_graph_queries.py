@@ -243,9 +243,12 @@ async def test_get_pattern_subgraph_as_of_skips_evidence_link_merge():
         db, tenant_id, pattern_id, as_of=datetime(2026, 1, 1, tzinfo=UTC)
     )
 
-    # pattern lookup + first BFS depth only (empty frontier ends traversal);
-    # no PEL query, no decoration queries.
-    assert len(calls) == 2
+    # The guarantee is the ABSENCE of the PatternEvidenceLink merge under
+    # as_of (PEL has no validity window — merging would leak present-day
+    # links into a historical view). The 2026-08-07 node-inspector work
+    # added an unconditional title-decoration query, so the old exact
+    # query-count pin (==2) no longer describes the invariant.
+    assert not any("pattern_evidence_links" in str(c) for c in calls)
     assert result["edges"] == []
 
 

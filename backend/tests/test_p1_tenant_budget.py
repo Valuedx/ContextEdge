@@ -286,6 +286,7 @@ async def test_upsert_budget_creates_new_row_when_none_exists():
         get=AsyncMock(side_effect=get),
         add=lambda obj: added.append(obj),
         flush=AsyncMock(),
+        refresh=AsyncMock(),  # upsert now refreshes server defaults
     )
 
     budget = await upsert_budget(

@@ -1,4 +1,4 @@
-"""E2e-run fixes: reconstruction race guard, singleton gate, Zoho
+﻿"""E2e-run fixes: reconstruction race guard, singleton gate, Zoho
 client-side filter, classification fast lane.
 
 The governing incident: 8 identical episodes minted in 46 seconds by
@@ -46,7 +46,7 @@ async def test_singleton_cluster_skips_without_llm():
 
 @pytest.mark.asyncio
 async def test_manual_trigger_may_reconstruct_a_singleton():
-    """settle=False (reviewer-triggered) bypasses the gate — the demo's
+    """settle=False (reviewer-triggered) bypasses the gate â€” the demo's
     per-ticket reconstruct endpoint depends on this."""
     db = _db_with_lock(acquired=False)  # then stops at the lock, fine
     with patch(
@@ -84,6 +84,7 @@ def test_zoho_client_side_filter_verifies_rows():
     from contextedge.connectors.zoho_desk.connector import ZohoDeskConnector
 
     conn = ZohoDeskConnector.__new__(ZohoDeskConnector)
+    conn.source_config = {}
     conn.module_filters = {"tickets": {"status": "Resolved By Agent"}}
     assert conn._matches_module_filter("tickets", {"status": "Resolved By Agent"})
     assert conn._matches_module_filter("tickets", {"status": "resolved by agent"})

@@ -196,16 +196,37 @@ async def create_episodes_from_evidence(
             logger.warning("episode_embedding_failed", ep_title=title)
             embedding = None
 
-        # Preventive Episode Deduplication: Check if Episode with matching title already exists
+        # Preventive Episode Deduplication — constrained to the SAME
+        # OCCURRENCE. A bare title match merges tenant-wide: two
+        # different incidents that both title "Password reset issue"
+        # would fuse and cross-link unrelated evidence — exactly the
+        # cross-case contamination the recurrence system exists to
+        # avoid ("similar problem, NEVER the same occurrence"). Merge
+        # only when the existing episode is active AND shares evidence
+        # with the incoming one; otherwise create normally and let the
+        # fingerprint supersession handle cluster-identity dedup.
         from sqlalchemy import func
         clean_title = title.strip().lower()
-        existing_ep_res = await db.execute(
-            select(Episode).where(
-                Episode.tenant_id == tenant_id,
-                func.lower(Episode.title) == clean_title,
-            ).limit(1)
-        )
-        existing_ep = existing_ep_res.scalar_one_or_none()
+        existing_ep = None
+        try:
+            existing_ep_res = await db.execute(
+                select(Episode).where(
+                    Episode.tenant_id == tenant_id,
+                    func.lower(Episode.title) == clean_title,
+                    Episode.reviewer_state.notin_(("superseded", "rejected")),
+                ).limit(5)
+            )
+            incoming_ids = {str(e) for e in episode_evidence_ids}
+            existing_ep = next(
+                (
+                    ep
+                    for ep in existing_ep_res.scalars()
+                    if incoming_ids & {str(e) for e in (ep.evidence_ids or [])}
+                ),
+                None,
+            )
+        except Exception:  # noqa: BLE001 - a dedup PRE-CHECK must never
+            existing_ep = None  # break episode creation itself.
         if existing_ep:
             for evidence_id in episode_evidence_ids:
                 link_exists = (
@@ -314,17 +335,48 @@ async def deduplicate_episodes(
 
     eps = (
         await db.execute(
-            select(Episode).where(Episode.tenant_id == tenant_id)
+            select(Episode).where(
+                Episode.tenant_id == tenant_id,
+                # Already-superseded/rejected episodes are settled
+                # history — re-merging them would churn links forever.
+                Episode.reviewer_state.notin_(("superseded", "rejected")),
+            )
         )
     ).scalars().all()
 
+    # Group by (title, shared evidence): title alone merges different
+    # incidents that happen to share a label. Within a title group,
+    # only episodes overlapping in evidence merge together.
     grouped_episodes: dict[str, list[Episode]] = {}
     for ep in eps:
         key = ep.title.strip().lower()
         grouped_episodes.setdefault(key, []).append(ep)
 
+    def _overlap_components(group: list[Episode]) -> list[list[Episode]]:
+        """Split a same-title group into evidence-overlap connected
+        components — only episodes sharing evidence are the same
+        occurrence and may merge."""
+        sets = [{str(e) for e in (ep.evidence_ids or [])} for ep in group]
+        parent = list(range(len(group)))
+
+        def find(i: int) -> int:
+            while parent[i] != i:
+                parent[i] = parent[parent[i]]
+                i = parent[i]
+            return i
+
+        for i in range(len(group)):
+            for j in range(i + 1, len(group)):
+                if sets[i] & sets[j]:
+                    parent[find(i)] = find(j)
+        components: dict[int, list[Episode]] = {}
+        for i, ep in enumerate(group):
+            components.setdefault(find(i), []).append(ep)
+        return list(components.values())
+
     merged_count = 0
-    for key, group in grouped_episodes.items():
+    for key, title_group in grouped_episodes.items():
+      for group in _overlap_components(title_group):
         if len(group) <= 1:
             continue
 
@@ -431,7 +483,10 @@ async def deduplicate_episodes(
                     edge.source_node_id = new_src
                     edge.target_node_id = new_tgt
 
-            await db.delete(dup)
+            # Supersede, never hard-delete: the governed lifecycle keeps
+            # the audit trail and stays reversible (same rule as the
+            # reconstruction-race cleanup).
+            dup.reviewer_state = "superseded"
             merged_count += 1
 
     await db.flush()

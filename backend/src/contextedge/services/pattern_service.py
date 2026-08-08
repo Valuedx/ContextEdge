@@ -77,16 +77,27 @@ async def create_pattern_from_episodes(
     """Create a pattern from a cluster of episodes."""
     await _assert_domain_safe_membership(db, tenant_id, domain_id, episode_ids)
 
-    # Preventive Deduplication: Merge into existing pattern if title matches
+    # Preventive Deduplication: merge into an existing pattern when the
+    # title matches — scoped to the SAME domain (the domain-safety
+    # assertion above covers the incoming episodes; merging into a
+    # pattern of another domain would leak across that boundary) and to
+    # active patterns only. Fail-soft: a dedup pre-check must never
+    # break pattern creation.
     from sqlalchemy import func
     clean_title = title.strip()
-    existing_pattern_res = await db.execute(
-        select(Pattern).where(
-            Pattern.tenant_id == tenant_id,
-            func.lower(Pattern.title) == clean_title.lower(),
-        ).limit(1)
-    )
-    existing_pattern = existing_pattern_res.scalar_one_or_none()
+    existing_pattern = None
+    try:
+        existing_pattern_res = await db.execute(
+            select(Pattern).where(
+                Pattern.tenant_id == tenant_id,
+                Pattern.domain_id == domain_id,
+                Pattern.active_flag.is_(True),
+                func.lower(Pattern.title) == clean_title.lower(),
+            ).limit(1)
+        )
+        existing_pattern = existing_pattern_res.scalar_one_or_none()
+    except Exception:  # noqa: BLE001
+        existing_pattern = None
 
     if existing_pattern:
         for ep_id in episode_ids:

@@ -337,9 +337,19 @@ async def _cluster(db, tid: uuid.UUID, did: uuid.UUID | None) -> dict:
             created += 1
             assigned_ids.update(e.id for e in cluster)
 
+        # The dedup sweep is housekeeping riding on the clustering task —
+        # it must never fail the clustering itself (and clustering runs
+        # on the solo pattern queue, so the sweep is serialised there;
+        # the API-triggered sweep in patterns.py can still overlap it,
+        # which the merge logic tolerates via its existence checks).
         from contextedge.services.pattern_service import deduplicate_patterns_and_playbooks
-        dedup_stats = await deduplicate_patterns_and_playbooks(db, tid)
-        await db.commit()
+        try:
+            dedup_stats = await deduplicate_patterns_and_playbooks(db, tid)
+        except Exception as dedup_exc:  # noqa: BLE001
+            logger.warning("pattern_dedup_sweep_failed", error=str(dedup_exc))
+            dedup_stats = {}
+        # No explicit commit: run_async owns the commit/rollback contract
+        # for every worker task.
 
         return {
             "status": "success",

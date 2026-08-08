@@ -1,4 +1,4 @@
-"""Domain-safe pattern mining: patterns are synthesized CONTENT, so a
+﻿"""Domain-safe pattern mining: patterns are synthesized CONTENT, so a
 cluster must never mix episode text across domain boundaries."""
 
 from types import SimpleNamespace
@@ -46,7 +46,7 @@ async def test_guard_allows_global_episodes_in_domain_pattern():
 
 @pytest.mark.asyncio
 async def test_guard_rejects_domain_episode_in_global_pattern():
-    """A NULL-domain pattern is visible to ALL domains — domain-scoped
+    """A NULL-domain pattern is visible to ALL domains â€” domain-scoped
     content in it would leak everywhere."""
     tenant_id = uuid4()
     ep = uuid4()
@@ -58,7 +58,7 @@ async def test_guard_rejects_domain_episode_in_global_pattern():
 
 @pytest.mark.asyncio
 async def test_guard_hides_foreign_tenant_episodes_as_missing():
-    """Cross-tenant probes get the same error as nonexistent ids — never
+    """Cross-tenant probes get the same error as nonexistent ids â€” never
     confirm another tenant's episode exists."""
     tenant_id = uuid4()
     ep_foreign, ep_missing = uuid4(), uuid4()
@@ -100,19 +100,27 @@ async def test_cluster_queries_are_domain_scoped():
     with the requested domain was the leak this replaces."""
     captured: list[str] = []
 
-    async def execute(stmt):
+    async def execute(stmt, params=None):
         captured.append(str(stmt))
         return _empty_rows() if "pattern_evidence_links" in str(stmt) else _empty_scalars()
 
     tid, did = uuid4(), uuid4()
     result = await _cluster(SimpleNamespace(execute=execute), tid, did)
     assert result["patterns_created"] == 0
-    candidates_sql = captured[-1]
+    # The dedup sweep (2026-08-07) appends its own queries after the
+    # candidate scan, so "last captured" no longer works — assert on the
+    # last EPISODE-candidate query instead.
+    candidates_sql = next(
+        s for s in reversed(captured) if "FROM episodes" in s or "episodes.domain_id" in s
+    )
     assert "episodes.domain_id = " in candidates_sql
 
     captured.clear()
     await _cluster(SimpleNamespace(execute=execute), tid, None)
-    assert "episodes.domain_id IS NULL" in captured[-1]
+    null_sql = next(
+        s for s in reversed(captured) if "episodes.domain_id" in s
+    )
+    assert "episodes.domain_id IS NULL" in null_sql
 
 
 @pytest.mark.asyncio
@@ -134,4 +142,4 @@ async def test_create_pattern_guard_fires_before_any_write():
         await create_pattern_from_episodes(
             db, tenant_id, None, "Mixed", [ep]
         )
-    assert added == []  # no Pattern row, no links — nothing written
+    assert added == []  # no Pattern row, no links â€” nothing written

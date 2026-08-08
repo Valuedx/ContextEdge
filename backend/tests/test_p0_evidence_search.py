@@ -37,6 +37,10 @@ async def test_evidence_search_with_query():
         "foo",
         limit=5,
         exclude_policy_ids=None,
+        # Filter passthrough added 2026-08-07 (state/type/source facets).
+        relevance_state=None,
+        evidence_type=None,
+        source_type=None,
     )
 
 
