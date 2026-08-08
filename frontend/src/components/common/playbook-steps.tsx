@@ -15,7 +15,9 @@
  * step whose `source_refs` are empty is exactly the one to question.
  */
 
-import { AlertTriangle, ArrowRight, FileText, Layers } from "lucide-react";
+import { useState } from "react";
+
+import { AlertTriangle, ArrowRight, FileText, Layers, Lightbulb } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 
@@ -35,6 +37,13 @@ export interface PlaybookStep {
   expected_outcome?: string;
   evidence_quality?: string;
   source_refs?: PlaybookStepRef[];
+  // Grounded vs best-practice taxonomy (prompt v5 + structural
+  // enforcement): "grounded" steps carry validated source_refs;
+  // "non_grounded" steps are expert recommendations and must never be
+  // presented as if the sources stated them.
+  grounding_status?: string;
+  step_classification?: string;
+  reason?: string;
 }
 
 // Step kinds carry different risk. A remediation step changes the
@@ -71,6 +80,7 @@ export function PlaybookSteps({
   className?: string;
 }) {
   const list: PlaybookStep[] = Array.isArray(steps) ? (steps as PlaybookStep[]) : [];
+  const [hideBestPractice, setHideBestPractice] = useState(false);
 
   if (list.length === 0) {
     return (
@@ -80,9 +90,29 @@ export function PlaybookSteps({
     );
   }
 
+  const bestPracticeCount = list.filter(
+    (s) => s.grounding_status === "non_grounded",
+  ).length;
+  const visible = hideBestPractice
+    ? list.filter((s) => s.grounding_status !== "non_grounded")
+    : list;
+
   return (
-    <ol className={cn("space-y-3", className)}>
-      {sortSteps(list).map((step, index) => {
+    <div className={className}>
+      {bestPracticeCount > 0 && (
+        <label className="mb-2 flex items-center gap-2 text-xs text-slate-400">
+          <input
+            type="checkbox"
+            checked={hideBestPractice}
+            onChange={(e) => setHideBestPractice(e.target.checked)}
+            className="h-3 w-3"
+          />
+          Hide best-practice steps ({bestPracticeCount} of {list.length} are
+          expert recommendations, not from source evidence)
+        </label>
+      )}
+    <ol className="space-y-3">
+      {sortSteps(visible).map((step, index) => {
         const type = (step.type || "").toLowerCase();
         const refs = Array.isArray(step.source_refs) ? step.source_refs : [];
         return (
@@ -105,6 +135,18 @@ export function PlaybookSteps({
                       )}
                     >
                       {step.type}
+                    </span>
+                  )}
+                  {step.grounding_status === "non_grounded" && (
+                    <span
+                      className="inline-flex items-center gap-1 rounded border border-violet-500/40 bg-violet-500/10 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-violet-300"
+                      title={
+                        step.reason ||
+                        "Expert recommendation — not explicitly present in the source material."
+                      }
+                    >
+                      <Lightbulb className="h-3 w-3" />
+                      Best Practice (Non-Grounded)
                     </span>
                   )}
                   {step.evidence_quality && (
@@ -167,5 +209,6 @@ export function PlaybookSteps({
         );
       })}
     </ol>
+    </div>
   );
 }

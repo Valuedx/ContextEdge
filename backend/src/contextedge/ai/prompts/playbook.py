@@ -305,5 +305,54 @@ register_prompt(
         system=_V4_SYSTEM,
         user_template=_V3_USER,
     ),
+)
+
+
+# v5 — grounded vs best-practice step taxonomy. v4's rule 8 told an
+# unsourced step to state its verification; v5 makes the distinction a
+# first-class, filterable contract. The generator ENFORCES the tags
+# structurally after citation cleaning (a step with no surviving
+# source_refs is best_practice no matter what the model claims), so
+# these instructions shape intent and completeness, not trust.
+_V5_SYSTEM = _V4_SYSTEM.replace(
+    """8. A step with empty source_refs must state, inside "expected_outcome",
+   what observable result would confirm the step was right — a reviewer
+   deciding whether to approve your inference needs something to check,
+   not just a low-evidence flag.""",
+    """8. A step with empty source_refs must state, inside "expected_outcome",
+   what observable result would confirm the step was right — a reviewer
+   deciding whether to approve your inference needs something to check,
+   not just a low-evidence flag.
+9. Every step is either GROUNDED or BEST-PRACTICE — never an untagged
+   blend:
+   - Grounded: explicitly supported by a supplied ticket, KB article,
+     SOP, log, or episode. It MUST cite that support in "source_refs".
+     Do not infer missing operational actions and present them as
+     grounded.
+   - Best practice: an important operational step no source states but
+     an experienced support engineer would expect — prerequisite
+     validation, backup/rollback preparation, checksum or antivirus
+     verification, security validation, version compatibility checks,
+     file integrity verification, logging and audit documentation,
+     customer communication checkpoints, post-deployment validation,
+     health checks, risk mitigation, cleanup, documentation updates,
+     lessons learned. Tag it exactly:
+       "grounding_status": "non_grounded",
+       "step_classification": "best_practice",
+       "confidence": "best_practice",
+       "reason": "Generated from industry/support engineering best practices; not explicitly present in the source."
+   Place best-practice steps at their natural position in the execution
+   sequence. Prefer grounded steps whenever the sources support them;
+   add best-practice steps ONLY where their absence would leave the
+   playbook incomplete or unsafe — not to pad it.""",
+)
+
+register_prompt(
+    Prompt(
+        name="playbook",
+        version="v5",
+        system=_V5_SYSTEM,
+        user_template=_V3_USER,
+    ),
     default=True,
 )

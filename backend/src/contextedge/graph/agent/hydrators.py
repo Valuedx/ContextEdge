@@ -193,7 +193,17 @@ def playbook_version_facts(version: PlaybookVersion) -> tuple[dict[str, Any], fl
         else:
             label = step
         if label:
-            step_labels.append(f"{index}. {_text(label, PLAYBOOK_STEP_CHARS)}")
+            # A best-practice step is expert inference, not sourced
+            # procedure — the agent must never relay it as if the source
+            # material stated it (same rule the UI badge enforces for
+            # humans).
+            marker = (
+                "[best practice] "
+                if isinstance(step, dict)
+                and step.get("grounding_status") == "non_grounded"
+                else ""
+            )
+            step_labels.append(f"{index}. {marker}{_text(label, PLAYBOOK_STEP_CHARS)}")
 
     facts: dict[str, Any] = {
         "semantic_version": version.semantic_version,

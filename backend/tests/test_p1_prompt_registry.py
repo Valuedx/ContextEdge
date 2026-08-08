@@ -1,4 +1,4 @@
-"""Tests for the versioned prompt registry + per-tenant A/B routing
+﻿"""Tests for the versioned prompt registry + per-tenant A/B routing
 (W10-12.2)."""
 
 from unittest.mock import patch
@@ -59,7 +59,7 @@ def test_registering_conflicting_default_raises():
 
 def test_registering_same_default_twice_is_noop():
     """Idempotency: calling register_prompt with default=True on an
-    already-registered default version shouldn't raise — the submodule
+    already-registered default version shouldn't raise â€” the submodule
     may be imported multiple times across workers / tests."""
     p1 = _p("same", "v1")
     register_prompt(p1, default=True)
@@ -106,7 +106,7 @@ def test_override_to_unregistered_version_falls_back_to_default():
 
 
 def test_malformed_variants_json_does_not_crash():
-    """A bad JSON blob in config must not take down ingest — empty
+    """A bad JSON blob in config must not take down ingest â€” empty
     overrides on parse failure is the safe choice."""
     register_prompt(_p("robust", "v1"), default=True)
     with patch.object(
@@ -150,19 +150,19 @@ def test_real_relevance_prompt_registered():
 
 def test_all_migrated_prompt_families_registered():
     """Every inline prompt that was migrated must have a v1 default
-    registered at import time. Regression guard — forgetting to import
+    registered at import time. Regression guard â€” forgetting to import
     a submodule in ``ai/prompts/__init__.py`` silently breaks the
     caller via a KeyError at first LLM call."""
     # identity is v3 since the extraction eval harness could decide it:
     # 19 labelled cases at 3 samples each gave junk 9.5% -> 0%, forbidden
     # 23 -> 3, stability 0.96 -> 1.00, and MISSING 0 -> 0. That last one
-    # settled it — the entity-count fall that looked like recall loss on
+    # settled it â€” the entity-count fall that looked like recall loss on
     # an unlabelled sample was the junk being removed.
     #
     # identity_adjudication moved to v2 with the trigram candidate
     # change. Candidates are now found by similarity rather than
     # substring, which raised the share of mentions reaching the
-    # adjudicator from 33% to 52% — and started routinely showing it
+    # adjudicator from 33% to 52% â€” and started routinely showing it
     # numbered siblings like MAILGW01/MAILGW02 that are textually near
     # and genuinely different machines. v1 said nothing about those.
     # Raising recall into a judge without telling it what the new
@@ -176,7 +176,7 @@ def test_all_migrated_prompt_families_registered():
         # v3 adds approved KB/SOP as a distinct input, step-level source
         # citations, and the conflicts block. v1/v2 remain registered and
         # immutable for eval baselines.
-        "playbook": "v4",
+        "playbook": "v5",
         "contradiction": "v1",
     }
     for name, default_version in expected_defaults.items():
@@ -201,7 +201,7 @@ def test_migrated_extractors_forward_prompt_identity(
 
     Parameterised over the two async extractors whose signatures take
     a single content string. Episode / pattern / playbook follow the
-    same pattern but need list-of-dicts fixtures — same regression
+    same pattern but need list-of-dicts fixtures â€” same regression
     guarantee, just not covered by this parametrization."""
     import asyncio
     import importlib
@@ -222,7 +222,7 @@ def test_migrated_extractors_forward_prompt_identity(
 
 
 def test_episode_extractor_forwards_prompt_identity():
-    """Episode extractor has a chunking wrapper — verify the inner
+    """Episode extractor has a chunking wrapper â€” verify the inner
     ``_extract_from_chunk`` still threads prompt_name/version."""
     import asyncio
     from unittest.mock import patch as _patch

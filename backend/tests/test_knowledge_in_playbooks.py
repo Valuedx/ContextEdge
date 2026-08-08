@@ -1,4 +1,4 @@
-"""Phase 2: approved KB/SOP content reaching playbook generation.
+﻿"""Phase 2: approved KB/SOP content reaching playbook generation.
 
 The failure these guard against, stated once:
 
@@ -60,8 +60,8 @@ def _doc(title="VPN Certificate Renewal SOP", **kw):
 
 def test_query_uses_episode_facts_not_just_the_pattern_title():
     """An incident titled "Laptop Wi-Fi not working" retrieves nothing
-    useful. The same episode's established facts — adapter, error code,
-    the action that worked — retrieve the article that documents them.
+    useful. The same episode's established facts â€” adapter, error code,
+    the action that worked â€” retrieve the article that documents them.
     That richer fingerprint only exists after reconstruction, which is
     why retrieval runs at pattern time."""
     query = build_retrieval_query(
@@ -104,7 +104,7 @@ async def test_only_knowledge_evidence_is_returned():
             "contextedge.search.vector_search.search_evidence_semantic",
             AsyncMock(
                 # All four inside MAX_DISTANCE (0.25, derived from the link
-                # threshold) — this test is about the TYPE filter, and its
+                # threshold) â€” this test is about the TYPE filter, and its
                 # fixtures must not straddle the distance ceiling or it
                 # silently becomes a threshold test.
                 return_value=[(ticket, 0.1), (kb, 0.15), (chat, 0.2), (article, 0.22)]
@@ -266,9 +266,9 @@ def test_default_prompt_instructs_the_model_to_surface_disagreement_not_resolve_
     from contextedge.ai.prompts import get_prompt
 
     prompt = get_prompt("playbook", None)
-    assert prompt.version == "v4"
+    assert prompt.version == "v5"  # grounded/best-practice taxonomy (2026-08-08)
     # Whitespace-normalized: the prompt is hard-wrapped, so asserting on
-    # raw text would break whenever a line is reflowed — a failure that
+    # raw text would break whenever a line is reflowed â€” a failure that
     # says nothing about the contract being tested.
     system = " ".join(prompt.system.split())
     assert "do not silently choose" in system
@@ -290,7 +290,7 @@ def test_earlier_prompt_versions_remain_registered_and_immutable():
     # v4 added: verbatim commands, no prompt labels in prose, unsourced
     # steps must state their verification. Earlier versions stay for eval
     # baselines and historical llm.usage attribution.
-    assert list_prompt_versions("playbook") == ["v1", "v2", "v3", "v4"]
+    assert list_prompt_versions("playbook") == ["v1", "v2", "v3", "v4", "v5"]
 
 
 # --- provenance --------------------------------------------------------------
@@ -298,7 +298,7 @@ def test_earlier_prompt_versions_remain_registered_and_immutable():
 
 def test_knowledge_links_are_written_with_their_own_type():
     """"Which SOP does this playbook implement" must be answerable
-    without re-reading the JSON blob — and a knowledge-drift check needs
+    without re-reading the JSON blob â€” and a knowledge-drift check needs
     to find every version citing an article that changed."""
     added = []
     db = SimpleNamespace(add=added.append)
@@ -337,7 +337,7 @@ def test_a_knowledge_id_also_listed_as_evidence_is_not_duplicated():
 
 
 def test_conflicts_persist_on_the_version():
-    """NULL means "not assessed" — versions generated before knowledge
+    """NULL means "not assessed" â€” versions generated before knowledge
     was an input must not claim the comparison was made and found
     nothing."""
     from contextedge.models.playbook import PlaybookVersion

@@ -88,7 +88,53 @@ async def generate_playbook_candidate(
     )
     if isinstance(result, dict):
         validate_source_refs(result, ref_map)
+        classify_step_grounding(result)
     return result
+
+
+BEST_PRACTICE_REASON = (
+    "Generated from industry/support engineering best practices; "
+    "not explicitly present in the source."
+)
+
+
+def classify_step_grounding(result: dict) -> dict[str, int]:
+    """Deterministic grounded / best-practice classification, applied
+    AFTER citation cleaning so it cannot be argued with.
+
+    The rule is structural, not model-claimed: a step whose (validated)
+    source_refs are non-empty is grounded; a step with none is a
+    best-practice recommendation and is FORCED to carry the tags —
+    including a step the model claimed was grounded but whose minted
+    citations were just dropped. Never the reverse: a model may not
+    label an evidenced step best_practice to dodge review scrutiny.
+
+    ``result["grounding"]`` records the counts and a grounded_ratio.
+    Best-practice steps can only lower or hold that ratio, never raise
+    it — the spec's scoring rule, enforced by arithmetic.
+    """
+    counts = {"grounded": 0, "best_practice": 0}
+    steps = [s for s in (result.get("steps") or []) if isinstance(s, dict)]
+    for step in steps:
+        if step.get("source_refs"):
+            step["grounding_status"] = "grounded"
+            step.setdefault("step_classification", "procedure")
+            if step.get("reason") == BEST_PRACTICE_REASON:
+                step.pop("reason", None)
+            counts["grounded"] += 1
+        else:
+            step["grounding_status"] = "non_grounded"
+            step["step_classification"] = "best_practice"
+            step["confidence"] = "best_practice"
+            step["reason"] = BEST_PRACTICE_REASON
+            counts["best_practice"] += 1
+    result["grounding"] = {
+        **counts,
+        "grounded_ratio": (
+            round(counts["grounded"] / len(steps), 3) if steps else 0.0
+        ),
+    }
+    return counts
 
 
 # --- citation validation -----------------------------------------------------
