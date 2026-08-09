@@ -17,7 +17,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from fastapi import APIRouter
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from contextedge.deps import AuthUser, DbSession
 from contextedge.services.inventory_diff_service import observe_inventory
@@ -33,6 +33,15 @@ class InventoryObservation(BaseModel):
     external_id: str | None = Field(default=None, max_length=500)
     state: dict[str, str] = Field(default_factory=dict)
     observed_at: datetime | None = None
+
+    @model_validator(mode="after")
+    def _external_id_needs_its_system(self):
+        # A bare external_id can collide across source systems and
+        # silently attach state to the wrong CI — exact resolution is
+        # only exact with both halves of the identity.
+        if self.external_id and not self.external_system:
+            raise ValueError("external_id requires external_system")
+        return self
 
 
 class InventoryReport(BaseModel):

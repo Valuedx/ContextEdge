@@ -205,19 +205,24 @@ async def close_resolution_session(
         return None
 
     previous_status = session.status
+    # Re-closing an already-closed session is a no-op for history:
+    # appending closed->closed transitions (or a second outcome) on
+    # every repeat call would be noise wearing the costume of lifecycle.
+    already_closed = previous_status == "closed"
     session.status = "closed"
     session.closed_at = datetime.now(UTC)
     await db.flush()
-    await record_case_transition(
-        db,
-        tenant_id,
-        session.id,
-        from_status=previous_status,
-        to_status="closed",
-        reason=(outcome or {}).get("resolution_summary"),
-        transitioned_by=closed_by,
-    )
-    if outcome and outcome.get("outcome_status"):
+    if not already_closed:
+        await record_case_transition(
+            db,
+            tenant_id,
+            session.id,
+            from_status=previous_status,
+            to_status="closed",
+            reason=(outcome or {}).get("resolution_summary"),
+            transitioned_by=closed_by,
+        )
+    if not already_closed and outcome and outcome.get("outcome_status"):
         await record_case_outcome(
             db,
             tenant_id,

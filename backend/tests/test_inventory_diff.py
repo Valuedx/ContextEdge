@@ -140,6 +140,22 @@ async def test_external_id_resolution_carries_onto_created_entity():
     assert created.external_id == "ae-1234"
 
 
+def test_external_id_without_system_is_rejected_at_the_schema():
+    """A bare external_id can collide across source systems — exact
+    resolution needs both halves of the identity."""
+    from pydantic import ValidationError
+
+    from contextedge.api.v1.inventory import InventoryObservation
+
+    with pytest.raises(ValidationError, match="external_system"):
+        InventoryObservation(ci_name="agent-07", external_id="ae-1234")
+    # Both halves together are fine.
+    obs = InventoryObservation(
+        ci_name="agent-07", external_system="automationedge", external_id="ae-1234"
+    )
+    assert obs.external_id == "ae-1234"
+
+
 def test_inventory_endpoint_is_registered():
     import inspect
 

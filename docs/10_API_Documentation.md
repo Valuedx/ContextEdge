@@ -995,7 +995,12 @@ Get Session
 
 ### `PATCH /api/v1/sessions/{session_id}/close`
 
-Close Session
+Close Session. Accepts an optional body asserting the outcome
+(`outcome_status`, `resolution_summary`, `confirmed_root_cause`,
+`successful_action`, `failed_actions`, `user_confirmed`,
+`fix_results`) — with it the close records a `CaseOutcome`; without it
+only the state transition is recorded. Re-closing an already-closed
+session is a history no-op.
 
 - **Auth**: required
 - **Response**: `ResolutionSessionResponse`

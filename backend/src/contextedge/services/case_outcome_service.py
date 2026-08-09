@@ -133,7 +133,12 @@ async def record_case_outcome(
                 case_outcome_id=outcome.id,
                 fix_pattern_id=fix_pattern_id,
                 result=result,
-                confidence=confidence if isinstance(confidence, int | float) else None,
+                confidence=(
+                    confidence
+                    if isinstance(confidence, int | float)
+                    and not isinstance(confidence, bool)
+                    else None
+                ),
             )
         )
     await db.flush()

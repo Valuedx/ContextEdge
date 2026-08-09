@@ -141,6 +141,42 @@ async def test_close_without_outcome_records_transition_only(mock_op, mock_inv):
 @pytest.mark.asyncio
 @patch(_INVALIDATE, new_callable=AsyncMock)
 @patch("contextedge.services.session_service.append_operational_event", new_callable=AsyncMock)
+async def test_reclose_is_a_noop_for_history(mock_op, mock_inv):
+    """Closing an already-closed session must not append closed->closed
+    transitions or a second outcome."""
+    from contextedge.services import session_service
+
+    added: list = []
+    session = _closable_session()
+    session.status = "closed"  # already closed by an earlier call
+    with patch.object(
+        session_service, "get_resolution_session", new=AsyncMock(return_value=session)
+    ):
+        await session_service.close_resolution_session(
+            _db(added), tenant_id=uuid4(), session_id=session.id,
+            outcome={"outcome_status": "resolved"},
+        )
+    assert [a for a in added if isinstance(a, CaseStateTransition)] == []
+    assert [a for a in added if isinstance(a, CaseOutcome)] == []
+
+
+@pytest.mark.asyncio
+async def test_fix_result_bool_confidence_is_not_a_confidence():
+    added: list = []
+    await record_case_outcome(
+        _db(added), uuid4(), SimpleNamespace(id=uuid4(), created_at=None),
+        outcome_status="resolved",
+        fix_results=[
+            {"fix_pattern_id": str(uuid4()), "result": "successful", "confidence": True}
+        ],
+    )
+    links = [a for a in added if isinstance(a, CaseOutcomeFixPattern)]
+    assert links[0].confidence is None
+
+
+@pytest.mark.asyncio
+@patch(_INVALIDATE, new_callable=AsyncMock)
+@patch("contextedge.services.session_service.append_operational_event", new_callable=AsyncMock)
 async def test_close_with_outcome_records_both(mock_op, mock_inv):
     from contextedge.services import session_service
 
