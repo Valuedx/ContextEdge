@@ -1,19 +1,26 @@
 """Claim population from the relevance pass (roadmap A4).
 
-The ``claims`` table, ``claim`` node type, and ``asserted_in`` edge have
-been in the schema and the maf.v1 profile since they shipped — with
-zero writers. This service is the populator: 0-3 atomic assertions per
-relevant evidence item, emitted by the same relevance call that already
-reads every body (no extra LLM call), deduplicated tenant-wide on
-normalized text.
+The ``claims`` table and ``claim`` node type have been in the schema and
+the maf.v1 profile since they shipped — with zero writers. This service
+is the populator: 0-3 atomic assertions per relevant evidence item,
+emitted by the same relevance call that already reads every body (no
+extra LLM call), deduplicated tenant-wide on normalized text.
+
+Edge vocabulary (settled 2026-08-09, matching the materializer):
+``asserted_in`` is claim→SESSION (where the claim was asserted);
+claim→EVIDENCE uses the support vocabulary — this service writes
+``supported_by``, the same type the materializer derives from
+``ClaimEvidence.support_type``. An earlier draft used ``asserted_in``
+for claim→evidence too; re-enabling it that way would have interleaved
+two incompatible meanings of one edge type.
 
 Lifecycle by default: new claims land ``unverified``, which the
 projection's visibility gate excludes — the graph accumulates candidate
 assertions without the agent seeing an unreviewed one. Validation
 (machine or human) is what promotes a claim into the projection.
 A re-asserted claim (same normalized text from new evidence) gains an
-additional ``asserted_in`` edge instead of a duplicate row — corroboration
-accrues on one claim, not across copies.
+additional ``supported_by`` edge instead of a duplicate row —
+corroboration accrues on one claim, not across copies.
 """
 
 from __future__ import annotations
@@ -44,7 +51,7 @@ async def persist_extracted_claims(
     evidence,
     claims: list[dict],
 ) -> dict:
-    """Persist parsed claims for one evidence item; link via asserted_in."""
+    """Persist parsed claims for one evidence item; link via supported_by."""
     counts = {"created": 0, "linked": 0}
     if not claims:
         return counts
@@ -90,10 +97,11 @@ async def persist_extracted_claims(
             source_id=claim.id,
             target_type="evidence",
             target_id=evidence.id,
-            edge_type="asserted_in",
+            edge_type="supported_by",
             weight=1.0,
             confidence=float(item.get("confidence", 0.5)),
             domain_id=getattr(evidence, "domain_id", None),
+            metadata={"origin": "relevance_extraction"},
         )
         counts["linked"] += 1
     return counts

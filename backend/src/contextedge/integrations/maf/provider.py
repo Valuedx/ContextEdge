@@ -144,12 +144,31 @@ class ContextGraphProvider(ContextProvider):
                 answer = ""
         if not answer.strip():
             return
+        # Structured provenance: every node the projection cited becomes
+        # a checkable reference on the decision record, so "what informed
+        # this diagnosis" is queryable instead of buried in a snapshot.
+        evidence_refs = []
+        for key in (projection.get("cited_nodes") or [])[:40]:
+            ntype, _, nid = str(key).partition(":")
+            if ntype and nid:
+                evidence_refs.append(
+                    {
+                        "ref_type": ntype,
+                        "ref_id": nid,
+                        "description": "cited in the projection that informed this run",
+                    }
+                )
         payload = {
             "decision_type": "agent_diagnosis",
             "agent_step": "maf_run",
             "actor_type": "ai",
             "rationale_summary": " ".join(answer.split())[:2_000],
             "context_snapshot": projection,
+            "evidence_refs": evidence_refs,
+            # An unreviewed AI diagnosis must never become authoritative
+            # by default: the projection hides pending AI decisions, and
+            # this flag routes the record through human review.
+            "approval_required": True,
         }
         try:
             await self.writeback.record_decision(payload)

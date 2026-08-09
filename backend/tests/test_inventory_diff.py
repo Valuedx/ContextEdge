@@ -33,12 +33,13 @@ def test_diff_catches_change_addition_and_removal():
     assert not any(c[0] == "agent" for c in changes)
 
 
-def _entity_db(entity):
+def _entity_db(*entities):
+    """Resolution now fetches up to two matches (ambiguity check)."""
     db = MagicMock()
     db.add = MagicMock()
     db.flush = AsyncMock()
     result = MagicMock()
-    result.scalar_one_or_none.return_value = entity
+    result.scalars.return_value.all.return_value = [e for e in entities if e is not None]
     db.execute = AsyncMock(return_value=result)
     return db
 
@@ -68,7 +69,7 @@ async def test_changed_key_emits_one_event():
             db, uuid.uuid4(), ci_name="agent-07", state={"browser": "119"},
             observed_at=datetime(2026, 8, 7, tzinfo=UTC),
         )
-    assert counts == {"events": 1, "baseline": False, "changes": 1}
+    assert counts == {"status": "ok", "events": 1, "baseline": False, "changes": 1}
     kwargs = rec.await_args.kwargs
     assert kwargs["event_kind"] == "browser"
     assert kwargs["from_value"] == "118"
@@ -88,6 +89,55 @@ async def test_reshaped_report_is_capped():
         )
     assert counts["events"] == MAX_EVENTS_PER_OBSERVATION
     assert rec.await_count == MAX_EVENTS_PER_OBSERVATION
+
+
+@pytest.mark.asyncio
+async def test_ambiguous_name_refuses_and_writes_nothing():
+    """Two same-named CIs: guessing attaches state events to the wrong
+    one and contaminates both preceding-change windows."""
+    a = MagicMock(attributes={}, domain_id=None)
+    b = MagicMock(attributes={}, domain_id=None)
+    db = _entity_db(a, b)
+    with patch.object(inventory_diff_service, "record_state_event", new=AsyncMock()) as rec:
+        counts = await observe_inventory(
+            db, uuid.uuid4(), ci_name="agent-07", state={"browser": "119"},
+        )
+    assert counts["status"] == "ambiguous_ci"
+    rec.assert_not_awaited()
+    db.add.assert_not_called()
+    db.flush.assert_not_awaited()  # nothing persisted, not even a snapshot
+
+
+@pytest.mark.asyncio
+async def test_unknown_ci_is_refused_unless_opted_in():
+    db = _entity_db()
+    counts = await observe_inventory(
+        db, uuid.uuid4(), ci_name="typo-host", state={"browser": "119"},
+    )
+    assert counts["status"] == "unknown_ci"
+    db.add.assert_not_called()
+
+    db2 = _entity_db()
+    counts = await observe_inventory(
+        db2, uuid.uuid4(), ci_name="new-host", state={"browser": "119"},
+        create_missing=True,
+    )
+    assert counts["status"] == "ok" and counts["baseline"] is True
+    created = db2.add.call_args.args[0]
+    assert created.entity_type == "configuration_item"
+
+
+@pytest.mark.asyncio
+async def test_external_id_resolution_carries_onto_created_entity():
+    db = _entity_db()
+    await observe_inventory(
+        db, uuid.uuid4(), ci_name="agent-07", state={},
+        external_system="automationedge", external_id="ae-1234",
+        create_missing=True,
+    )
+    created = db.add.call_args.args[0]
+    assert created.external_system == "automationedge"
+    assert created.external_id == "ae-1234"
 
 
 def test_inventory_endpoint_is_registered():

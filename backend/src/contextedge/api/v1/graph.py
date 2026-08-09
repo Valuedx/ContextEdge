@@ -117,6 +117,59 @@ async def change_risk(
     return await assess_change_risk(db, user.tenant_id, ci, window_days=window_days)
 
 
+@router.get("/edge-proposals")
+async def list_edge_proposals_endpoint(
+    db: DbSession,
+    user: AuthUser,
+    limit: int = Query(100, ge=1, le=500),
+):
+    """Pending agent-proposed dependencies awaiting review. Proposals
+    never enter the maf.v1 projection; this queue is how they become
+    authored topology (or audit history)."""
+    user.require_role("knowledge_manager")
+    from contextedge.services.edge_proposal_service import list_edge_proposals
+
+    return {"proposals": await list_edge_proposals(db, user.tenant_id, limit=limit)}
+
+
+@router.post("/edge-proposals/{edge_id}/approve")
+async def approve_edge_proposal_endpoint(
+    edge_id: UUID,
+    db: DbSession,
+    user: AuthUser,
+    note: str | None = Query(None, max_length=500),
+):
+    """Promote a proposal to an authored depends_on edge with review
+    provenance; the proposal edge closes (supersede, never delete)."""
+    user.require_role("knowledge_manager")
+    from contextedge.services.edge_proposal_service import approve_edge_proposal
+
+    result = await approve_edge_proposal(
+        db, user.tenant_id, edge_id, reviewed_by=str(user.user_id), note=note
+    )
+    if result.get("error"):
+        raise HTTPException(status_code=404, detail=result["error"])
+    return result
+
+
+@router.post("/edge-proposals/{edge_id}/reject")
+async def reject_edge_proposal_endpoint(
+    edge_id: UUID,
+    db: DbSession,
+    user: AuthUser,
+    note: str | None = Query(None, max_length=500),
+):
+    user.require_role("knowledge_manager")
+    from contextedge.services.edge_proposal_service import reject_edge_proposal
+
+    result = await reject_edge_proposal(
+        db, user.tenant_id, edge_id, reviewed_by=str(user.user_id), note=note
+    )
+    if result.get("error"):
+        raise HTTPException(status_code=404, detail=result["error"])
+    return result
+
+
 @router.get("/neighbors")
 async def graph_neighbors(
     db: DbSession,

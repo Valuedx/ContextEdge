@@ -202,6 +202,33 @@ def test_generated_search_vectors_are_read_only_in_orm():
     assert playbook_column.computed is not None
 
 
+def test_pending_ai_decisions_are_invisible_until_reviewed():
+    """Agent output must not launder itself into agent input: a pending
+    AI-authored diagnosis stays out of projection until review or a
+    recorded outcome moves it past pending."""
+    tenant_id = uuid4()
+    scope = AgentGraphAccessScope(
+        tenant_id=tenant_id,
+        principal_id=uuid4(),
+        principal_type="user",
+    )
+    decision = SimpleNamespace(
+        tenant_id=tenant_id,
+        domain_id=None,
+        workspace_id=None,
+        status="pending",
+        actor_type="ai",
+    )
+    assert node_is_visible("decision", decision, scope, set()) is False
+    decision.status = "completed"  # outcome recorded
+    assert node_is_visible("decision", decision, scope, set()) is True
+    decision.status = "pending"
+    decision.actor_type = "human"  # human pending decisions stay visible
+    assert node_is_visible("decision", decision, scope, set()) is True
+    decision.status = "superseded"
+    assert node_is_visible("decision", decision, scope, set()) is False
+
+
 def test_sensitive_nodes_fail_closed_and_user_projection_omits_email():
     tenant_id = uuid4()
     scope = AgentGraphAccessScope(

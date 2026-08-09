@@ -85,7 +85,8 @@ Prefixes are relative to `/api/v1`.
 | `/policies` | policies | Tenant policies |
 | `/drift` | drift | Drift alerts |
 | `/graph` | graph | Graph traversal, subgraph visualization, aggregate statistics |
-| `/sessions` | sessions | Resolution sessions and decision trace events |
+| `/sessions` | sessions | Resolution sessions and decision trace events. `PATCH /sessions/{id}/close` accepts an optional body asserting the outcome (`outcome_status` from the CaseOutcome vocabulary, `resolution_summary`, `confirmed_root_cause`, `successful_action`, `failed_actions`, `user_confirmed`, `fix_results`); with it the close records a `CaseOutcome` (MTTR from the session timeline, fix-pattern links). Without it only the state transition is recorded — an unstated outcome is unknown, not "resolved". Every open/close appends a `CaseStateTransition`. |
+| `/inventory` | inventory | Agent-side state reports (`POST /inventory/report`, `knowledge_manager`). Observations may carry `external_system`/`external_id` for exact CI resolution; ambiguous names return `ambiguous_ci` and write nothing; unknown names return `unknown_ci` unless the report sets `create_missing: true`. |
 | `/execution` | execution | Governed playbook execution runs and approvals |
 | `/decisions` | decisions | First-class decision traces with options, outcomes, and similarity search |
 | `/review-queue` | review-queue | Reviewer console bundle — session + top decision + similar aggregate in one call |
@@ -247,6 +248,16 @@ These endpoints expose the context graph for interactive exploration and visuali
 | `GET` | `/subgraph/{entity_type}/{entity_id}` | Returns nodes and edges around any entity for visualization |
 | `GET` | `/stats` | Aggregate edge-type and node-type counts for the tenant |
 | `POST` | `/agent-subsets` | Bounded, ranked, authorization-filtered projection for agents |
+| `GET` | `/edge-proposals` | Pending agent-proposed dependencies awaiting review (`knowledge_manager`) |
+| `POST` | `/edge-proposals/{edge_id}/approve` | Promote a proposal to an authored `depends_on` edge with review provenance; closes the proposal (`knowledge_manager`; optional `note` query param) |
+| `POST` | `/edge-proposals/{edge_id}/reject` | Close the proposal with a rejected verdict; writes no topology (`knowledge_manager`; optional `note`) |
+
+Edge proposals come from the MAF `propose_dependency` tool as
+`proposed_depends_on` edges — excluded from the maf.v1 projection, so
+agents never consume unreviewed topology. Either review verdict closes
+the proposal edge (`valid_to`, never deleted); approval records which
+proposal, whose review, and the agent's rationale/evidence on the
+authored edge's metadata.
 
 All three `GET` endpoints accept optional `domain_id` and timezone-aware
 `as_of` parameters. Without `as_of`, only active edges (`valid_to IS NULL`)

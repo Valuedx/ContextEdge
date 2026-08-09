@@ -49,7 +49,9 @@ def test_prompt_default_stays_v2_after_failed_ab():
 
 
 @pytest.mark.asyncio
-async def test_new_claim_lands_unverified_with_asserted_in_edge():
+async def test_new_claim_lands_unverified_with_supported_by_edge():
+    """claim->evidence uses the SUPPORT vocabulary (matching the
+    materializer); asserted_in is reserved for claim->session."""
     db = MagicMock()
     db.add = MagicMock()
     db.flush = AsyncMock()
@@ -66,7 +68,8 @@ async def test_new_claim_lands_unverified_with_asserted_in_edge():
     claim = db.add.call_args.args[0]
     assert claim.validation_status == "unverified"
     assert claim.created_by_type == "agent"
-    assert edge.await_args.kwargs["edge_type"] == "asserted_in"
+    assert edge.await_args.kwargs["edge_type"] == "supported_by"
+    assert edge.await_args.kwargs["target_type"] == "evidence"
 
 
 @pytest.mark.asyncio

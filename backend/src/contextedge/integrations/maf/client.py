@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Protocol
+from uuid import UUID
 
 import httpx
 
@@ -251,13 +252,34 @@ class DecisionWritebackClient(Protocol):
 
 
 class InProcessDecisionWritebackClient:
-    def __init__(self, session_factory, tenant_id, actor_id):
+    """``session_id`` / ``domain_id`` scope every recorded decision to
+    the resolution session and domain the deployment is running for —
+    without them an agent-authored decision floats free of the session
+    trail and domain RBAC it should belong to."""
+
+    def __init__(
+        self,
+        session_factory,
+        tenant_id,
+        actor_id,
+        *,
+        session_id=None,
+        domain_id=None,
+    ):
         self.session_factory = session_factory
         self.tenant_id = tenant_id
         self.actor_id = actor_id
+        self.session_id = session_id
+        self.domain_id = domain_id
 
     async def record_decision(self, payload: dict) -> dict | None:
         from contextedge.services.decision_trace_service import create_decision
+
+        def _uuid_or_none(value):
+            try:
+                return UUID(str(value)) if value else None
+            except ValueError:
+                return None
 
         async with self.session_factory() as db:
             try:
@@ -268,9 +290,13 @@ class InProcessDecisionWritebackClient:
                     agent_step=payload.get("agent_step", "maf_run"),
                     actor_type="ai",
                     actor_id=self.actor_id,
+                    session_id=_uuid_or_none(payload.get("session_id")) or self.session_id,
+                    domain_id=_uuid_or_none(payload.get("domain_id")) or self.domain_id,
                     context_snapshot=payload.get("context_snapshot", {}),
+                    evidence_refs=payload.get("evidence_refs") or [],
                     rationale_summary=payload.get("rationale_summary", ""),
                     confidence=payload.get("confidence"),
+                    approval_required=bool(payload.get("approval_required", True)),
                 )
                 await db.commit()
                 return {"id": str(decision.id)}

@@ -424,12 +424,12 @@ The hybrid ranker uses a hard-coded `quality_score = 0.5` for all playbooks. A p
   measure-first A/B the un-benchmarked 3.6-flash lane defaults need —
   flipping the task key today would switch pattern synthesis models as
   a side effect.
-- **`proposed_depends_on` has no approval workflow**: agent-discovered
-  dependencies are written as raw graph edges, kept out of the maf.v1
-  allowlist so agents never consume them unreviewed — but there is no
-  approve/reject/promote path, so proposals accumulate invisibly.
-  Needs a review queue (reuse the reviewer_state lifecycle) before the
-  feature is honest to call review-gated.
+- ~~**`proposed_depends_on` has no approval workflow**~~ **Resolved
+  2026-08-09**: `edge_proposal_service` + `/graph/edge-proposals`
+  (list/approve/reject, knowledge_manager). Approve mints an authored
+  `depends_on` with full review provenance; either verdict closes the
+  proposal edge (supersede, never delete). Frontend reviewer UI for the
+  queue is a follow-up — the API is consumable today.
 - **Ruff backlog (~360 findings)**: pre-existing style violations
   (mostly E501) across older modules. The two genuine runtime bugs
   found in the 2026-08-09 sweep (undefined `logger` in
@@ -437,35 +437,37 @@ The hybrid ranker uses a hard-coded `quality_score = 0.5` for all playbooks. A p
   connector) are fixed; the style backlog is untouched and should be
   burned down module-by-module, not in one bulk reformat.
 
-## Enterprise-graph blockers (carried from the prior review, re-verified 2026-08-09)
+## Enterprise-graph blockers (carried from the prior review; four of five resolved 2026-08-09)
 
-All five re-checked against the tree at `3592bc3` — none has changed.
-Adequate-for-pilot, blocking for authoritative-enterprise-graph status:
-
-- **Inventory CI identity/scoping** (`api/v1/inventory.py`,
-  `inventory_diff_service.observe_inventory`): any authenticated user
-  may report; CIs resolve by `(tenant_id, name)` with `.limit(1)`, so
-  same-named CIs silently merge and unknown names mint domainless
-  `configuration_item` entities. Needs a role gate, an
-  external-id/system disambiguator in the observation schema, and a
-  refuse-or-flag path on ambiguous names.
-- **MAF decision write-back is under-provenanced**
-  (`integrations/maf/provider.py` payload): no session_id, domain_id,
-  evidence references, or confidence; the decision lands `pending`,
-  and graph visibility (`hydrators.py`) hides decisions only when
-  `superseded`/`reverted` — so pending AI diagnoses are visible to
-  later agents. Either exclude `pending` AI decisions from projection
-  or require review before visibility, and enrich the payload.
-- **Outcome/fix flywheel is schema-only** (`models/case_outcome.py`):
-  `CaseOutcome` / `CaseStateTransition` have zero production writers.
-  The roadmap status line now says so explicitly.
-- **`asserted_in` means two different things**: dormant
-  `claim_service` writes it claim→evidence; the materializer writes it
-  claim→session. Settle the vocabulary (materializer's claim→session +
-  `supported_by` for evidence looks right) BEFORE claim population is
-  ever re-enabled, or the two populations will interleave
-  incompatibly.
-- **Temporal/execution lineage partial**: `as_of` filters edges but
-  hydrated node facts are current-state; playbook versions, execution
-  steps, tool invocations, and state transitions are not projected
-  nodes. Known scope, not a regression.
+- ~~**Inventory CI identity/scoping**~~ **Resolved**: `POST
+  /inventory/report` requires `knowledge_manager`; observations may
+  carry `external_system`/`external_id` for exact resolution; an
+  ambiguous name returns `ambiguous_ci` and writes nothing; unknown
+  names are refused (`unknown_ci`) unless the report opts in with
+  `create_missing`. Note the behavior change for collectors that
+  relied on implicit creation: they must now send
+  `create_missing: true`.
+- ~~**MAF decision write-back under-provenanced**~~ **Resolved**: the
+  payload carries structured `evidence_refs` (every projection-cited
+  node) and `approval_required: true`; the in-process client threads
+  `session_id`/`domain_id` through to `create_decision`; and the
+  projection hides `pending` AI-authored decisions (`hydrators.py`) —
+  agent output cannot launder itself into agent input.
+- ~~**Outcome/fix flywheel schema-only**~~ **Writers shipped**:
+  `case_outcome_service` + session lifecycle hooks. Every session
+  open/close appends a `CaseStateTransition`; a close that asserts an
+  outcome records `CaseOutcome` (MTTR from the session timeline) and
+  links `fix_results` to fix patterns. A close without an outcome
+  records the transition only — unstated is unknown, never "resolved".
+  Remaining follow-up: aggregation of fix results into
+  decision-time statistics (roadmap F10) and richer intermediate
+  states once the API exposes them.
+- ~~**`asserted_in` vocabulary conflict**~~ **Settled**:
+  `asserted_in` = claim→session (materializer); the dormant
+  `claim_service` now writes claim→evidence as `supported_by`,
+  matching the materializer's support vocabulary, so re-enabling claim
+  population cannot interleave two meanings of one edge type.
+- **Temporal/execution lineage partial** (still open): `as_of` filters
+  edges but hydrated node facts are current-state; playbook versions,
+  execution steps, tool invocations, and trace events are not
+  projected nodes. Known scope, not a regression.

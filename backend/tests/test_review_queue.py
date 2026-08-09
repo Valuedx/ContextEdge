@@ -788,7 +788,7 @@ async def test_close_resolution_session_invalidates_own_session(
         new_callable=AsyncMock,
         return_value=session_obj,
     ):
-        db = SimpleNamespace(flush=AsyncMock(), refresh=AsyncMock())
+        db = SimpleNamespace(add=lambda obj: None, flush=AsyncMock(), refresh=AsyncMock())
         await close_resolution_session(db, tenant_id=tenant_id, session_id=session_id)
 
     mock_invalidate.assert_awaited_once_with(tenant_id, session_id)

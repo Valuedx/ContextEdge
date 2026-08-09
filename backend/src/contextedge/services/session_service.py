@@ -59,6 +59,16 @@ async def create_resolution_session(
     db.add(session)
     await db.flush()
     await db.refresh(session)
+    from contextedge.services.case_outcome_service import record_case_transition
+
+    await record_case_transition(
+        db,
+        tenant_id,
+        session.id,
+        from_status=None,
+        to_status="open",
+        transitioned_by=str(initiated_by) if initiated_by else None,
+    )
     await append_operational_event(
         db,
         tenant_id=tenant_id,
@@ -176,14 +186,51 @@ async def close_resolution_session(
     *,
     tenant_id: uuid.UUID,
     session_id: uuid.UUID,
+    outcome: dict | None = None,
+    closed_by: str | None = None,
 ) -> ResolutionSession | None:
+    """``outcome`` (optional): asserts what the close MEANS —
+    ``{"outcome_status": ..., "resolution_summary": ...,
+    "confirmed_root_cause": ..., "successful_action": ...,
+    "failed_actions": [...], "user_confirmed": ..., "fix_results":
+    [...]}``. A close without it records the transition only: an
+    unstated outcome is unknown, not "resolved"."""
+    from contextedge.services.case_outcome_service import (
+        record_case_outcome,
+        record_case_transition,
+    )
+
     session = await get_resolution_session(db, tenant_id=tenant_id, session_id=session_id)
     if session is None:
         return None
 
+    previous_status = session.status
     session.status = "closed"
     session.closed_at = datetime.now(UTC)
     await db.flush()
+    await record_case_transition(
+        db,
+        tenant_id,
+        session.id,
+        from_status=previous_status,
+        to_status="closed",
+        reason=(outcome or {}).get("resolution_summary"),
+        transitioned_by=closed_by,
+    )
+    if outcome and outcome.get("outcome_status"):
+        await record_case_outcome(
+            db,
+            tenant_id,
+            session,
+            outcome_status=outcome["outcome_status"],
+            resolution_summary=outcome.get("resolution_summary"),
+            confirmed_root_cause=outcome.get("confirmed_root_cause"),
+            successful_action=outcome.get("successful_action"),
+            failed_actions=outcome.get("failed_actions"),
+            user_confirmed=outcome.get("user_confirmed"),
+            closed_by=closed_by,
+            fix_results=outcome.get("fix_results"),
+        )
     await append_operational_event(
         db,
         tenant_id=tenant_id,

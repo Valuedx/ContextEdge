@@ -142,8 +142,15 @@ def node_is_visible(
         "human_validated",
     }:
         return False
-    elif node_type == "decision" and obj.status in {"superseded", "reverted"}:
-        return False
+    elif node_type == "decision":
+        if obj.status in {"superseded", "reverted"}:
+            return False
+        # A pending AI-authored decision is an unreviewed diagnosis. It
+        # must not steer the next agent until a human review or a
+        # recorded outcome moves it past "pending" — otherwise agent
+        # output launders itself into agent input.
+        if obj.actor_type == "ai" and obj.status == "pending":
+            return False
     elif node_type in {
         "identity",
         "entity",
