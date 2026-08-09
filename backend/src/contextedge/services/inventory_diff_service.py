@@ -60,6 +60,7 @@ async def observe_inventory(
     external_system: str | None = None,
     external_id: str | None = None,
     create_missing: bool = False,
+    allowed_domain_ids: list[uuid.UUID] | None = None,
 ) -> dict:
     """Diff one CI's reported state against its stored snapshot; emit
     one B2 event per changed key; store the new snapshot.
@@ -70,7 +71,15 @@ async def observe_inventory(
     attaching state events to the wrong same-named CI contaminates the
     preceding-change window for both. Unknown CIs are only minted when
     the report opts in with ``create_missing``; a typo in a collector
-    config must not quietly grow the topology."""
+    config must not quietly grow the topology.
+
+    ``allowed_domain_ids`` (domain-limited service tokens): writes FAIL
+    CLOSED. A CI outside the caller's domains — including tenant-shared
+    domainless CIs — returns ``forbidden_domain`` untouched; reads may
+    see shared topology, but mutating it needs tenant-wide authority.
+    Created CIs are stamped with the caller's single domain; a
+    multi-domain token cannot create (``domain_required``) because the
+    service would have to guess which domain owns the new CI."""
     observed_at = observed_at or datetime.now(UTC)
     counts = {"status": "ok", "events": 0, "baseline": False, "changes": 0}
     state = {str(k)[:120]: str(v)[:300] for k, v in (state or {}).items()}
@@ -95,12 +104,28 @@ async def observe_inventory(
         counts["status"] = "ambiguous_ci"
         return counts
     entity = matches[0] if matches else None
+    if entity is not None and allowed_domain_ids is not None:
+        if entity.domain_id not in allowed_domain_ids:
+            logger.warning(
+                "inventory_diff.forbidden_domain",
+                ci=ci_name[:80],
+                entity_domain=str(entity.domain_id),
+            )
+            counts["status"] = "forbidden_domain"
+            return counts
     if entity is None:
         if not create_missing:
             counts["status"] = "unknown_ci"
             return counts
+        domain_id = None
+        if allowed_domain_ids is not None:
+            if len(allowed_domain_ids) != 1:
+                counts["status"] = "domain_required"
+                return counts
+            domain_id = allowed_domain_ids[0]
         entity = Entity(
             tenant_id=tenant_id,
+            domain_id=domain_id,
             name=ci_name[:255],
             entity_type="configuration_item",
             external_system=(external_system or None),

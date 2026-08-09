@@ -278,6 +278,37 @@ async def resolve_ci_entity(
     ).scalar_one_or_none()
 
 
+async def resolve_ci_entity_checked(
+    db: AsyncSession, tenant_id: uuid.UUID, term: str
+) -> tuple[Entity | None, bool]:
+    """``(entity, ambiguous)`` — for WRITE paths that must refuse to
+    guess. ``resolve_ci_entity`` above keeps its oldest-match behavior
+    for read-only assessments (change risk, fix applicability), where a
+    best-effort answer beats none; a write against the wrong same-named
+    CI is how topology rots, so writers use this instead."""
+    sys_id = _ref_sys_id(term)
+    if sys_id is not None:
+        return await resolve_ci_entity(db, tenant_id, term), False
+    matches = (
+        (
+            await db.execute(
+                select(Entity)
+                .where(
+                    Entity.tenant_id == tenant_id,
+                    func.lower(Entity.name) == term.strip().lower(),
+                )
+                .order_by(Entity.created_at)
+                .limit(2)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    if len(matches) > 1:
+        return None, True
+    return (matches[0] if matches else None), False
+
+
 async def load_servicenow_connector(
     db: AsyncSession, tenant_id: uuid.UUID, source_id: uuid.UUID | None = None
 ):

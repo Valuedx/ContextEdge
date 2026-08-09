@@ -401,16 +401,11 @@ The hybrid ranker uses a hard-coded `quality_score = 0.5` for all playbooks. A p
   `vertex_location`/`vertex_project` kwargs and per-task
   `*_LOCATION` settings (`get_location_for_task`). The
   `supports_reasoning()` matching concern goes away with 2-segment IDs.
-- **Pattern/playbook lanes switch models silently on restart**: the same
-  commit added `pattern_model`/`playbook_model` settings defaulting to
-  `vertex_ai/gemini-3.6-flash`. Those env keys are brand new, so every
-  existing `.env` lacks them — on next worker restart, pattern discovery
-  and playbook generation move from 2.5-flash to 3.6-flash with no A/B
-  (the measure-first discipline applies: playbook output is
-  reviewer-facing). Note `.env.example` pins `PATTERN_MODEL`/
-  `PLAYBOOK_MODEL=vertex_ai/gemini-2.5-flash`, diverging from the code
-  default. Either pin the lanes in `.env` or run the A/B before relying
-  on generated output.
+- ~~**Pattern/playbook lanes switch models silently on restart**~~
+  **Resolved 2026-08-09**: `pattern_model`/`playbook_model` code
+  defaults now match what the lanes actually run (and what
+  `.env.example` pins): `vertex_ai/gemini-2.5-flash`. Upgrading to
+  3.6-flash is a deliberate env change gated on the measure-first A/B.
 - **Poison messages on the pattern queue**: `generate_playbook_candidate`
   tasks with malformed UUID args (from 2026-08-07 evening testing) cycle
   on bounded retries in workerB's log. Harmless but noisy; they expire at
@@ -418,12 +413,12 @@ The hybrid ranker uses a hard-coded `quality_score = 0.5` for all playbooks. A p
 
 ## Open items from the 2026-08-09 review cycle
 
-- **Pattern lane routing is dormant**: `pattern_extractor` sends
-  `task="extraction"`, so `pattern_model`/`pattern_location` route
-  nothing. The one-line fix is deliberately parked behind the same
-  measure-first A/B the un-benchmarked 3.6-flash lane defaults need —
-  flipping the task key today would switch pattern synthesis models as
-  a side effect.
+- ~~**Pattern lane routing is dormant**~~ **Resolved 2026-08-09**:
+  `pattern_extractor` now sends `task="pattern"`. Safe to flip because
+  the lane defaults were first aligned to the model it already ran
+  (2.5-flash) — wiring the lane changed zero behavior; the 3.6 upgrade
+  remains a deliberate env + A/B step. `validate_pattern_match` stays
+  on `task="verification"` (falls through to the extraction default).
 - ~~**`proposed_depends_on` has no approval workflow**~~ **Resolved
   2026-08-09**: `edge_proposal_service` + `/graph/edge-proposals`
   (list/approve/reject, knowledge_manager). Approve mints an authored

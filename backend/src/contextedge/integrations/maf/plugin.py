@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from contextedge.integrations.maf.client import (
     ChangeRiskClient,
     CmdbTopologyClient,
@@ -33,8 +35,16 @@ class ContextGraphMAFPlugin:
         fix_applicability_client: FixApplicabilityClient | None = None,
         cohort_client: CohortClient | None = None,
         edge_proposal_client: EdgeProposalClient | None = None,
+        writeback: Any | None = None,
     ):
-        self.provider = ContextGraphProvider(client) if enable_provider else None
+        # F1 write-back reaches the provider through the bundle — before
+        # this, the flywheel was constructible only by bypassing the
+        # plugin and building ContextGraphProvider by hand.
+        self.provider = (
+            ContextGraphProvider(client, writeback=writeback)
+            if enable_provider
+            else None
+        )
         self.toolset = ContextGraphTools(client) if enable_tool else None
         self.cmdb_toolset = (
             CmdbTopologyTools(cmdb_client) if cmdb_client is not None else None

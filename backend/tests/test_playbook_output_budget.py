@@ -104,7 +104,9 @@ def test_the_request_and_the_ceiling_agree_on_which_tasks_are_long():
     from contextedge.ai import provider
 
     source = inspect.getsource(provider.llm_complete_json)
-    asks_large = {t for t in ("extraction", "playbook") if f'"{t}"' in source}
+    asks_large = {
+        t for t in ("extraction", "playbook", "pattern") if f'"{t}"' in source
+    }
     assert asks_large <= set(settings.llm_task_output_tokens)
 
 

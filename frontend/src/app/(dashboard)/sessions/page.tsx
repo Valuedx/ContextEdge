@@ -200,6 +200,14 @@ const OUTCOME_STATUSES = [
   "false_alarm",
 ] as const;
 
+// Mirrors backend has_role: these roles may assert outcome facts.
+const OUTCOME_ROLES = [
+  "knowledge_manager",
+  "tenant_admin",
+  "admin",
+  "platform_super_admin",
+];
+
 function CloseSessionDialog({
   session,
   onDone,
@@ -210,6 +218,8 @@ function CloseSessionDialog({
   onCancel: () => void;
 }) {
   const qc = useQueryClient();
+  const roles = useAuthStore((s) => s.roles);
+  const canAssertOutcome = roles.some((r) => OUTCOME_ROLES.includes(r));
   const [outcomeStatus, setOutcomeStatus] = useState<string>("");
   const [summary, setSummary] = useState("");
   const [rootCause, setRootCause] = useState("");
@@ -240,65 +250,72 @@ function CloseSessionDialog({
       <DialogHeader>
         <DialogTitle>Close session</DialogTitle>
       </DialogHeader>
-      <div className="space-y-4">
-        <div>
-          <Label className="text-xs">Outcome</Label>
-          <Select value={outcomeStatus} onValueChange={(v) => setOutcomeStatus(v ?? "")}>
-            <SelectTrigger className="mt-1 w-full">
-              <SelectValue placeholder="No outcome recorded (unknown)" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="">No outcome recorded (unknown)</SelectItem>
-              {OUTCOME_STATUSES.map((s) => (
-                <SelectItem key={s} value={s}>
-                  {s.replaceAll("_", " ")}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <p className="mt-1 text-[11px] text-muted-foreground">
-            Recording an outcome feeds resolution statistics; leave unset if the
-            result is genuinely unknown.
-          </p>
+      {canAssertOutcome ? (
+        <div className="space-y-4">
+          <div>
+            <Label className="text-xs">Outcome</Label>
+            <Select value={outcomeStatus} onValueChange={(v) => setOutcomeStatus(v ?? "")}>
+              <SelectTrigger className="mt-1 w-full">
+                <SelectValue placeholder="No outcome recorded (unknown)" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="">No outcome recorded (unknown)</SelectItem>
+                {OUTCOME_STATUSES.map((s) => (
+                  <SelectItem key={s} value={s}>
+                    {s.replaceAll("_", " ")}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <p className="mt-1 text-[11px] text-muted-foreground">
+              Recording an outcome feeds resolution statistics; leave unset if the
+              result is genuinely unknown.
+            </p>
+          </div>
+          <div>
+            <Label htmlFor="close-summary" className="text-xs">
+              Resolution summary (optional)
+            </Label>
+            <Textarea
+              id="close-summary"
+              className="mt-1 min-h-[70px]"
+              placeholder="What actually fixed it, in one or two sentences."
+              value={summary}
+              onChange={(e) => setSummary(e.target.value)}
+            />
+          </div>
+          <div>
+            <Label htmlFor="close-root-cause" className="text-xs">
+              Confirmed root cause (optional)
+            </Label>
+            <Input
+              id="close-root-cause"
+              className="mt-1"
+              placeholder="e.g. connection pool exhaustion"
+              value={rootCause}
+              onChange={(e) => setRootCause(e.target.value)}
+            />
+          </div>
+          <div>
+            <Label className="text-xs">User confirmed the fix?</Label>
+            <Select value={userConfirmed} onValueChange={(v) => setUserConfirmed(v ?? "unknown")}>
+              <SelectTrigger className="mt-1 w-[180px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="unknown">Unknown</SelectItem>
+                <SelectItem value="yes">Yes</SelectItem>
+                <SelectItem value="no">No</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
         </div>
-        <div>
-          <Label htmlFor="close-summary" className="text-xs">
-            Resolution summary (optional)
-          </Label>
-          <Textarea
-            id="close-summary"
-            className="mt-1 min-h-[70px]"
-            placeholder="What actually fixed it, in one or two sentences."
-            value={summary}
-            onChange={(e) => setSummary(e.target.value)}
-          />
-        </div>
-        <div>
-          <Label htmlFor="close-root-cause" className="text-xs">
-            Confirmed root cause (optional)
-          </Label>
-          <Input
-            id="close-root-cause"
-            className="mt-1"
-            placeholder="e.g. connection pool exhaustion"
-            value={rootCause}
-            onChange={(e) => setRootCause(e.target.value)}
-          />
-        </div>
-        <div>
-          <Label className="text-xs">User confirmed the fix?</Label>
-          <Select value={userConfirmed} onValueChange={(v) => setUserConfirmed(v ?? "unknown")}>
-            <SelectTrigger className="mt-1 w-[180px]">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="unknown">Unknown</SelectItem>
-              <SelectItem value="yes">Yes</SelectItem>
-              <SelectItem value="no">No</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
-      </div>
+      ) : (
+        <p className="text-sm text-muted-foreground">
+          The session will close without a recorded outcome — asserting outcome
+          facts requires the knowledge manager role.
+        </p>
+      )}
       <DialogFooter>
         <Button variant="outline" onClick={onCancel}>Cancel</Button>
         <Button disabled={mut.isPending} onClick={() => mut.mutate()}>

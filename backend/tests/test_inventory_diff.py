@@ -140,6 +140,55 @@ async def test_external_id_resolution_carries_onto_created_entity():
     assert created.external_id == "ae-1234"
 
 
+@pytest.mark.asyncio
+async def test_domain_limited_token_fails_closed_on_foreign_and_shared_cis():
+    """Reads may see shared topology; MUTATING it needs tenant-wide
+    authority — including domainless (tenant-shared) CIs."""
+    foreign = MagicMock(attributes={}, domain_id=uuid.uuid4())
+    counts = await observe_inventory(
+        _entity_db(foreign), uuid.uuid4(), ci_name="x", state={"a": "1"},
+        allowed_domain_ids=[uuid.uuid4()],
+    )
+    assert counts["status"] == "forbidden_domain"
+
+    shared = MagicMock(attributes={}, domain_id=None)
+    counts = await observe_inventory(
+        _entity_db(shared), uuid.uuid4(), ci_name="x", state={"a": "1"},
+        allowed_domain_ids=[uuid.uuid4()],
+    )
+    assert counts["status"] == "forbidden_domain"
+
+    # A CI inside the caller's domain proceeds normally.
+    domain = uuid.uuid4()
+    mine = MagicMock(attributes={}, domain_id=domain)
+    counts = await observe_inventory(
+        _entity_db(mine), uuid.uuid4(), ci_name="x", state={"a": "1"},
+        allowed_domain_ids=[domain],
+    )
+    assert counts["status"] == "ok" and counts["baseline"] is True
+
+
+@pytest.mark.asyncio
+async def test_domain_limited_create_stamps_single_domain_or_refuses():
+    domain = uuid.uuid4()
+    db = _entity_db()
+    counts = await observe_inventory(
+        db, uuid.uuid4(), ci_name="new-host", state={}, create_missing=True,
+        allowed_domain_ids=[domain],
+    )
+    assert counts["status"] == "ok"
+    assert db.add.call_args.args[0].domain_id == domain
+
+    # Multi-domain token: the service must not guess an owner.
+    db2 = _entity_db()
+    counts = await observe_inventory(
+        db2, uuid.uuid4(), ci_name="new-host", state={}, create_missing=True,
+        allowed_domain_ids=[uuid.uuid4(), uuid.uuid4()],
+    )
+    assert counts["status"] == "domain_required"
+    db2.add.assert_not_called()
+
+
 def test_external_id_without_system_is_rejected_at_the_schema():
     """A bare external_id can collide across source systems — exact
     resolution needs both halves of the identity."""

@@ -56,8 +56,12 @@ class Settings(BaseSettings):
     default_classification_model: str = "vertex_ai/gemini-2.5-flash"
     default_extraction_model: str = "vertex_ai/gemini-2.5-flash"
     default_embedding_model: str = "text-embedding-3-small"
-    pattern_model: str = "vertex_ai/gemini-3.6-flash"
-    playbook_model: str = "vertex_ai/gemini-3.6-flash"
+    # Defaults match what these lanes actually run today (and what
+    # .env.example pins) — wiring a lane must not switch its model as a
+    # side effect. Upgrading to gemini-3.6-flash is a deliberate env
+    # change gated on the measure-first A/B (KNOWN_GAPS).
+    pattern_model: str = "vertex_ai/gemini-2.5-flash"
+    playbook_model: str = "vertex_ai/gemini-2.5-flash"
 
     # Per-task locations
     classification_location: str = "global"
@@ -117,8 +121,17 @@ class Settings(BaseSettings):
     # Reasoning counting against the same budget is why this ceiling
     # cannot be trimmed close to the expected output size: on
     # gemini-2.5-flash the thinking is most of it.
+    #
+    # "pattern" entered when pattern synthesis moved off task=
+    # "extraction" onto its own routing lane — without its own entry the
+    # lane flip would have silently dropped its ceiling 16384 -> 4096,
+    # recreating the truncation failure above.
     llm_task_output_tokens: dict[str, int] = Field(
-        default_factory=lambda: {"playbook": 16384, "extraction": 16384}
+        default_factory=lambda: {
+            "playbook": 16384,
+            "extraction": 16384,
+            "pattern": 16384,
+        }
     )
     # Largest number of texts sent to the embedding API in one request.
     # Callers hand in whole documents' worth of chunks; without a cap a single

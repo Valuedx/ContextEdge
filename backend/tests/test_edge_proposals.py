@@ -108,6 +108,67 @@ async def test_list_resolves_ci_names_for_the_reviewer():
     assert rows[0]["rationale"] == "OrderHub calls the pricing API"
 
 
+@pytest.mark.asyncio
+async def test_domain_limited_review_fails_closed_in_the_query():
+    """A domain-limited identity's proposal lookup must carry the domain
+    restriction into SQL — domainless proposals need tenant-wide
+    authority to review."""
+    captured: dict = {}
+
+    async def _exec(stmt):
+        captured["stmt"] = stmt
+        res = MagicMock()
+        res.scalar_one_or_none.return_value = None
+        return res
+
+    db = MagicMock()
+    db.execute = AsyncMock(side_effect=_exec)
+    out = await svc.approve_edge_proposal(
+        db, uuid.uuid4(), uuid.uuid4(), reviewed_by="r",
+        allowed_domain_ids=[uuid.uuid4()],
+    )
+    assert out["error"] == "proposal_not_found"
+    assert "domain_id IN" in str(captured["stmt"])
+
+    # Without the restriction, no domain clause is added.
+    out = await svc.reject_edge_proposal(db, uuid.uuid4(), uuid.uuid4(), reviewed_by="r")
+    assert "domain_id IN" not in str(captured["stmt"])
+
+
+@pytest.mark.asyncio
+async def test_checked_ci_resolution_reports_ambiguity():
+    from contextedge.services.cmdb_topology_service import resolve_ci_entity_checked
+
+    db = MagicMock()
+    res = MagicMock()
+    res.scalars.return_value.all.return_value = [
+        SimpleNamespace(id=uuid.uuid4()),
+        SimpleNamespace(id=uuid.uuid4()),
+    ]
+    db.execute = AsyncMock(return_value=res)
+    entity, ambiguous = await resolve_ci_entity_checked(db, uuid.uuid4(), "OrderHub")
+    assert entity is None and ambiguous is True
+
+    res.scalars.return_value.all.return_value = []
+    entity, ambiguous = await resolve_ci_entity_checked(db, uuid.uuid4(), "OrderHub")
+    assert entity is None and ambiguous is False
+
+
+def test_partial_fix_results_project_as_their_own_edge_type():
+    from contextedge.graph.agent.materializer import FIX_RESULT_EDGE_TYPES
+    from contextedge.graph.agent.profiles import MAF_RELATIONSHIP_TYPES, MAF_V1
+
+    assert FIX_RESULT_EDGE_TYPES["partial"] == "partially_validated_fix"
+    assert FIX_RESULT_EDGE_TYPES["failed"] == "invalidated_fix"
+    assert "partially_validated_fix" in MAF_RELATIONSHIP_TYPES
+    # Partial evidence must rank between invalidated and validated.
+    assert (
+        MAF_V1.relationship_factor("invalidated_fix")
+        < MAF_V1.relationship_factor("partially_validated_fix")
+        < MAF_V1.relationship_factor("validated_fix")
+    )
+
+
 def test_proposal_routes_are_registered():
     from contextedge.api.v1 import graph
 

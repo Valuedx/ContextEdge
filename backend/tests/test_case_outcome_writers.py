@@ -73,12 +73,21 @@ async def test_invalid_outcome_status_is_refused():
         )
 
 
+def _db_with_valid_fixes(added: list, *fix_ids):
+    db = _db(added)
+    db.execute = AsyncMock(
+        return_value=SimpleNamespace(all=lambda: [(f,) for f in fix_ids])
+    )
+    return db
+
+
 @pytest.mark.asyncio
 async def test_fix_results_link_and_malformed_entries_skip():
     added: list = []
     fix_id = uuid4()
     await record_case_outcome(
-        _db(added), uuid4(), SimpleNamespace(id=uuid4(), created_at=None),
+        _db_with_valid_fixes(added, fix_id),
+        uuid4(), SimpleNamespace(id=uuid4(), created_at=None),
         outcome_status="workaround_applied",
         fix_results=[
             {"fix_pattern_id": str(fix_id), "result": "successful", "confidence": 0.8},
@@ -89,6 +98,38 @@ async def test_fix_results_link_and_malformed_entries_skip():
     links = [a for a in added if isinstance(a, CaseOutcomeFixPattern)]
     assert len(links) == 1
     assert links[0].fix_pattern_id == fix_id and links[0].result == "successful"
+
+
+@pytest.mark.asyncio
+async def test_foreign_fix_pattern_ids_never_accrue_statistics():
+    """A fix id from another tenant (or thin air) must not link."""
+    added: list = []
+    await record_case_outcome(
+        _db_with_valid_fixes(added),  # tenant owns none of the referenced ids
+        uuid4(), SimpleNamespace(id=uuid4(), created_at=None),
+        outcome_status="resolved",
+        fix_results=[{"fix_pattern_id": str(uuid4()), "result": "successful"}],
+    )
+    assert [a for a in added if isinstance(a, CaseOutcomeFixPattern)] == []
+
+
+@pytest.mark.asyncio
+async def test_duplicate_fix_results_link_once_not_integrity_error():
+    added: list = []
+    fix_id = uuid4()
+    await record_case_outcome(
+        _db_with_valid_fixes(added, fix_id),
+        uuid4(), SimpleNamespace(id=uuid4(), created_at=None),
+        outcome_status="resolved",
+        fix_results=[
+            {"fix_pattern_id": str(fix_id), "result": "successful"},
+            {"fix_pattern_id": str(fix_id), "result": "successful"},
+            {"fix_pattern_id": str(fix_id), "result": "partial"},
+        ],
+    )
+    links = [a for a in added if isinstance(a, CaseOutcomeFixPattern)]
+    assert len(links) == 2  # (successful) deduped; (partial) is distinct
+    assert {link.result for link in links} == {"successful", "partial"}
 
 
 @pytest.mark.asyncio
@@ -193,15 +234,33 @@ async def test_reclose_is_a_noop_for_history(mock_op, mock_inv):
 @pytest.mark.asyncio
 async def test_fix_result_bool_confidence_is_not_a_confidence():
     added: list = []
+    fix_id = uuid4()
     await record_case_outcome(
-        _db(added), uuid4(), SimpleNamespace(id=uuid4(), created_at=None),
+        _db_with_valid_fixes(added, fix_id),
+        uuid4(), SimpleNamespace(id=uuid4(), created_at=None),
         outcome_status="resolved",
         fix_results=[
-            {"fix_pattern_id": str(uuid4()), "result": "successful", "confidence": True}
+            {"fix_pattern_id": str(fix_id), "result": "successful", "confidence": True}
         ],
     )
     links = [a for a in added if isinstance(a, CaseOutcomeFixPattern)]
     assert links[0].confidence is None
+
+
+@pytest.mark.asyncio
+async def test_outcome_bearing_close_requires_knowledge_manager():
+    """Anyone may close a session; asserting outcome facts is governed."""
+    from fastapi import HTTPException
+
+    from contextedge.api.v1.sessions import SessionCloseRequest, close_session
+
+    user = MagicMock()
+    user.require_role.side_effect = HTTPException(status_code=403, detail="Role required")
+    with pytest.raises(HTTPException):
+        await close_session(
+            uuid4(), MagicMock(), user, SessionCloseRequest(outcome_status="resolved")
+        )
+    user.require_role.assert_called_once_with("knowledge_manager")
 
 
 @pytest.mark.asyncio

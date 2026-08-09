@@ -201,23 +201,40 @@ class EdgeProposalClient(Protocol):
 
 
 class InProcessEdgeProposalClient:
-    def __init__(self, session_factory, tenant_id):
+    """``domain_id``: the deployment's domain, stamped onto proposals so
+    domain-scoped review works. Without it, the proposal falls back to
+    the CIs' own domain when both agree, else lands domainless (visible
+    only to tenant-wide reviewers)."""
+
+    def __init__(self, session_factory, tenant_id, *, domain_id=None):
         self.session_factory = session_factory
         self.tenant_id = tenant_id
+        self.domain_id = domain_id
 
     async def propose(self, source_ci: str, target_ci: str, rationale: str, evidence_ids: list) -> dict:
         from contextedge.graph.builder import ensure_edge
-        from contextedge.services.cmdb_topology_service import resolve_ci_entity
+        from contextedge.services.cmdb_topology_service import resolve_ci_entity_checked
 
         async with self.session_factory() as db:
             try:
-                src = await resolve_ci_entity(db, self.tenant_id, source_ci)
-                dst = await resolve_ci_entity(db, self.tenant_id, target_ci)
+                src, src_ambiguous = await resolve_ci_entity_checked(
+                    db, self.tenant_id, source_ci
+                )
+                dst, dst_ambiguous = await resolve_ci_entity_checked(
+                    db, self.tenant_id, target_ci
+                )
+                if src_ambiguous or dst_ambiguous:
+                    which = source_ci if src_ambiguous else target_ci
+                    return {"error": {"code": "ambiguous_ci",
+                                      "message": f"Multiple CIs match {which!r}; use a sys_id."}}
                 if src is None or dst is None:
                     missing = source_ci if src is None else target_ci
                     return {"error": {"code": "ci_not_found", "message": f"No CI matches {missing!r}."}}
                 if src.id == dst.id:
                     return {"error": {"code": "self_edge", "message": "A CI cannot depend on itself."}}
+                domain_id = self.domain_id
+                if domain_id is None and src.domain_id == dst.domain_id:
+                    domain_id = src.domain_id
                 edge = await ensure_edge(
                     db,
                     self.tenant_id,
@@ -233,6 +250,7 @@ class InProcessEdgeProposalClient:
                         "rationale": str(rationale)[:500],
                         "evidence_ids": [str(e) for e in evidence_ids[:10]],
                     },
+                    domain_id=domain_id,
                 )
                 await db.commit()
                 return {"status": "proposed", "edge_id": str(edge.id),

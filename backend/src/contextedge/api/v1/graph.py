@@ -129,7 +129,14 @@ async def list_edge_proposals_endpoint(
     user.require_role("knowledge_manager")
     from contextedge.services.edge_proposal_service import list_edge_proposals
 
-    return {"proposals": await list_edge_proposals(db, user.tenant_id, limit=limit)}
+    return {
+        "proposals": await list_edge_proposals(
+            db,
+            user.tenant_id,
+            limit=limit,
+            allowed_domain_ids=user.allowed_domain_ids,
+        )
+    }
 
 
 @router.post("/edge-proposals/{edge_id}/approve")
@@ -145,7 +152,12 @@ async def approve_edge_proposal_endpoint(
     from contextedge.services.edge_proposal_service import approve_edge_proposal
 
     result = await approve_edge_proposal(
-        db, user.tenant_id, edge_id, reviewed_by=str(user.user_id), note=note
+        db,
+        user.tenant_id,
+        edge_id,
+        reviewed_by=str(user.user_id),
+        note=note,
+        allowed_domain_ids=user.allowed_domain_ids,
     )
     if result.get("error"):
         raise HTTPException(status_code=404, detail=result["error"])
@@ -163,7 +175,12 @@ async def reject_edge_proposal_endpoint(
     from contextedge.services.edge_proposal_service import reject_edge_proposal
 
     result = await reject_edge_proposal(
-        db, user.tenant_id, edge_id, reviewed_by=str(user.user_id), note=note
+        db,
+        user.tenant_id,
+        edge_id,
+        reviewed_by=str(user.user_id),
+        note=note,
+        allowed_domain_ids=user.allowed_domain_ids,
     )
     if result.get("error"):
         raise HTTPException(status_code=404, detail=result["error"])

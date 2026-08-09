@@ -37,6 +37,14 @@ from contextedge.models.session import ResolutionSession
 #                         their own row's domain_id
 
 
+# "partial" gets its own edge type — projecting it as validated_fix
+# overstated the evidence an agent ranks remediations on.
+FIX_RESULT_EDGE_TYPES = {
+    "failed": "invalidated_fix",
+    "partial": "partially_validated_fix",
+}
+
+
 @dataclass(slots=True)
 class ReconciliationResult:
     tenant_id: UUID
@@ -335,13 +343,14 @@ class GraphRelationshipMaterializer:
             .where(CaseOutcomeFixPattern.tenant_id == tenant_id),
             batch_size,
         ):
+            edge_type = FIX_RESULT_EDGE_TYPES.get(link.result, "validated_fix")
             result.relationships_seen += await self._edge(
                 tenant_id,
                 "case_outcome",
                 link.case_outcome_id,
                 "fix_pattern",
                 link.fix_pattern_id,
-                "invalidated_fix" if link.result == "failed" else "validated_fix",
+                edge_type,
                 domain_id=fix_domain_id,
                 weight=float(link.confidence or 1.0),
                 metadata={"result": link.result},

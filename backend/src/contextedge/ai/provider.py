@@ -511,7 +511,7 @@ async def llm_complete_json(
     caching and maximises OpenAI's automatic prefix-cache hit rate.
     """
     # Increase token limit for extraction tasks to avoid truncation
-    max_tokens = 16384 if task in ("extraction", "playbook") else 8192
+    max_tokens = 16384 if task in ("extraction", "playbook", "pattern") else 8192
 
     result = await llm_complete(
         prompt,

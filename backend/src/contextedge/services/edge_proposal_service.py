@@ -36,32 +36,48 @@ PROPOSAL_EDGE_TYPE = "proposed_depends_on"
 APPROVED_CONFIDENCE = 0.7
 
 
-async def _active_proposal(db, tenant_id: uuid.UUID, edge_id: uuid.UUID):
+async def _active_proposal(
+    db,
+    tenant_id: uuid.UUID,
+    edge_id: uuid.UUID,
+    allowed_domain_ids: list[uuid.UUID] | None = None,
+):
+    conditions = [
+        GraphEdge.id == edge_id,
+        GraphEdge.tenant_id == tenant_id,
+        GraphEdge.edge_type == PROPOSAL_EDGE_TYPE,
+        GraphEdge.valid_to.is_(None),
+    ]
+    if allowed_domain_ids is not None:
+        # Fail closed for domain-limited identities: reviewing a
+        # proposal WRITES topology, so domainless proposals need
+        # tenant-wide authority.
+        conditions.append(GraphEdge.domain_id.in_(allowed_domain_ids))
     return (
-        await db.execute(
-            select(GraphEdge).where(
-                GraphEdge.id == edge_id,
-                GraphEdge.tenant_id == tenant_id,
-                GraphEdge.edge_type == PROPOSAL_EDGE_TYPE,
-                GraphEdge.valid_to.is_(None),
-            )
-        )
+        await db.execute(select(GraphEdge).where(*conditions))
     ).scalar_one_or_none()
 
 
 async def list_edge_proposals(
-    db, tenant_id: uuid.UUID, *, limit: int = 100
+    db,
+    tenant_id: uuid.UUID,
+    *,
+    limit: int = 100,
+    allowed_domain_ids: list[uuid.UUID] | None = None,
 ) -> list[dict]:
     """Pending proposals with resolved CI names for the reviewer."""
+    conditions = [
+        GraphEdge.tenant_id == tenant_id,
+        GraphEdge.edge_type == PROPOSAL_EDGE_TYPE,
+        GraphEdge.valid_to.is_(None),
+    ]
+    if allowed_domain_ids is not None:
+        conditions.append(GraphEdge.domain_id.in_(allowed_domain_ids))
     edges = (
         (
             await db.execute(
                 select(GraphEdge)
-                .where(
-                    GraphEdge.tenant_id == tenant_id,
-                    GraphEdge.edge_type == PROPOSAL_EDGE_TYPE,
-                    GraphEdge.valid_to.is_(None),
-                )
+                .where(*conditions)
                 .order_by(GraphEdge.created_at.desc())
                 .limit(limit)
             )
@@ -113,10 +129,11 @@ async def approve_edge_proposal(
     *,
     reviewed_by: str,
     note: str | None = None,
+    allowed_domain_ids: list[uuid.UUID] | None = None,
 ) -> dict:
     from contextedge.graph.builder import ensure_edge
 
-    proposal = await _active_proposal(db, tenant_id, edge_id)
+    proposal = await _active_proposal(db, tenant_id, edge_id, allowed_domain_ids)
     if proposal is None:
         return {"error": "proposal_not_found"}
 
@@ -158,8 +175,9 @@ async def reject_edge_proposal(
     *,
     reviewed_by: str,
     note: str | None = None,
+    allowed_domain_ids: list[uuid.UUID] | None = None,
 ) -> dict:
-    proposal = await _active_proposal(db, tenant_id, edge_id)
+    proposal = await _active_proposal(db, tenant_id, edge_id, allowed_domain_ids)
     if proposal is None:
         return {"error": "proposal_not_found"}
     _close(proposal, decision="rejected", reviewed_by=reviewed_by, note=note)

@@ -37,7 +37,7 @@ async def synthesize_pattern(
     user = prompt.format_user(episodes_text=fence_untrusted(ep_text))
     return await llm_complete_json(
         user,
-        task="extraction",
+        task="pattern",
         system_prompt=prompt.system,
         tenant_id=tenant_id,
         db=db,

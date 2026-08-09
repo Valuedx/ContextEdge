@@ -174,6 +174,7 @@ async def record_case_outcome(
     db.add(outcome)
     await db.flush()
 
+    parsed: list[tuple[uuid.UUID, str, float | None]] = []
     for item in fix_results or []:
         result = item.get("result")
         raw_id = item.get("fix_pattern_id")
@@ -190,19 +191,58 @@ async def record_case_outcome(
             )
             continue
         confidence = item.get("confidence")
-        db.add(
-            CaseOutcomeFixPattern(
-                tenant_id=tenant_id,
-                case_outcome_id=outcome.id,
-                fix_pattern_id=fix_pattern_id,
-                result=result,
-                confidence=(
-                    confidence
-                    if isinstance(confidence, int | float)
-                    and not isinstance(confidence, bool)
-                    else None
-                ),
+        parsed.append(
+            (
+                fix_pattern_id,
+                result,
+                confidence
+                if isinstance(confidence, int | float)
+                and not isinstance(confidence, bool)
+                else None,
             )
         )
+
+    if parsed:
+        # A fix result asserts evidence about a fix pattern — verify
+        # the referenced patterns actually exist IN THIS TENANT before
+        # linking; an id from elsewhere must not accrue statistics.
+        from sqlalchemy import select
+
+        from contextedge.models.error_signature import FixPattern
+
+        valid_ids = {
+            row[0]
+            for row in (
+                await db.execute(
+                    select(FixPattern.id).where(
+                        FixPattern.tenant_id == tenant_id,
+                        FixPattern.id.in_({p[0] for p in parsed}),
+                    )
+                )
+            ).all()
+        }
+        seen: set[tuple[uuid.UUID, str]] = set()
+        for fix_pattern_id, result, confidence in parsed:
+            if fix_pattern_id not in valid_ids:
+                logger.warning(
+                    "case_outcome.fix_result_unknown_pattern",
+                    case_id=str(session.id),
+                    fix_pattern_id=str(fix_pattern_id),
+                )
+                continue
+            # The DB uniquifies (outcome, fix, result); dedupe here so a
+            # repeated entry is a skip, not an IntegrityError-500.
+            if (fix_pattern_id, result) in seen:
+                continue
+            seen.add((fix_pattern_id, result))
+            db.add(
+                CaseOutcomeFixPattern(
+                    tenant_id=tenant_id,
+                    case_outcome_id=outcome.id,
+                    fix_pattern_id=fix_pattern_id,
+                    result=result,
+                    confidence=confidence,
+                )
+            )
     await db.flush()
     return outcome

@@ -68,6 +68,7 @@ async def report_inventory(body: InventoryReport, db: DbSession, user: AuthUser)
             external_system=obs.external_system,
             external_id=obs.external_id,
             create_missing=body.create_missing,
+            allowed_domain_ids=user.allowed_domain_ids,
         )
         results.append({"ci_name": obs.ci_name, **counts})
     return {"observations": results}

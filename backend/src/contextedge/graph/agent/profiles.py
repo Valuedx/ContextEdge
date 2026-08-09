@@ -168,6 +168,9 @@ MAF_RELATIONSHIP_TYPES = frozenset(
         "recommends",
         "validated_fix",
         "invalidated_fix",
+        # A "partial" fix result is its own type — folding it into
+        # validated_fix let half-fixes masquerade as full validation.
+        "partially_validated_fix",
         "superseded_by",
     }
 )
@@ -188,6 +191,9 @@ MAF_V1 = AgentGraphProjectionProfile(
         "supported_by_claim": 1.15,
         "chose": 1.1,
         "validated_fix": 1.2,
+        # Between full validation (1.2) and neutral: partial evidence
+        # helps ranking but must never outrank a fully validated fix.
+        "partially_validated_fix": 1.05,
         "contradicted_by": 0.95,
         "invalidated_fix": 0.9,
         # Semantic episode seeds are only useful if the proven playbook two
@@ -213,6 +219,7 @@ MAF_V1 = AgentGraphProjectionProfile(
         "resulted_in": frozenset({"result", "outcome"}),
         "validated_fix": frozenset({"result"}),
         "invalidated_fix": frozenset({"result"}),
+        "partially_validated_fix": frozenset({"result"}),
     },
 )
 

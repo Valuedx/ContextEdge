@@ -1,3 +1,4 @@
+from typing import Literal
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Query, status
@@ -116,6 +117,12 @@ async def session_history(
     return await get_case_history(db, user.tenant_id, session_id)
 
 
+class FixResultInput(BaseModel):
+    fix_pattern_id: UUID
+    result: Literal["successful", "failed", "partial"]
+    confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+
+
 class SessionCloseRequest(BaseModel):
     """Optional close-time outcome: what the close MEANS. Absent fields
     stay unknown — closing never fabricates "resolved"."""
@@ -126,7 +133,7 @@ class SessionCloseRequest(BaseModel):
     successful_action: str | None = Field(default=None, max_length=120)
     failed_actions: list[str] = Field(default_factory=list, max_length=20)
     user_confirmed: bool | None = None
-    fix_results: list[dict] = Field(default_factory=list, max_length=20)
+    fix_results: list[FixResultInput] = Field(default_factory=list, max_length=20)
 
 
 @router.patch("/{session_id}/close", response_model=ResolutionSessionResponse)
@@ -141,7 +148,13 @@ async def close_session(
             status_code=400,
             detail=f"outcome_status must be one of {sorted(OUTCOME_STATUSES)}",
         )
-    outcome = body.model_dump(exclude_none=True) if body else None
+    if body and body.outcome_status:
+        # Anyone may close their session; ASSERTING an outcome writes
+        # root-cause and fix facts the flywheel treats as authoritative
+        # — that is governed knowledge, so it takes the same role every
+        # other knowledge write does.
+        user.require_role("knowledge_manager")
+    outcome = body.model_dump(exclude_none=True, mode="json") if body else None
     session = await close_resolution_session(
         db,
         tenant_id=user.tenant_id,

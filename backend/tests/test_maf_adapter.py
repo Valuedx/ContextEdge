@@ -209,3 +209,16 @@ def test_plugin_without_optional_clients_registers_core_tool_only():
     assert plugin.cohort_toolset is None
     assert plugin.edge_proposal_toolset is None
     assert len(plugin.tools) == 1
+
+
+def test_plugin_threads_writeback_to_the_provider():
+    """The advertised flywheel must be reachable through the bundle,
+    not only by hand-building ContextGraphProvider."""
+    from contextedge.integrations.maf.plugin import ContextGraphMAFPlugin
+
+    sentinel = object()
+    plugin = ContextGraphMAFPlugin(StubClient(), writeback=sentinel)
+    assert plugin.provider is not None
+    assert plugin.provider.writeback is sentinel
+    # And omitting it keeps the provider read-only, as before.
+    assert ContextGraphMAFPlugin(StubClient()).provider.writeback is None
