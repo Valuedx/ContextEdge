@@ -25,6 +25,13 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { Separator } from "@/components/ui/separator";
@@ -183,6 +190,126 @@ function NewSessionDialog({ onClose }: { onClose: () => void }) {
   );
 }
 
+// Mirrors the backend's CaseOutcome vocabulary (OUTCOME_STATUSES).
+const OUTCOME_STATUSES = [
+  "resolved",
+  "unresolved",
+  "workaround_applied",
+  "escalated",
+  "duplicate",
+  "false_alarm",
+] as const;
+
+function CloseSessionDialog({
+  session,
+  onDone,
+  onCancel,
+}: {
+  session: ResolutionSession;
+  onDone: () => void;
+  onCancel: () => void;
+}) {
+  const qc = useQueryClient();
+  const [outcomeStatus, setOutcomeStatus] = useState<string>("");
+  const [summary, setSummary] = useState("");
+  const [rootCause, setRootCause] = useState("");
+  const [userConfirmed, setUserConfirmed] = useState<string>("unknown");
+
+  const mut = useMutation({
+    mutationFn: () => {
+      // Only assert what the reviewer actually stated — an unstated
+      // outcome stays unknown on the backend, never "resolved".
+      const body: Record<string, unknown> = {};
+      if (outcomeStatus) body.outcome_status = outcomeStatus;
+      if (summary.trim()) body.resolution_summary = summary.trim();
+      if (rootCause.trim()) body.confirmed_root_cause = rootCause.trim();
+      if (userConfirmed !== "unknown") body.user_confirmed = userConfirmed === "yes";
+      return api.patch(`/sessions/${session.id}/close`, body);
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["sessions"] });
+      qc.invalidateQueries({ queryKey: ["session-history", session.id] });
+      toast.success(outcomeStatus ? "Session closed with outcome" : "Session closed");
+      onDone();
+    },
+    onError: (err: Error) => toast.error(err.message || "Failed to close session"),
+  });
+
+  return (
+    <DialogContent className="max-w-lg">
+      <DialogHeader>
+        <DialogTitle>Close session</DialogTitle>
+      </DialogHeader>
+      <div className="space-y-4">
+        <div>
+          <Label className="text-xs">Outcome</Label>
+          <Select value={outcomeStatus} onValueChange={(v) => setOutcomeStatus(v ?? "")}>
+            <SelectTrigger className="mt-1 w-full">
+              <SelectValue placeholder="No outcome recorded (unknown)" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="">No outcome recorded (unknown)</SelectItem>
+              {OUTCOME_STATUSES.map((s) => (
+                <SelectItem key={s} value={s}>
+                  {s.replaceAll("_", " ")}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <p className="mt-1 text-[11px] text-muted-foreground">
+            Recording an outcome feeds resolution statistics; leave unset if the
+            result is genuinely unknown.
+          </p>
+        </div>
+        <div>
+          <Label htmlFor="close-summary" className="text-xs">
+            Resolution summary (optional)
+          </Label>
+          <Textarea
+            id="close-summary"
+            className="mt-1 min-h-[70px]"
+            placeholder="What actually fixed it, in one or two sentences."
+            value={summary}
+            onChange={(e) => setSummary(e.target.value)}
+          />
+        </div>
+        <div>
+          <Label htmlFor="close-root-cause" className="text-xs">
+            Confirmed root cause (optional)
+          </Label>
+          <Input
+            id="close-root-cause"
+            className="mt-1"
+            placeholder="e.g. connection pool exhaustion"
+            value={rootCause}
+            onChange={(e) => setRootCause(e.target.value)}
+          />
+        </div>
+        <div>
+          <Label className="text-xs">User confirmed the fix?</Label>
+          <Select value={userConfirmed} onValueChange={(v) => setUserConfirmed(v ?? "unknown")}>
+            <SelectTrigger className="mt-1 w-[180px]">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="unknown">Unknown</SelectItem>
+              <SelectItem value="yes">Yes</SelectItem>
+              <SelectItem value="no">No</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+      </div>
+      <DialogFooter>
+        <Button variant="outline" onClick={onCancel}>Cancel</Button>
+        <Button disabled={mut.isPending} onClick={() => mut.mutate()}>
+          {mut.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+          Close session
+        </Button>
+      </DialogFooter>
+    </DialogContent>
+  );
+}
+
 function SessionDetail({
   session,
   onClose,
@@ -190,17 +317,7 @@ function SessionDetail({
   session: ResolutionSession;
   onClose: () => void;
 }) {
-  const qc = useQueryClient();
-
-  const closeMut = useMutation({
-    mutationFn: () => api.patch(`/sessions/${session.id}/close`, {}),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["sessions"] });
-      toast.success("Session closed");
-      onClose();
-    },
-    onError: (err: Error) => toast.error(err.message || "Failed to close session"),
-  });
+  const [closeOpen, setCloseOpen] = useState(false);
 
   return (
     <Card>
@@ -208,17 +325,8 @@ function SessionDetail({
         <CardTitle className="text-base font-mono text-xs">{session.id}</CardTitle>
         <div className="flex gap-2">
           {session.status === "open" && (
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={closeMut.isPending}
-              onClick={() => closeMut.mutate()}
-            >
-              {closeMut.isPending ? (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              ) : (
-                <CheckCircle className="mr-2 h-4 w-4" />
-              )}
+            <Button variant="outline" size="sm" onClick={() => setCloseOpen(true)}>
+              <CheckCircle className="mr-2 h-4 w-4" />
               Close session
             </Button>
           )}
@@ -226,6 +334,18 @@ function SessionDetail({
             Dismiss
           </Button>
         </div>
+        <Dialog open={closeOpen} onOpenChange={setCloseOpen}>
+          {closeOpen && (
+            <CloseSessionDialog
+              session={session}
+              onDone={() => {
+                setCloseOpen(false);
+                onClose();
+              }}
+              onCancel={() => setCloseOpen(false)}
+            />
+          )}
+        </Dialog>
       </CardHeader>
       <CardContent className="space-y-4 text-sm">
         <div className="grid gap-2 md:grid-cols-2">
@@ -268,6 +388,31 @@ function SessionDetail({
   );
 }
 
+interface CaseTransition {
+  from_status: string | null;
+  to_status: string;
+  reason: string | null;
+  transitioned_by: string | null;
+  at: string | null;
+}
+
+interface CaseOutcomeRow {
+  outcome_status: string;
+  resolution_summary: string | null;
+  confirmed_root_cause: string | null;
+  successful_action: string | null;
+  failed_actions: string[];
+  user_confirmed: boolean | null;
+  mttr_minutes: number | null;
+  closed_by: string | null;
+  closed_at: string | null;
+}
+
+interface SessionHistory {
+  transitions: CaseTransition[];
+  outcomes: CaseOutcomeRow[];
+}
+
 function SessionDecisionsAndTraces({ session }: { session: ResolutionSession }) {
   const [tab, setTab] = useState("traces");
 
@@ -278,6 +423,12 @@ function SessionDecisionsAndTraces({ session }: { session: ResolutionSession }) 
     enabled: tab === "decisions",
   });
 
+  const { data: history, isLoading: historyLoading } = useQuery<SessionHistory>({
+    queryKey: ["session-history", session.id],
+    queryFn: () => api.get(`/sessions/${session.id}/history`),
+    enabled: tab === "history",
+  });
+
   return (
     <Tabs value={tab} onValueChange={setTab}>
       <TabsList>
@@ -285,6 +436,7 @@ function SessionDecisionsAndTraces({ session }: { session: ResolutionSession }) 
           Trace events ({session.trace_events.length})
         </TabsTrigger>
         <TabsTrigger value="decisions">Decisions</TabsTrigger>
+        <TabsTrigger value="history">History &amp; outcome</TabsTrigger>
       </TabsList>
 
       <TabsContent value="traces" className="mt-3">
@@ -372,6 +524,75 @@ function SessionDecisionsAndTraces({ session }: { session: ResolutionSession }) 
               </div>
             ))}
           </div>
+        )}
+      </TabsContent>
+
+      <TabsContent value="history" className="mt-3 space-y-4">
+        {historyLoading ? (
+          <p className="text-xs text-muted-foreground">Loading history…</p>
+        ) : !history ? null : (
+          <>
+            {history.outcomes.length > 0 && (
+              <div className="space-y-2">
+                {history.outcomes.map((o, i) => (
+                  <div key={i} className="rounded-md border p-3 space-y-1.5">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <StatusBadge status={o.outcome_status} />
+                      {o.mttr_minutes != null && (
+                        <span className="text-[10px] font-mono text-muted-foreground">
+                          MTTR {o.mttr_minutes >= 90
+                            ? `${(o.mttr_minutes / 60).toFixed(1)} h`
+                            : `${Math.round(o.mttr_minutes)} min`}
+                        </span>
+                      )}
+                      {o.user_confirmed != null && (
+                        <Badge variant="outline" className="text-[10px]">
+                          {o.user_confirmed ? "user confirmed" : "not confirmed by user"}
+                        </Badge>
+                      )}
+                      <span className="ml-auto text-[10px] text-muted-foreground">
+                        {o.closed_at ? new Date(o.closed_at).toLocaleString() : ""}
+                      </span>
+                    </div>
+                    {o.resolution_summary && (
+                      <p className="text-xs whitespace-pre-wrap">{o.resolution_summary}</p>
+                    )}
+                    {o.confirmed_root_cause && (
+                      <p className="text-[11px] text-muted-foreground">
+                        Root cause: {o.confirmed_root_cause}
+                      </p>
+                    )}
+                    {o.successful_action && (
+                      <p className="text-[11px] text-muted-foreground">
+                        Successful action: {o.successful_action}
+                      </p>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+            {history.transitions.length === 0 ? (
+              <p className="text-xs text-muted-foreground">
+                No lifecycle history recorded for this session.
+              </p>
+            ) : (
+              <div className="space-y-1.5">
+                {history.transitions.map((t, i) => (
+                  <div key={i} className="flex items-center gap-2 text-xs">
+                    <span className="text-muted-foreground w-40 shrink-0">
+                      {t.at ? new Date(t.at).toLocaleString() : "—"}
+                    </span>
+                    <span className="font-mono">
+                      {t.from_status ?? "∅"} → {t.to_status}
+                    </span>
+                    {t.reason && (
+                      <span className="text-muted-foreground truncate">— {t.reason}</span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </>
         )}
       </TabsContent>
     </Tabs>

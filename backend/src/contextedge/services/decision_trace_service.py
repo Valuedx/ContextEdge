@@ -297,6 +297,7 @@ async def list_decisions(
     decision_type: str | None = None,
     agent_step: str | None = None,
     status: str | None = None,
+    actor_type: str | None = None,
     min_confidence: float | None = None,
     max_confidence: float | None = None,
     sort: str = "created_desc",
@@ -319,6 +320,8 @@ async def list_decisions(
         stmt = stmt.where(Decision.agent_step == agent_step)
     if status is not None:
         stmt = stmt.where(Decision.status == status)
+    if actor_type is not None:
+        stmt = stmt.where(Decision.actor_type == actor_type)
     if min_confidence is not None:
         stmt = stmt.where(Decision.confidence >= min_confidence)
     if max_confidence is not None:

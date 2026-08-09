@@ -35,6 +35,69 @@ logger = structlog.get_logger()
 _FIX_RESULTS = ("successful", "failed", "partial")
 
 
+async def get_case_history(db, tenant_id: uuid.UUID, case_id: uuid.UUID) -> dict:
+    """Lifecycle history for one case: every state transition (oldest
+    first — it reads as a timeline) plus recorded outcomes (newest
+    first — the latest is the operative one; earlier rows are
+    reopen-and-close history)."""
+    from sqlalchemy import select
+
+    transitions = (
+        (
+            await db.execute(
+                select(CaseStateTransition)
+                .where(
+                    CaseStateTransition.tenant_id == tenant_id,
+                    CaseStateTransition.case_id == case_id,
+                )
+                .order_by(CaseStateTransition.created_at.asc())
+            )
+        )
+        .scalars()
+        .all()
+    )
+    outcomes = (
+        (
+            await db.execute(
+                select(CaseOutcome)
+                .where(
+                    CaseOutcome.tenant_id == tenant_id,
+                    CaseOutcome.case_id == case_id,
+                )
+                .order_by(CaseOutcome.closed_at.desc())
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return {
+        "transitions": [
+            {
+                "from_status": t.from_status,
+                "to_status": t.to_status,
+                "reason": t.transition_reason,
+                "transitioned_by": t.transitioned_by,
+                "at": t.created_at.isoformat() if t.created_at else None,
+            }
+            for t in transitions
+        ],
+        "outcomes": [
+            {
+                "outcome_status": o.outcome_status,
+                "resolution_summary": o.resolution_summary,
+                "confirmed_root_cause": o.confirmed_root_cause,
+                "successful_action": o.successful_action,
+                "failed_actions": o.failed_actions,
+                "user_confirmed": o.user_confirmed,
+                "mttr_minutes": float(o.mttr_minutes) if o.mttr_minutes is not None else None,
+                "closed_by": o.closed_by,
+                "closed_at": o.closed_at.isoformat() if o.closed_at else None,
+            }
+            for o in outcomes
+        ],
+    }
+
+
 async def record_case_transition(
     db,
     tenant_id: uuid.UUID,

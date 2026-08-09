@@ -164,6 +164,7 @@ async def list_decisions(
     decision_type: str | None = None,
     agent_step: str | None = None,
     status_filter: str | None = Query(None, alias="status"),
+    actor_type: str | None = Query(None, pattern="^(ai|human|system)$"),
     min_confidence: float | None = Query(None, ge=0.0, le=1.0),
     max_confidence: float | None = Query(None, ge=0.0, le=1.0),
     sort: str = Query(
@@ -181,6 +182,7 @@ async def list_decisions(
             decision_type=decision_type,
             agent_step=agent_step,
             status=status_filter,
+            actor_type=actor_type,
             min_confidence=min_confidence,
             max_confidence=max_confidence,
             sort=sort,

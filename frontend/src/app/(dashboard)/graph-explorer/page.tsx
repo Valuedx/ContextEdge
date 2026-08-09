@@ -2,10 +2,11 @@
 
 import { Suspense, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { BarChart3, BrainCircuit, GitBranch, Network } from "lucide-react";
+import { BarChart3, BrainCircuit, GitBranch, GitPullRequest, Network } from "lucide-react";
 
 import { PageHeader } from "@/components/common/page-header";
 import { AgentContextPreview } from "@/components/graph/agent-context-preview";
+import { EdgeProposals } from "@/components/graph/edge-proposals";
 import { NODE_TYPE_OPTIONS } from "@/components/graph/graph-constants";
 import { GraphNeighbors } from "@/components/graph/graph-neighbors";
 import { GraphQueryControls } from "@/components/graph/graph-query-controls";
@@ -13,7 +14,7 @@ import { GraphStats } from "@/components/graph/graph-stats";
 import { GraphSubgraph } from "@/components/graph/graph-subgraph";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
-const TAB_NAMES = ["stats", "subgraph", "neighbors", "agent-context"] as const;
+const TAB_NAMES = ["stats", "subgraph", "neighbors", "agent-context", "proposals"] as const;
 type TabName = (typeof TAB_NAMES)[number];
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -121,6 +122,9 @@ function GraphExplorerContent() {
             <TabsTrigger value="agent-context" className="flex items-center gap-2">
               <BrainCircuit className="h-4 w-4" /> Agent Context
             </TabsTrigger>
+            <TabsTrigger value="proposals" className="flex items-center gap-2">
+              <GitPullRequest className="h-4 w-4" /> Proposals
+            </TabsTrigger>
           </TabsList>
         </div>
 
@@ -139,6 +143,9 @@ function GraphExplorerContent() {
         </TabsContent>
         <TabsContent value="agent-context" className="border-none p-0 outline-none">
           <AgentContextPreview scope={scope} />
+        </TabsContent>
+        <TabsContent value="proposals" className="border-none p-0 outline-none">
+          <EdgeProposals />
         </TabsContent>
       </Tabs>
     </div>

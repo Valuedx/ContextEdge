@@ -428,8 +428,8 @@ The hybrid ranker uses a hard-coded `quality_score = 0.5` for all playbooks. A p
   2026-08-09**: `edge_proposal_service` + `/graph/edge-proposals`
   (list/approve/reject, knowledge_manager). Approve mints an authored
   `depends_on` with full review provenance; either verdict closes the
-  proposal edge (supersede, never delete). Frontend reviewer UI for the
-  queue is a follow-up — the API is consumable today.
+  proposal edge (supersede, never delete). Reviewer UI shipped
+  2026-08-09: Graph Explorer → Proposals tab.
 - **Ruff backlog (~360 findings)**: pre-existing style violations
   (mostly E501) across older modules. The two genuine runtime bugs
   found in the 2026-08-09 sweep (undefined `logger` in

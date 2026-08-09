@@ -64,7 +64,22 @@ const columns: ColumnDef<Decision>[] = [
   {
     accessorKey: "actor_type",
     header: "Actor",
-    cell: ({ row }) => row.getValue("actor_type"),
+    cell: ({ row }) => {
+      const actor = row.getValue("actor_type") as string;
+      // A pending AI diagnosis is projection-hidden until reviewed —
+      // this badge is how a reviewer finds the ones waiting.
+      if (actor === "ai" && row.original.status === "pending") {
+        return (
+          <Badge
+            variant="outline"
+            className="border-amber-500/40 bg-amber-500/10 text-amber-600 dark:text-amber-400 text-[10px]"
+          >
+            AI · awaiting review
+          </Badge>
+        );
+      }
+      return actor;
+    },
   },
   {
     accessorKey: "compact_trace",
@@ -119,6 +134,7 @@ function DecisionsPageContent() {
   const [typeFilter, setTypeFilter] = useState<string>("");
   const [stepFilter, setStepFilter] = useState<string>("");
   const [sessionFilter, setSessionFilter] = useState<string>("");
+  const [reviewFilter, setReviewFilter] = useState<string>("");
   const [activeTab, setActiveTab] = useState("detail");
   const pg = usePagination(50);
 
@@ -126,9 +142,13 @@ function DecisionsPageContent() {
   if (typeFilter) queryParams.decision_type = typeFilter;
   if (stepFilter) queryParams.agent_step = stepFilter;
   if (sessionFilter) queryParams.session_id = sessionFilter;
+  if (reviewFilter === "ai_pending") {
+    queryParams.status = "pending";
+    queryParams.actor_type = "ai";
+  }
 
   const { data = [], isLoading } = useQuery<Decision[]>({
-    queryKey: ["decisions", pg.page, typeFilter, stepFilter, sessionFilter],
+    queryKey: ["decisions", pg.page, typeFilter, stepFilter, sessionFilter, reviewFilter],
     queryFn: () => api.get("/decisions", queryParams),
   });
 
@@ -194,6 +214,18 @@ function DecisionsPageContent() {
             value={sessionFilter}
             onChange={(e) => setSessionFilter(e.target.value)}
           />
+        </div>
+        <div className="space-y-1">
+          <Label className="text-xs">Review</Label>
+          <Select value={reviewFilter} onValueChange={(v) => setReviewFilter(v ?? "")}>
+            <SelectTrigger className="w-[190px]">
+              <SelectValue placeholder="All decisions" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="">All decisions</SelectItem>
+              <SelectItem value="ai_pending">AI · awaiting review</SelectItem>
+            </SelectContent>
+          </Select>
         </div>
       </div>
 

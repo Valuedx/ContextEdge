@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
 import pytest
@@ -16,6 +16,7 @@ from contextedge.models.case_outcome import (
     CaseStateTransition,
 )
 from contextedge.services.case_outcome_service import (
+    get_case_history,
     record_case_outcome,
     record_case_transition,
 )
@@ -107,6 +108,35 @@ async def test_session_create_writes_the_opening_transition(mock_task, mock_op):
     assert transitions[0].from_status is None
     assert transitions[0].to_status == "open"
     assert transitions[0].case_id == session.id
+
+
+@pytest.mark.asyncio
+async def test_case_history_serializes_timeline_and_outcomes():
+    when = datetime(2026, 8, 9, 12, 0, tzinfo=UTC)
+    transition = SimpleNamespace(
+        from_status=None, to_status="open", transition_reason=None,
+        transitioned_by="ops", created_at=when,
+    )
+    outcome = SimpleNamespace(
+        outcome_status="resolved", resolution_summary="fixed",
+        confirmed_root_cause=None, successful_action=None,
+        failed_actions=[], user_confirmed=True, mttr_minutes=42,
+        closed_by="ops", closed_at=when,
+    )
+    db = MagicMock()
+    t_res, o_res = MagicMock(), MagicMock()
+    t_res.scalars.return_value.all.return_value = [transition]
+    o_res.scalars.return_value.all.return_value = [outcome]
+    db.execute = AsyncMock(side_effect=[t_res, o_res])
+    history = await get_case_history(db, uuid4(), uuid4())
+    assert history["transitions"] == [
+        {
+            "from_status": None, "to_status": "open", "reason": None,
+            "transitioned_by": "ops", "at": when.isoformat(),
+        }
+    ]
+    assert history["outcomes"][0]["outcome_status"] == "resolved"
+    assert history["outcomes"][0]["mttr_minutes"] == 42.0
 
 
 def _closable_session():

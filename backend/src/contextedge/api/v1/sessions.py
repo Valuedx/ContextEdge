@@ -98,6 +98,24 @@ async def create_session_event(
     return event
 
 
+@router.get("/{session_id}/history")
+async def session_history(
+    session_id: UUID,
+    db: DbSession,
+    user: AuthUser,
+):
+    """Lifecycle history: state transitions (timeline order) and
+    recorded outcomes (latest first) for one resolution session."""
+    from contextedge.services.case_outcome_service import get_case_history
+
+    session = await get_resolution_session(
+        db, tenant_id=user.tenant_id, session_id=session_id
+    )
+    if session is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return await get_case_history(db, user.tenant_id, session_id)
+
+
 class SessionCloseRequest(BaseModel):
     """Optional close-time outcome: what the close MEANS. Absent fields
     stay unknown — closing never fabricates "resolved"."""

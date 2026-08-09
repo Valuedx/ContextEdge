@@ -15,7 +15,7 @@
  */
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import {
   AlertTriangle,
   Brain,
@@ -415,10 +415,6 @@ function BudgetEditForm({
   );
   const [localError, setLocalError] = useState<string | null>(null);
 
-  useEffect(() => {
-    setLocalError(null);
-  }, [tokenLimit, costCap, action]);
-
   function parseOrNull(raw: string): number | null | "invalid" {
     const trimmed = raw.trim();
     if (trimmed === "") return null;
@@ -475,7 +471,10 @@ function BudgetEditForm({
                 step={1000}
                 placeholder="blank = no cap"
                 value={tokenLimit}
-                onChange={(e) => setTokenLimit(e.target.value)}
+                onChange={(e) => {
+                  setTokenLimit(e.target.value);
+                  setLocalError(null);
+                }}
               />
               <div className="text-[11px] text-muted-foreground">
                 Counts prompt + completion. Cached tokens still count.
@@ -493,7 +492,10 @@ function BudgetEditForm({
                 step={0.01}
                 placeholder="blank = no cap"
                 value={costCap}
-                onChange={(e) => setCostCap(e.target.value)}
+                onChange={(e) => {
+                  setCostCap(e.target.value);
+                  setLocalError(null);
+                }}
               />
               <div className="text-[11px] text-muted-foreground">
                 Estimated from provider per-million-token rates.
@@ -506,7 +508,10 @@ function BudgetEditForm({
             <Select
               value={action}
               onValueChange={(v) => {
-                if (v === "block" || v === "warn") setAction(v);
+                if (v === "block" || v === "warn") {
+                  setAction(v);
+                  setLocalError(null);
+                }
               }}
             >
               <SelectTrigger className="w-[220px]">
