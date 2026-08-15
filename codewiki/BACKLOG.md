@@ -646,7 +646,32 @@ contract's dry-run path instead of the special case currently in `start_executio
 resolving to a registered skill; a skill with side effects cannot register without a
 contract; the shadow-mode special case is deleted, not duplicated.
 
-### F7 · Immutable approval binding — M
+### F7 · Immutable approval binding — M — **SHIPPED 2026-08-16**
+**Shipped.** Migration `0059`: `artifact_version` / `artifact_hash` / `policy_snapshot` /
+`expires_at` on `approval_requests`, plus a `BEFORE UPDATE` trigger making a **published**
+version's `steps` immutable — a hash of a mutable row only proves it has not changed
+since someone last looked, so the payload must not be able to drift underneath the
+binding at all. `services/artifact_binding_service.py` hashes the step *in its version*
+(two playbooks can hold identical steps; hashing the step alone would let an approval for
+one satisfy execution of the other). Written at `request_approval`, re-checked in
+`record_tool_invocation` — the last moment before a tool runs — and a violation is
+recorded as an `approval.binding_violated` event, not merely raised. `expires_at` is 4h,
+the incident working span: distinct from the 72h that expires an *unanswered* request,
+because that one is about nobody answering and this one is about the answer going stale.
+
+**RFC 8785 rather than `json.dumps(sort_keys=True)`**, via the `rfc8785` dependency
+(pure Python, no transitive deps). Key order, whitespace and number formatting change
+the bytes without changing the meaning, so a naive hash produces false mismatches on
+re-serialization — and a check that cries wolf on every legitimate execution gets
+disabled. ECMAScript number serialization and UTF-16 key ordering are exactly the parts
+a hand-rolled canonicalizer gets wrong.
+
+Approvals predating F7 carry no hash and are allowed through, logged: retro-blocking
+approvals granted before the mechanism existed would break running deployments to
+enforce a rule they had no way to satisfy, and they age out on their own. The hash is a
+self-consistency check, **not a signature** — it proves the payload did not change, not
+who produced it. 1622 tests.
+
 **What.** Canonicalize the resolved step payload with RFC 8785 (JSON Canonicalization
 Scheme), hash it, and store `artifact_version` + `artifact_hash` + `policy_snapshot` +
 `expires_at` on the approval. Re-hash and compare immediately before execution; refuse

@@ -557,6 +557,13 @@ async def test_record_tool_invocation_under_shadow_tags_outputs_and_status():
         get=AsyncMock(side_effect=get),
         add=lambda obj: captured_add.append(obj),
         flush=AsyncMock(),
+        # F7: record_tool_invocation now re-checks the approval binding
+        # before a tool runs, which queries for the step's approvals. This
+        # step has none, so the check is a no-op — but the fixture has to be
+        # able to answer the question.
+        execute=AsyncMock(
+            return_value=SimpleNamespace(scalars=lambda: SimpleNamespace(all=list))
+        ),
     )
 
     with patch(
@@ -790,6 +797,11 @@ async def test_record_tool_invocation_non_shadow_unchanged():
         get=AsyncMock(side_effect=get),
         add=lambda obj: None,
         flush=AsyncMock(),
+        # F7: the approval-binding re-check queries for this step's
+        # approvals. It has none, so the check is a no-op.
+        execute=AsyncMock(
+            return_value=SimpleNamespace(scalars=lambda: SimpleNamespace(all=list))
+        ),
     )
 
     captured: dict = {}

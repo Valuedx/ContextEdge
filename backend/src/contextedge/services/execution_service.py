@@ -31,6 +31,12 @@ from contextedge.services.approval_policy_service import (
     load_approval_policy,
     step_requires_policy_approval,
 )
+from contextedge.services.artifact_binding_service import (
+    ArtifactBindingError,
+    approval_expiry,
+    hash_step_artifact,
+    verify_binding,
+)
 from contextedge.services.decision_trace_service import create_decision, record_outcome
 from contextedge.services.event_log_service import append_operational_event
 from contextedge.services.policy_check_service import record_policy_check
@@ -186,6 +192,94 @@ async def _record_decider_check(
         },
         evaluated_by=decided_by,
     )
+
+
+def _policy_snapshot(policy: ApprovalPolicy | None) -> dict | None:
+    """The governance state the approver decided under (F7).
+
+    Stored on the approval rather than looked up at execution, because the
+    policy can be edited between the two and the question the audit asks is
+    what the approver was told, not what the rules say now.
+    """
+    if policy is None or not policy.is_configured:
+        return None
+    return {
+        "policy_id": str(policy.policy_id),
+        "policy_version": policy.version,
+        "approver_roles": sorted(policy.approver_roles or ()),
+        "forbid_self_approval": policy.forbid_self_approval,
+        "require_approval_min_safety_class": policy.require_approval_min_safety_class,
+        "max_automation_mode": policy.max_automation_mode,
+    }
+
+
+async def assert_approved_artifact_unchanged(
+    db: AsyncSession, tenant_id: uuid.UUID, step: ExecutionStepRun
+) -> None:
+    """Re-check the approval binding immediately before the tool runs (F7).
+
+    v6 invariant 2: no execution of an artifact different from the approved
+    artifact hash. The hash is recomputed from the step payload as it stands
+    now and compared with what the approver signed off; the approval's own
+    expiry is checked in the same pass.
+
+    Only approved, artifact-bound requests are checked. A step that never
+    required approval has nothing to verify, and an approval predating F7
+    carries no hash — see ``verify_binding`` for why that is allowed through
+    rather than refused.
+    """
+    approvals = (
+        (
+            await db.execute(
+                select(ApprovalRequest).where(
+                    ApprovalRequest.tenant_id == tenant_id,
+                    ApprovalRequest.step_run_id == step.id,
+                    ApprovalRequest.status == "approved",
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    if not approvals:
+        return
+
+    run = await db.get(ExecutionRun, step.execution_run_id)
+    if run is None or run.tenant_id != tenant_id:
+        return
+    version = await db.get(PlaybookVersion, run.playbook_version_id)
+    if version is None:
+        return
+
+    current = hash_step_artifact(
+        playbook_id=run.playbook_id,
+        playbook_version_id=version.id,
+        semantic_version=version.semantic_version,
+        step_index=step.step_index,
+        step=step.inputs,
+    )
+    for approval in approvals:
+        try:
+            verify_binding(
+                approved_hash=approval.artifact_hash,
+                current_hash=current,
+                expires_at=approval.expires_at,
+            )
+        except ArtifactBindingError as exc:
+            await append_operational_event(
+                db,
+                tenant_id=tenant_id,
+                entity_type="approval_request",
+                entity_id=approval.id,
+                event_type="approval.binding_violated",
+                payload={
+                    "step_run_id": str(step.id),
+                    "approved_hash": approval.artifact_hash,
+                    "current_hash": current,
+                    "reason": str(exc),
+                },
+            )
+            raise ExecutionPolicyError(str(exc)) from exc
 
 
 def _approver_role_label(policy: ApprovalPolicy) -> str | None:
@@ -424,6 +518,18 @@ async def start_execution(
             # rather than claiming one was.
             action_name=step_run.action_name,
             approver_role=_approver_role_label(approval_policy),
+            # F7: bind the approval to the exact artifact. The step payload is
+            # what was stored on the run, which is the version's step verbatim.
+            artifact_version=version.semantic_version,
+            artifact_hash=hash_step_artifact(
+                playbook_id=playbook.id,
+                playbook_version_id=version.id,
+                semantic_version=version.semantic_version,
+                step_index=step_run.step_index,
+                step=step_run.inputs,
+            ),
+            policy_snapshot=_policy_snapshot(approval_policy),
+            expires_at=approval_expiry(),
         )
         approval_count += 1
         if is_shadow:
@@ -677,6 +783,11 @@ async def record_tool_invocation(
     if step is None or step.tenant_id != tenant_id:
         return None
 
+    # F7: the last moment before a tool actually runs. If this step was
+    # approved, the artifact about to execute must still be the one that was
+    # approved, and the approval must not have gone stale.
+    await assert_approved_artifact_unchanged(db, tenant_id, step)
+
     run = await db.get(ExecutionRun, step.execution_run_id)
     shadow = run is not None and is_shadow_mode(run.automation_mode)
 
@@ -730,6 +841,10 @@ async def request_approval(
     context: dict | None = None,
     action_name: str | None = None,
     approver_role: str | None = None,
+    artifact_version: str | None = None,
+    artifact_hash: str | None = None,
+    policy_snapshot: dict | None = None,
+    expires_at: datetime | None = None,
 ) -> ApprovalRequest:
     req = ApprovalRequest(
         execution_run_id=execution_run_id,
@@ -742,6 +857,10 @@ async def request_approval(
         status="pending",
         action_name=action_name,
         approver_role=approver_role,
+        artifact_version=artifact_version,
+        artifact_hash=artifact_hash,
+        policy_snapshot=policy_snapshot,
+        expires_at=expires_at,
     )
     db.add(req)
 
