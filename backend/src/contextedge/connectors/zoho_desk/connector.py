@@ -319,11 +319,17 @@ class ZohoDeskConnector(BaseConnector):
         except (TypeError, ValueError):
             self.max_pages = DEFAULT_MAX_PAGES
         try:
-            self.max_days = int(config.get("max_days")) if config.get("max_days") is not None else None
+            self.max_days = (
+                int(config.get("max_days")) if config.get("max_days") is not None else None
+            )
         except (TypeError, ValueError):
             self.max_days = None
         try:
-            self.max_records = int(config.get("max_records")) if config.get("max_records") is not None else None
+            self.max_records = (
+                int(config.get("max_records"))
+                if config.get("max_records") is not None
+                else None
+            )
         except (TypeError, ValueError):
             self.max_records = None
         self.type_kind_map = {

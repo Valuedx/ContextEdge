@@ -76,7 +76,11 @@ async def list_patterns(
             pb_id, pb_updated_at = pb_map[pat.id]
             resp.has_playbook = True
             resp.playbook_id = pb_id
-            if pb_updated_at and pat.updated_at and (pat.updated_at - pb_updated_at).total_seconds() > 5:
+            if (
+                pb_updated_at
+                and pat.updated_at
+                and (pat.updated_at - pb_updated_at).total_seconds() > 5
+            ):
                 resp.playbook_status = "review_needed"
             else:
                 resp.playbook_status = "generated"
@@ -111,7 +115,11 @@ async def get_pattern(pattern_id: UUID, db: DbSession, user: AuthUser):
     if pb_row:
         resp.has_playbook = True
         resp.playbook_id = pb_row[0]
-        if pb_row[1] and pattern.updated_at and (pattern.updated_at - pb_row[1]).total_seconds() > 5:
+        if (
+            pb_row[1]
+            and pattern.updated_at
+            and (pattern.updated_at - pb_row[1]).total_seconds() > 5
+        ):
             resp.playbook_status = "review_needed"
         else:
             resp.playbook_status = "generated"

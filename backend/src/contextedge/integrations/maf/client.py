@@ -197,7 +197,9 @@ class EdgeProposalClient(Protocol):
     a REVIEWABLE proposal (proposed_depends_on, not in the maf.v1
     allowlist), never as authored fact."""
 
-    async def propose(self, source_ci: str, target_ci: str, rationale: str, evidence_ids: list) -> dict: ...
+    async def propose(
+        self, source_ci: str, target_ci: str, rationale: str, evidence_ids: list
+    ) -> dict: ...
 
 
 class InProcessEdgeProposalClient:
@@ -211,7 +213,9 @@ class InProcessEdgeProposalClient:
         self.tenant_id = tenant_id
         self.domain_id = domain_id
 
-    async def propose(self, source_ci: str, target_ci: str, rationale: str, evidence_ids: list) -> dict:
+    async def propose(
+        self, source_ci: str, target_ci: str, rationale: str, evidence_ids: list
+    ) -> dict:
         from contextedge.graph.builder import ensure_edge
         from contextedge.services.cmdb_topology_service import resolve_ci_entity_checked
 
@@ -229,9 +233,11 @@ class InProcessEdgeProposalClient:
                                       "message": f"Multiple CIs match {which!r}; use a sys_id."}}
                 if src is None or dst is None:
                     missing = source_ci if src is None else target_ci
-                    return {"error": {"code": "ci_not_found", "message": f"No CI matches {missing!r}."}}
+                    return {"error": {"code": "ci_not_found",
+                                      "message": f"No CI matches {missing!r}."}}
                 if src.id == dst.id:
-                    return {"error": {"code": "self_edge", "message": "A CI cannot depend on itself."}}
+                    return {"error": {"code": "self_edge",
+                                      "message": "A CI cannot depend on itself."}}
                 domain_id = self.domain_id
                 if domain_id is None and src.domain_id == dst.domain_id:
                     domain_id = src.domain_id

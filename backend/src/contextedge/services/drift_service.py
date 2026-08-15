@@ -57,7 +57,12 @@ async def list_drift_alerts(
                 select(Pattern).where(Pattern.id == pb.pattern_id)
             )
             pat = pat_res.scalar_one_or_none()
-            if pat and pat.updated_at and pb.updated_at and (pat.updated_at - pb.updated_at).total_seconds() > 5:
+            if (
+                pat
+                and pat.updated_at
+                and pb.updated_at
+                and (pat.updated_at - pb.updated_at).total_seconds() > 5
+            ):
                 issues.append("pattern_nodes_added_drift")
 
         if issues:
@@ -66,7 +71,11 @@ async def list_drift_alerts(
                 "pattern_id": str(pb.pattern_id) if pb.pattern_id else None,
                 "title": pb.title,
                 "issues": issues,
-                "severity": "high" if "past_expiry" in issues else ("medium" if "pattern_nodes_added_drift" in issues else "low"),
+                "severity": (
+                    "high"
+                    if "past_expiry" in issues
+                    else ("medium" if "pattern_nodes_added_drift" in issues else "low")
+                ),
             })
 
     return alerts
