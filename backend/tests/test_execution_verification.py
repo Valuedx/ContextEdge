@@ -71,18 +71,65 @@ def test_recheck_delay_default_floor_and_garbage():
 # --- verdicts ---------------------------------------------------------------
 
 
-def _db(version, session, execute_results):
+def _first_result(row):
+    result = Mock()
+    result.first.return_value = row
+    return result
+
+
+def _count_result(value):
+    result = Mock()
+    result.scalar_one_or_none.return_value = value
+    return result
+
+
+def _db(version, session, execute_results, *, observable=True, confirmations=None):
+    """Build a db double for the F9 sweep.
+
+    The sweep now runs more queries than the absence check did: after CI
+    resolution and the post-action scan it asks whether the CI has EVER
+    reported (so silence can be told apart from recovery), then whether anyone
+    confirmed the fix. ``observable`` and ``confirmations`` drive those two,
+    and any query beyond them gets a permissive empty result so a test only
+    has to state what it cares about.
+    """
+    added: list = []
+    tail = [
+        _first_result(object() if observable else None),
+        _count_result(None if confirmations is None else max(confirmations, 1)),
+        _count_result(confirmations),
+    ]
+    queue = list(execute_results) + tail
+
+    async def execute(_stmt):
+        if queue:
+            return queue.pop(0)
+        empty = Mock()
+        empty.first.return_value = None
+        empty.scalar_one_or_none.return_value = None
+        empty.scalars.return_value.all.return_value = []
+        empty.all.return_value = []
+        return empty
+
     async def get(model, pk):
         name = getattr(model, "__name__", str(model))
         if "PlaybookVersion" in name:
             return version
         return session
 
-    return SimpleNamespace(
+    def add(obj):
+        if getattr(obj, "id", None) is None:
+            obj.id = uuid4()
+        added.append(obj)
+
+    db = SimpleNamespace(
         get=AsyncMock(side_effect=get),
-        execute=AsyncMock(side_effect=execute_results),
+        execute=AsyncMock(side_effect=execute),
         flush=AsyncMock(),
+        add=add,
     )
+    db.added = added
+    return db
 
 
 @pytest.mark.asyncio
@@ -124,8 +171,15 @@ async def test_verified_when_no_post_action_signals():
     assert result["status"] == "verified"
     assert run.verification_status == "verified"
     assert run.verified_at == NOW
-    assert run.verification_details["new_incidents"] == 0
+    # F9: the verdict now says WHAT was checked. Absence still passes, but
+    # only because this CI is known to report — see the inconclusive test.
+    assert run.verification_details["assessment"] == "success"
     assert run.verification_details["checked_cis"] == ["vpn-gw-east-01"]
+    statuses = {
+        c["type"]: c["status"] for c in run.verification_details["criteria"]
+    }
+    assert statuses["incident_absence"] == "pass"
+    assert statuses["alert_absence"] == "pass"
     event_types = [c.kwargs["event_type"] for c in event_mock.await_args_list]
     assert event_types == [
         "execution.verification_completed",
@@ -153,8 +207,13 @@ async def test_failed_when_incidents_or_alerts_continue():
 
     assert result["status"] == "failed"
     assert run.verification_status == "failed"
-    assert run.verification_details["new_incidents"] == 1
-    assert run.verification_details["new_alert_batches"] == 2
+    observed = {
+        c["type"]: c["observed"] for c in run.verification_details["criteria"]
+    }
+    assert observed["incident_absence"]["count"] == 1
+    assert observed["alert_absence"]["count"] == 2
+    # A recurrence is the one failure with something to undo.
+    assert run.verification_details["assessment"] == "rollback_required"
     # No auto-close recommendation on a failed verdict, ever.
     event_types = [c.kwargs["event_type"] for c in event_mock.await_args_list]
     assert event_types == ["execution.verification_completed"]
@@ -178,7 +237,12 @@ async def test_unverifiable_without_session_or_cis():
         db = _db(_version(), _session(tenant_id, entities=[]), [])
         result = await verify_execution_run(db, tenant_id, no_cis, now=NOW)
         assert result["status"] == "unverifiable"
-        assert result["details"]["reason"] == "no_resolvable_cis"
+        # F9: it now says WHY it could not decide, per criterion, instead of
+        # one opaque reason code.
+        assert result["details"]["assessment"] == "inconclusive"
+        assert all(
+            c["status"] == "not_observable" for c in result["details"]["criteria"]
+        )
 
 
 @pytest.mark.asyncio
@@ -284,11 +348,12 @@ async def test_stale_alert_redelivery_does_not_fail_verification():
             return raw
         return evidence
 
-    db = SimpleNamespace(
-        get=AsyncMock(side_effect=get),
-        execute=AsyncMock(side_effect=[_scalars_result([ci]), _rows_result(post_rows)]),
-        flush=AsyncMock(),
+    db = _db(
+        version,
+        session,
+        [_scalars_result([ci]), _rows_result(post_rows)],
     )
+    db.get = AsyncMock(side_effect=get)
 
     # Alerts fired 3h before completion — re-delivered batch, not new trouble.
     stale_payload = {"last_event_time": (NOW - timedelta(hours=4)).strftime("%Y-%m-%d %H:%M:%S")}
@@ -305,8 +370,8 @@ async def test_stale_alert_redelivery_does_not_fail_verification():
         result = await verify_execution_run(db, tenant_id, run, now=NOW)
 
     assert result["status"] == "verified"
-    assert run.verification_details["new_alert_batches"] == 0
-    assert run.verification_details["alert_batches_confirmed_by_event_time"] is True
+    observed = {c["type"]: c["observed"] for c in run.verification_details["criteria"]}
+    assert observed["alert_absence"]["count"] == 0
 
 
 @pytest.mark.asyncio
@@ -331,16 +396,15 @@ async def test_genuinely_new_alerts_still_fail_verification():
             return raw
         return evidence
 
-    db = SimpleNamespace(
-        get=AsyncMock(side_effect=get),
-        execute=AsyncMock(
-            side_effect=[
-                _scalars_result([ci]),
-                _rows_result([(alert_evidence_id, "em_alert_rollup:ci:2026-08-01")]),
-            ]
-        ),
-        flush=AsyncMock(),
+    db = _db(
+        version,
+        session,
+        [
+            _scalars_result([ci]),
+            _rows_result([(alert_evidence_id, "em_alert_rollup:ci:2026-08-01")]),
+        ],
     )
+    db.get = AsyncMock(side_effect=get)
 
     fresh_payload = {"last_event_time": (NOW - timedelta(minutes=10)).strftime("%Y-%m-%d %H:%M:%S")}
     with (
@@ -356,4 +420,8 @@ async def test_genuinely_new_alerts_still_fail_verification():
         result = await verify_execution_run(db, tenant_id, run, now=NOW)
 
     assert result["status"] == "failed"
-    assert run.verification_details["new_alert_batches"] == 1
+    observed = {c["type"]: c["observed"] for c in run.verification_details["criteria"]}
+    assert observed["alert_absence"]["count"] == 1
+    # Alerts alone are not a recurrence of the incident, so there is nothing
+    # obvious to undo — this fails without recommending a rollback.
+    assert run.verification_details["assessment"] == "failed"
