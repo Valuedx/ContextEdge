@@ -138,6 +138,15 @@ class EvidenceItem(Base, TenantScopedMixin):
     # knowledge), and retrieval falls back to lexical extraction.
     applicability: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
+    # Empirical support for a knowledge item — has this procedure ever
+    # actually worked? (0057) Computed by knowledge_validation_service from
+    # playbook→knowledge links and *verified* execution outcomes, refreshed by
+    # the event that changes it: a verification verdict. Stored rather than
+    # recomputed per retrieval, for the same reason ``applicability`` is.
+    # NULL means not-yet-computed and ranks as neutral — silence is not
+    # failure, and most knowledge is simply never exercised.
+    knowledge_support: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+
 
 class EvidenceChunk(Base, TenantScopedMixin):
     """High-recall sibling of ``EvidenceItem``.

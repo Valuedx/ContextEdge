@@ -193,6 +193,63 @@ async def validate_knowledge_item(
     return result
 
 
+async def persist_knowledge_support(
+    db: AsyncSession, tenant_id: uuid.UUID, evidence_id: uuid.UUID
+) -> KnowledgeValidation | None:
+    """Recompute one item's support and store it on the row (F4, 0057).
+
+    Retrieval cannot afford to recompute this — it is several queries per
+    candidate article per playbook generation, the same cost argument that
+    kept applicability lexical until 0051. So it is stored, and refreshed by
+    the event that changes the answer: a verification verdict.
+
+    Returns None when the evidence does not belong to the tenant. Deliberately
+    does NOT commit: the caller owns the transaction, and this runs inside the
+    verification sweep's.
+    """
+    evidence = await db.get(EvidenceItem, evidence_id)
+    if evidence is None or evidence.tenant_id != tenant_id:
+        return None
+    validation = await validate_knowledge_item(db, tenant_id, evidence_id)
+    payload = validation.as_dict()
+    # The reviewer-facing fields are already in as_dict(); the ranker needs
+    # only ``support``, and storing the counts alongside it means a reviewer
+    # asking "why is this contested?" does not have to re-run the query.
+    payload.pop("title", None)
+    evidence.knowledge_support = payload
+    await db.flush()
+    return validation
+
+
+async def refresh_support_for_playbook_version(
+    db: AsyncSession, tenant_id: uuid.UUID, playbook_version_id: uuid.UUID
+) -> int:
+    """Refresh every knowledge item cited by one playbook version.
+
+    Called after a verification verdict lands, because that verdict is exactly
+    what changes these numbers. Bounded by the citations of a single version —
+    a handful of articles, not the corpus.
+    """
+    evidence_ids = (
+        (
+            await db.execute(
+                select(PlaybookEvidenceLink.evidence_id).where(
+                    PlaybookEvidenceLink.playbook_version_id == playbook_version_id,
+                    PlaybookEvidenceLink.link_type == KNOWLEDGE_LINK_TYPE,
+                    PlaybookEvidenceLink.evidence_id.is_not(None),
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    refreshed = 0
+    for evidence_id in {eid for eid in evidence_ids if eid}:
+        if await persist_knowledge_support(db, tenant_id, evidence_id) is not None:
+            refreshed += 1
+    return refreshed
+
+
 async def validate_tenant_knowledge(
     db: AsyncSession, tenant_id: uuid.UUID, limit: int = 200
 ) -> list[KnowledgeValidation]:

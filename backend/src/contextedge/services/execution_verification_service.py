@@ -291,6 +291,31 @@ async def verify_execution_run(
                 error=str(exc),
             )
 
+    # F4: this verdict is exactly what changes the empirical support of the
+    # knowledge this playbook version was built on, so it is refreshed here
+    # rather than on a sweep that would recompute a whole corpus to catch a
+    # handful of changed rows. Fail-soft for the same reason as the cohort
+    # write-back above — a ranking input must never break the verification.
+    if verdict in ("verified", "failed") and version is not None:
+        version_id = None
+        try:
+            from contextedge.services.knowledge_validation_service import (
+                refresh_support_for_playbook_version,
+            )
+
+            # Inside the try, not outside: a partially-loaded version is one
+            # of the failures this block exists to absorb, and reading its id
+            # is part of the operation rather than a precondition of it.
+            version_id = version.id
+            await refresh_support_for_playbook_version(db, tenant_id, version_id)
+        except Exception as exc:
+            logger.warning(
+                "knowledge_support.refresh_failed",
+                tenant_id=str(tenant_id),
+                playbook_version_id=str(version_id) if version_id else None,
+                error=str(exc),
+            )
+
     await append_operational_event(
         db,
         tenant_id=tenant_id,
