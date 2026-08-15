@@ -80,6 +80,13 @@ from contextedge.models.policy import (
     PolicyCheck,
     TenantPolicy,
 )
+from contextedge.models.remediation import (
+    ESCALATION_PRIORITIES,
+    ESCALATION_STATUSES,
+    ROLLBACK_PLAN_STATUSES,
+    Escalation,
+    RollbackPlan,
+)
 from contextedge.models.session import CaseLink, DecisionTraceEvent, ResolutionSession
 from contextedge.models.skill import (
     CONCURRENCY_POLICIES,
@@ -130,6 +137,8 @@ __all__ = [
     "VerificationAssessment", "VerificationObservation",
     "CRITERION_TYPES", "OBSERVATION_STATUSES", "ASSESSMENT_RESULTS",
     "TrustProfile", "AUTONOMY_LEVELS", "UNSCOPED",
+    "RollbackPlan", "Escalation", "ROLLBACK_PLAN_STATUSES",
+    "ESCALATION_STATUSES", "ESCALATION_PRIORITIES",
     "EvaluationDataset", "EvaluationRun", "RetrievalFeedback",
     "POLICY_TYPES", "TenantPolicy", "POLICY_CHECK_RESULTS", "PolicyCheck",
     "Skill", "ExecutionContract", "INTERFACE_TYPES", "IDEMPOTENCY_MODES",

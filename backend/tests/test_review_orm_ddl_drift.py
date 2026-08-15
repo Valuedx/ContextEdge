@@ -82,6 +82,17 @@ def _collect_constraint_markers() -> set[tuple[str, str]]:
 # (no ALTER needed) or covered by an explicit ALTER TABLE block with
 # IF EXISTS guards in 0029.
 _EXPECTED_MARKERS: set[tuple[str, str]] = {
+    # rollback_plans + escalations are brand-new tables (0063 CREATE TABLE).
+    ('remediation.py', 'ForeignKey("execution_runs.id", ondelete="CASCADE"),'),
+    ('remediation.py', 'ForeignKey("execution_runs.id", ondelete="SET NULL"),'),
+    ('remediation.py', 'ForeignKey("resolution_sessions.id", ondelete="SET NULL"),'),
+    ('remediation.py', 'ForeignKey("verification_assessments.id", ondelete="SET NULL"),'),
+    ('remediation.py',
+     'UUID(as_uuid=True), ForeignKey("decisions.id", ondelete="SET NULL"), nullable=True'),
+    ('remediation.py', 'UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"),'),
+    # execution_runs.rolls_back_run_id is a NEW FK on an EXISTING table, so it
+    # needs an ALTER — 0063 issues create_foreign_key for exactly this.
+    ('execution.py', 'ForeignKey("execution_runs.id", ondelete="SET NULL"),'),
     # trust_profiles is a brand-new table (0062 CREATE TABLE).
     ('trust.py', 'UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"),'),
     ('trust.py',

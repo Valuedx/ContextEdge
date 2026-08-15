@@ -94,13 +94,25 @@ EXPECTED_UNWRITTEN: dict[tuple[str, str], tuple[str, str]] = {
         )
         for col in ("skill_id", "skill_version")
     },
-    ("verification.py", "monitoring_window_sec"): (
-        "F11",
-        "monitor_required is emitted but nothing schedules the follow-up watch yet",
-    ),
+    # ``verification.monitoring_window_sec`` left this register in F11 — a
+    # monitor_required verdict now writes it.
     ("trust.py", "reopens"): (
-        "F11",
-        "reopen detection lives with the case lifecycle, not the verification sweep",
+        "case-lifecycle",
+        "a reopen is a second CaseOutcome on a case, which the verification "
+        "sweep never sees; wiring it belongs with the case lifecycle",
+    ),
+    **{
+        ("remediation.py", col): (
+            "reviewer-console",
+            "the resolve flow is an operator action with no surface yet; raising "
+            "and acknowledging an escalation are wired, closing one is not",
+        )
+        for col in ("resolved_at", "resolution_note")
+    },
+    ("execution.py", "rolls_back_run_id"): (
+        "executor",
+        "a rollback plan is derived, but nothing executes one — the run that "
+        "would carry this link is created by a dispatcher that does not exist",
     ),
     # --- claims: created, never validated; both link tables have no constructor
     **{
