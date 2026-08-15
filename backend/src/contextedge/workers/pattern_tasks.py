@@ -197,7 +197,8 @@ async def _cluster(db, tid: uuid.UUID, did: uuid.UUID | None) -> dict:
             if ep.id in assigned_ids:
                 continue
 
-            # First, check if candidate episode is close (cosine distance < 0.35) to an EXISTING pattern
+            # First, check if candidate episode is close (cosine distance < 0.35)
+            # to an EXISTING pattern
             match_r = await db.execute(
                 select(PatternEvidenceLink.pattern_id)
                 .join(Episode, Episode.id == PatternEvidenceLink.episode_id)
@@ -297,8 +298,17 @@ async def _cluster(db, tid: uuid.UUID, did: uuid.UUID | None) -> dict:
                 syn_title = synthesis.get("title") or f"Synthesized: {cluster[0].title[:50]}"
                 syn_title_lower = syn_title.strip().lower()
 
-                # Gate: skip persisting if LLM determined there is no operational incident/pattern
-                if any(p in syn_title_lower for p in ["no incident", "no pattern", "no operational pattern", "no recurring pattern"]):
+                # Gate: skip persisting if LLM determined there is no
+                # operational incident/pattern
+                if any(
+                    p in syn_title_lower
+                    for p in [
+                        "no incident",
+                        "no pattern",
+                        "no operational pattern",
+                        "no recurring pattern",
+                    ]
+                ):
                     logger.info(
                         "pattern_synthesis_rejected_no_incident",
                         title=syn_title,
@@ -401,7 +411,6 @@ def generate_playbook_candidate(self, pattern_id: str, tenant_id: str):
         if not pattern:
             return {"status": "skipped", "reason": "pattern_not_found"}
 
-        from sqlalchemy import func
         existing = await db.execute(
             select(Playbook).where(
                 Playbook.tenant_id == tid,

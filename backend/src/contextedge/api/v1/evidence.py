@@ -83,7 +83,14 @@ async def search_evidence(
         q = q.where(EvidenceItem.source_type == source_type)
     if domain_id:
         q = q.where(EvidenceItem.domain_id == domain_id)
-    q = q.order_by(EvidenceItem.created_at_source.desc().nullslast(), EvidenceItem.ingested_at.desc()).limit(limit).offset(offset)
+    q = (
+        q.order_by(
+            EvidenceItem.created_at_source.desc().nullslast(),
+            EvidenceItem.ingested_at.desc(),
+        )
+        .limit(limit)
+        .offset(offset)
+    )
     result = await db.execute(q)
     return await _attach_source_references(db, list(result.scalars().all()))
 
@@ -143,7 +150,7 @@ async def _attach_source_references(db, items: list[EvidenceItem]) -> list:
                     FROM raw_evidence_objects
                     WHERE id = ANY(:ids)
                 )
-                SELECT 
+                SELECT
                     t.id,
                     t.external_id,
                     COALESCE(
@@ -173,7 +180,8 @@ async def _attach_source_references(db, items: list[EvidenceItem]) -> list:
                     ) AS url
                 FROM target_objects t
                 LEFT JOIN raw_evidence_objects p ON (
-                    t.external_id LIKE 'zoho_ticket:%:msg:%' AND p.external_id = split_part(t.external_id, ':', 2)
+                    t.external_id LIKE 'zoho_ticket:%:msg:%'
+                    AND p.external_id = split_part(t.external_id, ':', 2)
                 )
                 """
             ),

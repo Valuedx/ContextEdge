@@ -199,7 +199,8 @@ async def add_episode_to_pattern(
     pattern_id: uuid.UUID,
     episode_id: uuid.UUID,
 ) -> Pattern:
-    """Add a new episode to an existing pattern, update count/graph/memory, and auto-enqueue playbook regeneration."""
+    """Add a new episode to an existing pattern, update count/graph/memory, and
+    auto-enqueue playbook regeneration."""
     pattern = await db.get(Pattern, pattern_id)
     if not pattern or pattern.tenant_id != tenant_id:
         raise ValueError(f"Pattern {pattern_id} not found")
@@ -248,7 +249,8 @@ async def add_episode_to_pattern(
 
 async def deduplicate_evidence_items(db: AsyncSession, tenant_id: uuid.UUID) -> int:
     """Merge duplicate evidence items sharing identical title and evidence_type."""
-    from sqlalchemy import text, delete, func
+    from sqlalchemy import delete, func, text
+
     from contextedge.models.evidence import EvidenceItem, RawEvidenceObject
 
     group_stmt = text("""
@@ -283,11 +285,20 @@ async def deduplicate_evidence_items(db: AsyncSession, tenant_id: uuid.UUID) -> 
             for query_str in (
                 "UPDATE case_links SET evidence_id = :can_id WHERE evidence_id = :dup_id",
                 "DELETE FROM evidence_identity_links WHERE evidence_id = :dup_id",
-                "UPDATE episode_evidence_links SET evidence_id = :can_id WHERE evidence_id = :dup_id AND episode_id NOT IN (SELECT episode_id FROM episode_evidence_links WHERE evidence_id = :can_id)",
+                "UPDATE episode_evidence_links SET evidence_id = :can_id"
+                " WHERE evidence_id = :dup_id AND episode_id NOT IN"
+                " (SELECT episode_id FROM episode_evidence_links"
+                " WHERE evidence_id = :can_id)",
                 "DELETE FROM episode_evidence_links WHERE evidence_id = :dup_id",
-                "UPDATE pattern_evidence_links SET evidence_id = :can_id WHERE evidence_id = :dup_id AND pattern_id NOT IN (SELECT pattern_id FROM pattern_evidence_links WHERE evidence_id = :can_id)",
+                "UPDATE pattern_evidence_links SET evidence_id = :can_id"
+                " WHERE evidence_id = :dup_id AND pattern_id NOT IN"
+                " (SELECT pattern_id FROM pattern_evidence_links"
+                " WHERE evidence_id = :can_id)",
                 "DELETE FROM pattern_evidence_links WHERE evidence_id = :dup_id",
-                "UPDATE playbook_evidence_links SET evidence_id = :can_id WHERE evidence_id = :dup_id AND playbook_version_id NOT IN (SELECT playbook_version_id FROM playbook_evidence_links WHERE evidence_id = :can_id)",
+                "UPDATE playbook_evidence_links SET evidence_id = :can_id"
+                " WHERE evidence_id = :dup_id AND playbook_version_id NOT IN"
+                " (SELECT playbook_version_id FROM playbook_evidence_links"
+                " WHERE evidence_id = :can_id)",
                 "DELETE FROM playbook_evidence_links WHERE evidence_id = :dup_id",
             ):
                 try:
@@ -298,9 +309,19 @@ async def deduplicate_evidence_items(db: AsyncSession, tenant_id: uuid.UUID) -> 
             await db.execute(delete(EvidenceItem).where(EvidenceItem.id == dup.id))
 
             if dup.raw_object_ref:
-                ref_cnt = (await db.execute(select(func.count()).select_from(EvidenceItem).where(EvidenceItem.raw_object_ref == dup.raw_object_ref))).scalar_one()
+                ref_cnt = (
+                    await db.execute(
+                        select(func.count())
+                        .select_from(EvidenceItem)
+                        .where(EvidenceItem.raw_object_ref == dup.raw_object_ref)
+                    )
+                ).scalar_one()
                 if ref_cnt == 0:
-                    await db.execute(delete(RawEvidenceObject).where(RawEvidenceObject.id == dup.raw_object_ref))
+                    await db.execute(
+                        delete(RawEvidenceObject).where(
+                            RawEvidenceObject.id == dup.raw_object_ref
+                        )
+                    )
 
             merged_evidence_count += 1
 
@@ -314,6 +335,7 @@ async def deduplicate_patterns_and_playbooks(
 ) -> dict[str, int]:
     """Scan and merge duplicate Evidence Items, Episodes, Patterns, and Playbooks for a tenant."""
     from sqlalchemy import func
+
     from contextedge.models.pattern import GraphEdge
     from contextedge.models.playbook import Playbook, PlaybookVersion
     from contextedge.services.episode_service import deduplicate_episodes
@@ -453,7 +475,8 @@ async def deduplicate_patterns_and_playbooks(
         duplicates_pb = group[1:]
 
         for dup_pb in duplicates_pb:
-            from sqlalchemy import update, delete
+            from sqlalchemy import delete, update
+
             from contextedge.models.playbook import PlaybookEvidenceLink
 
             dup_versions = (

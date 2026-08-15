@@ -329,9 +329,8 @@ async def deduplicate_episodes(
     tenant_id: uuid.UUID,
 ) -> int:
     """Merge duplicate episodes with matching normalized titles for a tenant."""
-    from sqlalchemy import func
-    from contextedge.models.pattern import PatternEvidenceLink, GraphEdge
     from contextedge.models.episode import EpisodeStep
+    from contextedge.models.pattern import GraphEdge, PatternEvidenceLink
 
     eps = (
         await db.execute(

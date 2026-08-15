@@ -158,7 +158,9 @@ class EdgeProposalTools:
         self,
         source_ci: Annotated[str, Field(description="The CI that depends (name or sys_id).")],
         target_ci: Annotated[str, Field(description="The CI depended upon (name or sys_id).")],
-        rationale: Annotated[str, Field(description="One sentence: the evidence for this dependency.")],
+        rationale: Annotated[
+            str, Field(description="One sentence: the evidence for this dependency.")
+        ],
         evidence_ids: Annotated[
             list[str] | None,
             Field(description="Evidence UUIDs supporting the discovery (max 10)."),

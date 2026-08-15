@@ -55,11 +55,20 @@ _LOG_LEVEL_RE = re.compile(r"(?:^|[\s\[])(?:ERROR|FATAL|SEVERE)(?:[\]\s:]|$)")
 # Variable stripping. Order matters: UUIDs before hex, dates/times before
 # the generic digit-run rule would shred them into key-polluting fragments.
 _NORMALIZERS: tuple[tuple[re.Pattern[str], str], ...] = (
-    (re.compile(r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b"), "<id>"),
+    (
+        re.compile(
+            r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
+            r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b"
+        ),
+        "<id>",
+    ),
     (re.compile(r"\b0x[0-9a-fA-F]{4,16}\b"), "<hex>"),
     (re.compile(r"\b\d{4}-\d{2}-\d{2}\b"), "<date>"),
     (re.compile(r"\b\d{1,2}:\d{2}(?::\d{2})?(?:[.,]\d{1,6})?\b"), "<time>"),
-    (re.compile(r"\b(?:UTC|GMT|IST|EST|EDT|PST|PDT|CET|CEST)(?:[+-]\d{1,2}(?::\d{2})?)?\b"), "<tz>"),
+    (
+        re.compile(r"\b(?:UTC|GMT|IST|EST|EDT|PST|PDT|CET|CEST)(?:[+-]\d{1,2}(?::\d{2})?)?\b"),
+        "<tz>",
+    ),
     (re.compile(r"(?:[A-Za-z]:)?[\\/](?:[\w.-]+[\\/])+[\w.-]+"), "<path>"),
     (re.compile(r"\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(?::\d+)?\b"), "<host>"),
     (re.compile(r"\[REDACTED:[A-Z_]+\]"), "<redacted>"),
@@ -179,7 +188,12 @@ async def fingerprint_evidence(
     """
     counts = {"signatures": 0, "created": 0, "edges": 0}
     text = "\n".join(
-        part for part in [getattr(evidence, "title", None), getattr(evidence, "body_text", None)] if part
+        part
+        for part in [
+            getattr(evidence, "title", None),
+            getattr(evidence, "body_text", None),
+        ]
+        if part
     )
     if not text.strip():
         return counts
