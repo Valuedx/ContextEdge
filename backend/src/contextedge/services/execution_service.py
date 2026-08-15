@@ -22,6 +22,7 @@ from contextedge.models.execution import (
 )
 from contextedge.models.playbook import Playbook, PlaybookVersion, is_shadow_mode
 from contextedge.models.session import ResolutionSession
+from contextedge.models.skill import ExecutionContract
 from contextedge.services.approval_policy_service import (
     ApprovalPolicy,
     ApprovalPolicyViolation,
@@ -67,6 +68,40 @@ def _step_action_identity(step_data: dict) -> tuple[str | None, str | None]:
     raw_type = step_data.get("action_type")
     kind = raw_type.strip() if isinstance(raw_type, str) else None
     return name, (kind if kind in ACTION_TYPES else None)
+
+
+async def _refuse_undryrunnable_shadow_steps(
+    db: AsyncSession, tenant_id: uuid.UUID, steps: list | None
+) -> None:
+    """Refuse a shadow run whose bound skills cannot be dry-run (F6).
+
+    Shadow mode's whole promise is "go through the motions with no real side
+    effects". A skill whose contract declares ``supports_dry_run=False`` cannot
+    keep that promise, and the current implementation would short-circuit the
+    tool call into a recorded shadow outcome — an audit trail asserting a
+    rehearsal that the tool could not have performed.
+    """
+    from contextedge.services.skill_registry_service import (
+        UnresolvedSkillReference,
+        validate_step_bindings,
+    )
+
+    try:
+        bound = await validate_step_bindings(db, tenant_id, steps)
+    except UnresolvedSkillReference as exc:
+        raise ExecutionPolicyError(str(exc)) from exc
+
+    for index, skill in bound.items():
+        if skill.execution_contract_id is None:
+            continue
+        contract = await db.get(ExecutionContract, skill.execution_contract_id)
+        if contract is not None and not contract.supports_dry_run:
+            raise ExecutionPolicyError(
+                f"step {index} is bound to skill {skill.skill_key!r}, whose execution "
+                "contract declares no dry-run support — it cannot be shadow-executed. "
+                "Run it under a mode that performs the action, or give the skill a "
+                "contract that supports dry-run."
+            )
 
 
 async def _record_automation_mode_check(
@@ -295,6 +330,14 @@ async def start_execution(
     )
     db.add(run)
     await db.flush()
+
+    # F6: a shadow run is a dry run. A step bound to a skill whose contract
+    # says it cannot be dry-run has no shadow behaviour to offer — running it
+    # "in shadow" would either do the real thing or silently do nothing, and
+    # both are worse than refusing. Only bound steps can be checked; unbound
+    # ones keep today's behaviour.
+    if is_shadow_mode(playbook.automation_mode):
+        await _refuse_undryrunnable_shadow_steps(db, tenant_id, version.steps)
 
     steps = version.steps or []
     if not steps:

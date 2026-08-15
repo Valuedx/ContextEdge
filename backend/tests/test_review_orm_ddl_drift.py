@@ -82,6 +82,17 @@ def _collect_constraint_markers() -> set[tuple[str, str]]:
 # (no ALTER needed) or covered by an explicit ALTER TABLE block with
 # IF EXISTS guards in 0029.
 _EXPECTED_MARKERS: set[tuple[str, str]] = {
+    # skills + execution_contracts are brand-new tables (0058 CREATE TABLE).
+    # execution_contract_id is RESTRICT on purpose: deleting the contract a
+    # live skill runs under would strip its timeout and idempotency
+    # guarantees, which is not a thing to allow by cascade.
+    ('skill.py', 'ForeignKey("execution_contracts.id", ondelete="RESTRICT"),'),
+    ('skill.py', 'UUID(as_uuid=True), ForeignKey("skills.id", ondelete="SET NULL"), nullable=True'),
+    ('skill.py', 'UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"),'),
+    ('skill.py',
+     'UniqueConstraint("tenant_id", "name", name="uq_execution_contracts_tenant_name"),'),
+    ('skill.py',
+     'UniqueConstraint("tenant_id", "skill_key", "version", name="uq_skills_key_version"),'),
     # policy_checks is a brand-new table (0056 CREATE TABLE), so no ALTER
     # migration is needed for these two — see this test's own guidance.
     ('policy.py', 'ForeignKey("tenant_policies.id", ondelete="SET NULL"),'),
