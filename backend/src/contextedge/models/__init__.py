@@ -5,6 +5,11 @@ from contextedge.models.action_policy import (
     ActionPolicy,
     DecisionActionPolicy,
 )
+from contextedge.models.attempt import (
+    ATTEMPT_STATUSES,
+    TERMINAL_ATTEMPT_STATUSES,
+    ExecutionAttempt,
+)
 from contextedge.models.audit import AuditLog
 from contextedge.models.base import Base, TenantScopedMixin
 from contextedge.models.case_bridge import (
@@ -113,6 +118,7 @@ __all__ = [
     "ResolutionSession", "DecisionTraceEvent", "CaseLink",
     "Decision", "DecisionOption", "DecisionOutcome",
     "ExecutionRun", "ExecutionStepRun", "ToolInvocation", "ApprovalRequest",
+    "ExecutionAttempt", "ATTEMPT_STATUSES", "TERMINAL_ATTEMPT_STATUSES",
     "EvaluationDataset", "EvaluationRun", "RetrievalFeedback",
     "POLICY_TYPES", "TenantPolicy", "POLICY_CHECK_RESULTS", "PolicyCheck",
     "Skill", "ExecutionContract", "INTERFACE_TYPES", "IDEMPOTENCY_MODES",

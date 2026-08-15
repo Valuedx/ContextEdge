@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from contextedge.graph.builder import ensure_edge
+from contextedge.models.attempt import ATTEMPT_STATUSES, ExecutionAttempt
 from contextedge.models.execution import (
     ACTION_TYPES,
     OUTCOMES,
@@ -194,6 +195,150 @@ async def _record_decider_check(
     )
 
 
+async def _record_attempt(
+    db: AsyncSession,
+    *,
+    tenant_id: uuid.UUID,
+    step: ExecutionStepRun,
+    status: str,
+    error_message: str | None = None,
+    worker_ref: str | None = None,
+    input_hash: str | None = None,
+) -> ExecutionAttempt:
+    """Append one attempt to a step's history (F8).
+
+    The number is derived from what is already recorded rather than passed in,
+    so a caller cannot renumber history — and a retry after a timeout lands as
+    attempt N+1 without the caller having to know what N was.
+    """
+    if status not in ATTEMPT_STATUSES:
+        raise ExecutionPolicyError(
+            f"attempt status must be one of {ATTEMPT_STATUSES}, got {status!r}"
+        )
+
+    prior = (
+        await db.execute(
+            select(func.count())
+            .select_from(ExecutionAttempt)
+            .where(ExecutionAttempt.step_run_id == step.id)
+        )
+    ).scalar_one()
+
+    attempt = ExecutionAttempt(
+        tenant_id=tenant_id,
+        step_run_id=step.id,
+        attempt_number=int(prior) + 1,
+        idempotency_key=step.idempotency_key,
+        status=status,
+        error_message=error_message,
+        worker_ref=worker_ref,
+        # What this attempt actually ran against. Two attempts of the same
+        # step with different input hashes means the payload changed
+        # mid-flight, which the step row alone cannot show.
+        input_hash=input_hash,
+        completed_at=datetime.now(UTC),
+    )
+    db.add(attempt)
+    await db.flush()
+    return attempt
+
+
+async def _assign_idempotency_keys(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    *,
+    run: ExecutionRun,
+    playbook,
+    version,
+    step_runs: list[ExecutionStepRun],
+) -> None:
+    """Give every side-effecting step a key, and flag replays (F8).
+
+    A duplicate is *skipped*, not re-run: the whole point of the key is that
+    the same action in the same case does not happen twice. It is recorded as
+    a ``deduplicated`` attempt rather than silently dropped, because durable
+    evidence that a replay was recognised is what separates an idempotency
+    control that works from one nobody can prove worked.
+    """
+    from contextedge.services.idempotency_service import (
+        DUPLICATE_CHECK_DUPLICATE,
+        DUPLICATE_CHECK_NOT_APPLICABLE,
+        DUPLICATE_CHECK_PASSED,
+        derive_idempotency_key,
+        find_duplicate,
+        needs_idempotency_key,
+    )
+    from contextedge.services.skill_registry_service import (
+        UnresolvedSkillReference,
+        resolve_skill,
+    )
+
+    for step_run in step_runs:
+        tool_ref = (
+            step_run.inputs.get("tool_ref") if isinstance(step_run.inputs, dict) else None
+        )
+        idempotency_mode = None
+        if isinstance(tool_ref, str) and tool_ref.strip():
+            try:
+                skill = await resolve_skill(db, tenant_id, tool_ref)
+            except UnresolvedSkillReference:
+                skill = None
+            if skill is not None and skill.execution_contract_id is not None:
+                contract = await db.get(ExecutionContract, skill.execution_contract_id)
+                idempotency_mode = getattr(contract, "idempotency_mode", None)
+
+        if not needs_idempotency_key(step_run.safety_class, idempotency_mode):
+            step_run.duplicate_check_status = DUPLICATE_CHECK_NOT_APPLICABLE
+            continue
+
+        key = derive_idempotency_key(
+            tenant_id=tenant_id,
+            scope_id=run.session_id,
+            artifact_hash=hash_step_artifact(
+                playbook_id=playbook.id,
+                playbook_version_id=version.id,
+                semantic_version=version.semantic_version,
+                step_index=step_run.step_index,
+                step=step_run.inputs,
+            ),
+        )
+        prior = await find_duplicate(db, tenant_id, key)
+        if prior is not None:
+            # The key stays NULL on the duplicate: the partial unique index is
+            # global, and writing it would raise IntegrityError instead of
+            # letting the run record what it noticed.
+            step_run.duplicate_check_status = DUPLICATE_CHECK_DUPLICATE
+            step_run.status = "skipped"
+            db.add(
+                ExecutionAttempt(
+                    tenant_id=tenant_id,
+                    step_run_id=step_run.id,
+                    attempt_number=1,
+                    idempotency_key=key,
+                    status="deduplicated",
+                    duplicate_of_step_run_id=prior.id,
+                    completed_at=datetime.now(UTC),
+                )
+            )
+            await append_operational_event(
+                db,
+                tenant_id=tenant_id,
+                entity_type="execution_step_run",
+                entity_id=step_run.id,
+                event_type="execution.step_deduplicated",
+                payload={
+                    "duplicate_of_step_run_id": str(prior.id),
+                    "step_index": step_run.step_index,
+                },
+            )
+            continue
+
+        step_run.idempotency_key = key
+        step_run.duplicate_check_status = DUPLICATE_CHECK_PASSED
+
+    await db.flush()
+
+
 def _policy_snapshot(policy: ApprovalPolicy | None) -> dict | None:
     """The governance state the approver decided under (F7).
 
@@ -215,7 +360,7 @@ def _policy_snapshot(policy: ApprovalPolicy | None) -> dict | None:
 
 async def assert_approved_artifact_unchanged(
     db: AsyncSession, tenant_id: uuid.UUID, step: ExecutionStepRun
-) -> None:
+) -> str | None:
     """Re-check the approval binding immediately before the tool runs (F7).
 
     v6 invariant 2: no execution of an artifact different from the approved
@@ -227,6 +372,10 @@ async def assert_approved_artifact_unchanged(
     required approval has nothing to verify, and an approval predating F7
     carries no hash — see ``verify_binding`` for why that is allowed through
     rather than refused.
+
+    Returns the current artifact hash when one could be computed, so the
+    attempt row (F8) can record what it actually ran against without paying
+    for the same lookups twice.
     """
     approvals = (
         (
@@ -242,14 +391,14 @@ async def assert_approved_artifact_unchanged(
         .all()
     )
     if not approvals:
-        return
+        return None
 
     run = await db.get(ExecutionRun, step.execution_run_id)
     if run is None or run.tenant_id != tenant_id:
-        return
+        return None
     version = await db.get(PlaybookVersion, run.playbook_version_id)
     if version is None:
-        return
+        return None
 
     current = hash_step_artifact(
         playbook_id=run.playbook_id,
@@ -280,6 +429,7 @@ async def assert_approved_artifact_unchanged(
                 },
             )
             raise ExecutionPolicyError(str(exc)) from exc
+    return current
 
 
 def _approver_role_label(policy: ApprovalPolicy) -> str | None:
@@ -490,6 +640,15 @@ async def start_execution(
         step_runs.append(step_run)
 
     await db.flush()
+
+    # F8: the idempotency key 0029 provisioned and nothing ever wrote. Assigned
+    # after the flush so every step has an id, and only to steps whose replay
+    # is worth suppressing — re-running a diagnostic is normal, and a key that
+    # blocked the second status check would be a bug wearing a safety
+    # control's clothes.
+    await _assign_idempotency_keys(
+        db, tenant_id, run=run, playbook=playbook, version=version, step_runs=step_runs
+    )
 
     approval_count = 0
     shadow_approvals: list[ApprovalRequest] = []
@@ -783,10 +942,19 @@ async def record_tool_invocation(
     if step is None or step.tenant_id != tenant_id:
         return None
 
+    # F8: a step the duplicate check already recognised as a replay must not
+    # invoke anything. Checked before the binding re-check because a
+    # deduplicated step is not "the wrong artifact", it is "no artifact".
+    if step.duplicate_check_status == "duplicate":
+        raise ExecutionPolicyError(
+            f"step {step.step_index} was recognised as a duplicate of an earlier "
+            "execution in this case and must not invoke a tool"
+        )
+
     # F7: the last moment before a tool actually runs. If this step was
     # approved, the artifact about to execute must still be the one that was
     # approved, and the approval must not have gone stale.
-    await assert_approved_artifact_unchanged(db, tenant_id, step)
+    input_hash = await assert_approved_artifact_unchanged(db, tenant_id, step)
 
     run = await db.get(ExecutionRun, step.execution_run_id)
     shadow = run is not None and is_shadow_mode(run.automation_mode)
@@ -810,6 +978,18 @@ async def record_tool_invocation(
     )
     db.add(invocation)
     await db.flush()
+
+    # F8: one attempt row per try. The step-run above carries the intent and
+    # the invocation below carries the call; without this, a retried step
+    # overwrote its own history and "did this run twice?" had no answer.
+    await _record_attempt(
+        db,
+        tenant_id=tenant_id,
+        step=step,
+        status="succeeded" if (shadow or status == "completed") else status,
+        error_message=error_message,
+        input_hash=input_hash,
+    )
 
     await append_operational_event(
         db,

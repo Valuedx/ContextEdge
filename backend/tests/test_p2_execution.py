@@ -1,4 +1,4 @@
-"""Tests for P2a: governed execution, safety-class enforcement, approval gates."""
+﻿"""Tests for P2a: governed execution, safety-class enforcement, approval gates."""
 
 from datetime import datetime, timezone
 from types import SimpleNamespace
@@ -19,11 +19,27 @@ from contextedge.services.execution_service import (
 )
 
 
+class _NoRowsResult:
+    """A SELECT that found nothing, in every shape the execution service asks
+    for it. F7's approval-binding re-check uses ``scalars().all()``; F8's
+    attempt numbering uses ``scalar_one()`` on a COUNT; the duplicate lookup
+    uses ``scalar_one_or_none()``."""
+
+    def scalars(self):
+        return SimpleNamespace(all=list)
+
+    def scalar_one(self):
+        return 0
+
+    def scalar_one_or_none(self):
+        return None
+
+
 def _execute_returning(approval):
     """Build an AsyncMock that satisfies the ApprovalRequest lookup shape
     used after the F-15 row-lock change (select + with_for_update +
     scalar_one_or_none). Also tolerates being called for other models
-    in the same test — returns the same result for each SELECT, which
+    in the same test â€” returns the same result for each SELECT, which
     is fine because the service looks up other entities via db.get()."""
     result = Mock()
     result.scalar_one_or_none.return_value = approval
@@ -196,6 +212,9 @@ async def test_start_execution_creates_pending_approval_for_gated_step():
         add=add,
         flush=AsyncMock(),
         refresh=AsyncMock(),
+        # F8: the destructive step gets an idempotency key, which means a
+        # duplicate lookup. Nothing matches — this is its first run.
+        execute=AsyncMock(return_value=_NoRowsResult()),
     )
 
     with (
@@ -228,7 +247,7 @@ async def test_start_execution_creates_pending_approval_for_gated_step():
 
 
 # =========================================================================
-# A3 — modify_approval (approve-with-changes)
+# A3 â€” modify_approval (approve-with-changes)
 # =========================================================================
 
 
@@ -470,7 +489,7 @@ def test_approval_modification_request_rejects_invalid_code():
 
 def test_caller_max_safety_shadow_admin_gets_destructive():
     """Shadow mode lets admins attempt destructive actions since nothing
-    real executes — the whole point is to surface what a full_auto run
+    real executes â€” the whole point is to surface what a full_auto run
     would do without causing side effects."""
     assert _caller_max_safety_class(["tenant_admin"], "shadow") == "destructive"
     assert _caller_max_safety_class(["platform_super_admin"], "shadow") == "destructive"
@@ -478,7 +497,7 @@ def test_caller_max_safety_shadow_admin_gets_destructive():
 
 
 def test_caller_max_safety_shadow_nonadmin_capped_at_high_side_effect():
-    """Non-admins can still shadow through high_side_effect — destructive
+    """Non-admins can still shadow through high_side_effect â€” destructive
     shadows stay gated behind an admin role so a sales rep can't dry-run
     `delete-prod-db` without explicit clearance."""
     assert _caller_max_safety_class(["knowledge_manager"], "shadow") == "high_side_effect"
@@ -499,7 +518,7 @@ def test_automation_modes_constant_contains_shadow():
     from contextedge.models.playbook import AUTOMATION_MODES
 
     assert "shadow" in AUTOMATION_MODES
-    # Ordering matters — code reasons about monotonic permissiveness.
+    # Ordering matters â€” code reasons about monotonic permissiveness.
     assert AUTOMATION_MODES.index("suggest_only") < AUTOMATION_MODES.index("shadow")
     assert AUTOMATION_MODES.index("shadow") < AUTOMATION_MODES.index("full_auto")
 
@@ -517,7 +536,7 @@ def test_playbook_create_accepts_shadow_and_rejects_garbage():
 def test_playbook_update_accepts_none_and_shadow():
     from contextedge.schemas.playbook import PlaybookUpdate
 
-    # None passthrough — lets callers PATCH without touching automation.
+    # None passthrough â€” lets callers PATCH without touching automation.
     assert PlaybookUpdate(automation_mode=None).automation_mode is None
     assert PlaybookUpdate(automation_mode="shadow").automation_mode == "shadow"
 
@@ -538,6 +557,9 @@ async def test_record_tool_invocation_under_shadow_tags_outputs_and_status():
 
     step = SimpleNamespace(
         id=step_run_id, tenant_id=tenant_id, execution_run_id=execution_run_id,
+        # F8: record_tool_invocation refuses a step already recognised as a
+        # duplicate, so the fixture has to be able to answer that question.
+        step_index=0, duplicate_check_status=None, idempotency_key=None,
     )
     run = SimpleNamespace(id=execution_run_id, automation_mode="shadow")
 
@@ -559,11 +581,9 @@ async def test_record_tool_invocation_under_shadow_tags_outputs_and_status():
         flush=AsyncMock(),
         # F7: record_tool_invocation now re-checks the approval binding
         # before a tool runs, which queries for the step's approvals. This
-        # step has none, so the check is a no-op — but the fixture has to be
+        # step has none, so the check is a no-op â€” but the fixture has to be
         # able to answer the question.
-        execute=AsyncMock(
-            return_value=SimpleNamespace(scalars=lambda: SimpleNamespace(all=list))
-        ),
+        execute=AsyncMock(return_value=_NoRowsResult()),
     )
 
     with patch(
@@ -732,7 +752,7 @@ async def test_decide_approval_deny_skips_foreign_tenant_step_run():
         id=execution_run_id, tenant_id=tenant_id, session_id=None,
         status="awaiting_approval", playbook_id=None, initiated_by=uuid4(),
     )
-    # The step_run belongs to a DIFFERENT tenant — simulating a bug where
+    # The step_run belongs to a DIFFERENT tenant â€” simulating a bug where
     # an approval_request id was somehow associated with a foreign step.
     foreign_step = SimpleNamespace(
         id=step_run_id, tenant_id=foreign_tenant,
@@ -778,7 +798,7 @@ async def test_decide_approval_deny_skips_foreign_tenant_step_run():
 
 @pytest.mark.asyncio
 async def test_record_tool_invocation_non_shadow_unchanged():
-    """Non-shadow runs keep the exact prior behavior — no ``shadow`` key
+    """Non-shadow runs keep the exact prior behavior â€” no ``shadow`` key
     leaks into outputs, status is whatever the caller passed."""
     from contextedge.services.execution_service import record_tool_invocation
 
@@ -787,6 +807,9 @@ async def test_record_tool_invocation_non_shadow_unchanged():
     execution_run_id = uuid4()
     step = SimpleNamespace(
         id=step_run_id, tenant_id=tenant_id, execution_run_id=execution_run_id,
+        # F8: record_tool_invocation refuses a step already recognised as a
+        # duplicate, so the fixture has to be able to answer that question.
+        step_index=0, duplicate_check_status=None, idempotency_key=None,
     )
     run = SimpleNamespace(id=execution_run_id, automation_mode="full_auto")
 
@@ -799,9 +822,7 @@ async def test_record_tool_invocation_non_shadow_unchanged():
         flush=AsyncMock(),
         # F7: the approval-binding re-check queries for this step's
         # approvals. It has none, so the check is a no-op.
-        execute=AsyncMock(
-            return_value=SimpleNamespace(scalars=lambda: SimpleNamespace(all=list))
-        ),
+        execute=AsyncMock(return_value=_NoRowsResult()),
     )
 
     captured: dict = {}
@@ -972,3 +993,5 @@ def test_approval_policy_forbids_self_approval_and_wrong_roles():
         run_initiated_by=initiator,
         decider_roles=["change_manager"],
     )
+
+
