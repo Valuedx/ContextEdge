@@ -2,7 +2,7 @@
 
 import uuid
 
-from sqlalchemy import func, or_, select, cast, String
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from contextedge.models.evidence import EvidenceItem, RawEvidenceObject

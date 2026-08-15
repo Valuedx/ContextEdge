@@ -72,9 +72,9 @@ USAGE_CACHE_TTL_SECONDS = 60.0
 # task. Within one loop the serialisation semantics are unchanged (the
 # API server keeps its cross-request protection); across worker threads
 # the overshoot is bounded by concurrency, as documented in the RUNBOOK.
-_TENANT_LOCKS: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, dict[uuid.UUID, asyncio.Lock]]" = (
-    weakref.WeakKeyDictionary()
-)
+_TENANT_LOCKS: weakref.WeakKeyDictionary[
+    asyncio.AbstractEventLoop, dict[uuid.UUID, asyncio.Lock]
+] = weakref.WeakKeyDictionary()
 
 
 def _lock_for_tenant(tenant_id: uuid.UUID) -> asyncio.Lock:

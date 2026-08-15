@@ -10,6 +10,7 @@ from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.orm import selectinload
 
+from contextedge.api.v1.evidence import _attach_source_references
 from contextedge.deps import AuthUser, DbSession
 from contextedge.middleware.audit import log_audit_event
 from contextedge.models.playbook import Playbook, PlaybookVersion
@@ -35,7 +36,6 @@ from contextedge.services.playbook_service import (
     transition_playbook,
 )
 from contextedge.services.policy_assignment import assert_policy_assignment
-from contextedge.api.v1.evidence import _attach_source_references
 
 router = APIRouter()
 logger = structlog.get_logger()
@@ -97,10 +97,11 @@ async def list_playbooks(
     if q and q.strip():
         query_clean = q.strip().lstrip('#').strip()
         from sqlalchemy import or_
-        from contextedge.models.playbook import PlaybookEvidenceLink
-        from contextedge.models.pattern import PatternEvidenceLink
+
         from contextedge.models.episode import EpisodeEvidenceLink
         from contextedge.models.evidence import EvidenceItem, RawEvidenceObject
+        from contextedge.models.pattern import PatternEvidenceLink
+        from contextedge.models.playbook import PlaybookEvidenceLink
 
         pb_direct = select(Playbook.id).where(
             Playbook.tenant_id == user.tenant_id,
@@ -248,9 +249,10 @@ async def get_playbook(playbook_id: UUID, db: DbSession, user: AuthUser):
 
 @router.get("/{playbook_id}/references")
 async def get_playbook_references(playbook_id: UUID, db: DbSession, user: AuthUser):
-    """Retrieve full lineage references (source Pattern, member Episodes, and Evidence items) for a playbook."""
+    """Retrieve full lineage references (source Pattern, member Episodes, and
+    Evidence items) for a playbook."""
     from contextedge.models.episode import Episode, EpisodeEvidenceLink
-    from contextedge.models.evidence import EvidenceItem, RawEvidenceObject
+    from contextedge.models.evidence import EvidenceItem
     from contextedge.models.pattern import Pattern, PatternEvidenceLink
 
     result = await db.execute(
@@ -351,7 +353,11 @@ async def get_playbook_references(playbook_id: UUID, db: DbSession, user: AuthUs
                 for ev in ev_items:
                     if ev.id not in seen_ev:
                         seen_ev.add(ev.id)
-                        ref_disp = getattr(ev.source_reference, "display_id", None) if getattr(ev, "source_reference", None) else None
+                        ref_disp = (
+                            getattr(ev.source_reference, "display_id", None)
+                            if getattr(ev, "source_reference", None)
+                            else None
+                        )
                         evidence_list.append({
                             "id": str(ev.id),
                             "title": ev.title or "Untitled",
@@ -374,7 +380,11 @@ async def get_playbook_references(playbook_id: UUID, db: DbSession, user: AuthUs
         if ev_items:
             await _attach_source_references(db, ev_items)
             for ev in ev_items:
-                ref_disp = getattr(ev.source_reference, "display_id", None) if getattr(ev, "source_reference", None) else None
+                ref_disp = (
+                    getattr(ev.source_reference, "display_id", None)
+                    if getattr(ev, "source_reference", None)
+                    else None
+                )
                 evidence_list.append({
                     "id": str(ev.id),
                     "title": ev.title or "Untitled",
