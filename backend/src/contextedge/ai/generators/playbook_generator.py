@@ -10,6 +10,7 @@ import uuid as _uuid
 from typing import Any
 
 from contextedge.ai.prompts import get_prompt
+from contextedge.ai.provenance import GENERATION_PROVENANCE_KEY, generation_provenance
 from contextedge.ai.provider import llm_complete_json
 
 
@@ -89,6 +90,9 @@ async def generate_playbook_candidate(
     if isinstance(result, dict):
         validate_source_refs(result, ref_map)
         classify_step_grounding(result)
+        # F5: stamped by the caller after validation, so the model can neither
+        # supply nor influence the record of what produced it.
+        result[GENERATION_PROVENANCE_KEY] = generation_provenance(prompt, task="playbook")
     return result
 
 

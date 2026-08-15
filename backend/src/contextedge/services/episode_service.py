@@ -7,6 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from contextedge.ai.extractors.episode_extractor import reconstruct_episode
+from contextedge.ai.provenance import GENERATION_PROVENANCE_KEY
 from contextedge.ai.provider import generate_embedding
 from contextedge.models.episode import Episode, EpisodeEvidenceLink, EpisodeStep
 from contextedge.models.evidence import EvidenceItem
@@ -267,6 +268,7 @@ async def create_episodes_from_evidence(
             entity_refs=entity_refs,
             contradictions=ep_data.get("contradictions") or None,
             embedding=embedding,
+            generation_provenance=ep_data.get(GENERATION_PROVENANCE_KEY),
         )
         db.add(episode)
         await db.flush()

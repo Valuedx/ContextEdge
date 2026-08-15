@@ -142,6 +142,8 @@ async def record_llm_usage(
     prompt_name: str | None = None,
     prompt_version: str | None = None,
     db: Any | None = None,
+    subject_type: str | None = None,
+    subject_id: Any | None = None,
 ) -> dict[str, int]:
     """Record a completed LLM call across Prometheus, logs, and optionally DB.
 
@@ -218,7 +220,12 @@ async def record_llm_usage(
             await append_operational_event(
                 db,
                 tenant_id=tid,
-                entity_type="llm_usage",
+                # F5: when the call is ABOUT an existing row, the event is
+                # anchored to it, so "what did we spend on this evidence
+                # item?" is a direct query. Generation calls have no subject
+                # yet and keep the generic ``llm_usage`` anchor.
+                entity_type=subject_type or "llm_usage",
+                entity_id=str(subject_id) if subject_id is not None else None,
                 event_type="llm.usage",
                 payload={
                     "model": model,

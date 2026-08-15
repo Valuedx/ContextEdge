@@ -9,6 +9,7 @@ from contextedge.ai.extractors.pattern_extractor import (
     validate_pattern_match,
 )
 from contextedge.ai.generators import playbook_generator
+from contextedge.ai.provenance import GENERATION_PROVENANCE_KEY
 from contextedge.ai.provider import generate_embedding
 from contextedge.graph.builder import ensure_edge, link_node_to_identities
 from contextedge.models.episode import Episode, EpisodeEvidenceLink
@@ -331,6 +332,7 @@ async def _cluster(db, tid: uuid.UUID, did: uuid.UUID | None) -> dict:
                     root_causes=synthesis.get("root_causes"),
                     resolution_steps=synthesis.get("resolution_steps"),
                     evidence_summary=synthesis.get("evidence_summary"),
+                    generation_provenance=synthesis.get(GENERATION_PROVENANCE_KEY),
                 )
             except Exception as e:
                 # Robust fallback to basic pattern creation if AI synthesis fails
@@ -641,6 +643,11 @@ def generate_playbook_candidate(self, pattern_id: str, tenant_id: str):
             "conflicts": llm.get("conflicts") or [],
             "playbook_confidence": float(llm.get("playbook_confidence") or 0.5),
             "execution_confidence_guidance": llm.get("execution_confidence_guidance"),
+            # F5: version_data is assembled field by field, so the generator's
+            # stamp has to be carried across explicitly — it does not ride
+            # along the way it does on the API path that forwards the
+            # candidate dict whole.
+            GENERATION_PROVENANCE_KEY: llm.get(GENERATION_PROVENANCE_KEY),
         }
         version = await create_playbook_version(db, playbook, version_data)
         # Semantic fingerprint so the agent seed resolver can match this

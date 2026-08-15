@@ -159,6 +159,9 @@ class PlaybookVersion(Base):
     playbook_confidence: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
     execution_confidence_guidance: Mapped[str | None] = mapped_column(Text, nullable=True)
     verification_policy: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    # What generated this version (0055) — see Episode.generation_provenance.
+    # NULL on hand-authored versions, which is the truthful answer for them.
+    generation_provenance: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     published_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(

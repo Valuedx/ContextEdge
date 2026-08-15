@@ -73,6 +73,7 @@ async def create_pattern_from_episodes(
     root_causes: list[str] | None = None,
     resolution_steps: list[str] | None = None,
     evidence_summary: dict | None = None,
+    generation_provenance: dict | None = None,
 ) -> Pattern:
     """Create a pattern from a cluster of episodes."""
     await _assert_domain_safe_membership(db, tenant_id, domain_id, episode_ids)
@@ -118,6 +119,9 @@ async def create_pattern_from_episodes(
         root_causes=root_causes,
         resolution_steps=resolution_steps,
         evidence_summary=evidence_summary,
+        # F5: NULL for the fallback path that creates a pattern without
+        # synthesis — no prompt ran, so there is no provenance to record.
+        generation_provenance=generation_provenance,
     )
     db.add(pattern)
     await db.flush()
