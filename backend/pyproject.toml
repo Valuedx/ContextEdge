@@ -26,6 +26,12 @@ dependencies = [
     "httpx>=0.28",
     "python-multipart>=0.0.18",
     "cryptography>=44",
+    # RFC 8785 JSON Canonicalization — the approval/artifact binding (F7).
+    # Deliberately not hand-rolled: ECMAScript number serialization and
+    # UTF-16 key ordering are the parts a naive sort_keys dump gets wrong,
+    # and a hash that is only right for the values we happened to test is
+    # worse than no hash. Pure Python, no transitive dependencies.
+    "rfc8785>=0.1.4",
     "boto3>=1.35",
     "google-auth>=2.29",
     "litellm>=1.55",

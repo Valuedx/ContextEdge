@@ -204,6 +204,17 @@ class ApprovalRequest(Base):
     executed_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     sod_check_status: Mapped[str | None] = mapped_column(String(30), nullable=True)
     sod_violation_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # F7 — what was approved, exactly. ``artifact_hash`` is an RFC 8785
+    # canonicalization of the step in its version, re-checked immediately
+    # before the tool runs; ``policy_snapshot`` is the governance state the
+    # approver decided under; ``expires_at`` is when the ANSWER goes stale
+    # (distinct from the 72h that expires an unanswered request).
+    artifact_version: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    artifact_hash: Mapped[str | None] = mapped_column(String(71), nullable=True)
+    policy_snapshot: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     # Anchor approval to case + decision (currently only execution_run).
     case_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
