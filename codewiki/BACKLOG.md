@@ -824,7 +824,39 @@ systematically inflated). **Acceptance.** A high-sample service restart on a
 non-critical Windows host reaches AUTONOMOUS while a 3-sample Oracle failover on a
 payment service stays SUPERVISED; a recent failure streak demotes without a deploy.
 
-### F11 · Rollback + escalation objects — M
+### F11 · Rollback + escalation objects — M — **SHIPPED 2026-08-16 · M8 COMPLETE**
+**Shipped.** Migration `0063`: `rollback_plans`, `escalations`, and
+`execution_runs.rolls_back_run_id`.
+
+**Only the plan is new, deliberately.** v6 models RollbackPlan / RollbackAction /
+RollbackExecution as three classes; running an undo needs steps, approvals, attempts, an
+artifact binding and a verification — all of which `ExecutionRun` has after F6–F9. A
+parallel execution hierarchy would duplicate every one and then drift, so
+`rolls_back_run_id` is the whole difference, and a rollback is verified like anything
+else rather than trusted because it was called a rollback.
+
+The plan is derived when F9's verdict sets `rollback_recommended`: one action per
+completed step that can be undone, **in reverse order** (the order is the plan), from the
+bound skill's registered rollback skill or the step's free-text hint — weaker, but it is
+what a responder needs at 3am. Irreversible steps are **named, not omitted**, and a plan
+with no actions is stored as `infeasible`: "we cannot undo this" is the most important
+thing to learn early, and a missing row reads as "nobody checked".
+
+An escalation carries **refs, never copies** — assessment, run, playbook version,
+per-criterion outcomes, rollback plan — because a copy is a second version of the truth
+that ages away from the first. `acknowledgement_latency_min` is stored on
+acknowledgement so the number survives an edit of either timestamp.
+
+Also closed here: `verification.monitoring_window_sec` is now written by a
+`monitor_required` verdict (4h — long enough for a slow recurrence, short enough that an
+operator still associates the alert with the change). 1687 tests.
+
+**Still claimed in the F1 register, with owners:** `rolls_back_run_id` (executor —
+nothing executes a plan yet), `escalations.resolved_at` / `resolution_note`
+(reviewer-console — raising and acknowledging are wired, closing is not), `trust.reopens`
+(case-lifecycle — a reopen is a second `CaseOutcome`, which the verification sweep never
+sees).
+
 **What.** `RollbackPlan` / `RollbackAction` / `RollbackExecution` linked to the forward
 execution and verified like any other execution; `Escalation` with reason,
 escalated-by/to, priority, decision-trace ref, evidence-bundle ref, recommended next

@@ -44,6 +44,11 @@ from contextedge.models.verification import (
     POSITIVE_CRITERION_TYPES,
 )
 
+# How long a ``monitor_required`` verdict asks the follow-up watch to run.
+# Four hours: long enough that a slow recurrence surfaces inside it, short
+# enough that an operator still associates the alert with the change.
+MONITOR_WINDOW_SEC = 4 * 60 * 60
+
 
 @dataclass(slots=True)
 class CriterionResult:
@@ -76,6 +81,11 @@ class Verdict:
     rollback_recommended: bool = False
     retry_recommended: bool = False
     escalation_required: bool = False
+    # How long the follow-up watch should run, when the verdict asks for one.
+    # Set only for ``monitor_required`` — every other result has already
+    # decided, and a monitoring window on a settled verdict would be a
+    # number nobody acts on.
+    monitoring_window_hint: int | None = None
 
 
 def aggregate(results: list[CriterionResult]) -> Verdict:
@@ -127,6 +137,7 @@ def aggregate(results: list[CriterionResult]) -> Verdict:
         return Verdict(
             overall_result="monitor_required",
             summary=f"passed what could be observed; still open: {names}",
+            monitoring_window_hint=MONITOR_WINDOW_SEC,
         )
 
     names = ", ".join(

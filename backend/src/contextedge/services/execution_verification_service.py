@@ -443,6 +443,79 @@ async def _persist_assessment(
     return assessment
 
 
+async def _act_on_verdict(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    *,
+    run: ExecutionRun,
+    outcome: Verdict,
+    assessment: VerificationAssessment,
+    results: list[CriterionResult],
+) -> None:
+    """Turn a verdict's routing flags into artifacts (F11).
+
+    ``rollback_recommended`` derives the plan; ``escalation_required`` raises
+    an escalation carrying the bundle. Both are refs-only records — nothing
+    executes here, because running an undo is an ``ExecutionRun`` with
+    ``rolls_back_run_id`` set and therefore goes through the same approval,
+    attempt and verification machinery as anything else.
+    """
+    from contextedge.services.remediation_service import (
+        derive_rollback_plan,
+        raise_escalation,
+    )
+
+    plan = None
+    if outcome.rollback_recommended:
+        plan = await derive_rollback_plan(
+            db,
+            tenant_id,
+            run=run,
+            assessment_id=assessment.id,
+            reason=outcome.summary,
+        )
+
+    if outcome.monitoring_window_hint is not None:
+        assessment.monitoring_window_sec = outcome.monitoring_window_hint
+        await db.flush()
+
+    if not outcome.escalation_required:
+        return
+
+    # Refs, never copies: a copy would be a second version of the truth that
+    # ages away from the first.
+    bundle = {
+        "verification_assessment_id": str(assessment.id),
+        "execution_run_id": str(run.id),
+        "playbook_version_id": str(run.playbook_version_id),
+        "criteria": [
+            {"type": r.criterion_type, "status": r.status, "detail": r.detail}
+            for r in results
+        ],
+        "rollback_plan_id": str(plan.id) if plan is not None else None,
+    }
+    recommended: list[str] = []
+    if plan is not None and plan.status == "proposed":
+        recommended.append(f"review rollback plan {plan.id} ({len(plan.actions)} action(s))")
+    if plan is not None and plan.status == "infeasible":
+        recommended.append("no reversible steps — forward-fix or contain manually")
+    for result in results:
+        if result.status == "fail":
+            recommended.append(f"investigate: {result.criterion_name}")
+
+    await raise_escalation(
+        db,
+        tenant_id,
+        reason=outcome.summary,
+        escalated_by="execution_verification_sweep",
+        case_id=run.session_id,
+        execution_run_id=run.id,
+        priority="high" if outcome.overall_result == "rollback_required" else "normal",
+        evidence_bundle=bundle,
+        recommended_next_actions=recommended,
+    )
+
+
 async def _record_trust_outcomes(
     db: AsyncSession,
     tenant_id: uuid.UUID,
@@ -622,6 +695,21 @@ async def verify_execution_run(
                 execution_run_id=str(run.id),
                 error=str(exc),
             )
+
+    # F11: a verdict that recommends undoing or hands over to a human must
+    # produce the artifact that makes that actionable, not just a word. Both
+    # are fail-soft: neither may break the verification that produced them.
+    try:
+        await _act_on_verdict(
+            db, tenant_id, run=run, outcome=outcome, assessment=assessment, results=results
+        )
+    except Exception as exc:
+        logger.warning(
+            "verification.followup_failed",
+            tenant_id=str(tenant_id),
+            execution_run_id=str(run.id),
+            error=str(exc),
+        )
 
     # F10: fold the outcome into the trust record for every scope this run
     # touched. Fail-soft for the same reason as the cohort write-back — a

@@ -60,6 +60,17 @@ class ExecutionRun(Base, TenantScopedMixin):
     verification_status: Mapped[str | None] = mapped_column(String(30), nullable=True)
     verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     verification_details: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    # F11: a rollback IS an execution — it needs steps, approvals, attempts,
+    # an artifact binding and a verification, all of which this table already
+    # has. This column is the whole difference between a run and the run that
+    # undoes it, and it means a rollback is verified like anything else rather
+    # than trusted because it was called a rollback.
+    rolls_back_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("execution_runs.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False,
     )
