@@ -575,7 +575,47 @@ because treating "no runs" as negative would demote the whole corpus on day one.
   a filename is not grounds for retiring an SOP, so it follows the
   `IdentityMergeProposal` pattern, and that is its own item.
 
-### F4b · Reviewer-gated knowledge supersession — M
+### F4b · Reviewer-gated knowledge supersession — M — **SHIPPED 2026-08-16**
+**Shipped.** Migration `0065`: `knowledge_supersession_proposals`, plus
+`services/knowledge_supersession_service.py`. The heuristic proposes; a human decides.
+Confidence is tiered by what the filenames actually show — an explicit bump on both
+sides (`v1`→`v2`) 0.9, a version appearing against an unversioned original 0.7, revision
+words (`draft`→`final`) 0.55 — and anything pointing the other way or nowhere returns
+**nothing**: proposing a reversed pair is worse than proposing nothing, because accepting
+it demotes the current document in favour of the old one. Rejection is durable, checked
+per pair rather than per run, so a scheduled pass never re-raises a declined pair; the
+`signals` blob travels with the proposal, because a reviewer who cannot see WHY two
+documents were paired will either rubber-stamp it or ignore it. Acceptance writes a
+`superseded_by` edge — already in the F2 registry, already projected — and retrieval reads
+the **edge, not a column**, so a supersession later closed stops demoting its predecessor
+without anyone remembering to undo a flag. Retrieval **demotes rather than drops**
+(`SUPERSEDED_RANK_FACTOR = 1.6`, above `contested`'s 1.25, because "a human said this was
+replaced" is a stronger statement about an article than "its run record is mixed") and
+labels the block: when the successor does not match the query, the predecessor is still
+the only guidance that exists, and hiding it leaves the reviewer with nothing and no sign
+anything was withheld. Ships with `api/v1/knowledge-supersessions` — list, on-demand
+scan, decide — because a proposal table with nowhere to review it is the same gap in new
+clothes: findings accumulate, nobody sees them, retrieval keeps serving the replaced
+article. `knowledge_manager` throughout: retiring an SOP is a knowledge decision, not an
+administrative one. 1737 tests.
+
+**Side finding, fixed here (`0066`):** `TenantScopedMixin` carries `TimestampMixin`, so
+every model using it declares `created_at` **and** `updated_at` — and the hand-written
+`create_table` calls in `0062` (trust profiles) and `0063` (rollback plans, escalations)
+listed the columns their authors typed. Three columns the ORM declares did not exist in a
+migrated database, which is an `UndefinedColumn` on **every** SELECT of those models. The
+suite could not see it: it runs without a live Postgres, and SQLAlchemy will happily
+describe a column the database does not have. `0034` and `0049` exist for exactly this
+bug, so this was the third occurrence — `tests/test_orm_migration_column_parity.py` now
+reads the migration chain as text and fails on the next one.
+
+**Deliberately not shipped here, with reasons:**
+- **A scheduled proposal pass.** The scan is on demand. Filling a queue on a beat before
+  anyone has reviewed a single proposal is how a review surface becomes noise; the
+  schedule should follow evidence that the proposals are worth reading.
+- **A UI.** The API is the contract the console will use; the queue's shape should follow
+  the first real batch of proposals rather than predict it.
+
 **What.** Persist `services/documents/versioning.py`'s duplicate/version findings as
 supersession *proposals* (the `IdentityMergeProposal` pattern: stored, reviewer-decided,
 rejection durable), and on acceptance write `superseded_by` edges between knowledge

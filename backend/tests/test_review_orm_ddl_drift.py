@@ -82,6 +82,15 @@ def _collect_constraint_markers() -> set[tuple[str, str]]:
 # (no ALTER needed) or covered by an explicit ALTER TABLE block with
 # IF EXISTS guards in 0029.
 _EXPECTED_MARKERS: set[tuple[str, str]] = {
+    # knowledge_supersession_proposals is a brand-new table (0065 CREATE
+    # TABLE), so the constraints ship with the table and no ALTER is needed.
+    ('knowledge_supersession.py',
+     'ForeignKey("evidence_items.id", ondelete="CASCADE"),'),
+    ('knowledge_supersession.py',
+     'UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"),'),
+    ('knowledge_supersession.py',
+     'UniqueConstraint( "tenant_id", "predecessor_evidence_id", '
+     '"successor_evidence_id", name="uq_knowledge_supersession_pair", ),'),
     # rollback_plans + escalations are brand-new tables (0063 CREATE TABLE).
     ('remediation.py', 'ForeignKey("execution_runs.id", ondelete="CASCADE"),'),
     ('remediation.py', 'ForeignKey("execution_runs.id", ondelete="SET NULL"),'),

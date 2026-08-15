@@ -110,6 +110,18 @@ SUPPORT_RANK_FACTORS: dict[str, float] = {
 }
 
 
+# A superseded article is demoted, not dropped (F4b) — the same rule
+# applicability and support follow. The successor is usually also a candidate
+# for the same query, so a demotion is enough to reorder them; and when the
+# successor does NOT match, the predecessor is still the only guidance that
+# exists and hiding it would leave the reviewer with nothing.
+#
+# Heavier than `contested` (1.25): "this has been replaced" is a stronger
+# statement about an article than "its run record is mixed", and it is a
+# statement a human reviewed rather than a statistic.
+SUPERSEDED_RANK_FACTOR = 1.6
+
+
 def support_rank_factor(stored: Any) -> tuple[float, str | None]:
     """``(factor, support level)`` from the stored knowledge-support blob.
 
@@ -156,9 +168,15 @@ class KnowledgeDocument:
     # Empirical support (F4): has this procedure ever actually worked? None
     # when it has never been computed, which ranks and reads as neutral.
     support: str | None = None
+    # A reviewer accepted that something replaced this article (F4b).
+    superseded: bool = False
 
     def to_prompt_block(self, index: int) -> str:
         header = f"[kb-{index}] {self.title} ({self.evidence_type})"
+        if self.superseded:
+            # Surfaced, not hidden: the generator should be able to say a
+            # procedure has been replaced rather than quote it as current.
+            header += " — SUPERSEDED: a newer version of this document exists"
         if self.support == "contested":
             # Surfaced, not hidden: the generator should be able to say the
             # procedure is disputed rather than quote it as settled.
@@ -364,6 +382,12 @@ async def _retrieve(
 
         documents.append(document)
 
+    # F4b: demote anything a reviewer has accepted as superseded. Applied once
+    # over the candidate set rather than per document, because it is one query
+    # for all of them — and applied BEFORE the truncation below, so a
+    # superseded article cannot hold a slot its replacement should have.
+    await _apply_supersession(db, tenant_id, documents)
+
     documents.sort(key=lambda d: d.best_distance)
     documents = documents[:limit]
 
@@ -372,6 +396,37 @@ async def _retrieve(
 
     await _attach_sections(db, tenant_id, documents, query)
     return documents
+
+
+async def _apply_supersession(
+    db: AsyncSession, tenant_id: uuid.UUID, documents: list[KnowledgeDocument]
+) -> None:
+    """Demote documents a reviewer accepted as replaced (F4b).
+
+    Fail-soft: a supersession lookup that errors leaves the ranking exactly as
+    it was. A ranking input must never cost the caller the result set — the
+    same rule the applicability path follows.
+    """
+    if not documents:
+        return
+    try:
+        from contextedge.services.knowledge_supersession_service import (
+            superseded_evidence_ids,
+        )
+
+        superseded = await superseded_evidence_ids(
+            db, tenant_id, [d.evidence_id for d in documents]
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "knowledge_retrieval.supersession_failed", error_type=type(exc).__name__
+        )
+        return
+
+    for document in documents:
+        if document.evidence_id in superseded:
+            document.best_distance *= SUPERSEDED_RANK_FACTOR
+            document.superseded = True
 
 
 async def _attach_sections(
