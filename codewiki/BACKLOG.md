@@ -725,7 +725,38 @@ resume hang off the same table.
 key produces a `DEDUPLICATED` attempt and zero new side effects; a timed-out attempt
 records as attempt N and retries as N+1 under the contract's backoff.
 
-### F9 · Generalized verification criteria — L
+### F9 · Generalized verification criteria — L — **SHIPPED 2026-08-16**
+**Shipped.** Migration `0061`: `verification_assessments` + `verification_observations`.
+Each criterion is evaluated and recorded separately — type, human-facing name, the
+parameters as evaluated, status, observed value, window — and the assessment aggregates
+them and carries the rollback / retry / escalation flags a single word could not.
+`user_confirmation` joins the two absence checks as the first **positive** signal, read
+from the `message_function` the A1 classifier already writes at ingest: no new
+extraction, no model call on the verification path.
+
+**The behaviour change that is the point of the item:** absence now passes only when the
+CI has actually produced an incident or alert in the last 30 days. Otherwise the
+criterion is `not_observable` and the verdict is `inconclusive` — the case the old sweep
+called `verified` and fed to the cohort counters as success.
+
+**The calibration that keeps it useful:** `not_observable` ("could not apply") and
+`inconclusive` ("applied, could not decide") are distinct. Only the latter holds a
+verdict at `monitor_required`; the former does not hold back a success the other criteria
+earned. Without that split, every telemetry-verified run with a quiet chat thread would
+have been demoted, throwing away the signal 0036 shipped.
+
+`execution_runs.verification_status` keeps its three words and is derived from the
+assessment. `partial_success` and `monitor_required` both map to a **non-verified**
+status: counting a half-fix or an unconfirmed quiet period as verified success is what
+F9 exists to stop, and only `success` maps to `verified` (pinned by a test).
+
+**Criteria are deliberately not a table** — they are declared in
+`PlaybookVersion.verification_policy` plus the defaults, and each observation records
+what it evaluated. A `verification_criteria` table with no authoring surface would be
+another set of columns nothing writes. **Deviation from v6, recorded:**
+`ESCALATE_TO_HUMAN` is a flag rather than a seventh result, because a verdict and a
+routing decision are different things. 1654 tests.
+
 **What.** `VerificationCriterion` / `VerificationObservation` / `VerificationAssessment`.
 Keep today's two signals as criterion types (`incident_absence`, `alert_absence`) and
 add at least one positive-signal type — ticket state or user confirmation, both already

@@ -94,6 +94,10 @@ EXPECTED_UNWRITTEN: dict[tuple[str, str], tuple[str, str]] = {
         )
         for col in ("skill_id", "skill_version")
     },
+    ("verification.py", "monitoring_window_sec"): (
+        "F11",
+        "monitor_required is emitted but nothing schedules the follow-up watch yet",
+    ),
     # --- claims: created, never validated; both link tables have no constructor
     **{
         ("claim.py", col): ("dormant-feature", reason)

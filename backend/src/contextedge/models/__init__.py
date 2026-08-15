@@ -99,6 +99,13 @@ from contextedge.models.source import (
 )
 from contextedge.models.tenant import Domain, RoleBinding, Tenant, User, Workspace
 from contextedge.models.thread_topic import ThreadTopic
+from contextedge.models.verification import (
+    ASSESSMENT_RESULTS,
+    CRITERION_TYPES,
+    OBSERVATION_STATUSES,
+    VerificationAssessment,
+    VerificationObservation,
+)
 
 __all__ = [
     "Base", "TenantScopedMixin",
@@ -119,6 +126,8 @@ __all__ = [
     "Decision", "DecisionOption", "DecisionOutcome",
     "ExecutionRun", "ExecutionStepRun", "ToolInvocation", "ApprovalRequest",
     "ExecutionAttempt", "ATTEMPT_STATUSES", "TERMINAL_ATTEMPT_STATUSES",
+    "VerificationAssessment", "VerificationObservation",
+    "CRITERION_TYPES", "OBSERVATION_STATUSES", "ASSESSMENT_RESULTS",
     "EvaluationDataset", "EvaluationRun", "RetrievalFeedback",
     "POLICY_TYPES", "TenantPolicy", "POLICY_CHECK_RESULTS", "PolicyCheck",
     "Skill", "ExecutionContract", "INTERFACE_TYPES", "IDEMPOTENCY_MODES",

@@ -39,7 +39,17 @@ from contextedge.models.execution import ExecutionRun
 from contextedge.models.pattern import GraphEdge
 from contextedge.models.playbook import PlaybookVersion
 from contextedge.models.session import ResolutionSession
+from contextedge.models.verification import (
+    VerificationAssessment,
+    VerificationObservation,
+)
 from contextedge.services.event_log_service import append_operational_event
+from contextedge.services.verification_criteria_service import (
+    CriterionResult,
+    Verdict,
+    aggregate,
+    legacy_status,
+)
 
 logger = structlog.get_logger()
 
@@ -184,6 +194,255 @@ async def _confirm_alert_batches(
     return confirmed
 
 
+# How far back to look for evidence that a CI produces signals at all. If a
+# CI has been silent for this long BEFORE the run too, its silence afterwards
+# says nothing about the fix — that is the difference between "recovered" and
+# "was never watched", and conflating them is what F9 fixes.
+OBSERVABILITY_LOOKBACK_DAYS = 30
+
+
+async def _ci_ever_observable(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    entity_ids: list[uuid.UUID],
+    completed_at: datetime,
+) -> bool:
+    """Did any of these CIs produce an incident or alert before the run?
+
+    Absence of a signal from a source that never produced one is not evidence
+    the fix held. This is the check that turns the old sweep's most dangerous
+    silent pass into an honest ``inconclusive``.
+    """
+    if not entity_ids:
+        return False
+    since = completed_at - timedelta(days=OBSERVABILITY_LOOKBACK_DAYS)
+    found = (
+        await db.execute(
+            select(EvidenceItem.id)
+            .join(
+                GraphEdge,
+                (GraphEdge.source_node_type == "evidence")
+                & (GraphEdge.source_node_id == EvidenceItem.id),
+            )
+            .where(
+                GraphEdge.tenant_id == tenant_id,
+                GraphEdge.edge_type == "affects_ci",
+                GraphEdge.target_node_type == "entity",
+                GraphEdge.target_node_id.in_(tuple(entity_ids)),
+                GraphEdge.valid_to.is_(None),
+                EvidenceItem.tenant_id == tenant_id,
+                func.coalesce(EvidenceItem.created_at_source, EvidenceItem.created_at)
+                <= completed_at,
+                func.coalesce(EvidenceItem.created_at_source, EvidenceItem.created_at)
+                >= since,
+            )
+            .limit(1)
+        )
+    ).first()
+    return found is not None
+
+
+def _conversation_on_cis(tenant_id: uuid.UUID, entity_ids: list[uuid.UUID], after: datetime):
+    """Classified conversational evidence about these CIs, after *after*.
+
+    Scoped through ``affects_ci`` — the same join the absence criteria use —
+    rather than through the case, because ``CaseLink`` keys on the
+    correlation layer's canonical case id, not on ``ResolutionSession.id``.
+    Inventing a session↔evidence join here would be inventing the wrong one.
+    """
+    return (
+        select(func.count())
+        .select_from(EvidenceItem)
+        .join(
+            GraphEdge,
+            (GraphEdge.source_node_type == "evidence")
+            & (GraphEdge.source_node_id == EvidenceItem.id),
+        )
+        .where(
+            GraphEdge.tenant_id == tenant_id,
+            GraphEdge.edge_type == "affects_ci",
+            GraphEdge.target_node_type == "entity",
+            GraphEdge.target_node_id.in_(tuple(entity_ids)),
+            GraphEdge.valid_to.is_(None),
+            EvidenceItem.tenant_id == tenant_id,
+            func.coalesce(EvidenceItem.created_at_source, EvidenceItem.created_at) > after,
+        )
+    )
+
+
+async def _user_confirmation_after(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    entity_ids: list[uuid.UUID],
+    completed_at: datetime,
+) -> int | None:
+    """Count post-completion messages a classifier read as confirmation.
+
+    The first POSITIVE signal in the verification plane: somebody said it
+    worked, rather than nothing said it broke. Uses ``message_function``,
+    which the A1 classifier already writes at ingest — no new extraction, no
+    new model call on the verification path.
+
+    Returns None when there was no classified conversation at all, so "nobody
+    confirmed" and "there was nobody to confirm" stay distinguishable — the
+    same distinction the absence criteria draw between quiet and unwatched.
+    """
+    if not entity_ids:
+        return None
+    total = (
+        await db.execute(
+            _conversation_on_cis(tenant_id, entity_ids, completed_at).where(
+                EvidenceItem.message_function.is_not(None)
+            )
+        )
+    ).scalar_one_or_none()
+    if not total:
+        return None
+    confirmations = (
+        await db.execute(
+            _conversation_on_cis(tenant_id, entity_ids, completed_at).where(
+                EvidenceItem.message_function == "resolution_confirmation"
+            )
+        )
+    ).scalar_one_or_none()
+    return int(confirmations or 0)
+
+
+async def _evaluate_criteria(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    *,
+    cis: list[Entity],
+    completed_at: datetime,
+) -> list[CriterionResult]:
+    """Evaluate every criterion for this run, independently."""
+    results: list[CriterionResult] = []
+    ci_names = ", ".join(ci.name for ci in cis) or "—"
+
+    if not cis:
+        # Both absence criteria are unevaluable without a CI to watch. Two
+        # rows rather than one, because "we could not check incidents" and
+        # "we could not check alerts" are separately true.
+        for criterion_type, label in (
+            ("incident_absence", "no new incidents"),
+            ("alert_absence", "no new alert activity"),
+        ):
+            results.append(
+                CriterionResult(
+                    criterion_type=criterion_type,
+                    criterion_name=f"{label} on the case's CIs",
+                    status="not_observable",
+                    detail="the case names no resolvable CI",
+                    window_start=completed_at,
+                )
+            )
+    else:
+        entity_ids = [ci.id for ci in cis]
+        signals = await _post_action_signals(db, tenant_id, entity_ids, completed_at)
+        alert_evidence_ids = signals.pop("alert_evidence_ids")
+        if signals["new_incidents"] == 0 and signals["new_alert_batches"] > 0:
+            # Alerts are the deciding signal — confirm by the alerts' own
+            # event times so re-delivered old alerts (state changes after a
+            # successful fix) cannot produce a false failure.
+            signals["new_alert_batches"] = await _confirm_alert_batches(
+                db, tenant_id, alert_evidence_ids, completed_at
+            )
+        observable = await _ci_ever_observable(db, tenant_id, entity_ids, completed_at)
+
+        for criterion_type, label, count in (
+            ("incident_absence", "no new incidents", signals["new_incidents"]),
+            ("alert_absence", "no new alert activity", signals["new_alert_batches"]),
+        ):
+            if count > 0:
+                status, detail = "fail", f"{count} observed after completion"
+            elif observable:
+                status, detail = "pass", "none observed, and this CI does report"
+            else:
+                # The silent pass the old sweep called `verified`.
+                status = "not_observable"
+                detail = (
+                    "none observed, but no incident or alert has been seen on this "
+                    f"CI in the last {OBSERVABILITY_LOOKBACK_DAYS} days either — "
+                    "silence here is not evidence"
+                )
+            results.append(
+                CriterionResult(
+                    criterion_type=criterion_type,
+                    criterion_name=f"{label} on {ci_names}",
+                    status=status,
+                    criterion_params={
+                        "cis": [str(i) for i in entity_ids],
+                        "observability_lookback_days": OBSERVABILITY_LOOKBACK_DAYS,
+                    },
+                    observed_value={"count": count, "ci_observable": observable},
+                    detail=detail,
+                    window_start=completed_at,
+                )
+            )
+
+    confirmations = await _user_confirmation_after(
+        db, tenant_id, [ci.id for ci in cis], completed_at
+    )
+    if confirmations is None:
+        status, detail = "not_observable", "no conversational evidence on this case"
+    elif confirmations > 0:
+        status, detail = "pass", f"{confirmations} confirmation message(s) after completion"
+    else:
+        status, detail = "inconclusive", "conversation continued but nobody confirmed"
+    results.append(
+        CriterionResult(
+            criterion_type="user_confirmation",
+            criterion_name="someone confirmed the issue is resolved",
+            status=status,
+            observed_value={"confirmations": confirmations},
+            detail=detail,
+            window_start=completed_at,
+        )
+    )
+    return results
+
+
+async def _persist_assessment(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    *,
+    run: ExecutionRun,
+    outcome: Verdict,
+    results: list[CriterionResult],
+    now: datetime,
+) -> VerificationAssessment:
+    assessment = VerificationAssessment(
+        tenant_id=tenant_id,
+        execution_run_id=run.id,
+        overall_result=outcome.overall_result,
+        summary=outcome.summary,
+        rollback_recommended=outcome.rollback_recommended,
+        retry_recommended=outcome.retry_recommended,
+        escalation_required=outcome.escalation_required,
+        verified_by="execution_verification_sweep",
+        verified_at=now,
+    )
+    db.add(assessment)
+    await db.flush()
+    for result in results:
+        db.add(
+            VerificationObservation(
+                tenant_id=tenant_id,
+                assessment_id=assessment.id,
+                criterion_type=result.criterion_type,
+                criterion_name=result.criterion_name[:200],
+                criterion_params=result.criterion_params,
+                status=result.status,
+                observed_value=result.observed_value,
+                detail=result.detail,
+                window_start=result.window_start,
+                window_end=now,
+            )
+        )
+    await db.flush()
+    return assessment
+
+
 async def verify_execution_run(
     db: AsyncSession,
     tenant_id: uuid.UUID,
@@ -225,36 +484,41 @@ async def verify_execution_run(
         else []
     )
 
-    if not cis:
-        verdict = "unverifiable"
-        details: dict = {
-            "reason": "no_resolvable_cis",
-            "session_id": str(run.session_id) if run.session_id else None,
-        }
-    else:
-        signals = await _post_action_signals(
-            db, tenant_id, [ci.id for ci in cis], completed_at
-        )
-        alert_evidence_ids = signals.pop("alert_evidence_ids")
-        if signals["new_incidents"] == 0 and signals["new_alert_batches"] > 0:
-            # Alerts are the deciding signal — confirm by the alerts' own
-            # event times so re-delivered old alerts (state changes after
-            # a successful fix) can't produce a false failure.
-            signals["new_alert_batches"] = await _confirm_alert_batches(
-                db, tenant_id, alert_evidence_ids, completed_at
-            )
-            signals["alert_batches_confirmed_by_event_time"] = True
-        failed = signals["new_incidents"] > 0 or signals["new_alert_batches"] > 0
-        verdict = "failed" if failed else "verified"
-        details = {
-            **signals,
-            "checked_cis": [ci.name for ci in cis],
-            "recheck_after_sec": recheck_after,
-        }
+    # F9: evaluate each criterion separately, then aggregate. The verdict now
+    # says WHAT was checked and what each check found, and — the case this
+    # exists for — a CI that never produced a signal yields `inconclusive`
+    # rather than the `verified` the old absence-only rule returned.
+    results = await _evaluate_criteria(
+        db, tenant_id, cis=cis, completed_at=completed_at
+    )
+    outcome = aggregate(results)
+    verdict = legacy_status(outcome.overall_result)
+    details: dict = {
+        "assessment": outcome.overall_result,
+        "summary": outcome.summary,
+        "criteria": [
+            {
+                "type": r.criterion_type,
+                "name": r.criterion_name,
+                "status": r.status,
+                "observed": r.observed_value,
+            }
+            for r in results
+        ],
+        "checked_cis": [ci.name for ci in cis],
+        "recheck_after_sec": recheck_after,
+    }
 
     run.verification_status = verdict
     run.verified_at = now
     run.verification_details = details
+    await db.flush()
+
+    assessment = await _persist_assessment(
+        db, tenant_id, run=run, outcome=outcome, results=results, now=now
+    )
+    details["assessment_id"] = str(assessment.id)
+    run.verification_details = dict(details)
     await db.flush()
 
     # B5: a verified/failed verdict is a fix OUTCOME for every fix
