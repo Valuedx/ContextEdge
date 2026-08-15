@@ -17,6 +17,7 @@ from contextedge.models.playbook import (
 )
 from contextedge.services.event_log_service import append_operational_event
 from contextedge.services.memory_service import promote_playbook_memory
+from contextedge.services.skill_registry_service import validate_step_bindings
 
 VALID_TRANSITIONS = {
     "candidate": {"under_review"},
@@ -362,6 +363,14 @@ async def create_playbook_version(
     version_data: dict,
 ) -> PlaybookVersion:
     """Create a new version of a playbook."""
+    # F6: a step that names a tool must name one the registry knows. Checked
+    # before any version row is created, so an unresolvable reference fails
+    # the create instead of publishing a version that cannot be executed.
+    # Steps naming no tool are untouched — that is almost every step today,
+    # and requiring a binding for them would block authoring rather than
+    # improve anything.
+    await validate_step_bindings(db, playbook.tenant_id, version_data.get("steps"))
+
     requested_semantic_version = version_data.get("semantic_version")
     if requested_semantic_version is not None:
         requested_semantic_version = str(requested_semantic_version)

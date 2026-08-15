@@ -596,7 +596,39 @@ measurement substrate the measure-first discipline assumes.
 **Dependencies.** None. **Acceptance.** Prompt version and model for any episode,
 decision or claim are one query; the answer survives a worker that had no session.
 
-### F6 · Skill registry + `ExecutionContract` — L
+### F6 · Skill registry + `ExecutionContract` — L — **SHIPPED 2026-08-16**
+**Shipped.** Migration `0058`: `skills` + `execution_contracts`. Two tables, because one
+operational envelope governs many skills and because the contract is what F8's attempt
+model reads while the skill is what the planner reads. Side-effect classification reuses
+`SAFETY_CLASSES` rather than minting v6's parallel vocabulary.
+
+Three registration invariants, enforced at the earliest point they can be — before a
+planner can select the skill, before an approver can approve it, before an executor
+exists to run it:
+- a `low_side_effect`+ skill **needs a contract** (without one it has no timeout, no
+  retry policy and no statement about replay, and the executor would invent all three at
+  call time);
+- a `high_side_effect` / `destructive` skill **may not register as `NOT_IDEMPOTENT`** —
+  v6 invariant 8 made enforceable. The tool is not blocked from the system, only from
+  being registered as if replay were safe;
+- **`max_attempts > 1` requires a replay guarantee**, because retrying a call without one
+  is how an action happens twice.
+
+`tool_ref` is now a reference (`skill_key` → active version, or `skill_key@version`
+pinned), resolved by `validate_step_bindings` at `create_playbook_version`. Steps naming
+no tool are untouched — almost every step today — and the stronger "a step the executor
+will run must be bound" rule belongs with the executor. Shadow mode gained the contract's
+real safety content: a run refuses steps whose bound skill declares
+`supports_dry_run=False`, because short-circuiting such a call into a recorded shadow
+outcome would assert a rehearsal the tool could not perform. Both existing guards fired
+and were answered — the F1 register caught that `ExecutionContract` had no creation path,
+so `register_execution_contract` was added rather than the columns claimed. 1605 tests.
+
+**Deliberately deferred:** deleting the shadow special case in `start_execution` in
+favour of a contract-driven dry-run path. Today that would be a risky refactor with no
+behavioural gain (there is no executor); the safety property it was meant to carry ships
+here as the refusal above. Revisit with F8.
+
 **What.** Promote `PlaybookStep.tool_ref` from free string to a registry reference.
 `Skill`: id, name, version, action type, interface type (API / MCP / RPA / CLI /
 SCRIPT / WORKFLOW / MANUAL), input + output JSON Schema, reversible, rollback skill
