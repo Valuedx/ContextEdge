@@ -103,11 +103,27 @@ class ActionPolicy(Base, TenantScopedMixin):
         JSONB, server_default="{}", nullable=False
     )
 
-    # Precedence groundwork for Section 43.12. Engine TBD.
+    # Precedence, evaluated by services/action_policy_service (F3b). Scope
+    # specificity decides first; ``priority`` and ``conflict_resolution`` only
+    # break a genuine tie.
     priority: Mapped[int] = mapped_column(Integer, default=100, nullable=False)
     policy_scope: Mapped[str | None] = mapped_column(String(40), nullable=True)
     conflict_resolution: Mapped[str] = mapped_column(
         String(40), default="most_restrictive", nullable=False
+    )
+
+    # Versioning (0064), matching TenantPolicy: a policy_checks row keys on the
+    # VERSION, so editing a policy must not rewrite the history of what a past
+    # execution was judged under. Bumped on rule changes only — renaming or
+    # deactivating a policy does not change what it decided.
+    version: Mapped[int] = mapped_column(
+        Integer, default=1, server_default="1", nullable=False
+    )
+    effective_from: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    effective_to: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
     )
 
     description: Mapped[str | None] = mapped_column(Text, nullable=True)

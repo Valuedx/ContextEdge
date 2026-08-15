@@ -500,7 +500,38 @@ then the gate has already decided and additive evidence must never turn an allow
 into a failed one. The version tracks the **rules**, not the labels — renaming or
 deactivating a policy does not bump it, changing its config does. 1579 tests.
 
-### F3b · Action-policy engine, CRUD and versioning — L
+### F3b · Action-policy engine, CRUD and versioning — L — **SHIPPED 2026-08-16**
+**The deferral no longer held.** This item was scheduled "with the executor, not before
+it — a policy engine with nothing to gate is the same mistake in a new place". **F1
+changed that** by populating `ExecutionStepRun.action_name`: the lookup key this table
+is designed around now exists on every step, so the engine gates something real.
+
+**Shipped.** `services/action_policy_service.py` decides in three steps — **scope
+filter** (a NULL axis means "any"), then **specificity** (a rule that pins down more
+axes wins; precedence that ignored that would make narrow rules pointless to write),
+then **conflict resolution**, and only for a genuine tie. The default is
+`most_restrictive` deliberately: when two equally specific rules disagree about whether
+something may run unattended, the safe reading is the one that asks a human. Rules that
+disagree about the *strategy* resolve most-restrictively too, and a full tie breaks by
+policy name because row order is not a decision anyone made. An unknown verdict ranks
+**most** restrictive — a typo must never read as `allowed_auto`.
+
+Migration `0064` adds the versioning F3 gave `tenant_policies`, on the same terms: rules
+bump it, labels do not. `api/v1/action-policies` ships with it, because a policy table
+nobody can author is a vocabulary rather than a control.
+
+Wired into `start_execution` per step: `approval_required` forces a gate, the blocking
+verdicts refuse the run, and **`allowed_auto` grants nothing** — it means "this policy
+does not object", and safety class, role and trust have already had their say. A policy
+that could overturn them would be a way to grant privilege by writing a row.
+`Decision.policy_result` now carries the run's strictest step verdict, closing another
+F1 register entry. 1710 tests.
+
+**Side effect worth knowing:** the CRUD surface writes column *names* that other models
+share, so the F1 register's name-based scan can no longer see six genuinely-unwritten
+columns elsewhere. They moved to a documented `SHADOWED_BY_NAME` map with a test that
+they never drift back — a name collision should cost visibility, not knowledge.
+
 **What.** `action_policies` is read only by the agent projection; `execution_service`
 never queries it, there is no CRUD API, and nothing writes it — all 12 of its columns sit
 in the F1 register. This item builds the evaluator (precedence, scope, conflict

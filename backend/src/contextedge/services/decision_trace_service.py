@@ -73,6 +73,7 @@ async def create_decision(
     status: str = "pending",
     decision_intent: str | None = None,
     risk_level: str | None = None,
+    policy_result: str | None = None,
 ) -> Decision:
     evidence_refs = evidence_refs or []
     options = options or []
@@ -132,6 +133,11 @@ async def create_decision(
         status=status,
         decision_intent=decision_intent,
         risk_level=risk_level,
+        # F3b: the action-policy verdict the executor actually applied. NULL
+        # when no policy matched — an absent verdict and ``allowed_auto`` are
+        # different facts, and collapsing them would make "no rule existed"
+        # read as "a rule permitted it".
+        policy_result=policy_result,
     )
     db.add(decision)
     await db.flush()
