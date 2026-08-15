@@ -646,6 +646,15 @@ async def test_shadow_mode_auto_approves_gated_steps():
         def scalar_one_or_none(self):
             return version
 
+        # start_execution also runs bookkeeping SELECTs of its own now — the
+        # F10 trust-suspension scan and the F8 duplicate lookup / attempt
+        # count. Nothing found, in the shapes they ask for.
+        def scalars(self):
+            return SimpleNamespace(all=list)
+
+        def scalar_one(self):
+            return 0
+
     async def _execute(*args, **kwargs):
         return _PlaybookVersionResult()
 

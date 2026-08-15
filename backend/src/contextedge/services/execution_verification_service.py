@@ -443,6 +443,74 @@ async def _persist_assessment(
     return assessment
 
 
+async def _record_trust_outcomes(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    *,
+    run: ExecutionRun,
+    outcome: Verdict,
+    cis: list[Entity],
+) -> int:
+    """Fold this verdict into the trust record for each scope it touched (F10).
+
+    One outcome per (action type × CI class × environment × criticality) the
+    run acted on — not one per run. A playbook that restarts a service and
+    also patches a database has two track records, and averaging them is how
+    the easy action vouches for the hard one.
+
+    The action types come from the run's own steps, so a run whose steps
+    declared nothing records against ``unspecified`` rather than guessing:
+    an unscoped record is honest, an invented scope is not.
+    """
+    from contextedge.models.execution import ExecutionStepRun
+    from contextedge.services.trust_service import record_outcome, scope_key
+
+    step_rows = (
+        (
+            await db.execute(
+                select(ExecutionStepRun.action_type).where(
+                    ExecutionStepRun.execution_run_id == run.id,
+                    ExecutionStepRun.tenant_id == tenant_id,
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    action_types = {a for a in step_rows if a} or {None}
+
+    # Class and criticality come from the CI the action touched. Both are
+    # optional on the entity, and both degrade to "unspecified" rather than
+    # to a default that would merge unrelated records.
+    targets: list[tuple[str | None, str | None, str | None]] = [
+        (
+            (ci.attributes or {}).get("ci_class") if isinstance(ci.attributes, dict) else None,
+            ci.environment,
+            (ci.attributes or {}).get("criticality") if isinstance(ci.attributes, dict) else None,
+        )
+        for ci in cis
+    ] or [(None, None, None)]
+
+    recorded = 0
+    for action_type in action_types:
+        for resource_class, environment, criticality in targets:
+            await record_outcome(
+                db,
+                tenant_id,
+                scope=scope_key(
+                    agent_ref=str(run.initiated_by) if run.initiated_by else None,
+                    action_type=action_type,
+                    resource_class=resource_class,
+                    environment=environment,
+                    business_criticality=criticality,
+                ),
+                assessment_result=outcome.overall_result,
+                rolled_back=outcome.rollback_recommended,
+            )
+            recorded += 1
+    return recorded
+
+
 async def verify_execution_run(
     db: AsyncSession,
     tenant_id: uuid.UUID,
@@ -554,6 +622,19 @@ async def verify_execution_run(
                 execution_run_id=str(run.id),
                 error=str(exc),
             )
+
+    # F10: fold the outcome into the trust record for every scope this run
+    # touched. Fail-soft for the same reason as the cohort write-back — a
+    # trust counter must never break the verification that feeds it.
+    try:
+        await _record_trust_outcomes(db, tenant_id, run=run, outcome=outcome, cis=cis)
+    except Exception as exc:
+        logger.warning(
+            "trust.recording_failed",
+            tenant_id=str(tenant_id),
+            execution_run_id=str(run.id),
+            error=str(exc),
+        )
 
     # F4: this verdict is exactly what changes the empirical support of the
     # knowledge this playbook version was built on, so it is refreshed here

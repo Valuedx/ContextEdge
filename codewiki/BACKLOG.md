@@ -772,7 +772,41 @@ already read.
 **Acceptance.** A run against a CI with no telemetry returns `INCONCLUSIVE`, not
 `verified`; every verdict lists the criteria that produced it.
 
-### F10 · Scoped `TrustProfile` — L
+### F10 · Scoped `TrustProfile` — L — **SHIPPED 2026-08-16**
+**Shipped.** Migration `0062`: one row per (agent × action type × resource class ×
+environment × business criticality), the composite unique key. Unknown dimensions store
+`'unspecified'` rather than NULL — NULLs in a unique key would let two "unknown
+environment" profiles coexist and split the record in half.
+
+Three properties are load-bearing:
+- **The lower bound, not the rate.** `confidence_lower_bound` is a Wilson score
+  interval, so 3/3 (rate 1.0, means almost nothing) scores below 340/350 (rate 0.97,
+  means a great deal). No separate minimum-sample rule exists for someone to tune away.
+- **Recent failure beats the long-run average.** `consecutive_failures` suspends a scope
+  regardless of history, and the suspension check runs *before* the average so a good
+  record cannot rescue a bad streak. No deploy needed.
+- **Trust vetoes; it never grants.** A `suspended` scope blocks `start_execution` and
+  records a `trust_scope` policy check; `autonomous` merely stops trust being the reason
+  to block — policy still decides, per v6 §25. `advisory` deliberately does not block,
+  because treating "unproven" as "forbidden" stops every new action from ever earning a
+  record, which is how trust systems get switched off.
+
+Outcomes come from F9's assessment — only `success` counts, `partial_success` is a
+failure, `inconclusive` is neither and drags the bound down. **This is why F9 shipped
+first**: fed by the old silence-equals-success verifier every number here would have been
+inflated in exactly the direction that matters. Structurally the same machine as B5's
+cohort counters, applied to (agent, action) instead of (fix, CI class).
+
+**Acceptance met** — the v6 §25 worked example resolves from the same code: a 372-sample
+service restart on a non-critical CI reaches `autonomous` while the same agent's
+3-sample Oracle failover on a payment service does not, on the strength of the evidence
+alone. 1673 tests.
+
+**Side finding:** the F1 writer register reported every trust counter as unwritten,
+because its detector did not treat `+=` as a write. Fixed in the detector — the counters
+are only ever incremented, and a guard that cannot see that would have mis-registered
+every counter added from here on.
+
 **What.** Trust scoped to agent × action type × resource class × environment ×
 business criticality × tenant. Metrics: sample size, success rate, verification pass
 rate, rollback rate, human override rate, reopen rate, recent failure rate, and a

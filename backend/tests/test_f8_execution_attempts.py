@@ -275,8 +275,23 @@ async def test_start_execution_marks_read_only_steps_not_applicable():
             obj.id = uuid.uuid4()
         added.append(obj)
 
+    class _NoRows:
+        # F10's trust-suspension scan runs before the steps are built.
+        def scalars(self):
+            return SimpleNamespace(all=list)
+
+        def scalar_one(self):
+            return 0
+
+        def scalar_one_or_none(self):
+            return None
+
     db = SimpleNamespace(
-        get=AsyncMock(side_effect=_get), add=_add, flush=AsyncMock(), refresh=AsyncMock()
+        get=AsyncMock(side_effect=_get),
+        add=_add,
+        flush=AsyncMock(),
+        refresh=AsyncMock(),
+        execute=AsyncMock(return_value=_NoRows()),
     )
 
     with (
