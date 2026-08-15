@@ -7,6 +7,7 @@ from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from contextedge.graph.edge_types import require_registered
 from contextedge.models.pattern import GraphEdge
 
 ENRICHMENT_NAMESPACE = uuid.UUID("a1b2c3d4-e5f6-7890-abcd-ef1234567890")
@@ -27,6 +28,7 @@ async def add_edge(
     valid_from: datetime | None = None,
 ) -> GraphEdge:
     """Add an edge to the context graph."""
+    require_registered(edge_type)
     edge = GraphEdge(
         tenant_id=tenant_id,
         domain_id=domain_id,
@@ -68,6 +70,7 @@ async def ensure_edge(
     encodes was lost at the door. Callers should pass both when they mean
     both.
     """
+    require_registered(edge_type)
     q = select(GraphEdge).where(
         GraphEdge.tenant_id == tenant_id,
         GraphEdge.source_node_type == source_type,
@@ -145,6 +148,9 @@ async def close_edge(
     valid_to: datetime | None = None,
 ) -> int:
     """Close the current version of a logical relationship."""
+    # Validated even though closing writes no new row: a typo here closes
+    # nothing and reports success, which is the harder bug to notice.
+    require_registered(edge_type)
     closed_at = valid_to or datetime.now(UTC)
     q = (
         update(GraphEdge)
