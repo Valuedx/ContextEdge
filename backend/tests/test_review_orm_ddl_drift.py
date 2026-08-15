@@ -82,6 +82,11 @@ def _collect_constraint_markers() -> set[tuple[str, str]]:
 # (no ALTER needed) or covered by an explicit ALTER TABLE block with
 # IF EXISTS guards in 0029.
 _EXPECTED_MARKERS: set[tuple[str, str]] = {
+    # trust_profiles is a brand-new table (0062 CREATE TABLE).
+    ('trust.py', 'UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"),'),
+    ('trust.py',
+     'UniqueConstraint( "tenant_id", "agent_ref", "action_type", "resource_class", '
+     '"environment", "business_criticality", name="uq_trust_profiles_scope", ),'),
     # verification_assessments + verification_observations are brand-new
     # tables (0061 CREATE TABLE).
     ('verification.py', 'ForeignKey("execution_runs.id", ondelete="CASCADE"),'),

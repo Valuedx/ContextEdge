@@ -99,6 +99,7 @@ from contextedge.models.source import (
 )
 from contextedge.models.tenant import Domain, RoleBinding, Tenant, User, Workspace
 from contextedge.models.thread_topic import ThreadTopic
+from contextedge.models.trust import AUTONOMY_LEVELS, UNSCOPED, TrustProfile
 from contextedge.models.verification import (
     ASSESSMENT_RESULTS,
     CRITERION_TYPES,
@@ -128,6 +129,7 @@ __all__ = [
     "ExecutionAttempt", "ATTEMPT_STATUSES", "TERMINAL_ATTEMPT_STATUSES",
     "VerificationAssessment", "VerificationObservation",
     "CRITERION_TYPES", "OBSERVATION_STATUSES", "ASSESSMENT_RESULTS",
+    "TrustProfile", "AUTONOMY_LEVELS", "UNSCOPED",
     "EvaluationDataset", "EvaluationRun", "RetrievalFeedback",
     "POLICY_TYPES", "TenantPolicy", "POLICY_CHECK_RESULTS", "PolicyCheck",
     "Skill", "ExecutionContract", "INTERFACE_TYPES", "IDEMPOTENCY_MODES",

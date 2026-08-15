@@ -195,6 +195,72 @@ async def _record_decider_check(
     )
 
 
+async def _enforce_trust_suspension(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    *,
+    playbook,
+    actor_id: uuid.UUID,
+) -> None:
+    """Refuse a run whose actor is suspended for this playbook's actions (F10).
+
+    Only ``suspended`` blocks. ``advisory`` and ``supervised`` are recorded as
+    context, not enforced here — treating "unproven" as "forbidden" would stop
+    every new action from ever earning a record, which is the failure mode that
+    makes trust systems get switched off.
+
+    Recorded as a policy check either way, so "why did this refuse?" and "what
+    did trust think?" are both answerable after the fact.
+    """
+    from contextedge.models.trust import TrustProfile
+
+    suspended = (
+        (
+            await db.execute(
+                select(TrustProfile).where(
+                    TrustProfile.tenant_id == tenant_id,
+                    TrustProfile.agent_ref == str(actor_id),
+                    TrustProfile.autonomy_level == "suspended",
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    if not suspended:
+        return
+
+    profile = suspended[0]
+    reason = (
+        f"trust for {profile.agent_ref} on {profile.action_type} / "
+        f"{profile.resource_class} / {profile.environment} is suspended: "
+        f"{profile.autonomy_reason}"
+    )
+    await record_policy_check(
+        db,
+        tenant_id=tenant_id,
+        policy_id=None,
+        policy_version=None,
+        policy_type="trust",
+        check_name="trust_scope",
+        evaluated_entity_type="playbook",
+        evaluated_entity_id=playbook.id,
+        result="fail",
+        reason=reason,
+        input_snapshot={
+            "agent_ref": profile.agent_ref,
+            "action_type": profile.action_type,
+            "resource_class": profile.resource_class,
+            "environment": profile.environment,
+            "sample_size": profile.sample_size,
+            "consecutive_failures": profile.consecutive_failures,
+            "confidence_lower_bound": round(profile.confidence_lower_bound, 4),
+        },
+        evaluated_by=actor_id,
+    )
+    raise ExecutionPolicyError(reason)
+
+
 async def _record_attempt(
     db: AsyncSession,
     *,
@@ -574,6 +640,13 @@ async def start_execution(
     )
     db.add(run)
     await db.flush()
+
+    # F10: trust can VETO, never grant. A scope whose recent record says stop
+    # blocks the run; a scope with an excellent record merely stops being the
+    # reason to block, and policy still decides everything else. Inverting
+    # that would turn a measured track record into an automatic escalation of
+    # privilege.
+    await _enforce_trust_suspension(db, tenant_id, playbook=playbook, actor_id=actor_id)
 
     # F6: a shadow run is a dry run. A step bound to a skill whose contract
     # says it cannot be dry-run has no shadow behaviour to offer — running it

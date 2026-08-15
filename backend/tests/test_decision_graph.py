@@ -63,6 +63,18 @@ def _make_db(side_effects=None):
         if isinstance(stmt, _PgInsert):
             params = stmt.compile(dialect=postgresql.dialect()).params
             return _ScalarOneOrNoneResult(_GraphEdge(**dict(params)))
+        if not select_results:
+            # start_execution now runs bookkeeping SELECTs of its own — the
+            # F10 trust-suspension scan, the F8 duplicate lookup and attempt
+            # count. A test that stated no result for them wants "nothing
+            # found", not an IndexError.
+            empty = Mock()
+            empty.scalars.return_value.all.return_value = []
+            empty.scalar_one.return_value = 0
+            empty.scalar_one_or_none.return_value = None
+            empty.all.return_value = []
+            empty.first.return_value = None
+            return empty
         return select_results.pop(0)
 
     db = SimpleNamespace(

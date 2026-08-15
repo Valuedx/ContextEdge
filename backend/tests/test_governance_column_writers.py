@@ -98,6 +98,10 @@ EXPECTED_UNWRITTEN: dict[tuple[str, str], tuple[str, str]] = {
         "F11",
         "monitor_required is emitted but nothing schedules the follow-up watch yet",
     ),
+    ("trust.py", "reopens"): (
+        "F11",
+        "reopen detection lives with the case lifecycle, not the verification sweep",
+    ),
     # --- claims: created, never validated; both link tables have no constructor
     **{
         ("claim.py", col): ("dormant-feature", reason)
@@ -263,9 +267,14 @@ def _unwritten_columns() -> frozenset[tuple[str, str]]:
     for fname, columns in _declared_columns().items():
         for column in columns:
             escaped = re.escape(column)
-            if re.search(rf"(?<![\w.]){escaped}\s*=(?!=)", direct):
+            # ``x = v`` and ``obj.x = v``, plus augmented forms — ``counter +=
+            # 1`` is a write, and treating it as one was a real gap: F10's
+            # trust counters are only ever incremented, and the scanner
+            # reported every one of them as unwritten.
+            assign = r"\s*(?:\+|-|\*|/|//|\*\*|%|\||&|\^|>>|<<)?=(?!=)"
+            if re.search(rf"(?<![\w.]){escaped}{assign}", direct):
                 continue
-            if re.search(rf"\.{escaped}\s*=(?!=)", direct):
+            if re.search(rf"\.{escaped}{assign}", direct):
                 continue
             if re.search(rf"[\"']{escaped}[\"']", dynamic):
                 continue
