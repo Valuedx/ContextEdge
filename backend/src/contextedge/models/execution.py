@@ -10,8 +10,24 @@ from contextedge.models.base import Base, TenantScopedMixin
 SAFETY_CLASSES = ("read_only", "low_side_effect", "high_side_effect", "destructive")
 EXECUTION_STATUSES = ("pending", "running", "awaiting_approval", "completed", "failed", "aborted")
 STEP_STATUSES = ("pending", "running", "awaiting_approval", "completed", "skipped", "failed")
-APPROVAL_STATUSES = ("pending", "approved", "denied", "modified")
+# ``expired`` is written by ``approval_expiry_service`` when a pending request
+# ages out (72h). It was absent from this tuple until the F1 writer audit —
+# the vocabulary has to describe what the code actually writes.
+APPROVAL_STATUSES = ("pending", "approved", "denied", "modified", "expired")
 OUTCOMES = ("success", "partial", "failure", "aborted")
+
+# What a step *is*, as opposed to what it is called (``action_name``) or how
+# dangerous it is (``safety_class``). Declared by the playbook author on the
+# step; never inferred — a step that does not declare one stores NULL rather
+# than a guess, because the policy engine (F3) will key on it.
+ACTION_TYPES = (
+    "diagnostic",
+    "remediation",
+    "notification",
+    "escalation",
+    "approval",
+    "manual",
+)
 
 
 class ExecutionRun(Base, TenantScopedMixin):

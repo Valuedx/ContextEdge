@@ -174,6 +174,27 @@ Consequences:
 - `Decision.policy_result` is documented as "the verdict the executor checks"
   (`codewiki/17:126`). The executor does not check it; nothing sets it.
 
+**Update 2026-08-15 (F1 shipped).** The writer audit this finding demanded turned out
+to be larger than the 18 columns above. `tests/test_governance_column_writers.py` scans
+every `mapped_column` in `models/` for a writer anywhere under `src/contextedge` and
+found **79 columns with none** — the `0029` governance spine plus several other
+surfaces. Two of the others matter operationally:
+
+- **`FixPattern` has no constructor anywhere.** It is read in five places
+  (`fix_cohort_service`, `fix_applicability_service`, `execution_verification_service`,
+  `case_outcome_service`, the materializer) and written nowhere, so `fix_patterns` is
+  never populated — which leaves the B4 applicability join, the B5 cohort counters and
+  the verification write-back dormant in practice, not merely unexercised.
+- **`claim_evidence` and `decision_claims` have no constructors.** Claims are created
+  by `claim_service`, but nothing links one to its evidence or to a decision, and
+  nothing ever moves a claim past `unverified` — so the validation lifecycle in
+  `VALIDATION_STATUSES` is unreachable.
+
+F1 populated eight of the 79 and put the remaining 71 in the register with an owner
+each. The register is the durable half: set equality in both directions, so a new
+unwritten column fails CI, and a column that gains a writer also fails until its
+register entry is removed.
+
 **Precedent, and the reason this is fixable.** The same class of finding was recorded
 on 2026-08-05 for a different `0029` table — *"Outcome loop is schema-only (P0-4,
 confirmed): `CaseOutcome` / `CaseStateTransition` have model definitions and no writer

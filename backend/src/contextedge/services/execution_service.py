@@ -12,6 +12,7 @@ from sqlalchemy.orm import selectinload
 
 from contextedge.graph.builder import ensure_edge
 from contextedge.models.execution import (
+    ACTION_TYPES,
     OUTCOMES,
     SAFETY_CLASSES,
     ApprovalRequest,
@@ -22,6 +23,7 @@ from contextedge.models.execution import (
 from contextedge.models.playbook import Playbook, PlaybookVersion, is_shadow_mode
 from contextedge.models.session import ResolutionSession
 from contextedge.services.approval_policy_service import (
+    ApprovalPolicy,
     ApprovalPolicyViolation,
     check_automation_mode,
     check_decider,
@@ -47,6 +49,46 @@ def _safety_class_rank(cls: str) -> int:
         raise ExecutionPolicyError(
             f"Unknown safety class {cls!r}; expected one of {SAFETY_CLASSES}"
         ) from None
+
+
+def _step_action_identity(step_data: dict) -> tuple[str | None, str | None]:
+    """The controlled ``(action_name, action_type)`` a step declares.
+
+    Declared or nothing. A title like "Restart the ordering service" is not
+    an action name — the policy engine (F3) and the skill registry (F6) match
+    these exactly, and a value inferred from prose would match the wrong rule
+    with full confidence. An unrecognised ``action_type`` is dropped rather
+    than stored: the step still runs, but it does not get to invent a
+    vocabulary the governance layer will later key on.
+    """
+    raw_name = step_data.get("action_name")
+    name = raw_name.strip()[:120] if isinstance(raw_name, str) and raw_name.strip() else None
+    raw_type = step_data.get("action_type")
+    kind = raw_type.strip() if isinstance(raw_type, str) else None
+    return name, (kind if kind in ACTION_TYPES else None)
+
+
+def _approver_role_label(policy: ApprovalPolicy) -> str | None:
+    """The role an approval policy will require of the decider, if any.
+
+    ``ApprovalRequest.approver_role`` is *the role consulted*, not the user.
+    ``check_decider`` accepts any one of the policy's roles, so a policy
+    naming several is recorded as all of them rather than an arbitrary pick.
+    No configured roles means nothing was consulted — NULL, not a default.
+
+    Overflow drops whole roles: the column is 120 chars and a mid-word cut
+    would read as a role that does not exist.
+    """
+    roles = sorted(policy.approver_roles or ())
+    if not roles:
+        return None
+    label = ""
+    for role in roles:
+        candidate = f"{label}, {role}" if label else role
+        if len(candidate) > 120:
+            break
+        label = candidate
+    return label or roles[0][:120]
 
 
 def _caller_max_safety_class(roles: list[str], automation_mode: str) -> str:
@@ -172,6 +214,8 @@ async def start_execution(
         step_safety = "read_only"
         step_title = None
         needs_approval = False
+        action_name = None
+        action_type = None
         if isinstance(step_data, dict):
             step_title = (
                 step_data.get("title")
@@ -180,6 +224,7 @@ async def start_execution(
             )
             step_safety = step_data.get("safety_class", "read_only")
             needs_approval = bool(step_data.get("requires_approval", False))
+            action_name, action_type = _step_action_identity(step_data)
 
         if _safety_class_rank(step_safety) > _safety_class_rank(effective_safety_class):
             needs_approval = True
@@ -195,6 +240,15 @@ async def start_execution(
             requires_approval=needs_approval,
             status="pending",
             inputs=step_data if isinstance(step_data, dict) else {"raw": str(step_data)},
+            # F1: the governance columns 0029 provisioned. ``action_name`` /
+            # ``action_type`` come from the step only when its author declared
+            # them — never inferred from the title. The other two are exact
+            # denormalisations of the run, so a step row is self-describing
+            # without a join.
+            action_name=action_name,
+            action_type=action_type,
+            execution_mode=run.automation_mode,
+            executed_by=run.initiated_by,
         )
         db.add(step_run)
         step_runs.append(step_run)
@@ -221,6 +275,13 @@ async def start_execution(
                 "step_index": step_run.step_index,
                 "step_title": step_run.step_title,
             },
+            # F1: the step's controlled identifier (NULL when undeclared —
+            # ``requested_action`` stays the free-text label), and the role
+            # the approval policy will actually require of the decider. When
+            # no policy is configured no role is consulted, so it stays NULL
+            # rather than claiming one was.
+            action_name=step_run.action_name,
+            approver_role=_approver_role_label(approval_policy),
         )
         approval_count += 1
         if is_shadow:
@@ -525,6 +586,8 @@ async def request_approval(
     requested_action: str,
     safety_class: str,
     context: dict | None = None,
+    action_name: str | None = None,
+    approver_role: str | None = None,
 ) -> ApprovalRequest:
     req = ApprovalRequest(
         execution_run_id=execution_run_id,
@@ -535,6 +598,8 @@ async def request_approval(
         safety_class=safety_class,
         context=context or {},
         status="pending",
+        action_name=action_name,
+        approver_role=approver_role,
     )
     db.add(req)
 

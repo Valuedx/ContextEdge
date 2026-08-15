@@ -9,7 +9,7 @@ from pydantic import (
     field_validator,
 )
 
-from contextedge.models.execution import SAFETY_CLASSES
+from contextedge.models.execution import ACTION_TYPES, SAFETY_CLASSES
 from contextedge.models.playbook import AUTOMATION_MODES
 
 
@@ -36,6 +36,12 @@ class PlaybookStep(BaseModel):
     - `rollback_hint` → free-text Undo guidance
     - `safety_class` → per-step override of playbook-level safety
     - `tool_ref` → which connector/tool invokes this step (optional)
+
+    `action_name` and `action_type` are the controlled identifiers the
+    governance layer keys on (F1). `title` stays the human label. Both are
+    optional and stay NULL when the author does not declare them — a step's
+    action identity is not something to infer from prose, because policy
+    (F3) and the skill registry (F6) will match on it exactly.
     """
 
     model_config = ConfigDict(extra="allow")
@@ -43,6 +49,8 @@ class PlaybookStep(BaseModel):
     index: int | None = None
     title: str | None = None
     description: str | None = None
+    action_name: str | None = None
+    action_type: str | None = None
     safety_class: str | None = None
     requires_approval: bool = False
     reversible: bool = False
@@ -58,6 +66,13 @@ class PlaybookStep(BaseModel):
     def _validate_safety_class(cls, v: str | None) -> str | None:
         if v is not None and v not in SAFETY_CLASSES:
             raise ValueError(f"safety_class must be one of {SAFETY_CLASSES}")
+        return v
+
+    @field_validator("action_type")
+    @classmethod
+    def _validate_action_type(cls, v: str | None) -> str | None:
+        if v is not None and v not in ACTION_TYPES:
+            raise ValueError(f"action_type must be one of {ACTION_TYPES}")
         return v
 
 
