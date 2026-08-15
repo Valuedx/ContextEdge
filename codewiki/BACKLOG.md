@@ -15,6 +15,10 @@ cold and shipped on its own stacked branch.
   class taxonomy, problem fingerprints, fix applicability levels, cohort statistics).
   Nothing shipped yet.
 - **[Gap]** — items recorded in KNOWN_GAPS during the 2026-07/08 shipments.
+- **[Doc-4]** — the v6 Context Graph schema comparison and its validation against the
+  code at `76c4e82` ([REVIEW-2026-08-V6-SCHEMA.md](REVIEW-2026-08-V6-SCHEMA.md)):
+  unwired `0029` governance columns, and the prerequisites for a write-capable agent.
+  Epic F.
 
 **Working agreement** (how every item ships): stacked branch off
 `feature/maf-context-graph-integration` → implement → three review-fix-review passes
@@ -395,10 +399,211 @@ responded, so operators verify mapping without reading logs.
 
 ---
 
+## Epic F — Truthful governance & the autonomy prerequisites [Doc-4]
+
+Source: [REVIEW-2026-08-V6-SCHEMA.md](REVIEW-2026-08-V6-SCHEMA.md), which validated an
+external v6-schema comparison against the code at `76c4e82`. Two findings shape this
+epic:
+
+1. **Migration `0029` provisioned 18 governance columns that no service writes** —
+   six on `execution_step_runs` (`action_name`, `action_type`, `execution_mode`,
+   `executed_by`, `idempotency_key`, `duplicate_check_status`), eight on
+   `approval_requests` (`action_name`, `approver_role`, `approval_channel`,
+   `approval_note`, `recommended_by`, `executed_by`, `sod_check_status`,
+   `sod_violation_reason`), four on `decisions` (`decision_intent`,
+   `decision_summary`, `risk_level`, `policy_result`). This was deliberate — `codewiki/17` lists
+   service-code population as out of scope for `0029` — but the columns now read as
+   shipped capability to anyone auditing the schema, and the partial unique index
+   `uq_execution_step_runs_idempotency_key` guards a column that is always NULL.
+2. **There is no executor and no write-capable agent tool.** All six MAF tools are
+   read-or-propose; `execution_service` is a ledger driven by external callers. So the
+   autonomy-safety items below are prerequisites for a capability that does not exist
+   yet, not live exposure — which is what makes M7-before-M8 affordable.
+
+**Hard gate.** No tool that performs a side effect on a customer system merges until
+F6, F7 and F8 are in. "Just one low-risk action first" is the failure mode this gate
+exists to prevent.
+
+### F1 · Populate or retire the `0029` stub columns — M
+**What.** Decide every unwired column: write it at its natural point, or drop it.
+Minimum population set — `ExecutionStepRun.action_name` / `action_type` /
+`execution_mode` / `executed_by` (from the step payload and run mode in
+`start_execution`), `ApprovalRequest.action_name` / `approver_role` / `recommended_by`
+(from the requesting decision), `Decision.decision_intent` / `policy_result` /
+`risk_level`. Add a guard test that fails when a model column has no writer and no
+allowlist entry naming its owning backlog item.
+**Why.** An unwritten column is worse than a missing one: it makes every reviewer —
+human or model — score capability that does not exist. That is exactly how the Doc-4
+comparison reached 88%. It is also the prerequisite for F3 (the verdict must be
+written before it can be versioned and snapshotted).
+**Sketch.** Extend `tests/test_review_orm_ddl_drift.py`, or a sibling, with a
+writer-coverage assertion over `models/`; the allowlist entry format is
+`(model, column, owner_item, reason)`.
+**Dependencies.** None. **Acceptance.** The guard test is red before the change and
+green after; every remaining unwired column appears in the allowlist with an owner;
+`decision_intent` and `policy_result` are populated on every gated decision.
+
+### F2 · Relationship type registry — S
+**What.** A canonical `EDGE_TYPES` registry validated inside `graph/builder.add_edge`
+and `ensure_edge`. A test asserts both directions: every type written anywhere is
+registered, and every registered type is either present in `MAF_RELATIONSHIP_TYPES` or
+carries an explicit exclusion reason.
+**Why.** `edge_type` is free text written from 26 modules; the maf.v1 allowlist
+governs *reads* only, so a typo at a write site is invisible until the edge silently
+fails to project. The central helpers already exist, so this is small.
+**Sketch.** The `mentions_identity` fan-out note in `graph/agent/profiles.py` is the
+model for an exclusion reason string — the reason is data, not a comment.
+**Dependencies.** None. **Acceptance.** An unregistered `edge_type` raises at the
+builder; write registry and projection allowlist cannot silently diverge.
+
+### F3 · Policy versioning + a real `PolicyCheck` record — M
+**What.** `version` / `effective_from` / `effective_to` on `action_policies`; a
+policy-check row per evaluation carrying policy id + version + evaluated artifact ref +
+result + input snapshot + evaluator + timestamp.
+**Why.** `DecisionActionPolicy.policy_result_snapshot` records a result with no policy
+version, so "which policy version evaluated this, and what did it see?" is currently
+unanswerable — the audit question every governed execution has to answer.
+**Dependencies.** F1. **Acceptance.** For any gated decision, the evaluating policy
+version and its input snapshot are recoverable by query; editing a policy does not
+rewrite the history of decisions it already governed.
+
+### F4 · Knowledge freshness + supersession in retrieval — M
+**What.** Persist the `knowledge_validation_service` support level per knowledge
+evidence item; add support level and evidence recency as ranking terms in
+`knowledge_retrieval_service`; turn the `services/documents/versioning.py` heuristic
+into reviewer-gated `superseded_by` edges between knowledge evidence rows.
+**Why.** Validation already computes whether a procedure has ever worked, and
+retrieval ignores it — so a superseded SOP still ranks on similarity alone. The
+versioning module's own docstring names this gap.
+**Sketch.** Supersession proposals follow the `IdentityMergeProposal` pattern:
+persisted, reviewer-decided, rejection durable. Never auto-applied — a filename
+heuristic is not grounds for retiring an SOP.
+**Dependencies.** None (F5 makes the ranking change measurable).
+**Acceptance.** An article with `failing` support, or one with an accepted successor,
+ranks below its replacement for the same query; proposals surface in the review queue;
+nothing is applied automatically.
+
+### F5 · Generation provenance on derived entities — S/M
+**What.** Put the target entity type + id on `llm.usage` operational events, and record
+`prompt_name` / `prompt_version` / model on the derived row (episodes, decisions,
+claims) — a `generation_provenance` JSONB column is enough.
+**Why.** Prompt and model versions reach the cost/observability plane but never the
+artifact they produced, so "which prompt version wrote this episode" needs a
+correlation-id join and only works when a `db` session was in scope. This is also the
+measurement substrate the measure-first discipline assumes.
+**Dependencies.** None. **Acceptance.** Prompt version and model for any episode,
+decision or claim are one query; the answer survives a worker that had no session.
+
+### F6 · Skill registry + `ExecutionContract` — L
+**What.** Promote `PlaybookStep.tool_ref` from free string to a registry reference.
+`Skill`: id, name, version, action type, interface type (API / MCP / RPA / CLI /
+SCRIPT / WORKFLOW / MANUAL), input + output JSON Schema, reversible, rollback skill
+ref, risk level, allowed principals, status. `ExecutionContract`: idempotency mode
+(NATIVE / CALLER_KEY / DEDUPE_ONLY / NOT_IDEMPOTENT), dedup window, timeout, retry
+policy, max attempts, backoff, cancellation support, dry-run support, side-effect
+classification, concurrency policy, rate limit, credential scope.
+**Why.** E6's "tool registry" line, now with the contract the execution semantics
+need. Without it there is nothing to hash (F7), nothing to retry against (F8), and no
+declared side-effect class for policy to reason over.
+**Sketch.** Reuse the existing `SAFETY_CLASSES` tuple as the side-effect
+classification rather than minting a parallel vocabulary; express `shadow` mode as the
+contract's dry-run path instead of the special case currently in `start_execution`.
+**Dependencies.** F1. **Acceptance.** An executable step cannot publish without
+resolving to a registered skill; a skill with side effects cannot register without a
+contract; the shadow-mode special case is deleted, not duplicated.
+
+### F7 · Immutable approval binding — M
+**What.** Canonicalize the resolved step payload with RFC 8785 (JSON Canonicalization
+Scheme), hash it, and store `artifact_version` + `artifact_hash` + `policy_snapshot` +
+`expires_at` on the approval. Re-hash and compare immediately before execution; refuse
+on mismatch or expiry with a distinct error. Add the constraint that makes a published
+`PlaybookVersion.steps` payload immutable, and add `expired` to `APPROVAL_STATUSES`
+(`approval_expiry_service` already writes it).
+**Why.** Today nothing binds an approval to the exact thing that executes —
+`PlaybookVersion.steps` is mutable JSONB with no content hash, so "which exact artifact
+did the human approve?" cannot be answered. RFC 8785 rather than `json.dumps` because
+key order, whitespace and number formatting change bytes without changing meaning.
+**Dependencies.** F6. **Acceptance.** Mutating an approved step payload by one
+character blocks execution; an expired approval blocks execution; both emit operational
+events; expiry still never approves.
+
+### F8 · `ExecutionAttempt` + live idempotency — M/L
+**What.** An attempts table (attempt number, skill + version, idempotency key, dedup
+key, input hash, worker ref, started/completed, status including `DEDUPLICATED`,
+`TIMEOUT`, `CANCELLED`). Generate and enforce the idempotency key so
+`uq_execution_step_runs_idempotency_key` stops being decorative; set
+`duplicate_check_status` on every attempt.
+**Why.** Retries are first-class in any real executor, and at-least-once delivery
+without a live duplicate guard is how a remediation runs twice. E6's cancellation and
+resume hang off the same table.
+**Dependencies.** F6, F7. **Acceptance.** Replaying an execution request with the same
+key produces a `DEDUPLICATED` attempt and zero new side effects; a timed-out attempt
+records as attempt N and retries as N+1 under the contract's backoff.
+
+### F9 · Generalized verification criteria — L
+**What.** `VerificationCriterion` / `VerificationObservation` / `VerificationAssessment`.
+Keep today's two signals as criterion types (`incident_absence`, `alert_absence`) and
+add at least one positive-signal type — ticket state or user confirmation, both already
+available from the connectors. Assessment states: SUCCESS / PARTIAL_SUCCESS / FAILED /
+INCONCLUSIVE / ROLLBACK_REQUIRED / MONITOR_REQUIRED / ESCALATE_TO_HUMAN.
+**Why.** The current sweep infers success from silence, so a CI that stopped emitting
+telemetry reads as `verified`. That is a false positive pointed straight at the
+learning loop.
+**Sketch.** `execution_verification_service` keeps its deterministic, no-LLM posture;
+criteria come from `PlaybookVersion.verification_policy`, which already exists and is
+already read.
+**Dependencies.** None (independent of F6–F8), but must land **before** F10.
+**Acceptance.** A run against a CI with no telemetry returns `INCONCLUSIVE`, not
+`verified`; every verdict lists the criteria that produced it.
+
+### F10 · Scoped `TrustProfile` — L
+**What.** Trust scoped to agent × action type × resource class × environment ×
+business criticality × tenant. Metrics: sample size, success rate, verification pass
+rate, rollback rate, human override rate, reopen rate, recent failure rate, and a
+Wilson score lower bound. Autonomy verdict ADVISORY / SUPERVISED / AUTONOMOUS /
+SUSPENDED, consumed by the control decision alongside policy.
+**Why.** Autonomy today is a global mode on the playbook. The question that should
+gate an autonomous action is "has *this agent* done *this action* on *this class of
+thing* in *this environment*, and did it hold?" — and a raw ratio answers it wrong: 3/3
+must not outrank 340/350.
+**Sketch.** Structurally the same machine as B5 (cohort counters + reviewer-gated
+promotion ladder in `services/fix_cohort_service.py`), applied to (agent, action)
+instead of (fix, CI class). Build it as a sibling, not a new subsystem.
+**Dependencies.** F9 (trust computed from a silence-equals-success verifier is
+systematically inflated). **Acceptance.** A high-sample service restart on a
+non-critical Windows host reaches AUTONOMOUS while a 3-sample Oracle failover on a
+payment service stays SUPERVISED; a recent failure streak demotes without a deploy.
+
+### F11 · Rollback + escalation objects — M
+**What.** `RollbackPlan` / `RollbackAction` / `RollbackExecution` linked to the forward
+execution and verified like any other execution; `Escalation` with reason,
+escalated-by/to, priority, decision-trace ref, evidence-bundle ref, recommended next
+actions, acknowledged/resolved timestamps.
+**Why.** Rollback is free text today (`rollback_notes`, `rollback_hint`) and
+`reversible` is a flag nothing consumes; escalation exists only as a decision type and
+a case status, so a human receives a notification rather than the evidence bundle and
+the alternatives that were rejected.
+**Dependencies.** F6 (rollback skill ref), F9 (rollback is a verification outcome).
+**Acceptance.** A failed verification can produce a rollback execution with its own
+verification result; an escalation hands a human the evidence bundle and rejected
+alternatives.
+
+### Deferred tail (recorded, not scheduled)
+
+| Item | Why deferred |
+|---|---|
+| Structured `Assertion` alongside `Claim` (subject/predicate/object, validity window, source ref) | Real v6 gap, but pure modelling gain until something queries it. Revisit when the agent needs "what was asserted about X, by whom, valid when". |
+| Canonical `ResolutionObservation` | The facts already exist across `case_outcomes`, `case_outcome_fix_patterns`, `fix_cohort_stats` and `execution_runs.verification_status`. Ship as a read-model/API first; a table only if the read-model proves insufficient. |
+| System-time (bitemporal) history | PG16 has no native system versioning; this means an append-only history table or an extension. `operational_events` already answers most audit forms of the question. |
+| JSON-LD / SHACL export | Only when an external consumer asks. Then: read-only projection over existing tables, PROV-O + NORIA-O alignment rather than a private namespace, SHACL in CI over fixtures rather than at runtime. |
+
+---
+
 ## Recommended order
 
 Rationale: precision-first within conversational (A), foundation-first within
-applicability (B), and quality items (C) slotted where their dependencies land.
+applicability (B), quality items (C) slotted where their dependencies land, and
+governance (F) split into "make the schema honest" before "make autonomy safe".
 
 1. **M1 — Conversational precision**: A1 → A2 → A7 → A10 (classifier + corrections +
    negative store + ordering fix; small, each compounds the shipped tiers)
@@ -411,6 +616,13 @@ applicability (B), and quality items (C) slotted where their dependencies land.
 6. **M6 — Surfaces & robustness**: C4 → C6 → A8 → A9 → C5 → C7
 7. **Epics D/E** — schedule independently; E7/D3/D4 are small fillers, E1/E2 before
    any production tenant, D2 when AutomationEdge access exists.
+8. **M7 — Truthful governance**: F1 → F2 → F5 → F3 → F4 (F1 first: F3 depends on it,
+   F2 and F5 are independent fillers). Cheap, no prerequisites, and it removes the
+   schema-reads-as-capability ambiguity that inflated the Doc-4 comparison.
+9. **M8 — Autonomy prerequisites**: F6 → F7 → F8 → F9 → F10 → F11. Contract before
+   hash, hash before attempts, verification before trust. Nothing here ships value on
+   its own; all of it must land before the first side-effecting tool. F9 can start in
+   parallel with F6–F8 if two branches are in flight.
 
 ---
 
@@ -455,6 +667,24 @@ codewiki/BACKLOG.md; every broadening of scope stays reviewer-gated
 listed order, 3 review passes per item, skipping any item whose external dependency
 (AutomationEdge access, Opsgenie credentials) is unavailable and recording the skip
 in KNOWN_GAPS
+```
+
+```text
+/goal implement backlog milestone M7 (F1 populate-or-retire the 0029 stub columns
+behind a no-writer guard test, F2 relationship type registry validated in
+graph/builder, F5 generation provenance on derived entities, F3 policy versioning +
+PolicyCheck records, F4 knowledge freshness and supersession in retrieval) from
+codewiki/BACKLOG.md, one stacked branch per item, 3 review-fix-review passes,
+CI-verified merge each
+```
+
+```text
+/goal implement backlog milestone M8 (F6 skill registry + ExecutionContract, F7
+RFC-8785 immutable approval binding, F8 ExecutionAttempt + live idempotency, F9
+generalized verification criteria, F10 scoped TrustProfile with a Wilson lower bound,
+F11 rollback + escalation objects) from codewiki/BACKLOG.md; no side-effecting tool
+merges until F6-F8 are in; verification (F9) lands before trust (F10); 3 review passes
+per item
 ```
 
 ---
