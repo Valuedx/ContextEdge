@@ -506,7 +506,22 @@ heuristic is not grounds for retiring an SOP.
 ranks below its replacement for the same query; proposals surface in the review queue;
 nothing is applied automatically.
 
-### F5 · Generation provenance on derived entities — S/M
+### F5 · Generation provenance on derived entities — S/M — **SHIPPED 2026-08-15**
+**Shipped.** Migration `0055`: `generation_provenance JSONB` on `episodes`, `patterns`,
+`playbook_versions` — the three artifacts a prompt actually generates. Deliberately not
+on `decisions` / `claims`, which services and humans write: a column NULL by
+construction is the problem this epic exists to stop. Stamped by
+`ai/provenance.generation_provenance` **after** each schema gate, so a model-supplied
+key is overwritten rather than trusted. The field is `model_requested`, not `model` —
+E1's breaker can substitute the fallback mid-call and only `llm.usage` sees it, so
+`correlation_id` rides along as the join key to the event that knows the serving model.
+`llm_complete` / `llm_complete_json` gained optional `subject_type` / `subject_id`,
+which anchor the `llm.usage` event to the row a call is *about* (wired first on the
+message-function classifier); the cost dashboard filters on `event_type`, so the anchor
+change is invisible to it. One wiring bug found in review: the pattern worker assembles
+`version_data` field by field, so the generator's stamp had to be forwarded explicitly —
+both ends are now pinned by tests. 1569 tests.
+
 **What.** Put the target entity type + id on `llm.usage` operational events, and record
 `prompt_name` / `prompt_version` / model on the derived row (episodes, decisions,
 claims) — a `generation_provenance` JSONB column is enough.

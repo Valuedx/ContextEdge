@@ -409,6 +409,7 @@ async def _normalize(db: AsyncSession, raw_object_id: str, tenant_id: uuid.UUID)
                 ev.source_type or "unknown",
                 tenant_id=tenant_id,
                 db=db,
+                evidence_id=ev.id,
             )
             ev.message_function = mf["function"]
             ev.message_function_confidence = mf["confidence"]

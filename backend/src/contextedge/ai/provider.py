@@ -188,6 +188,8 @@ async def llm_complete(
     prompt_name: str | None = None,
     prompt_version: str | None = None,
     images: list[bytes] | None = None,
+    subject_type: str | None = None,
+    subject_id: Any | None = None,
 ) -> str:
     """Call LLM with the appropriate model for the task type.
 
@@ -214,6 +216,13 @@ async def llm_complete(
       admin dashboard can break down cost + quality by prompt version.
       Callers using ``contextedge.ai.prompts.get_prompt`` get these for
       free; legacy callers pass ``None`` and events record ``null``.
+    - ``subject_type`` / ``subject_id`` (F5) — the row this call is ABOUT,
+      when one already exists: classifying an evidence item, extracting
+      applicability from a knowledge article. The ``llm.usage`` event then
+      answers "what did we spend on this row?" directly instead of through a
+      correlation-id join. Generation calls leave these empty on purpose —
+      the artifact does not exist yet, and its own
+      ``generation_provenance`` column is the record for that direction.
     """
     model = model or get_model_for_task(task)
 
@@ -389,6 +398,8 @@ async def llm_complete(
                 db=db,
                 prompt_name=prompt_name,
                 prompt_version=prompt_version,
+                subject_type=subject_type,
+                subject_id=subject_id,
             )
         except Exception as exc:
             logger.warning("llm.usage_record_failed", error=str(exc))
@@ -501,6 +512,8 @@ async def llm_complete_json(
     db: Any | None = None,
     prompt_name: str | None = None,
     prompt_version: str | None = None,
+    subject_type: str | None = None,
+    subject_id: Any | None = None,
 ) -> dict | list:
     """Call LLM and parse JSON response with robust repair for truncation.
 
@@ -525,6 +538,8 @@ async def llm_complete_json(
         db=db,
         prompt_name=prompt_name,
         prompt_version=prompt_version,
+        subject_type=subject_type,
+        subject_id=subject_id,
     )
     try:
         return json.loads(result)

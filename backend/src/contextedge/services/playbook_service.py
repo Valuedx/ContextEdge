@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from contextedge.ai.provenance import GENERATION_PROVENANCE_KEY
 from contextedge.models.playbook import (
     Playbook,
     PlaybookApproval,
@@ -390,6 +391,10 @@ async def create_playbook_version(
                     playbook_confidence=float(version_data.get("playbook_confidence", 0.5)),
                     execution_confidence_guidance=version_data.get("execution_confidence_guidance"),
                     verification_policy=version_data.get("verification_policy"),
+                    # F5: present only when the generator produced this
+                    # version. A hand-authored version has no prompt behind
+                    # it, and NULL says exactly that.
+                    generation_provenance=version_data.get(GENERATION_PROVENANCE_KEY),
                 )
                 db.add(version)
                 await db.flush()

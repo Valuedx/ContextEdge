@@ -51,6 +51,8 @@ class Pattern(Base, TenantScopedMixin):
     root_causes: Mapped[list[str] | None] = mapped_column(JSONB, nullable=True)
     resolution_steps: Mapped[list[str] | None] = mapped_column(JSONB, nullable=True)
     evidence_summary: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    # What generated this pattern (0055) — see Episode.generation_provenance.
+    generation_provenance: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
     evidence_links: Mapped[list["PatternEvidenceLink"]] = relationship(back_populates="pattern")
 

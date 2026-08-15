@@ -29,6 +29,7 @@ async def classify_message_function(
     *,
     tenant_id: _uuid.UUID | str | None = None,
     db: Any | None = None,
+    evidence_id: _uuid.UUID | str | None = None,
 ) -> dict:
     """Returns ``{function, confidence}``. An out-of-vocabulary label
     from the model degrades to ``unclassified`` â€” consumers treat that
@@ -48,6 +49,11 @@ async def classify_message_function(
         db=db,
         prompt_name=prompt.name,
         prompt_version=prompt.version,
+        # F5: this call is ABOUT an evidence row that already exists, so the
+        # usage event anchors to it — "what did classifying this message
+        # cost?" stops needing a correlation-id join.
+        subject_type="evidence_item" if evidence_id else None,
+        subject_id=evidence_id,
     )
     function = result.get("function")
     if function not in MESSAGE_FUNCTIONS:

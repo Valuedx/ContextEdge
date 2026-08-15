@@ -247,6 +247,11 @@ class Episode(Base, TenantScopedMixin):
     # (0040): [{"topic": ..., "accounts": [{"evidence_id": ..., "claim": ...}]}]
     contradictions: Mapped[list | None] = mapped_column(JSONB, nullable=True)
     embedding = mapped_column(Vector(3072), nullable=True)
+    # What generated this episode (0055): prompt name/version, routing task,
+    # requested model, and the correlation id that joins to the llm.usage
+    # events carrying the SERVING model. NULL means unknown — never "the
+    # current default", which is what re-deriving it at read time would claim.
+    generation_provenance: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
     steps: Mapped[list["EpisodeStep"]] = relationship(
         back_populates="episode",

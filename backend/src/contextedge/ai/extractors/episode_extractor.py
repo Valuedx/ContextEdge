@@ -29,6 +29,7 @@ import structlog
 from contextedge.ai.extractors.episode_schema import validate_episode
 from contextedge.ai.fencing import fence_untrusted
 from contextedge.ai.prompts import get_prompt
+from contextedge.ai.provenance import GENERATION_PROVENANCE_KEY, generation_provenance
 from contextedge.ai.provider import llm_complete_json
 from contextedge.ai.text_salience import salient_slice
 
@@ -155,6 +156,9 @@ async def _extract_from_chunk(
         ep["evidence_refs"] = _translate_refs(ep.get("evidence_refs"), ref_map)
         for step in ep.get("steps", []):
             step["evidence_refs"] = _translate_refs(step.get("evidence_refs"), ref_map)
+        # F5: stamped AFTER the strict schema gate, so the model can neither
+        # supply nor influence its own provenance.
+        ep[GENERATION_PROVENANCE_KEY] = generation_provenance(prompt, task="extraction")
         validated.append(ep)
 
     return validated

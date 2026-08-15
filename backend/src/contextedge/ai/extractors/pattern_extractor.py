@@ -11,6 +11,7 @@ from typing import Any
 
 from contextedge.ai.fencing import fence_untrusted
 from contextedge.ai.prompts import get_prompt
+from contextedge.ai.provenance import GENERATION_PROVENANCE_KEY, generation_provenance
 from contextedge.ai.provider import llm_complete_json
 
 
@@ -35,7 +36,7 @@ async def synthesize_pattern(
 
     prompt = get_prompt("pattern", tenant_id)
     user = prompt.format_user(episodes_text=fence_untrusted(ep_text))
-    return await llm_complete_json(
+    result = await llm_complete_json(
         user,
         task="pattern",
         system_prompt=prompt.system,
@@ -44,6 +45,12 @@ async def synthesize_pattern(
         prompt_name=prompt.name,
         prompt_version=prompt.version,
     )
+    # F5: stamped by the caller, not the model — set only on a dict result so
+    # a salvaged/garbled response degrades to "unknown provenance" rather than
+    # to a crash on the way to the pattern writer.
+    if isinstance(result, dict):
+        result[GENERATION_PROVENANCE_KEY] = generation_provenance(prompt, task="pattern")
+    return result
 
 
 async def validate_pattern_match(
