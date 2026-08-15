@@ -138,11 +138,25 @@ def _execution_harness(steps, *, automation_mode="full_auto", approval_policy_id
         added.append(obj)
         store[(obj.__class__, obj.id)] = obj
 
+    class _NoRows:
+        """A SELECT that found nothing, in every shape start_execution asks
+        for: F8's duplicate lookup and attempt count, F7's approval scan."""
+
+        def scalars(self):
+            return SimpleNamespace(all=list)
+
+        def scalar_one(self):
+            return 0
+
+        def scalar_one_or_none(self):
+            return None
+
     db = SimpleNamespace(
         get=AsyncMock(side_effect=get_side_effect),
         add=add,
         flush=AsyncMock(),
         refresh=AsyncMock(),
+        execute=AsyncMock(return_value=_NoRows()),
     )
     return db, added, tenant_id, actor_id, playbook_id, version_id
 

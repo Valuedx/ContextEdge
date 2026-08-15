@@ -686,7 +686,33 @@ key order, whitespace and number formatting change bytes without changing meanin
 character blocks execution; an expired approval blocks execution; both emit operational
 events; expiry still never approves.
 
-### F8 · `ExecutionAttempt` + live idempotency — M/L
+### F8 · `ExecutionAttempt` + live idempotency — M/L — **SHIPPED 2026-08-16**
+**Shipped.** Migration `0060`: `execution_attempts`, one row per try, with
+`attempt_number` derived from what is already recorded so a caller cannot renumber
+history and a retry lands as N+1 without knowing N. `deduplicated` is the status that
+matters — durable evidence a replay arrived and was recognised, which is the difference
+between an idempotency control that works and one nobody can prove worked. `timeout` and
+`cancelled` are distinct from `failed`: a timeout is an unknown outcome, and conflating
+them tells retry logic the wrong thing.
+
+The key (`services/idempotency_service.py`) derives from F7's artifact hash scoped to the
+case — same case, same step payload, same action — so a re-run is a *retry of the same
+logical operation*, which is what a key is for. Hashed rather than concatenated because
+the unique index is global and a readable key would put tenant ids in a structure other
+tenants' rows share. **Only side-effecting steps get one**: suppressing a repeated
+diagnostic would be a bug wearing a safety control's clothes, and a skill whose contract
+declares `NATIVE` idempotency gets none either because the tool is already safe to
+replay. An unbound side-effecting step *does* get one — without a contract we cannot know
+the tool is safe, and the conservative answer suppresses.
+
+A recognised duplicate is skipped, recorded as a `deduplicated` attempt plus an
+`execution.step_deduplicated` event, and refused again at `record_tool_invocation` so the
+suppression holds at the call site rather than only at planning time. 1639 tests.
+
+**With F6 and F7, the M8 hard gate is satisfied**: a side-effecting tool now has a
+registry entry with a contract, an approval bound to the exact artifact, and a live
+duplicate guard.
+
 **What.** An attempts table (attempt number, skill + version, idempotency key, dedup
 key, input hash, worker ref, started/completed, status including `DEDUPLICATED`,
 `TIMEOUT`, `CANCELLED`). Generate and enforce the idempotency key so

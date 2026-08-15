@@ -82,6 +82,14 @@ def _collect_constraint_markers() -> set[tuple[str, str]]:
 # (no ALTER needed) or covered by an explicit ALTER TABLE block with
 # IF EXISTS guards in 0029.
 _EXPECTED_MARKERS: set[tuple[str, str]] = {
+    # execution_attempts is a brand-new table (0060 CREATE TABLE).
+    ('attempt.py', 'ForeignKey("execution_step_runs.id", ondelete="CASCADE"),'),
+    ('attempt.py',
+     'UUID(as_uuid=True), ForeignKey("skills.id", ondelete="SET NULL"), nullable=True'),
+    ('attempt.py', 'UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"),'),
+    ('attempt.py',
+     'UniqueConstraint( "step_run_id", "attempt_number", '
+     'name="uq_execution_attempts_step_number" ),'),
     # skills + execution_contracts are brand-new tables (0058 CREATE TABLE).
     # execution_contract_id is RESTRICT on purpose: deleting the contract a
     # live skill runs under would strip its timeout and idempotency

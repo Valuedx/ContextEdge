@@ -85,15 +85,14 @@ EXPECTED_UNWRITTEN: dict[tuple[str, str], tuple[str, str]] = {
             ("approval_note", "the approval surface that would carry it is not built"),
         )
     },
+    # ``idempotency_key`` and ``duplicate_check_status`` left this register in
+    # F8 — they are written by ``_assign_idempotency_keys`` now.
     **{
-        ("execution.py", col): ("F8", reason)
-        for col, reason in (
-            (
-                "idempotency_key",
-                "uq_execution_step_runs_idempotency_key guards an always-NULL column",
-            ),
-            ("duplicate_check_status", "there is no duplicate check to record the result of"),
+        ("attempt.py", col): (
+            "executor",
+            "no dispatcher binds an attempt to the skill it invoked yet",
         )
+        for col in ("skill_id", "skill_version")
     },
     # --- claims: created, never validated; both link tables have no constructor
     **{
