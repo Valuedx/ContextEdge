@@ -69,7 +69,12 @@ from contextedge.models.playbook import (
     PlaybookEvidenceLink,
     PlaybookVersion,
 )
-from contextedge.models.policy import POLICY_TYPES, TenantPolicy
+from contextedge.models.policy import (
+    POLICY_CHECK_RESULTS,
+    POLICY_TYPES,
+    PolicyCheck,
+    TenantPolicy,
+)
 from contextedge.models.session import CaseLink, DecisionTraceEvent, ResolutionSession
 from contextedge.models.source import (
     Source,
@@ -100,7 +105,7 @@ __all__ = [
     "Decision", "DecisionOption", "DecisionOutcome",
     "ExecutionRun", "ExecutionStepRun", "ToolInvocation", "ApprovalRequest",
     "EvaluationDataset", "EvaluationRun", "RetrievalFeedback",
-    "POLICY_TYPES", "TenantPolicy",
+    "POLICY_TYPES", "TenantPolicy", "POLICY_CHECK_RESULTS", "PolicyCheck",
     # AE Ops Context Graph alignment
     "ENTITY_TYPES", "Entity", "EntityClass",
     "CLAIM_TYPES", "VALIDATION_STATUSES", "CREATED_BY_TYPES",

@@ -168,6 +168,14 @@ EXPECTED_UNWRITTEN: dict[tuple[str, str], tuple[str, str]] = {
         ("entity_class.py", col): ("migration-seeded", "the class tree is seeded by 0042")
         for col in ("attributes_schema", "class_family", "parent_class_id")
     },
+    ("policy.py", "evaluated_at"): ("db-generated", "server_default now()"),
+    **{
+        ("policy.py", col): (
+            "F3b",
+            "policy validity windows are not evaluated yet; the loader checks is_active",
+        )
+        for col in ("effective_from", "effective_to")
+    },
     ("case_bridge.py", "identifier_type"): ("default-only", "'number' is the only kind registered"),
     ("case_bridge.py", "is_authoritative"): (
         "default-only",
