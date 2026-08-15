@@ -457,7 +457,16 @@ writer-coverage assertion over `models/`; the allowlist entry format is
 green after; every remaining unwired column appears in the allowlist with an owner;
 `decision_intent` and `policy_result` are populated on every gated decision.
 
-### F2 · Relationship type registry — S
+### F2 · Relationship type registry — S — **SHIPPED 2026-08-15**
+**Shipped.** `graph/edge_types.py`: 69 types in five semantic groups, enforced by
+`require_registered` in `add_edge` / `ensure_edge` / `close_edge` / `replace_edge`
+(closing too — a typo there closes nothing and reports success). 18 types are
+written but deliberately not projected, each with its argument recorded rather than
+implied. `tests/test_edge_type_registry.py` checks all three drift directions and
+guards its own AST scan against matching nothing. The runtime check earned itself on
+the first full-suite run: `involved_in`, a literal inside a tuple in
+`persist_pattern_enrichment_edges`, was invisible to the static scan. 1558 tests.
+
 **What.** A canonical `EDGE_TYPES` registry validated inside `graph/builder.add_edge`
 and `ensure_edge`. A test asserts both directions: every type written anywhere is
 registered, and every registered type is either present in `MAF_RELATIONSHIP_TYPES` or
