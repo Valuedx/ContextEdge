@@ -19,6 +19,7 @@ from contextedge.api.v1 import (  # noqa: E402, F401
     graph,
     identities,
     inventory,
+    knowledge_supersessions,
     negative_knowledge,
     notifications,
     patterns,
@@ -68,6 +69,11 @@ router.include_router(identities.router, prefix="/identities", tags=["identities
 router.include_router(correlations.router, prefix="/correlations", tags=["correlations"])
 router.include_router(
     policy_assignments.router, prefix="/policy-assignments", tags=["policy-assignments"]
+)
+router.include_router(
+    knowledge_supersessions.router,
+    prefix="/knowledge-supersessions",
+    tags=["knowledge-supersessions"],
 )
 router.include_router(graph.router, prefix="/graph", tags=["graph"])
 router.include_router(inventory.router, prefix="/inventory", tags=["inventory"])

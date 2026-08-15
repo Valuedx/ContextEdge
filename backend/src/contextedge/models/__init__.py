@@ -61,6 +61,10 @@ from contextedge.models.fix_applicability import FixApplicabilityRule
 from contextedge.models.fix_cohort import FixCohortStat
 from contextedge.models.fleet_group import FleetGroupSuggestion
 from contextedge.models.issue_signature import EpisodeIssueSignature, IssueSignature
+from contextedge.models.knowledge_supersession import (
+    SUPERSESSION_STATUSES,
+    KnowledgeSupersessionProposal,
+)
 from contextedge.models.pattern import (
     Contradiction,
     GraphEdge,
@@ -137,6 +141,7 @@ __all__ = [
     "VerificationAssessment", "VerificationObservation",
     "CRITERION_TYPES", "OBSERVATION_STATUSES", "ASSESSMENT_RESULTS",
     "TrustProfile", "AUTONOMY_LEVELS", "UNSCOPED",
+    "KnowledgeSupersessionProposal", "SUPERSESSION_STATUSES",
     "RollbackPlan", "Escalation", "ROLLBACK_PLAN_STATUSES",
     "ESCALATION_STATUSES", "ESCALATION_PRIORITIES",
     "EvaluationDataset", "EvaluationRun", "RetrievalFeedback",
