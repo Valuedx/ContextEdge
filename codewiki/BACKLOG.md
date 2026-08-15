@@ -522,8 +522,40 @@ unanswerable — the audit question every governed execution has to answer.
 version and its input snapshot are recoverable by query; editing a policy does not
 rewrite the history of decisions it already governed.
 
-### F4 · Knowledge freshness + supersession in retrieval — M
-**What.** Persist the `knowledge_validation_service` support level per knowledge
+### F4 · Knowledge freshness + supersession in retrieval — M — **SHIPPED 2026-08-16 (support half)**
+**Shipped.** Migration `0057`: `evidence_items.knowledge_support JSONB`, computed by
+`knowledge_validation_service` and refreshed by the event that changes it — a
+verification verdict, bounded to the knowledge cited by that playbook version rather
+than a sweep over the corpus. `knowledge_retrieval_service` now multiplies cosine
+distance by a support factor (proven 0.80, emerging 0.92, unproven 1.00, contested 1.25)
+alongside the existing applicability penalty, and a contested article carries a SUPPORT
+WARNING into the prompt so the generator can say a procedure is disputed rather than
+quote it as settled. Two principles are pinned by tests: support **re-ranks and never
+filters** (a procedure with a failure history is often the only guidance that exists),
+and **silence is not failure** — `unproven` and never-computed are both exactly neutral,
+because treating "no runs" as negative would demote the whole corpus on day one. 1588 tests.
+
+**Deliberately not shipped here, with reasons:**
+- **Age-based freshness.** A document's age is not evidence it is wrong, and inventing an
+  age penalty would be precisely the unmeasured number this codebase keeps having to
+  remove. Supersession is the real staleness signal.
+- **Supersession edges (→ F4b).** Turning `services/documents/versioning.py`'s filename
+  heuristic into `superseded_by` edges needs a proposal table and a reviewer surface —
+  a filename is not grounds for retiring an SOP, so it follows the
+  `IdentityMergeProposal` pattern, and that is its own item.
+
+### F4b · Reviewer-gated knowledge supersession — M
+**What.** Persist `services/documents/versioning.py`'s duplicate/version findings as
+supersession *proposals* (the `IdentityMergeProposal` pattern: stored, reviewer-decided,
+rejection durable), and on acceptance write `superseded_by` edges between knowledge
+evidence rows. Retrieval then demotes a superseded article in favour of its successor.
+**Why.** The versioning module's own docstring names the gap it does not close:
+retrieval "returns superseded guidance and nothing marks it as superseded". `superseded_by`
+edges exist today only for claims.
+**Dependencies.** F4. **Acceptance.** An accepted proposal makes the successor outrank
+its predecessor for the same query; a rejected one never re-raises.
+
+**Original scope.** Persist the `knowledge_validation_service` support level per knowledge
 evidence item; add support level and evidence recency as ranking terms in
 `knowledge_retrieval_service`; turn the `services/documents/versioning.py` heuristic
 into reviewer-gated `superseded_by` edges between knowledge evidence rows.

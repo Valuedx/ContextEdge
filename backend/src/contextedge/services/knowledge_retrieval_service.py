@@ -86,6 +86,45 @@ MAX_DISTANCE = round(1.0 - KNOWLEDGE_LINK_MIN_SIMILARITY, 2)
 # being generous here is negligible next to being wrong.
 APPLICABILITY_SCAN_CHARS = 40_000
 
+# Empirical support re-ranks, exactly as applicability does — it never
+# filters. A procedure with a failure history is often still the only guidance
+# that exists, and dropping it leaves the reviewer with nothing and no
+# indication anything was withheld.
+#
+# Multipliers on cosine distance, so below 1.0 promotes and above 1.0 demotes.
+# ``unproven`` and an absent record are BOTH neutral, deliberately: silence is
+# not failure. Most knowledge is never exercised, and treating "no runs" as a
+# negative signal would demote the whole corpus on day one — the same
+# principle knowledge_validation_service states and this is where it has to
+# hold to mean anything.
+#
+# ``contested`` is the only demotion and it is mild (1.25 against a 0.25
+# distance ceiling). A contested article is not wrong; it is inconsistent,
+# which is a reason to read it with the conflict in view rather than a reason
+# to bury it.
+SUPPORT_RANK_FACTORS: dict[str, float] = {
+    "proven": 0.80,
+    "emerging": 0.92,
+    "unproven": 1.0,
+    "contested": 1.25,
+}
+
+
+def support_rank_factor(stored: Any) -> tuple[float, str | None]:
+    """``(factor, support level)`` from the stored knowledge-support blob.
+
+    Anything unrecognised — absent column, malformed payload, a support level
+    from a future vocabulary — is neutral. A ranker that raised or guessed
+    here would turn a data problem into a retrieval that silently returns the
+    wrong articles.
+    """
+    if not isinstance(stored, dict):
+        return 1.0, None
+    support = stored.get("support")
+    if not isinstance(support, str):
+        return 1.0, None
+    return SUPPORT_RANK_FACTORS.get(support, 1.0), support
+
 
 @dataclass(slots=True)
 class KnowledgeSection:
@@ -114,9 +153,16 @@ class KnowledgeDocument:
     # different release is reviewable as such.
     applicability_notes: list[str] = field(default_factory=list)
     applicability_verdict: str = "unknown"
+    # Empirical support (F4): has this procedure ever actually worked? None
+    # when it has never been computed, which ranks and reads as neutral.
+    support: str | None = None
 
     def to_prompt_block(self, index: int) -> str:
         header = f"[kb-{index}] {self.title} ({self.evidence_type})"
+        if self.support == "contested":
+            # Surfaced, not hidden: the generator should be able to say the
+            # procedure is disputed rather than quote it as settled.
+            header += " — SUPPORT WARNING: this procedure has a mixed run record"
         if self.applicability_verdict == "mismatch":
             header += " — APPLICABILITY WARNING: " + "; ".join(
                 self.applicability_notes
@@ -262,6 +308,18 @@ async def _retrieve(
             evidence_type=evidence.evidence_type,
             best_distance=distance,
         )
+
+        # F4: empirical support re-ranks before applicability, and both are
+        # multiplicative on distance, so an article that is both proven and
+        # applicable compounds. getattr for the same reason applicability
+        # uses it — search may hand back a partial projection, and reading an
+        # absent column must not cost the caller the whole result set.
+        support_factor, support = support_rank_factor(
+            getattr(evidence, "knowledge_support", None)
+        )
+        document.support = support
+        distance *= support_factor
+        document.best_distance = distance
 
         # Applicability RE-RANKS; it never filters. An article written for
         # an older release is often the only guidance that exists for a
