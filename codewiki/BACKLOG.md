@@ -424,7 +424,21 @@ epic:
 F6, F7 and F8 are in. "Just one low-risk action first" is the failure mode this gate
 exists to prevent.
 
-### F1 · Populate or retire the `0029` stub columns — M
+### F1 · Populate or retire the `0029` stub columns — M — **SHIPPED 2026-08-15**
+**Shipped.** The audit found **79** unwritten columns, not the 18 the Doc-4 comparison
+named. Eight are now written: `ExecutionStepRun.action_name` / `action_type` (declared
+by the step or NULL — never inferred from the title) / `execution_mode` / `executed_by`,
+`ApprovalRequest.action_name` / `approver_role` (the roles the policy actually
+requires, or NULL when none is configured), `Decision.decision_intent` (derived from
+`decision_type` through `INTENT_BY_DECISION_TYPE`, explicit argument wins) and
+`Decision.risk_level` (from the **selected** option — the path taken, not the riskiest
+one considered). `APPROVAL_STATUSES` gained `expired`, which the expiry sweep has been
+writing since E6. The other 71 are in the register with an owner each. Two findings
+the audit surfaced, both recorded in KNOWN_GAPS: `FixPattern` has no constructor
+anywhere (so B4/B5/verification write-back are dormant, not merely unexercised), and
+`claim_evidence` / `decision_claims` have none either (claims never reach a
+validation status). 1551 tests.
+
 **What.** Decide every unwired column: write it at its natural point, or drop it.
 Minimum population set — `ExecutionStepRun.action_name` / `action_type` /
 `execution_mode` / `executed_by` (from the step payload and run mode in

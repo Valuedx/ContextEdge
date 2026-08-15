@@ -23,7 +23,13 @@ from contextedge.graph.builder import (
     link_decision_pattern,
     link_decision_policy,
 )
-from contextedge.models.decision import Decision, DecisionOption, DecisionOutcome
+from contextedge.models.decision import (
+    DECISION_INTENTS,
+    INTENT_BY_DECISION_TYPE,
+    Decision,
+    DecisionOption,
+    DecisionOutcome,
+)
 from contextedge.services.event_log_service import append_operational_event
 from contextedge.services.memory_service import REASONING_MEMORY
 from contextedge.services.session_service import append_trace_event
@@ -65,10 +71,35 @@ async def create_decision(
     policy_refs: list[str] | None = None,
     human_override: bool = False,
     status: str = "pending",
+    decision_intent: str | None = None,
+    risk_level: str | None = None,
 ) -> Decision:
     evidence_refs = evidence_refs or []
     options = options or []
     policy_refs = policy_refs or []
+
+    # F1. Both columns were provisioned by 0029 and written by nothing.
+    # ``decision_intent`` is derived from ``decision_type`` so the governance
+    # axis can never drift from the action axis; an explicit argument wins.
+    # ``risk_level`` is trace-level — the risk of the path actually taken —
+    # so it comes from the SELECTED option, not the riskiest one considered.
+    # Unknown decision types and option sets without a selection leave NULL
+    # rather than guessing.
+    if decision_intent is None:
+        decision_intent = INTENT_BY_DECISION_TYPE.get(decision_type)
+    elif decision_intent not in DECISION_INTENTS:
+        raise ValueError(
+            f"decision_intent must be one of {DECISION_INTENTS}, got {decision_intent!r}"
+        )
+    if risk_level is None:
+        risk_level = next(
+            (
+                opt.get("risk_level")
+                for opt in options
+                if opt.get("selected") and opt.get("risk_level")
+            ),
+            None,
+        )
 
     evidence_summary = [
         {
@@ -99,6 +130,8 @@ async def create_decision(
         policy_refs=policy_refs,
         human_override=human_override,
         status=status,
+        decision_intent=decision_intent,
+        risk_level=risk_level,
     )
     db.add(decision)
     await db.flush()

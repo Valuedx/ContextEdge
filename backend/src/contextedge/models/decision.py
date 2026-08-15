@@ -25,6 +25,38 @@ DECISION_TYPES = (
 )
 
 AGENT_STEPS = ("diagnostics", "remediation", "evaluation", "triage")
+
+# The governance-oriented axis (0029). ``decision_type`` says what the system
+# DID; ``decision_intent`` says what KIND of governed act it was, which is the
+# axis a policy engine keys on. Derived deterministically from decision_type by
+# ``INTENT_BY_DECISION_TYPE`` so the two can never drift, and overridable by
+# callers that know better.
+DECISION_INTENTS = (
+    "diagnosis",
+    "recommendation",
+    "remediation",
+    "escalation",
+    "approval_request",
+    "approval_decision",
+    "clarification",
+    "deferral",
+)
+
+INTENT_BY_DECISION_TYPE = {
+    "classify_issue": "diagnosis",
+    "verify_dependency": "diagnosis",
+    "select_playbook": "recommendation",
+    "restart_workflow": "remediation",
+    "execute_playbook": "remediation",
+    "create_ticket": "remediation",
+    "request_approval": "approval_request",
+    "approve": "approval_decision",
+    "deny": "approval_decision",
+    "modify": "approval_decision",
+    "escalate_to_human": "escalation",
+    "ask_clarifying_question": "clarification",
+    "defer": "deferral",
+}
 ACTOR_TYPES = ("ai", "human", "hybrid")
 DECISION_STATUSES = ("pending", "completed", "superseded", "reverted")
 RISK_LEVELS = ("low", "medium", "high")
