@@ -479,10 +479,42 @@ model for an exclusion reason string — the reason is data, not a comment.
 **Dependencies.** None. **Acceptance.** An unregistered `edge_type` raises at the
 builder; write registry and projection allowlist cannot silently diverge.
 
-### F3 · Policy versioning + a real `PolicyCheck` record — M
-**What.** `version` / `effective_from` / `effective_to` on `action_policies`; a
-policy-check row per evaluation carrying policy id + version + evaluated artifact ref +
-result + input snapshot + evaluator + timestamp.
+### F3 · Policy versioning + a real `PolicyCheck` record — M — **SHIPPED 2026-08-16**
+**Re-scoped on contact.** The item said "version `action_policies`" — but that table has
+no writer, no CRUD API and no evaluation engine, so versioning it would have added three
+more never-written columns to the register F1 exists to keep honest. Versioning the
+engine that does not run, while the one that does stayed unversioned, is the exact
+failure this epic is about. So F3 versions and records **the policy the executor actually
+enforces**, and the action-policy engine becomes **F3b** below.
+
+**Shipped.** Migration `0056`: `version` / `effective_from` / `effective_to` on
+`tenant_policies`, plus a `policy_checks` table (policy id + **version** + check name +
+evaluated entity + result + reason + input snapshot + evaluator + timestamp). Recorded at
+both real enforcement points in `execution_service` — the automation-mode cap at
+`start_execution` (anchored to the playbook, because the run row does not exist yet at
+gate time) and the decider gate at `decide_approval`. Three properties are deliberate:
+the rule functions stay pure and synchronous, so recording cannot slow or break the gate;
+**denials record before raising**, which is the evaluation an implementation that records
+only the success path loses; and a broken audit write is logged and swallowed, because by
+then the gate has already decided and additive evidence must never turn an allowed action
+into a failed one. The version tracks the **rules**, not the labels — renaming or
+deactivating a policy does not bump it, changing its config does. 1579 tests.
+
+### F3b · Action-policy engine, CRUD and versioning — L
+**What.** `action_policies` is read only by the agent projection; `execution_service`
+never queries it, there is no CRUD API, and nothing writes it — all 12 of its columns sit
+in the F1 register. This item builds the evaluator (precedence, scope, conflict
+resolution — the `priority` / `policy_scope` / `conflict_resolution` columns `0029`
+provisioned), the CRUD surface, and its own versioning, recording through the same
+`policy_checks` table F3 shipped.
+**Why.** Until it exists, `Decision.policy_result` has no verdict to record and
+`allowed_auto` is a vocabulary rather than a behaviour.
+**Dependencies.** F3. Schedule with the executor (M8), not before it — a policy engine
+with nothing to gate is the same mistake in a new place.
+
+**Original scope, for the record.** `version` / `effective_from` / `effective_to` on
+`action_policies`; a policy-check row per evaluation carrying policy id + version +
+evaluated artifact ref + result + input snapshot + evaluator + timestamp.
 **Why.** `DecisionActionPolicy.policy_result_snapshot` records a result with no policy
 version, so "which policy version evaluated this, and what did it see?" is currently
 unanswerable — the audit question every governed execution has to answer.

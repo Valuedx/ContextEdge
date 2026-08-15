@@ -131,6 +131,12 @@ async def update_policy(
     if body.description is not None:
         row.description = body.description.strip() or None
     if body.config is not None:
+        # F3: the version tracks the RULES, not the row. Renaming a policy or
+        # deactivating it does not change what a past decision was judged
+        # under; changing its config does, and every policy_check keyed to the
+        # old version has to keep meaning what it meant.
+        if body.config != row.config:
+            row.version = (row.version or 1) + 1
         row.config = body.config
     if body.is_active is not None:
         row.is_active = body.is_active

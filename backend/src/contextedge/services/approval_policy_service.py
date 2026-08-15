@@ -47,6 +47,10 @@ class ApprovalPolicy:
     forbid_self_approval: bool = False
     require_approval_min_safety_class: str | None = None
     max_automation_mode: str | None = None
+    # Carried so a recorded check keys on the policy VERSION rather than the
+    # policy row (F3) — a later edit must not rewrite the history of what a
+    # run was judged under.
+    version: int | None = None
 
     @property
     def is_configured(self) -> bool:
@@ -95,6 +99,7 @@ async def load_approval_policy(
         forbid_self_approval=bool(config.get("forbid_self_approval", False)),
         require_approval_min_safety_class=min_class,
         max_automation_mode=max_mode,
+        version=getattr(row, "version", None),
     )
 
 

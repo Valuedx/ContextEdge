@@ -32,6 +32,7 @@ from contextedge.services.approval_policy_service import (
 )
 from contextedge.services.decision_trace_service import create_decision, record_outcome
 from contextedge.services.event_log_service import append_operational_event
+from contextedge.services.policy_check_service import record_policy_check
 from contextedge.services.session_service import append_trace_event
 
 
@@ -66,6 +67,90 @@ def _step_action_identity(step_data: dict) -> tuple[str | None, str | None]:
     raw_type = step_data.get("action_type")
     kind = raw_type.strip() if isinstance(raw_type, str) else None
     return name, (kind if kind in ACTION_TYPES else None)
+
+
+async def _record_automation_mode_check(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    playbook,
+    actor_id: uuid.UUID,
+    *,
+    policy: ApprovalPolicy | None = None,
+    result: str | None = None,
+    reason: str | None = None,
+) -> None:
+    """Record the automation-mode gate (F3).
+
+    ``result=None`` means "derive it": a configured cap that the playbook
+    satisfied is a ``pass``; no configured cap is ``not_applicable``, which an
+    auditor must be able to tell apart from "no check ran".
+    """
+    configured = policy is not None and policy.max_automation_mode is not None
+    if result is None:
+        result = "pass" if configured else "not_applicable"
+    await record_policy_check(
+        db,
+        tenant_id=tenant_id,
+        policy_id=getattr(policy, "policy_id", None) or playbook.approval_policy_id,
+        policy_version=getattr(policy, "version", None),
+        policy_type="approval",
+        check_name="max_automation_mode",
+        evaluated_entity_type="playbook",
+        evaluated_entity_id=playbook.id,
+        result=result,
+        reason=reason,
+        input_snapshot={
+            "requested_automation_mode": playbook.automation_mode,
+            "max_automation_mode": getattr(policy, "max_automation_mode", None),
+        },
+        evaluated_by=actor_id,
+    )
+
+
+async def _record_decider_check(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    req: ApprovalRequest,
+    run: ExecutionRun,
+    decided_by: uuid.UUID,
+    decider_roles: list[str] | None,
+    *,
+    policy: ApprovalPolicy | None,
+    result: str | None = None,
+    reason: str | None = None,
+) -> None:
+    """Record the decider gate — self-approval ban and approver roles (F3).
+
+    The snapshot carries who decided, who initiated and which roles they held,
+    because that is what makes the verdict reproducible later. A policy with
+    neither rule configured is ``not_applicable``: the check ran and had
+    nothing to say, which is different from not running.
+    """
+    configured = policy is not None and (
+        policy.forbid_self_approval or bool(policy.approver_roles)
+    )
+    if result is None:
+        result = "pass" if configured else "not_applicable"
+    await record_policy_check(
+        db,
+        tenant_id=tenant_id,
+        policy_id=getattr(policy, "policy_id", None),
+        policy_version=getattr(policy, "version", None),
+        policy_type="approval",
+        check_name="decider",
+        evaluated_entity_type="approval_request",
+        evaluated_entity_id=req.id,
+        result=result,
+        reason=reason,
+        input_snapshot={
+            "decided_by": str(decided_by),
+            "run_initiated_by": str(run.initiated_by) if run.initiated_by else None,
+            "decider_roles": sorted(decider_roles or []),
+            "required_approver_roles": sorted(getattr(policy, "approver_roles", ()) or ()),
+            "forbid_self_approval": getattr(policy, "forbid_self_approval", None),
+        },
+        evaluated_by=decided_by,
+    )
 
 
 def _approver_role_label(policy: ApprovalPolicy) -> str | None:
@@ -168,13 +253,27 @@ async def start_execution(
     # The playbook's approval policy (if any) is loaded and enforced here —
     # previously the reference was validated at playbook save time but never
     # evaluated at execution time.
+    # Bound before the try so the failure recorder can still report the policy
+    # when load_approval_policy itself is what raised (a dangling or
+    # wrong-type reference fails closed).
+    approval_policy: ApprovalPolicy | None = None
     try:
         approval_policy = await load_approval_policy(
             db, tenant_id, playbook.approval_policy_id
         )
         check_automation_mode(approval_policy, playbook.automation_mode)
     except ApprovalPolicyViolation as exc:
+        # F3: a denial is the evaluation most worth recording, and it is the
+        # one an implementation that records only on the success path loses.
+        # The run row never exists at gate time, so it anchors to the playbook.
+        await _record_automation_mode_check(
+            db, tenant_id, playbook, actor_id,
+            policy=approval_policy, result="fail", reason=str(exc),
+        )
         raise ExecutionPolicyError(str(exc)) from exc
+    await _record_automation_mode_check(
+        db, tenant_id, playbook, actor_id, policy=approval_policy, result=None
+    )
 
     caller_max = _caller_max_safety_class(roles, playbook.automation_mode)
     effective_max = min(
@@ -686,6 +785,10 @@ async def decide_approval(
             else None
         )
         if policy_playbook is not None and policy_playbook.tenant_id == tenant_id:
+            # Bound before the try so the failure recorder can report the
+            # policy even when load_approval_policy itself is what raised
+            # (a dangling or wrong-type reference fails closed).
+            policy: ApprovalPolicy | None = None
             try:
                 policy = await load_approval_policy(
                     db, tenant_id, policy_playbook.approval_policy_id
@@ -697,7 +800,14 @@ async def decide_approval(
                     decider_roles=decider_roles,
                 )
             except ApprovalPolicyViolation as exc:
+                await _record_decider_check(
+                    db, tenant_id, req, policy_run, decided_by, decider_roles,
+                    policy=policy, result="fail", reason=str(exc),
+                )
                 raise ExecutionPolicyError(str(exc)) from exc
+            await _record_decider_check(
+                db, tenant_id, req, policy_run, decided_by, decider_roles, policy=policy,
+            )
 
     now = datetime.now(UTC)
     req.status = decision

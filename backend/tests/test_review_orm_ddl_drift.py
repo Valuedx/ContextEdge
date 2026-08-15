@@ -82,6 +82,11 @@ def _collect_constraint_markers() -> set[tuple[str, str]]:
 # (no ALTER needed) or covered by an explicit ALTER TABLE block with
 # IF EXISTS guards in 0029.
 _EXPECTED_MARKERS: set[tuple[str, str]] = {
+    # policy_checks is a brand-new table (0056 CREATE TABLE), so no ALTER
+    # migration is needed for these two — see this test's own guidance.
+    ('policy.py', 'ForeignKey("tenant_policies.id", ondelete="SET NULL"),'),
+    ('policy.py',
+     'UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False'),
     ('action_policy.py', 'ForeignKey("action_policies.id", ondelete="CASCADE"),'),
     ('action_policy.py', 'ForeignKey("decisions.id", ondelete="CASCADE"),'),
     ('action_policy.py', 'ForeignKey("entities.id", ondelete="SET NULL"),'),
