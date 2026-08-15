@@ -195,6 +195,97 @@ async def _record_decider_check(
     )
 
 
+def _strictest_verdict(verdicts) -> str | None:
+    """The most restrictive non-null verdict, or None if there were none."""
+    from contextedge.services.action_policy_service import restrictiveness
+
+    present = [v for v in verdicts if v]
+    return max(present, key=restrictiveness) if present else None
+
+
+async def _apply_action_policy(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    *,
+    playbook,
+    action_name: str | None,
+    step_index: int,
+    actor_id: uuid.UUID,
+) -> str | None:
+    """Evaluate the action policy for one step, and enforce a blocking verdict.
+
+    Returns the verdict, or None when the step declares no controlled action —
+    an undeclared action cannot be looked up, and inferring one from the title
+    is precisely what F1 refused to do.
+
+    ``allowed_auto`` is recorded and otherwise ignored: it means *this policy
+    does not object*, not *this may run unattended*. Safety class, role and
+    trust have already had their say, and a policy that could overturn them
+    would be a way to grant privilege by writing a row.
+    """
+    from contextedge.services.action_policy_service import (
+        BLOCKING_RESULTS,
+        evaluate_action,
+    )
+
+    if not action_name:
+        return None
+
+    policy = await evaluate_action(
+        db,
+        tenant_id,
+        action_name=action_name,
+        environment=getattr(playbook, "environment", None),
+    )
+    if policy is None:
+        await record_policy_check(
+            db,
+            tenant_id=tenant_id,
+            policy_id=None,
+            policy_version=None,
+            policy_type="action",
+            check_name="action_policy",
+            evaluated_entity_type="playbook",
+            evaluated_entity_id=playbook.id,
+            result="not_applicable",
+            reason=f"no active action policy matches {action_name!r}",
+            input_snapshot={"action_name": action_name, "step_index": step_index},
+            evaluated_by=actor_id,
+        )
+        return None
+
+    blocking = policy.policy_result in BLOCKING_RESULTS
+    await record_policy_check(
+        db,
+        tenant_id=tenant_id,
+        policy_id=policy.id,
+        policy_version=policy.version,
+        policy_type="action",
+        check_name="action_policy",
+        evaluated_entity_type="playbook",
+        evaluated_entity_id=playbook.id,
+        result="fail" if blocking else "pass",
+        reason=f"{policy.policy_name}: {policy.policy_result}",
+        input_snapshot={
+            "action_name": action_name,
+            "step_index": step_index,
+            "policy_result": policy.policy_result,
+            "environment": policy.environment,
+            "workflow_entity_id": (
+                str(policy.workflow_entity_id) if policy.workflow_entity_id else None
+            ),
+        },
+        evaluated_by=actor_id,
+    )
+    if blocking:
+        raise ExecutionPolicyError(
+            f"step {step_index} action {action_name!r} is {policy.policy_result} under "
+            f"policy {policy.policy_name!r} (v{policy.version}) — it may not be executed "
+            "through a playbook run"
+        )
+    return policy.policy_result
+
+
 async def _enforce_trust_suspension(
     db: AsyncSession,
     tenant_id: uuid.UUID,
@@ -669,6 +760,7 @@ async def start_execution(
         )
 
     step_runs: list[ExecutionStepRun] = []
+    action_verdicts: dict[int, str | None] = {}
     for idx, step_data in enumerate(steps):
         step_safety = "read_only"
         step_title = None
@@ -688,6 +780,20 @@ async def start_execution(
         if _safety_class_rank(step_safety) > _safety_class_rank(effective_safety_class):
             needs_approval = True
         if step_requires_policy_approval(approval_policy, step_safety):
+            needs_approval = True
+
+        # F3b: the action-policy verdict for this step's controlled action.
+        # It can force approval or refuse; it never grants an autonomy that
+        # safety class, role or trust withheld.
+        action_verdicts[idx] = await _apply_action_policy(
+            db,
+            tenant_id,
+            playbook=playbook,
+            action_name=action_name,
+            step_index=idx,
+            actor_id=actor_id,
+        )
+        if action_verdicts[idx] == "approval_required":
             needs_approval = True
 
         step_run = ExecutionStepRun(
@@ -891,6 +997,12 @@ async def start_execution(
             "max_safety_class": effective_safety_class,
         },
         status="pending",
+        # F3b: the strictest action-policy verdict any step drew. The run
+        # cannot be more permissive than its most-governed step, so that is
+        # the verdict the trace should carry — and it is NULL when no step
+        # declared an action or no policy matched, because "no rule existed"
+        # must not read as "a rule permitted it".
+        policy_result=_strictest_verdict(action_verdicts.values()),
     )
 
     return run

@@ -45,30 +45,23 @@ _MODELS = _SRC / "models"
 # (model file, column) -> (owner, reason). Owner is an Epic F item where the
 # column is scheduled, or a category when no work is pending.
 EXPECTED_UNWRITTEN: dict[tuple[str, str], tuple[str, str]] = {
-    # --- action_policies: the table has no writer and no CRUD API. Read only
-    # by the agent projection; the executor gates on TenantPolicy instead.
+    # --- action_policies: most columns became writable with F3b's CRUD
+    # surface. These three did not.
     **{
-        ("action_policy.py", col): ("F3", "action_policies has no writer and no CRUD API")
-        for col in (
-            "action_policy_id",
-            "allowed_execution_mode",
-            "business_unit",
-            "conflict_resolution",
-            "data_domain",
-            "policy_name",
-            "policy_result",
-            "policy_result_snapshot",
-            "policy_scope",
-            "required_approver_roles",
-            "restrictions",
-            "workflow_entity_id",
+        ("action_policy.py", col): ("F3b", reason)
+        for col, reason in (
+            ("policy_name", "written through the CRUD model dump, invisible to this scan"),
+            (
+                "action_policy_id",
+                "decision_action_policies has no constructor: nothing links a "
+                "decision to the policy row it was judged under",
+            ),
+            (
+                "policy_result_snapshot",
+                "superseded by policy_checks (F3); the column is a retire candidate",
+            ),
         )
     },
-    # --- decisions
-    ("decision.py", "policy_result"): (
-        "F3",
-        "the executor has no action-policy verdict to record until F3 builds the engine",
-    ),
     ("decision.py", "decision_summary"): (
         "F5",
         "retire candidate: rationale_summary already carries the canonical summary",
@@ -135,7 +128,6 @@ EXPECTED_UNWRITTEN: dict[tuple[str, str], tuple[str, str]] = {
         for col in (
             "pattern_name",
             "issue_type",
-            "workflow_entity_id",
             "error_signature_id",
             "failed_step",
             "recommended_fix",
@@ -165,7 +157,6 @@ EXPECTED_UNWRITTEN: dict[tuple[str, str], tuple[str, str]] = {
             "request_entity_id",
             "severity",
             "user_entity_id",
-            "workflow_entity_id",
         )
     },
     **{
@@ -178,8 +169,6 @@ EXPECTED_UNWRITTEN: dict[tuple[str, str], tuple[str, str]] = {
         "dormant-feature",
         "redaction runs but does not stamp the per-row marker",
     ),
-    ("entity.py", "business_unit"): ("F3", "tenant separation axis; no ingest path sets it"),
-    ("entity.py", "data_domain"): ("F3", "tenant separation axis; no ingest path sets it"),
     # --- db-generated / default-only / migration-seeded
     ("events.py", "recorded_at"): ("db-generated", "server_default now()"),
     ("evidence.py", "stored_at"): ("db-generated", "server_default now()"),
@@ -191,9 +180,9 @@ EXPECTED_UNWRITTEN: dict[tuple[str, str], tuple[str, str]] = {
     **{
         ("policy.py", col): (
             "F3b",
-            "policy validity windows are not evaluated yet; the loader checks is_active",
+            "tenant-policy validity windows are not evaluated; the loader checks is_active",
         )
-        for col in ("effective_from", "effective_to")
+        for col in ()
     },
     ("case_bridge.py", "identifier_type"): ("default-only", "'number' is the only kind registered"),
     ("case_bridge.py", "is_authoritative"): (
@@ -221,6 +210,29 @@ EXPECTED_UNWRITTEN: dict[tuple[str, str], tuple[str, str]] = {
         ("tenant.py", col): ("F5", "tenant admin CRUD remains open (E5)")
         for col in ("retention_defaults", "sso_config", "sso_provider")
     },
+}
+
+# Columns that ARE unwritten but which this scan can no longer see, because a
+# same-named column elsewhere gained a writer. Kept as prose rather than
+# assertions — the scan cannot check them, and the alternative is losing the
+# knowledge entirely the moment a name collides.
+#
+# Every entry here was in EXPECTED_UNWRITTEN until F3b's action-policy CRUD
+# started writing the same NAMES on a different table.
+SHADOWED_BY_NAME: dict[tuple[str, str], tuple[str, str]] = {
+    ("entity.py", "business_unit"): ("F3b", "shadowed by action_policies.business_unit"),
+    ("entity.py", "data_domain"): ("F3b", "shadowed by action_policies.data_domain"),
+    ("session.py", "workflow_entity_id"): (
+        "F3b",
+        "shadowed by action_policies.workflow_entity_id",
+    ),
+    ("error_signature.py", "workflow_entity_id"): (
+        "dormant-feature",
+        "shadowed by action_policies.workflow_entity_id; FixPattern still has no "
+        "constructor",
+    ),
+    ("policy.py", "effective_from"): ("F3b", "shadowed by action_policies.effective_from"),
+    ("policy.py", "effective_to"): ("F3b", "shadowed by action_policies.effective_to"),
 }
 
 _DECL = re.compile(r"^\s{4}(\w+)\s*(?::\s*Mapped\[[^\]]*\]\s*)?=\s*(.*)$")
@@ -316,6 +328,22 @@ def test_register_does_not_claim_closed_gaps():
         "the last column it owned):\n  "
         + "\n  ".join(f"{f}::{c}" for f, c in stale)
     )
+
+
+def test_shadowed_columns_are_recorded_rather_than_forgotten():
+    """A name collision must cost visibility, not knowledge.
+
+    These columns are still unwritten; the scan simply cannot see them any
+    more. They live in their own map so a reader of this file learns about
+    them, and so they cannot quietly reappear in the register and start
+    failing the set-equality assertion.
+    """
+    assert SHADOWED_BY_NAME, "the shadowing note should not be silently emptied"
+    for key, (owner, reason) in SHADOWED_BY_NAME.items():
+        assert key not in EXPECTED_UNWRITTEN, (
+            f"{key} is both registered and marked shadowed — pick one"
+        )
+        assert owner.strip() and len(reason.strip()) > 15, key
 
 
 def test_register_entries_are_specific():

@@ -3,6 +3,7 @@
 router = APIRouter()
 
 from contextedge.api.v1 import (  # noqa: E402, F401
+    action_policies,
     admin_cost,
     audit,
     auth,
@@ -52,6 +53,9 @@ router.include_router(sessions.router, prefix="/sessions", tags=["sessions"])
 router.include_router(runtime.router, prefix="/runtime", tags=["runtime"])
 router.include_router(evaluations.router, prefix="/evaluations", tags=["evaluations"])
 router.include_router(policies.router, prefix="/policies", tags=["policies"])
+router.include_router(
+    action_policies.router, prefix="/action-policies", tags=["action-policies"]
+)
 router.include_router(drift.router, prefix="/drift", tags=["drift"])
 router.include_router(execution.router, prefix="/execution", tags=["execution"])
 router.include_router(decisions.router, prefix="/decisions", tags=["decisions"])
