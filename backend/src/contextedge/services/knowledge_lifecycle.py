@@ -37,6 +37,10 @@ from __future__ import annotations
 
 from typing import Any
 
+import structlog
+
+logger = structlog.get_logger()
+
 # Normalized vocabulary. `published` is the only state that means "current";
 # the rest are recorded rather than collapsed, because "still in review" and
 # "withdrawn" are different answers to a reviewer asking why an article did
@@ -46,10 +50,19 @@ KNOWLEDGE_STATES = ("draft", "review", "published", "retired")
 # States that must not reach an agent or a responder as guidance.
 WITHHELD_KNOWLEDGE_STATES = ("draft", "review", "retired")
 
-# (source_type, payload field) -> the field holding the lifecycle state.
-_LIFECYCLE_FIELDS: dict[str, str] = {
+# (source_type, object_type) -> the payload field holding the lifecycle state.
+#
+# Keyed on the object type, not just the source, because a ticket carries a
+# `status` too and it means something entirely different. Zoho's "Open" is not
+# a knowledge state, and a table keyed only on the source would quietly treat
+# it as one. Same `(source_type, object_type)` key `evidence_typing` uses.
+_LIFECYCLE_FIELDS: dict[tuple[str, str], str] = {
     # Verified against the connector's own field list for `kb_knowledge`.
-    "servicenow": "workflow_state",
+    ("servicenow", "kb_knowledge"): "workflow_state",
+    # Zoho Desk articles carry `status`, which the connector already maps into
+    # the payload — and which nothing read, exactly as ServiceNow's
+    # `workflow_state` was ignored before this module existed.
+    ("zoho_desk", "articles"): "status",
 }
 
 # (source_type, raw value) -> normalized state. Raw values are lower-cased
@@ -64,7 +77,22 @@ _STATE_MAP: dict[tuple[str, str], str] = {
     # ServiceNow instances that use the pending-retirement step still mean
     # "on its way out" — but it is published until it is not, so it serves.
     ("servicenow", "pending_retirement"): "published",
+    # Zoho Desk. `Published` is verified — it appears in the connector's own
+    # fixtures and in Zoho's webhook payloads. `Draft` and `Review` come from
+    # Zoho's documented article workflow and have NOT been seen on this
+    # tenant, because no Zoho article has ever been ingested here. Adding them
+    # can only withhold something that genuinely is a draft; a status Zoho uses
+    # that is missing from this table still serves, and is logged once so it
+    # can be added with evidence rather than guessed at.
+    ("zoho_desk", "published"): "published",
+    ("zoho_desk", "draft"): "draft",
+    ("zoho_desk", "review"): "review",
 }
+
+# Raw values already reported as unmapped, so a backfill of ten thousand
+# articles logs each unfamiliar status once rather than once per record.
+# Log-only: it never changes what the function returns.
+_REPORTED_UNMAPPED: set[tuple[str, str]] = set()
 
 
 def derive_knowledge_state(payload: dict | None) -> str | None:
@@ -75,15 +103,31 @@ def derive_knowledge_state(payload: dict | None) -> str | None:
     """
     p = payload or {}
     source_type = str(p.get("_connector_source_type") or "").strip().lower()
+    object_type = str(p.get("_connector_object_type") or "").strip().lower()
     if not source_type:
         return None
-    field = _LIFECYCLE_FIELDS.get(source_type)
+    field = _LIFECYCLE_FIELDS.get((source_type, object_type))
     if not field:
         return None
     raw = p.get(field)
     if raw is None:
         return None
-    return _STATE_MAP.get((source_type, str(raw).strip().lower()))
+    key = (source_type, str(raw).strip().lower())
+    state = _STATE_MAP.get(key)
+    if state is None and key not in _REPORTED_UNMAPPED:
+        # The source has a lifecycle, said something, and this table does not
+        # recognise it. The article serves — unknown must never withhold — but
+        # somebody should decide what the value means, and they cannot decide
+        # about a value they never see.
+        _REPORTED_UNMAPPED.add(key)
+        logger.info(
+            "knowledge_lifecycle.unmapped_state",
+            source_type=source_type,
+            field=field,
+            value=str(raw)[:60],
+            note="served as current; add it to _STATE_MAP once its meaning is confirmed",
+        )
+    return state
 
 
 def is_current(state: str | None) -> bool:

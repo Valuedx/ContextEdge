@@ -62,7 +62,9 @@ def test_pending_retirement_still_serves():
 
 def test_a_source_with_no_lifecycle_reports_nothing():
     """Most knowledge has no lifecycle at all — a file-share SOP, an upload."""
-    assert derive_knowledge_state({"_connector_source_type": "sharepoint"}) is None
+    assert derive_knowledge_state(
+        {"_connector_source_type": "sharepoint", "_connector_object_type": "file"}
+    ) is None
     assert derive_knowledge_state({}) is None
     assert derive_knowledge_state(None) is None
 
@@ -202,3 +204,64 @@ def test_the_projection_seed_query_filters_too():
     from contextedge.graph.agent import repository
 
     assert "current_knowledge_clause(EvidenceItem)" in inspect.getsource(repository)
+
+
+# =========================================================================
+# Zoho Desk — the same field, ignored the same way
+# =========================================================================
+
+
+def _zoho(**kwargs):
+    return {"_connector_source_type": "zoho_desk",
+            "_connector_object_type": "articles", **kwargs}
+
+
+def test_zoho_article_status_is_read():
+    """The Zoho connector has always mapped `status` into the payload, and
+    nothing read it — the same shape as ServiceNow's `workflow_state`."""
+    assert derive_knowledge_state(_zoho(status="Published")) == "published"
+    assert derive_knowledge_state(_zoho(status="Draft")) == "draft"
+    assert derive_knowledge_state(_zoho(status="Review")) == "review"
+
+
+def test_a_zoho_draft_is_withheld_like_a_servicenow_one():
+    assert is_current(derive_knowledge_state(_zoho(status="Draft"))) is False
+    assert is_current(derive_knowledge_state(_zoho(status="Published"))) is True
+
+
+def test_an_unmapped_zoho_status_serves_and_is_reported():
+    """Only `Published` is verified against a live instance; the rest come
+    from Zoho's documented workflow. A status this table does not know must
+    still serve — and must be visible, so it can be added with evidence
+    rather than guessed at."""
+    from contextedge.services import knowledge_lifecycle
+
+    knowledge_lifecycle._REPORTED_UNMAPPED.discard(("zoho_desk", "unpublished"))
+    assert derive_knowledge_state(_zoho(status="Unpublished")) is None
+    assert ("zoho_desk", "unpublished") in knowledge_lifecycle._REPORTED_UNMAPPED
+
+
+def test_an_unmapped_status_is_reported_once_not_per_record():
+    """A backfill of ten thousand articles must not write ten thousand
+    identical log lines."""
+    from contextedge.services import knowledge_lifecycle
+
+    knowledge_lifecycle._REPORTED_UNMAPPED.discard(("zoho_desk", "archived"))
+    for _ in range(5):
+        derive_knowledge_state(_zoho(status="Archived"))
+    reported = [k for k in knowledge_lifecycle._REPORTED_UNMAPPED if k[1] == "archived"]
+    assert len(reported) == 1
+
+
+def test_a_zoho_ticket_has_no_knowledge_state():
+    """Tickets carry a `status` too, and it means something entirely
+    different. Keying on the object type keeps a ticket's "Open" from being
+    considered at all — a table keyed only on the source would treat every
+    ticket status as an unrecognised knowledge state and say so, loudly."""
+    from contextedge.services import knowledge_lifecycle
+
+    knowledge_lifecycle._REPORTED_UNMAPPED.discard(("zoho_desk", "open"))
+    ticket = {"_connector_source_type": "zoho_desk",
+              "_connector_object_type": "tickets", "status": "Open"}
+    assert derive_knowledge_state(ticket) is None
+    assert ("zoho_desk", "open") not in knowledge_lifecycle._REPORTED_UNMAPPED
