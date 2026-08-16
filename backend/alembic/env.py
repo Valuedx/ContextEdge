@@ -57,14 +57,21 @@ def run_migrations_online() -> None:
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
     )
+    # The widening runs on its OWN connection, and that matters more than it
+    # looks: a version table created by an Alembic older than 1.10 is
+    # VARCHAR(32) and six revision ids in this chain are longer, so such a
+    # database dies mid-chain on the stamp rather than on the DDL.
+    #
+    # Doing it on the migration connection is what broke: merely INSPECTING
+    # the table opens an implicit transaction, Alembic then sees a transaction
+    # it did not start and leaves the commit to whoever did, and the migration
+    # rolls back when the connection closes. `alembic upgrade` reported
+    # "Running upgrade ..." and returned success while changing nothing.
+    with connectable.connect() as bootstrap:
+        if widen_alembic_version_column(bootstrap):
+            bootstrap.commit()
+
     with connectable.connect() as connection:
-        # Before anything else: a version table created by an Alembic older
-        # than 1.10 is VARCHAR(32), and six revision ids in this chain are
-        # longer than that. Such a database dies mid-chain on the stamp, not
-        # on the DDL, which reads like a broken migration rather than a table
-        # that predates it. Fresh databases already get 255 and skip this.
-        if widen_alembic_version_column(connection):
-            connection.commit()
         context.configure(connection=connection, target_metadata=target_metadata)
         with context.begin_transaction():
             context.run_migrations()
