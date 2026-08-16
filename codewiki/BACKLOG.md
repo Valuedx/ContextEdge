@@ -1015,6 +1015,38 @@ serves — correct, but a second ITSM's lifecycle stays invisible until its valu
 verified against a live instance rather than guessed. Existing rows stay NULL until their
 next sync.
 
+### F14 · An authorable skill registry — S — **SHIPPED 2026-08-16**
+**Shipped.** `api/v1/skills.py`: execution contracts and skills, listable and authorable.
+F6 built the registry with real validation — a destructive skill without a replay
+guarantee is refused, a `DEDUPE_ONLY` contract without a window is refused — and a
+resolver for `PlaybookStep.tool_ref`. Nothing ever wrote a row, so `tool_ref` resolved to
+nothing and an approved playbook had no way to name what to call. A registry nobody can
+author is a vocabulary, not a control: the sentence F3b's action policies earned, for the
+same reason.
+
+Two lifecycle rules on top of the service's validation, both borrowed from surfaces that
+already work here:
+
+- **A skill is born `draft`.** `status` is not a field on create. Something registered as
+  immediately invocable skips the moment a human looks at what it can do and at what
+  safety class.
+- **Rules get a new version; labels get an edit.** An active skill's endpoint, safety
+  class, interface or contract cannot be mutated — a playbook was approved against those.
+  Name and description are labels. The same rule/label split `action_policies` versions on.
+
+Retirement is one-way and deprecation is not: a skill withdrawn in haste can come back,
+but un-retiring one should cost a new version so the decision stays legible. 1793 tests.
+
+**Why now.** Under the operating model the user set out — ServiceNow owns the ITSM and
+knowledge lifecycle, the MAF agent decides and acts, ContextEdge records and supplies
+inputs — an approved playbook is what the agent executes *instead of* re-reasoning each
+step, and every step has to name a real action. `interface_type` already covers
+`WORKFLOW` (AutomationEdge), `API`, `MCP`, `CLI`, `SCRIPT` and `MANUAL`, so the mapping
+works with or without AE.
+
+**Residual:** the surface exists, the rows do not. The AutomationEdge workflows that fill
+it live in the SupportFlo repo, and provisioning them is the next step there.
+
 ### Deferred tail (recorded, not scheduled)
 
 | Item | Why deferred |

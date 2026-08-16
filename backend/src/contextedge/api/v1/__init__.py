@@ -29,6 +29,7 @@ from contextedge.api.v1 import (  # noqa: E402, F401
     review_queue,
     runtime,
     sessions,
+    skills,
     sources,
     sync,
     tenants,
@@ -75,6 +76,7 @@ router.include_router(
     prefix="/knowledge-supersessions",
     tags=["knowledge-supersessions"],
 )
+router.include_router(skills.router, prefix="/skills", tags=["skills"])
 router.include_router(graph.router, prefix="/graph", tags=["graph"])
 router.include_router(inventory.router, prefix="/inventory", tags=["inventory"])
 router.include_router(review_queue.router, prefix="/review-queue", tags=["review-queue"])
