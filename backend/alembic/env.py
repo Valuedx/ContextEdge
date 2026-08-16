@@ -29,6 +29,7 @@ import contextedge.models.error_signature  # noqa: E402, F401
 import contextedge.models.case_outcome  # noqa: E402, F401
 
 from contextedge.config import settings  # noqa: E402
+from contextedge.migration_support import widen_alembic_version_column  # noqa: E402
 
 config = context.config
 
@@ -57,6 +58,13 @@ def run_migrations_online() -> None:
         poolclass=pool.NullPool,
     )
     with connectable.connect() as connection:
+        # Before anything else: a version table created by an Alembic older
+        # than 1.10 is VARCHAR(32), and six revision ids in this chain are
+        # longer than that. Such a database dies mid-chain on the stamp, not
+        # on the DDL, which reads like a broken migration rather than a table
+        # that predates it. Fresh databases already get 255 and skip this.
+        if widen_alembic_version_column(connection):
+            connection.commit()
         context.configure(connection=connection, target_metadata=target_metadata)
         with context.begin_transaction():
             context.run_migrations()

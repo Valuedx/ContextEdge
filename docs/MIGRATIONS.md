@@ -11,6 +11,21 @@ The first revision calls `Base.metadata.create_all()` against whatever SQLAlchem
 - **Reproducible environments:** after a known-good migrate on a reference commit, capture **`pg_dump --schema-only`** (or restore from a golden image) for CI and staging parity.
 - **Downgrade:** `0001` uses `drop_all()` and is destructive; do not use it casually in shared environments.
 
+## The `alembic_version` column width
+
+Alembic sizes `alembic_version.version_num` once, when it first creates the table, and never revisits it: before Alembic 1.10 that was `VARCHAR(32)`, current Alembic uses `VARCHAR(255)`. Six revision ids in this chain are longer than 32 characters — `0014_notifications_and_playbook_approval_policy` is 47.
+
+A database whose version table was created by an older Alembic therefore fails **on the stamp, not the DDL**:
+
+```
+DataError: value too long for type character varying(32)
+[SQL: UPDATE alembic_version SET version_num='0056_policy_versioning_and_checks' ...]
+```
+
+The migration's own DDL rolls back with it, so nothing is corrupted — the database is simply stuck, in a way that reads like a broken migration rather than a table that predates it. **Fresh installs never see this**, which is why it went unnoticed: every new database is created by a current Alembic.
+
+`alembic/env.py` widens the column in place before running any migration (idempotent; Postgres widens a varchar without rewriting the table). Renaming the long revisions was rejected: an id is only meaningful while it matches what a deployed database is stamped with, and shortening one turns "stuck" into `Can't locate revision`. Offline (`--sql`) mode is untouched — it has no connection to alter.
+
 ## Adding schema changes
 
 Always add a new revision (`alembic revision --autogenerate` or hand-written `op.create_table` / `op.add_column`) rather than expecting `0001` to update on existing databases.
