@@ -150,6 +150,13 @@ class SyncRun(Base):
     )
     items_processed: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     errors: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    # Cooperative stop: `pause` or `cancel`, set by an operator and read by
+    # the connector inside its own loops. A backfill can spend 900+ seconds
+    # in one call, so a signal checked only between calls would be useless.
+    # Both stops KEEP what was already fetched — see 0069.
+    control: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    # Escape hatch for a worker wedged past answering the cooperative check.
+    celery_task_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

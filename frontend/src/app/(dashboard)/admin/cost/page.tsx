@@ -48,14 +48,18 @@ import type {
   TenantBudget,
   TenantBudgetStatus,
   TenantBudgetUpsert,
+  SyncRun,
 } from "@/lib/types";
 
 // Windows the dashboard offers — not free-form so we can cache consistently.
 const WINDOW_OPTIONS = [
   { value: "1", label: "Last hour" },
-  { value: "24", label: "Last 24 hours" },
-  { value: "168", label: "Last 7 days" },
-  { value: "720", label: "Last 30 days" },
+  { value: "24", label: "Today (24h)" },
+  { value: "168", label: "This week (7d)" },
+  { value: "720", label: "This month (30d)" },
+  // The API caps the rolling window at 30 days; "overall" is a different
+  // question and asks the backend for no lower bound at all.
+  { value: "all", label: "Overall to date" },
 ] as const;
 
 function formatNumber(n: number): string {
@@ -561,14 +565,32 @@ function BudgetEditForm({
 export default function AdminCostPage() {
   const [windowHours, setWindowHours] = useState<string>("24");
 
+  // "This sync" is bounded by a run's own start and end rather than by the
+  // clock, so the number answers "what did THAT cost" instead of "what
+  // happened in a window that happens to contain it". A run still going has
+  // no end yet, which is what makes the meter live.
+  const { data: runs = [] } = useQuery<SyncRun[]>({
+    queryKey: ["admin-cost-sync-runs"],
+    queryFn: () => api.get<SyncRun[]>("/sync-runs", { limit: "20" }),
+    retry: false,
+  });
+  const [syncRunId, setSyncRunId] = useState<string>("");
+  const activeRun = runs.find((r) => r.status === "running") ?? null;
+
   const { data, isLoading, error, refetch, isFetching } = useQuery<LlmUsageResponse>({
-    queryKey: ["admin-llm-usage", windowHours],
+    queryKey: ["admin-llm-usage", windowHours, syncRunId],
     queryFn: () =>
       api.get<LlmUsageResponse>("/admin/llm-usage", {
-        window_hours: windowHours,
+        ...(syncRunId
+          ? { sync_run_id: syncRunId }
+          : windowHours === "all"
+            ? { all_time: "true" }
+            : { window_hours: windowHours }),
         top_n_breakdown: "15",
       }),
-    refetchInterval: 60_000,
+    // A live sync moves the number every few seconds; a quiet system does
+    // not need to be asked every five.
+    refetchInterval: syncRunId || activeRun ? 5_000 : 60_000,
   });
 
   const totals = data?.totals;
@@ -579,7 +601,7 @@ export default function AdminCostPage() {
     <div className="space-y-6">
       <PageHeader
         title="LLM Cost & Usage"
-        description="Per-tenant spend, cache-hit rate, and model/task breakdown over the selected window. Refreshes every 60 seconds."
+        description="Per-tenant spend, cache-hit rate, and model/task breakdown. Pick a window, or scope to a single sync run — a run still going updates every 5 seconds."
       />
 
       <div className="flex flex-wrap items-end gap-3">
@@ -590,8 +612,14 @@ export default function AdminCostPage() {
           <Select
             value={windowHours}
             onValueChange={(v) => {
-              if (v) setWindowHours(v);
+              if (v) {
+                setWindowHours(v);
+                // A window and a run are two different questions; picking one
+                // clears the other rather than silently combining them.
+                setSyncRunId("");
+              }
             }}
+            disabled={!!syncRunId}
           >
             <SelectTrigger className="w-[180px]">
               <SelectValue />
@@ -600,6 +628,30 @@ export default function AdminCostPage() {
               {WINDOW_OPTIONS.map((o) => (
                 <SelectItem key={o.value} value={o.value}>
                   {o.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+
+        <div className="space-y-1.5">
+          <label className="text-xs font-medium text-muted-foreground">
+            This sync
+          </label>
+          <Select
+            value={syncRunId || "none"}
+            onValueChange={(v) => setSyncRunId(!v || v === "none" ? "" : v)}
+          >
+            <SelectTrigger className="w-[280px]">
+              <SelectValue placeholder="Not scoped to a sync" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="none">Not scoped to a sync</SelectItem>
+              {runs.map((r) => (
+                <SelectItem key={r.id} value={r.id}>
+                  {r.status === "running" ? "▶ " : ""}
+                  {r.run_type} · {r.items_processed} items ·{" "}
+                  {r.started_at ? new Date(r.started_at).toLocaleString() : "—"}
                 </SelectItem>
               ))}
             </SelectContent>

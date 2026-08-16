@@ -81,6 +81,30 @@ class BaseConnector(ABC):
     def __init__(self, source_config: dict[str, Any], credentials: dict[str, Any]):
         self.source_config = source_config
         self.credentials = credentials
+        # Cooperative stop, set by the sync job. A backfill can spend a
+        # quarter of an hour inside ONE `backfill()` call — the live Zoho
+        # corpus took 913 seconds for a page walk plus 1,855 detail fetches
+        # — so a control signal checked only between invocations would do
+        # nothing for that entire time. Connectors that honour it call
+        # `await self._check_control()` inside their loops; the default is
+        # a no-op, so a connector that has not been taught still behaves
+        # exactly as before.
+        self._control_check: Any = None
+
+    def set_control_check(self, check: Any) -> None:
+        """Install the callback the loops consult. `check()` returns
+        ``"pause"``, ``"cancel"``, or a falsy value to continue."""
+        self._control_check = check
+
+    async def _check_control(self) -> str | None:
+        """The current signal, or None. Never raises: a control channel
+        that fails must not take the sync down with it."""
+        if self._control_check is None:
+            return None
+        try:
+            return await self._control_check()
+        except Exception:  # noqa: BLE001
+            return None
 
     @abstractmethod
     async def validate_credentials(self) -> CredentialStatus:

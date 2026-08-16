@@ -59,6 +59,9 @@ _STATE_FIELDS: dict[tuple[str, str], str] = {
 # the prefix rule below rather than needing an entry each.
 _STATE_MAP: dict[tuple[str, str], str] = {
     ("zoho_desk", "closed"): "resolved",
+    # A plain `Resolved` exists alongside the `Resolved By ...` family — 340
+    # tickets on this tenant, which the prefix rule below does NOT catch.
+    ("zoho_desk", "resolved"): "resolved",
     ("zoho_desk", "resolved by agent"): "resolved",
     ("zoho_desk", "resolved by plugin team"): "resolved",
     ("zoho_desk", "cancelled"): "cancelled",

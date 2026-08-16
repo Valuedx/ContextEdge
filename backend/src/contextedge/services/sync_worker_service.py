@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from contextedge.connectors.base import Checkpoint, DateRange
 from contextedge.connectors.registry import get_connector
+from contextedge.database import async_session_factory
 from contextedge.models.evidence import EvidenceItem, RawEvidenceObject
 from contextedge.models.source import (
     Source,
@@ -28,6 +29,10 @@ from contextedge.services.source_service import (
     create_sync_run,
     decrypt_credentials,
     discover_source_objects,
+)
+from contextedge.services.sync_control_service import (
+    control_check_for,
+    finalize_status,
 )
 from contextedge.services.sync_ingestion_queue import (
     NormalizeEnqueueError,
@@ -390,12 +395,34 @@ async def acquire_sync_lock(
     return bool(result.scalar_one())
 
 
+async def _read_control(run_id: uuid.UUID) -> str | None:
+    """The signal as it stands now, read on its own connection.
+
+    The job's own transaction was opened before the operator pressed
+    anything, so it cannot see the update; a fresh read can.
+    """
+    from sqlalchemy import select as _select
+
+    from contextedge.models.source import SyncRun as _SyncRun
+
+    try:
+        async with async_session_factory() as probe:
+            return (
+                await probe.execute(
+                    _select(_SyncRun.control).where(_SyncRun.id == run_id)
+                )
+            ).scalar_one_or_none()
+    except Exception:  # noqa: BLE001
+        return None
+
+
 async def run_backfill_job(
     db: AsyncSession,
     source_id: uuid.UUID,
     source_object_id: uuid.UUID,
     tenant_id: uuid.UUID,
     window_days: int = 90,
+    celery_task_id: str | None = None,
 ) -> dict:
     if not await acquire_sync_lock(db, source_object_id):
         logger.info(
@@ -423,6 +450,10 @@ async def run_backfill_job(
         return {"error": "source_not_found"}
 
     run = await create_sync_run(db, source.id, tenant_id, "backfill", so.id)
+    # Recorded so a run whose worker is wedged past answering the cooperative
+    # check can still be revoked. The cooperative stop is the mechanism;
+    # this is the escape hatch, and an escape hatch nobody can find is not one.
+    run.celery_task_id = celery_task_id
     connector = await _load_connector(db, source)
 
     ck_row = (
@@ -439,6 +470,11 @@ async def run_backfill_job(
     start = end - timedelta(days=window_days)
     window = DateRange(start=start, end=end)
 
+    # The connector consults this inside its own loops — per page, and every
+    # 25 records of the detail fetch. A signal checked only out here would sit
+    # unread for the 900+ seconds one backfill call can take.
+    connector.set_control_check(control_check_for(async_session_factory, run.id))
+
     try:
         result = await connector.backfill(so.external_id, so.object_type, window, ck)
         events = list(result.events or [])
@@ -450,7 +486,11 @@ async def run_backfill_job(
             events=events,
         )
         run.items_processed = len(events) if events else result.items_processed
-        run.status = "completed"
+        # A stop is not a failure and not a completion: the records fetched
+        # before it are persisted above, and the status says which of the two
+        # things the operator asked for happened.
+        stopped_by = await _read_control(run.id)
+        run.status = finalize_status(stopped_by)
         run.errors = (
             {"ingestion": {"raw_objects_created": raw_created, "raw_objects_deduped": raw_deduped}}
             if (raw_created or raw_deduped)
@@ -464,7 +504,8 @@ async def run_backfill_job(
                 )
             )
         so.last_checkpoint_at = datetime.now(UTC)
-        so.last_successful_sync_at = datetime.now(UTC)
+        if run.status == "completed":
+            so.last_successful_sync_at = datetime.now(UTC)
     except Exception as exc:
         run.status = "failed"
         run.errors = {"message": str(exc)}

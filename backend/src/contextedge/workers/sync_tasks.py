@@ -50,7 +50,10 @@ def run_backfill(
     tid = uuid.UUID(tenant_id)
 
     async def work(db):
-        return await run_backfill_job(db, sid, oid, tid, window_days=window_days)
+        return await run_backfill_job(
+            db, sid, oid, tid, window_days=window_days,
+            celery_task_id=getattr(self.request, "id", None),
+        )
 
     try:
         return run_async(work)

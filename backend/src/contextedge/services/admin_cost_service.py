@@ -75,6 +75,8 @@ async def get_llm_usage(
     tenant_id: uuid.UUID,
     window_hours: int = 24,
     top_n_breakdown: int = 10,
+    since: datetime | None = None,
+    until: datetime | None = None,
 ) -> dict[str, Any]:
     """Aggregate llm.usage events for one tenant over the last N hours.
 
@@ -84,15 +86,23 @@ async def get_llm_usage(
     the dashboard's polling refresh.
     """
     now = datetime.now(UTC)
-    from_time = now - timedelta(hours=window_hours)
+    # An explicit window wins over the rolling one. Two callers need it that
+    # the hours-back form cannot express: "everything to date" (window_hours
+    # caps at 30 days) and "this sync", which is bounded by a run's own start
+    # and end rather than by the clock.
+    from_time = since if since is not None else now - timedelta(hours=window_hours)
+
+    conditions = [
+        OperationalEvent.tenant_id == tenant_id,
+        OperationalEvent.event_type == "llm.usage",
+        OperationalEvent.recorded_at >= from_time,
+    ]
+    if until is not None:
+        conditions.append(OperationalEvent.recorded_at <= until)
 
     stmt = (
         select(OperationalEvent.payload, OperationalEvent.recorded_at)
-        .where(
-            OperationalEvent.tenant_id == tenant_id,
-            OperationalEvent.event_type == "llm.usage",
-            OperationalEvent.recorded_at >= from_time,
-        )
+        .where(*conditions)
         .order_by(OperationalEvent.recorded_at.desc())
     )
     rows = (await db.execute(stmt)).all()

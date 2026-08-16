@@ -122,6 +122,10 @@ DEFAULT_MAX_PAGES = 20
 # round trip each). Bounded per invocation; the rest arrive next tick
 # because the checkpoint only advances over records actually emitted.
 DETAIL_FETCH_LIMIT = 200
+# How often the detail loop consults the control signal. 25 records is
+# a few seconds of wall time — responsive without turning a control
+# check into a per-record database round trip.
+CONTROL_CHECK_EVERY = 25
 
 # The ticket list endpoint does NOT return `modifiedTime` in its default
 # response. Articles do; tickets do not — verified against the live
@@ -807,6 +811,17 @@ class ZohoDeskConnector(BaseConnector):
         hit_budget = True
 
         for _page in range(self.max_pages):
+            # Cooperative stop between pages. What has been collected so far
+            # is RETURNED, not discarded: a pause after 900 seconds of API
+            # calls must not throw those records away, and the checkpoint
+            # travels with them so a resume continues rather than restarts.
+            if await self._check_control():
+                logger.info(
+                    "zoho_desk.walk_stopped_by_control",
+                    module=module, collected=len(collected), offset=offset,
+                )
+                return collected, max_time, ids_at_max, False, offset
+
             params = self._list_params(
                 module,
                 {"limit": PAGE_SIZE, "from": offset, "sortBy": "-modifiedTime"},
@@ -923,7 +938,18 @@ class ZohoDeskConnector(BaseConnector):
         limit = int((self.source_config or {}).get("detail_fetch_limit") or DETAIL_FETCH_LIMIT)
         detail_params = {"include": meta["list_includes"]} if meta.get("list_includes") else None
         out: list[dict] = []
-        for row in rows[:limit]:
+        for index, row in enumerate(rows[:limit]):
+            # The detail fetch is the long pole — 1,855 sequential calls on
+            # the live corpus. Checked every CONTROL_CHECK_EVERY records so a
+            # pause lands in seconds rather than a quarter of an hour, and
+            # cheaply enough that the check itself is not the cost.
+            if index and index % CONTROL_CHECK_EVERY == 0 and await self._check_control():
+                logger.info(
+                    "zoho_desk.detail_stopped_by_control",
+                    module=module, detailed=len(out), remaining=len(rows) - index,
+                )
+                out.extend(rows[index:])
+                return out
             record_id = row.get("id")
             if not record_id:
                 continue
