@@ -29,6 +29,7 @@ from contextedge.services.evidence_normalization import (
 )
 from contextedge.services.evidence_typing import derive_evidence_type
 from contextedge.services.identity_service import link_evidence_identities
+from contextedge.services.knowledge_lifecycle import derive_knowledge_state
 from contextedge.services.redaction_service import redact, redact_evidence_fields
 from contextedge.workers.asyncio_runner import run_async
 from contextedge.workers.celery_app import celery_app
@@ -182,6 +183,21 @@ async def _normalize(db: AsyncSession, raw_object_id: str, tenant_id: uuid.UUID)
         )
     ).scalar_one_or_none()
     if existing:
+        # Refreshed on every re-ingest, unlike the fields below it. The
+        # content hash covers the BODY, and retiring an article does not
+        # rewrite its body — so a state change is precisely the case that
+        # lands here rather than creating a new row. Only ever set it when
+        # the source says something: a payload that has stopped carrying the
+        # field must not silently republish a retired article.
+        refreshed_state = derive_knowledge_state(payload)
+        if refreshed_state is not None and refreshed_state != existing.knowledge_state:
+            logger.info(
+                "evidence.knowledge_state_changed",
+                evidence_id=str(existing.id),
+                was=existing.knowledge_state,
+                now=refreshed_state,
+            )
+            existing.knowledge_state = refreshed_state
         if existing.created_at_source is None and source_ts:
             existing.created_at_source = source_ts
         if existing.thread_id is None:
@@ -281,6 +297,9 @@ async def _normalize(db: AsyncSession, raw_object_id: str, tenant_id: uuid.UUID)
         # Teams line were indistinguishable downstream. See
         # services/evidence_typing.py for why this is central.
         evidence_type=derive_evidence_type(payload),
+        # What the source system says about this article's currency. NULL for
+        # every source without a knowledge lifecycle, which serves normally.
+        knowledge_state=derive_knowledge_state(payload),
         title=title[:500],
         body_text=body,
         content_hash=h,

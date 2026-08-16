@@ -43,6 +43,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from contextedge.models.evidence import EvidenceChunk, EvidenceItem
 from contextedge.services.evidence_typing import KNOWLEDGE_EVIDENCE_TYPES
+from contextedge.services.knowledge_lifecycle import is_current
 
 logger = structlog.get_logger()
 
@@ -312,10 +313,21 @@ async def _retrieve(
     )
 
     documents: list[KnowledgeDocument] = []
+    # Counted, not silent: "no guidance exists" and "all of it is retired or
+    # unapproved" are different answers, and only one of them is a knowledge
+    # gap somebody should act on.
+    withheld = 0
     for row in rows:
         evidence = row[0]
         distance = float(row[1]) if len(row) > 1 and row[1] is not None else 1.0
         if getattr(evidence, "evidence_type", None) not in KNOWLEDGE_EVIDENCE_TYPES:
+            continue
+        # The source system's own lifecycle: a draft nobody approved, an
+        # article in review, or one a human retired is not guidance. Withheld
+        # rather than demoted, unlike supersession — there a filename
+        # heuristic guessed, here a person used their own system to say so.
+        if not is_current(getattr(evidence, "knowledge_state", None)):
+            withheld += 1
             continue
         if distance > MAX_DISTANCE:
             continue
@@ -387,6 +399,14 @@ async def _retrieve(
     # for all of them — and applied BEFORE the truncation below, so a
     # superseded article cannot hold a slot its replacement should have.
     await _apply_supersession(db, tenant_id, documents)
+
+    if withheld:
+        logger.info(
+            "knowledge_retrieval.withheld_by_source_lifecycle",
+            tenant_id=str(tenant_id),
+            withheld=withheld,
+            served=len(documents),
+        )
 
     documents.sort(key=lambda d: d.best_distance)
     documents = documents[:limit]

@@ -975,6 +975,46 @@ drive it. Nothing schedules or resumes a run either, so a caller that stops call
 one open — acceptable while the callers are external and few, not acceptable once anything
 unattended uses it.
 
+### F13 · Respect the source system's knowledge lifecycle — S — **SHIPPED 2026-08-16**
+**Shipped.** Migration `0067`: `evidence_items.knowledge_state`, plus
+`services/knowledge_lifecycle.py` as the single home for the rule. ServiceNow is the
+system of record for knowledge — articles are drafted, reviewed, published and retired
+there — and the connector has fetched `workflow_state` on `kb_knowledge` since it was
+written. That field appeared **exactly once in the entire codebase**: in the list of
+fields to fetch. It was read from ServiceNow and thrown away, so an unapproved draft, an
+article in review, and one a human explicitly retired were all retrieved and cited exactly
+like a published one. The citation is what makes it dangerous — it reads as though
+somebody checked.
+
+Four call sites honour it: ingest (stamps it), retrieval (withholds and counts),
+`node_is_visible` (so a withheld article cannot arrive through a graph edge either), and
+the F4b supersession scan (what the source already withdrew is not a candidate on either
+side). Two rules make it safe:
+
+- **NULL serves.** Most knowledge has no lifecycle at all — a file-share SOP, an uploaded
+  PDF — and treating "the source did not say" as "withheld" would empty the corpus for
+  every source but one. The SQL form spells the NULL branch out, because `NOT IN` drops
+  NULL rows and would have done exactly that.
+- **Withheld, not demoted.** F4b demotes a superseded article because a filename heuristic
+  guessed. Here a human used their own system to say this is not current guidance, and
+  serving it ranked-last would override that decision.
+
+The re-ingest path refreshes the state on the existing row, deliberately: the content hash
+covers the **body**, and retiring an article does not rewrite its body — so a state change
+is precisely the case that lands there rather than creating a new row. It only ever writes
+a state the source actually reports, so a payload that stops carrying the field cannot
+silently republish a retired article. 1777 tests.
+
+**Context.** This is the first item under the operating model the user set out: ServiceNow
+owns the ITSM and knowledge lifecycle, the MAF agent decides and acts, and ContextEdge
+records, suggests, and supplies inputs. It never authors an article and never runs a
+parallel review.
+
+**Residual:** only ServiceNow's vocabulary is mapped. Every other source reports NULL and
+serves — correct, but a second ITSM's lifecycle stays invisible until its values are
+verified against a live instance rather than guessed. Existing rows stay NULL until their
+next sync.
+
 ### Deferred tail (recorded, not scheduled)
 
 | Item | Why deferred |
