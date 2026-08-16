@@ -1028,6 +1028,30 @@ async def get_execution_run(
     return result.scalar_one_or_none()
 
 
+async def get_step_run(
+    db: AsyncSession,
+    *,
+    tenant_id: uuid.UUID,
+    step_run_id: uuid.UUID,
+) -> ExecutionStepRun | None:
+    """One step run with its invocations already loaded.
+
+    The eager load is the point: the step response embeds its tool
+    invocations, and a lazily-loaded relationship on an async session raises
+    `MissingGreenlet` from inside the serializer — a failure the test suite
+    cannot see, because it runs without a live Postgres.
+    """
+    result = await db.execute(
+        select(ExecutionStepRun)
+        .where(
+            ExecutionStepRun.id == step_run_id,
+            ExecutionStepRun.tenant_id == tenant_id,
+        )
+        .options(selectinload(ExecutionStepRun.tool_invocations))
+    )
+    return result.scalar_one_or_none()
+
+
 async def list_execution_runs(
     db: AsyncSession,
     *,
@@ -1134,6 +1158,18 @@ async def record_tool_invocation(
         raise ExecutionPolicyError(
             f"step {step.step_index} was recognised as a duplicate of an earlier "
             "execution in this case and must not invoke a tool"
+        )
+
+    # A call cannot be more dangerous than the step it belongs to. The step's
+    # class is what policy, the approval gate and the caller's own
+    # `max_safety_class` were all evaluated against; letting an invocation
+    # declare a higher one would record a destructive call under a step that
+    # was authorised as something milder — and every control upstream would
+    # still read as satisfied.
+    if _safety_class_rank(safety_class) > _safety_class_rank(step.safety_class):
+        raise ExecutionPolicyError(
+            f"tool invocation declares safety class {safety_class!r}, which exceeds "
+            f"step {step.step_index}'s authorised class {step.safety_class!r}"
         )
 
     # F7: the last moment before a tool actually runs. If this step was
