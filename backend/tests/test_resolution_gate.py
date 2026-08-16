@@ -67,6 +67,10 @@ def test_problem_only_language_does_not_match():
 async def test_cluster_signal_found_in_summary_of_any_item():
     db = MagicMock()
     rows = MagicMock()
+    # The gate now asks the source's own verdict first (case_state =
+    # 'resolved'); these fixtures exercise the TEXT tier, so they answer
+    # "no evidence carries a terminal state" and fall through to it.
+    rows.scalar.return_value = 0
     rows.all.return_value = [
         ("VPN down for store 42", None, "Users cannot connect since 9am."),
         (None, "Resolved by re-issuing the device certificate.", None),
@@ -79,6 +83,7 @@ async def test_cluster_signal_found_in_summary_of_any_item():
 async def test_cluster_without_signal_is_negative():
     db = MagicMock()
     rows = MagicMock()
+    rows.scalar.return_value = 0
     rows.all.return_value = [("VPN down", None, "Still investigating, no update.")]
     db.execute = AsyncMock(return_value=rows)
     assert not await cluster_has_resolution_signal(db, uuid.uuid4(), [uuid.uuid4()])

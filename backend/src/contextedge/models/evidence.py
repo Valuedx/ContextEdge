@@ -145,6 +145,21 @@ class EvidenceItem(Base, TenantScopedMixin):
     # ``services/knowledge_lifecycle.py`` for why unknown must never withhold.
     knowledge_state: Mapped[str | None] = mapped_column(String(20), nullable=True)
 
+    # What the SOURCE system says about the ticket's state — `resolved` when a
+    # fix landed, `cancelled` when the case ended without one, NULL while it is
+    # still running. Read by the resolution gate, which decides whether a
+    # cluster is worth synthesising; see ``services/case_state.py`` for why
+    # terminal and resolved are not the same question.
+    case_state: Mapped[str | None] = mapped_column(String(20), nullable=True)
+
+    # Facets the SOURCE system already recorded — a human-assigned root
+    # cause, the environment, the product version. Free, and better evidence
+    # than the same values inferred from the record's prose. Empty for every
+    # source that does not map any; see ``services/source_facets.py``.
+    source_facets: Mapped[dict] = mapped_column(
+        JSONB, default=dict, server_default="{}", nullable=False
+    )
+
     # Empirical support for a knowledge item — has this procedure ever
     # actually worked? (0057) Computed by knowledge_validation_service from
     # playbook→knowledge links and *verified* execution outcomes, refreshed by

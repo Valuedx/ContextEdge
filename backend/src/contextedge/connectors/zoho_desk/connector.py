@@ -255,6 +255,14 @@ MODULES: dict[str, dict[str, Any]] = {
         "thread_prefix": "zoho_ticket",
         # Sent on every list call for this module.
         "list_fields": TICKET_FIELDS,
+        # Zoho returns `assigneeId` / `contactId` as bare ids; the PEOPLE
+        # only arrive when the call asks for them. Verified live: without
+        # this, `assignee`, `reporter`, `assignee_email` and
+        # `reporter_email` were empty on all 1000 tickets of a real
+        # backfill — the mapper has always read these nested objects, and
+        # nothing was ever fetching them. It costs no extra API call: the
+        # objects come back inline on the list response.
+        "list_includes": "contacts,assignee,team,products",
     },
     "articles": {
         "label": "KB Articles",
@@ -550,6 +558,9 @@ class ZohoDeskConnector(BaseConnector):
         list_fields = MODULES.get(module, {}).get("list_fields")
         if list_fields:
             params["fields"] = list_fields
+        includes = MODULES.get(module, {}).get("list_includes")
+        if includes:
+            params["include"] = includes
         module_filter = self.module_filters.get(module)
         if isinstance(module_filter, dict):
             params.update({str(k): v for k, v in module_filter.items()})
@@ -902,13 +913,24 @@ class ZohoDeskConnector(BaseConnector):
         if not self.fetch_detail:
             return rows
         meta = MODULES[module]
+        # The cap bounds API calls per invocation, and it silently decided
+        # the quality of a whole backfill: at the default of 200 against a
+        # 1000-ticket window, 823 tickets kept their LIST row — whose
+        # `description` is the one-line summary (median 38 characters
+        # against 488 for a detail-fetched one) and which carries no
+        # `resolution` and no custom fields. Configurable so a backfill can
+        # pay for what it is actually ingesting.
+        limit = int((self.source_config or {}).get("detail_fetch_limit") or DETAIL_FETCH_LIMIT)
+        detail_params = {"include": meta["list_includes"]} if meta.get("list_includes") else None
         out: list[dict] = []
-        for row in rows[:DETAIL_FETCH_LIMIT]:
+        for row in rows[:limit]:
             record_id = row.get("id")
             if not record_id:
                 continue
             try:
-                detail = await self._get(f"{meta['list_path']}/{record_id}")
+                detail = await self._get(
+                    f"{meta['list_path']}/{record_id}", params=detail_params
+                )
             except Exception as exc:  # noqa: BLE001
                 logger.warning(
                     "zoho_desk.detail_fetch_failed",
@@ -919,7 +941,7 @@ class ZohoDeskConnector(BaseConnector):
                 out.append(row)
                 continue
             out.append({**row, **detail} if isinstance(detail, dict) else row)
-        out.extend(rows[DETAIL_FETCH_LIMIT:])
+        out.extend(rows[limit:])
         return out
 
     async def backfill(
