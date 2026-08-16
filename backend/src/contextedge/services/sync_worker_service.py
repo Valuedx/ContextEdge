@@ -19,6 +19,10 @@ from contextedge.models.source import (
     SyncCheckpoint,
 )
 from contextedge.services.evidence_normalization import evidence_content_hash_from_payload
+from contextedge.services.ingest_priority import (
+    _ingest_priority,
+    order_raw_ids_by_priority,
+)
 from contextedge.services.ingestion_persistence import persist_ingestion_events
 from contextedge.services.source_service import (
     create_sync_run,
@@ -267,7 +271,7 @@ async def _claim_pending_raw_ids_for_handoff(
     tenant_id: uuid.UUID,
     source_object_id: uuid.UUID,
     new_raw_ids: list[uuid.UUID],
-) -> tuple[list[uuid.UUID], list[uuid.UUID]]:
+) -> tuple[list[uuid.UUID], list[uuid.UUID], str]:
     source_object = await _lock_source_object(
         db,
         tenant_id=tenant_id,
@@ -283,7 +287,10 @@ async def _claim_pending_raw_ids_for_handoff(
         _set_pending_raw_ids_on_source_object(source_object, raw_ids=[])
         await db.flush()
     await db.commit()
-    return pending_raw_ids, recovered_raw_ids
+    # The priority travels with the claim: the source object is already
+    # locked and loaded here, and re-fetching it downstream would be a second
+    # query for a value this function is holding.
+    return pending_raw_ids, recovered_raw_ids, _ingest_priority(source_object)
 
 
 async def _commit_and_queue_normalization(
@@ -294,7 +301,7 @@ async def _commit_and_queue_normalization(
     source_object_id: uuid.UUID,
     new_raw_ids: list[uuid.UUID],
 ) -> None:
-    pending_raw_ids, _recovered_raw_ids = await _claim_pending_raw_ids_for_handoff(
+    pending_raw_ids, _recovered_raw_ids, priority = await _claim_pending_raw_ids_for_handoff(
         db,
         tenant_id=tenant_id,
         source_object_id=source_object_id,
@@ -302,6 +309,10 @@ async def _commit_and_queue_normalization(
     )
     if not pending_raw_ids:
         return
+
+    pending_raw_ids = await order_raw_ids_by_priority(
+        db, tenant_id=tenant_id, raw_ids=pending_raw_ids, priority=priority,
+    )
 
     try:
         queue_normalize_raw_objects(pending_raw_ids, tenant_id)

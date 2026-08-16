@@ -129,7 +129,10 @@ async def test_claim_pending_raw_ids_for_handoff_clears_recovered_backlog_before
             AsyncMock(return_value=[recovered_raw_id, new_raw_id]),
         ),
     ):
-        pending_raw_ids, recovered_raw_ids = await _claim_pending_raw_ids_for_handoff(
+        # The claim now also returns the ingest-priority mode: the source
+        # object is locked and loaded there, so the ordering step downstream
+        # does not need a second query for it.
+        pending_raw_ids, recovered_raw_ids, priority = await _claim_pending_raw_ids_for_handoff(
             db,
             tenant_id=tenant_id,
             source_object_id=source_object_id,
@@ -138,6 +141,7 @@ async def test_claim_pending_raw_ids_for_handoff_clears_recovered_backlog_before
 
     assert pending_raw_ids == [recovered_raw_id, new_raw_id]
     assert recovered_raw_ids == [recovered_raw_id]
+    assert priority == "none"
     assert source_object.metadata_extra == {"connector_state": {"cursor": "abc"}}
     assert db.flush.await_count == 1
     assert db.commit.await_count == 1
@@ -155,7 +159,7 @@ async def test_commit_and_queue_normalization_queues_claimed_pending_ids():
     with (
         patch(
             "contextedge.services.sync_worker_service._claim_pending_raw_ids_for_handoff",
-            AsyncMock(return_value=([recovered_raw_id, new_raw_id], [recovered_raw_id])),
+            AsyncMock(return_value=([recovered_raw_id, new_raw_id], [recovered_raw_id], "none")),
         ),
         patch("contextedge.services.sync_worker_service.queue_normalize_raw_objects") as queue,
     ):
@@ -188,7 +192,7 @@ async def test_commit_and_queue_normalization_persists_only_unqueued_tail_on_han
     with (
         patch(
             "contextedge.services.sync_worker_service._claim_pending_raw_ids_for_handoff",
-            AsyncMock(return_value=([recovered_raw_id, pending_raw_id], [recovered_raw_id])),
+            AsyncMock(return_value=([recovered_raw_id, pending_raw_id], [recovered_raw_id], "none")),
         ),
         patch(
             "contextedge.services.sync_worker_service._reconcile_pending_raw_ids_on_source_object",

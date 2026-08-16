@@ -1111,6 +1111,13 @@ class ZohoDeskConnector(BaseConnector):
             "summary": _text(row.get("subject")),
             "description": "\n\n".join(body_parts) or _text(row.get("subject")),
             "resolution": resolution or None,
+            # Conversation size. Requested since the field list was written
+            # and never mapped, so nothing downstream could see it: the
+            # min_thread_count filter reads the RAW row, and ingest
+            # prioritisation had no way to tell a one-line ticket from a
+            # forty-message investigation.
+            "thread_count": _int(row.get("threadCount")),
+            "comment_count": _int(row.get("commentCount")),
             "status": _text(row.get("status")) or None,
             "sub_status": _text(row.get("subStatus")) or None,
             "priority": _text(row.get("priority")) or None,
