@@ -19,6 +19,7 @@ from contextedge.services.artifact_extraction_service import (
     load_raw_payload,
     register_attachment_artifacts,
 )
+from contextedge.services.case_state import derive_case_state
 from contextedge.services.decision_service import link_evidence_decisions
 from contextedge.services.evidence_chunk_service import write_chunks
 from contextedge.services.evidence_normalization import (
@@ -31,6 +32,7 @@ from contextedge.services.evidence_typing import derive_evidence_type
 from contextedge.services.identity_service import link_evidence_identities
 from contextedge.services.knowledge_lifecycle import derive_knowledge_state
 from contextedge.services.redaction_service import redact, redact_evidence_fields
+from contextedge.services.source_facets import applicability_from_facets, derive_facets
 from contextedge.workers.asyncio_runner import run_async
 from contextedge.workers.celery_app import celery_app
 from contextedge.workers.chunk_tasks import chunk_evidence_task, embed_chunks_batch_task
@@ -189,6 +191,28 @@ async def _normalize(db: AsyncSession, raw_object_id: str, tenant_id: uuid.UUID)
         # lands here rather than creating a new row. Only ever set it when
         # the source says something: a payload that has stopped carrying the
         # field must not silently republish a retired article.
+        # A ticket's status is the field most likely to change without its
+        # body changing — closing one rarely rewrites the description — so it
+        # is refreshed here for the same reason knowledge_state is.
+        # Facets are filled in as the ticket is worked — the root cause is
+        # typically typed when it is resolved, long after first ingest, and
+        # without touching the description the content hash covers.
+        refreshed_facets = derive_facets(
+            payload, (getattr(await db.get(Source, raw.source_id), "config", None) or {}).get(
+                "facet_fields"
+            ) if raw.source_id else None
+        )
+        if refreshed_facets and refreshed_facets != (existing.source_facets or {}):
+            existing.source_facets = {**(existing.source_facets or {}), **refreshed_facets}
+        refreshed_case = derive_case_state(payload)
+        if refreshed_case is not None and refreshed_case != existing.case_state:
+            logger.info(
+                "evidence.case_state_changed",
+                evidence_id=str(existing.id),
+                was=existing.case_state,
+                now=refreshed_case,
+            )
+            existing.case_state = refreshed_case
         refreshed_state = derive_knowledge_state(payload)
         if refreshed_state is not None and refreshed_state != existing.knowledge_state:
             logger.info(
@@ -280,6 +304,7 @@ async def _normalize(db: AsyncSession, raw_object_id: str, tenant_id: uuid.UUID)
     # evidence on any unexpected source shape, never crash the ingest.
     src = await db.get(Source, raw.source_id) if raw.source_id else None
     source_domain_ids = list(getattr(src, "domain_ids", None) or [])
+    facets = derive_facets(payload, (getattr(src, "config", None) or {}).get("facet_fields"))
     ev = EvidenceItem(
         tenant_id=tenant_id,
         source_id=raw.source_id,
@@ -300,6 +325,11 @@ async def _normalize(db: AsyncSession, raw_object_id: str, tenant_id: uuid.UUID)
         # What the source system says about this article's currency. NULL for
         # every source without a knowledge lifecycle, which serves normally.
         knowledge_state=derive_knowledge_state(payload),
+        # Resolved / cancelled, from the source's own status field.
+        case_state=derive_case_state(payload),
+        # Whatever the source already states about cause, environment and
+        # version — recorded rather than re-inferred.
+        source_facets=facets,
         title=title[:500],
         body_text=body,
         content_hash=h,
@@ -636,6 +666,20 @@ async def _extract_applicability(
     )
 
     if ev.evidence_type not in KNOWLEDGE_EVIDENCE_TYPES or ev.applicability:
+        return
+
+    # What the source states beats what a model infers from the same text —
+    # and skips the call entirely. `extract_applicability_llm` costs ~7,200
+    # tokens; a stated environment and version cost nothing and were typed
+    # by someone who knew.
+    stated = applicability_from_facets(getattr(ev, "source_facets", None))
+    if stated:
+        ev.applicability = stated
+        logger.info(
+            "applicability.from_source_facets",
+            evidence_id=str(ev.id),
+            facets=sorted(stated),
+        )
         return
 
     try:

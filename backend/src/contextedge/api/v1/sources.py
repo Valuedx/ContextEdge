@@ -1,6 +1,7 @@
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Query, status
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 
 from contextedge.deps import AuthUser, DbSession
@@ -254,6 +255,11 @@ async def approve_source_object(
         raise HTTPException(status_code=404, detail="Source object not found")
 
     update_data = body.model_dump(exclude_unset=True)
+    # `ingest_priority` is not a column — it rides in metadata_extra, so the
+    # queue order is per source object without a migration for a preference.
+    priority = update_data.pop("ingest_priority", None)
+    if priority is not None:
+        so.metadata_extra = {**(so.metadata_extra or {}), "ingest_priority": priority}
     for field, value in update_data.items():
         setattr(so, field, value)
     await db.flush()
@@ -276,6 +282,87 @@ async def approve_source_object(
         run_incremental_sync.delay(str(source_id), str(object_id), str(user.tenant_id))
 
     return so
+
+
+class SyncControlRequest(BaseModel):
+    """Pause, resume or cancel. `source_object_id` targets one module; omit
+    it to act on every running sync for the source."""
+
+    action: str = Field(..., description="pause | resume | cancel")
+    source_object_id: UUID | None = None
+
+
+@router.post("/{source_id}/sync/control")
+async def control_sync(
+    source_id: UUID, body: SyncControlRequest, db: DbSession, user: AuthUser
+):
+    """Signal the running sync. The job acts on it inside its own loops.
+
+    Nothing is killed: a backfill holds records in memory for the length of a
+    page walk, and terminating the worker would throw away what it has
+    already paid Zoho for. The cooperative stop persists them and checkpoints,
+    so `resume` continues instead of restarting.
+    """
+    user.require_role("domain_admin")
+    action = body.action.strip().lower()
+    if action not in ("pause", "resume", "cancel"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="action must be pause, resume or cancel",
+        )
+
+    from contextedge.services.sync_control_service import active_run, signal_run
+
+    objects = (
+        await db.execute(
+            select(SourceObject).where(
+                SourceObject.source_id == source_id,
+                SourceObject.tenant_id == user.tenant_id,
+                *([SourceObject.id == body.source_object_id] if body.source_object_id else []),
+            )
+        )
+    ).scalars().all()
+    if not objects:
+        raise HTTPException(status_code=404, detail="No matching source object")
+
+    affected: list[dict] = []
+    for so in objects:
+        run = await active_run(db, tenant_id=user.tenant_id, source_object_id=so.id)
+        if action == "resume":
+            # Resume is about the NEXT run: the paused one has already ended
+            # and persisted what it had. Clearing the gate lets the scheduler
+            # (or an operator) start one that picks up from the checkpoint.
+            so.metadata_extra = {**(so.metadata_extra or {}), "sync_paused": False}
+            affected.append({"object": so.external_id, "resumed": True})
+            continue
+        so.metadata_extra = {
+            **(so.metadata_extra or {}),
+            "sync_paused": action == "pause",
+        }
+        signalled = None
+        if run is not None:
+            signalled = await signal_run(
+                db, tenant_id=user.tenant_id, run_id=run.id, action=action
+            )
+        affected.append({
+            "object": so.external_id,
+            "action": action,
+            "running_run_id": str(run.id) if run else None,
+            "signalled": bool(signalled and signalled.control == action),
+        })
+
+    await log_audit_event(
+        db,
+        tenant_id=user.tenant_id,
+        actor_id=user.user_id,
+        actor_email=user.email,
+        action=f"sync.{action}",
+        resource_type="source",
+        resource_id=str(source_id),
+        details={"objects": affected},
+    )
+    await db.commit()
+    return {"status": action, "objects": affected}
 
 
 @router.get("/{source_id}/sync-runs", response_model=list[SyncRunResponse])

@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from contextedge.connectors.base import Checkpoint, DateRange
 from contextedge.connectors.registry import get_connector
+from contextedge.database import async_session_factory
 from contextedge.models.evidence import EvidenceItem, RawEvidenceObject
 from contextedge.models.source import (
     Source,
@@ -19,11 +20,19 @@ from contextedge.models.source import (
     SyncCheckpoint,
 )
 from contextedge.services.evidence_normalization import evidence_content_hash_from_payload
+from contextedge.services.ingest_priority import (
+    _ingest_priority,
+    order_raw_ids_by_priority,
+)
 from contextedge.services.ingestion_persistence import persist_ingestion_events
 from contextedge.services.source_service import (
     create_sync_run,
     decrypt_credentials,
     discover_source_objects,
+)
+from contextedge.services.sync_control_service import (
+    control_check_for,
+    finalize_status,
 )
 from contextedge.services.sync_ingestion_queue import (
     NormalizeEnqueueError,
@@ -267,7 +276,7 @@ async def _claim_pending_raw_ids_for_handoff(
     tenant_id: uuid.UUID,
     source_object_id: uuid.UUID,
     new_raw_ids: list[uuid.UUID],
-) -> tuple[list[uuid.UUID], list[uuid.UUID]]:
+) -> tuple[list[uuid.UUID], list[uuid.UUID], str]:
     source_object = await _lock_source_object(
         db,
         tenant_id=tenant_id,
@@ -283,7 +292,10 @@ async def _claim_pending_raw_ids_for_handoff(
         _set_pending_raw_ids_on_source_object(source_object, raw_ids=[])
         await db.flush()
     await db.commit()
-    return pending_raw_ids, recovered_raw_ids
+    # The priority travels with the claim: the source object is already
+    # locked and loaded here, and re-fetching it downstream would be a second
+    # query for a value this function is holding.
+    return pending_raw_ids, recovered_raw_ids, _ingest_priority(source_object)
 
 
 async def _commit_and_queue_normalization(
@@ -294,7 +306,7 @@ async def _commit_and_queue_normalization(
     source_object_id: uuid.UUID,
     new_raw_ids: list[uuid.UUID],
 ) -> None:
-    pending_raw_ids, _recovered_raw_ids = await _claim_pending_raw_ids_for_handoff(
+    pending_raw_ids, _recovered_raw_ids, priority = await _claim_pending_raw_ids_for_handoff(
         db,
         tenant_id=tenant_id,
         source_object_id=source_object_id,
@@ -302,6 +314,10 @@ async def _commit_and_queue_normalization(
     )
     if not pending_raw_ids:
         return
+
+    pending_raw_ids = await order_raw_ids_by_priority(
+        db, tenant_id=tenant_id, raw_ids=pending_raw_ids, priority=priority,
+    )
 
     try:
         queue_normalize_raw_objects(pending_raw_ids, tenant_id)
@@ -379,12 +395,34 @@ async def acquire_sync_lock(
     return bool(result.scalar_one())
 
 
+async def _read_control(run_id: uuid.UUID) -> str | None:
+    """The signal as it stands now, read on its own connection.
+
+    The job's own transaction was opened before the operator pressed
+    anything, so it cannot see the update; a fresh read can.
+    """
+    from sqlalchemy import select as _select
+
+    from contextedge.models.source import SyncRun as _SyncRun
+
+    try:
+        async with async_session_factory() as probe:
+            return (
+                await probe.execute(
+                    _select(_SyncRun.control).where(_SyncRun.id == run_id)
+                )
+            ).scalar_one_or_none()
+    except Exception:  # noqa: BLE001
+        return None
+
+
 async def run_backfill_job(
     db: AsyncSession,
     source_id: uuid.UUID,
     source_object_id: uuid.UUID,
     tenant_id: uuid.UUID,
     window_days: int = 90,
+    celery_task_id: str | None = None,
 ) -> dict:
     if not await acquire_sync_lock(db, source_object_id):
         logger.info(
@@ -412,6 +450,10 @@ async def run_backfill_job(
         return {"error": "source_not_found"}
 
     run = await create_sync_run(db, source.id, tenant_id, "backfill", so.id)
+    # Recorded so a run whose worker is wedged past answering the cooperative
+    # check can still be revoked. The cooperative stop is the mechanism;
+    # this is the escape hatch, and an escape hatch nobody can find is not one.
+    run.celery_task_id = celery_task_id
     connector = await _load_connector(db, source)
 
     ck_row = (
@@ -428,6 +470,11 @@ async def run_backfill_job(
     start = end - timedelta(days=window_days)
     window = DateRange(start=start, end=end)
 
+    # The connector consults this inside its own loops — per page, and every
+    # 25 records of the detail fetch. A signal checked only out here would sit
+    # unread for the 900+ seconds one backfill call can take.
+    connector.set_control_check(control_check_for(async_session_factory, run.id))
+
     try:
         result = await connector.backfill(so.external_id, so.object_type, window, ck)
         events = list(result.events or [])
@@ -439,7 +486,11 @@ async def run_backfill_job(
             events=events,
         )
         run.items_processed = len(events) if events else result.items_processed
-        run.status = "completed"
+        # A stop is not a failure and not a completion: the records fetched
+        # before it are persisted above, and the status says which of the two
+        # things the operator asked for happened.
+        stopped_by = await _read_control(run.id)
+        run.status = finalize_status(stopped_by)
         run.errors = (
             {"ingestion": {"raw_objects_created": raw_created, "raw_objects_deduped": raw_deduped}}
             if (raw_created or raw_deduped)
@@ -453,7 +504,8 @@ async def run_backfill_job(
                 )
             )
         so.last_checkpoint_at = datetime.now(UTC)
-        so.last_successful_sync_at = datetime.now(UTC)
+        if run.status == "completed":
+            so.last_successful_sync_at = datetime.now(UTC)
     except Exception as exc:
         run.status = "failed"
         run.errors = {"message": str(exc)}

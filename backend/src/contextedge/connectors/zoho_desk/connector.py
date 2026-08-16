@@ -122,6 +122,10 @@ DEFAULT_MAX_PAGES = 20
 # round trip each). Bounded per invocation; the rest arrive next tick
 # because the checkpoint only advances over records actually emitted.
 DETAIL_FETCH_LIMIT = 200
+# How often the detail loop consults the control signal. 25 records is
+# a few seconds of wall time — responsive without turning a control
+# check into a per-record database round trip.
+CONTROL_CHECK_EVERY = 25
 
 # The ticket list endpoint does NOT return `modifiedTime` in its default
 # response. Articles do; tickets do not — verified against the live
@@ -255,6 +259,14 @@ MODULES: dict[str, dict[str, Any]] = {
         "thread_prefix": "zoho_ticket",
         # Sent on every list call for this module.
         "list_fields": TICKET_FIELDS,
+        # Zoho returns `assigneeId` / `contactId` as bare ids; the PEOPLE
+        # only arrive when the call asks for them. Verified live: without
+        # this, `assignee`, `reporter`, `assignee_email` and
+        # `reporter_email` were empty on all 1000 tickets of a real
+        # backfill — the mapper has always read these nested objects, and
+        # nothing was ever fetching them. It costs no extra API call: the
+        # objects come back inline on the list response.
+        "list_includes": "contacts,assignee,team,products",
     },
     "articles": {
         "label": "KB Articles",
@@ -550,6 +562,9 @@ class ZohoDeskConnector(BaseConnector):
         list_fields = MODULES.get(module, {}).get("list_fields")
         if list_fields:
             params["fields"] = list_fields
+        includes = MODULES.get(module, {}).get("list_includes")
+        if includes:
+            params["include"] = includes
         module_filter = self.module_filters.get(module)
         if isinstance(module_filter, dict):
             params.update({str(k): v for k, v in module_filter.items()})
@@ -796,6 +811,17 @@ class ZohoDeskConnector(BaseConnector):
         hit_budget = True
 
         for _page in range(self.max_pages):
+            # Cooperative stop between pages. What has been collected so far
+            # is RETURNED, not discarded: a pause after 900 seconds of API
+            # calls must not throw those records away, and the checkpoint
+            # travels with them so a resume continues rather than restarts.
+            if await self._check_control():
+                logger.info(
+                    "zoho_desk.walk_stopped_by_control",
+                    module=module, collected=len(collected), offset=offset,
+                )
+                return collected, max_time, ids_at_max, False, offset
+
             params = self._list_params(
                 module,
                 {"limit": PAGE_SIZE, "from": offset, "sortBy": "-modifiedTime"},
@@ -902,13 +928,35 @@ class ZohoDeskConnector(BaseConnector):
         if not self.fetch_detail:
             return rows
         meta = MODULES[module]
+        # The cap bounds API calls per invocation, and it silently decided
+        # the quality of a whole backfill: at the default of 200 against a
+        # 1000-ticket window, 823 tickets kept their LIST row — whose
+        # `description` is the one-line summary (median 38 characters
+        # against 488 for a detail-fetched one) and which carries no
+        # `resolution` and no custom fields. Configurable so a backfill can
+        # pay for what it is actually ingesting.
+        limit = int((self.source_config or {}).get("detail_fetch_limit") or DETAIL_FETCH_LIMIT)
+        detail_params = {"include": meta["list_includes"]} if meta.get("list_includes") else None
         out: list[dict] = []
-        for row in rows[:DETAIL_FETCH_LIMIT]:
+        for index, row in enumerate(rows[:limit]):
+            # The detail fetch is the long pole — 1,855 sequential calls on
+            # the live corpus. Checked every CONTROL_CHECK_EVERY records so a
+            # pause lands in seconds rather than a quarter of an hour, and
+            # cheaply enough that the check itself is not the cost.
+            if index and index % CONTROL_CHECK_EVERY == 0 and await self._check_control():
+                logger.info(
+                    "zoho_desk.detail_stopped_by_control",
+                    module=module, detailed=len(out), remaining=len(rows) - index,
+                )
+                out.extend(rows[index:])
+                return out
             record_id = row.get("id")
             if not record_id:
                 continue
             try:
-                detail = await self._get(f"{meta['list_path']}/{record_id}")
+                detail = await self._get(
+                    f"{meta['list_path']}/{record_id}", params=detail_params
+                )
             except Exception as exc:  # noqa: BLE001
                 logger.warning(
                     "zoho_desk.detail_fetch_failed",
@@ -919,7 +967,7 @@ class ZohoDeskConnector(BaseConnector):
                 out.append(row)
                 continue
             out.append({**row, **detail} if isinstance(detail, dict) else row)
-        out.extend(rows[DETAIL_FETCH_LIMIT:])
+        out.extend(rows[limit:])
         return out
 
     async def backfill(
@@ -1089,6 +1137,13 @@ class ZohoDeskConnector(BaseConnector):
             "summary": _text(row.get("subject")),
             "description": "\n\n".join(body_parts) or _text(row.get("subject")),
             "resolution": resolution or None,
+            # Conversation size. Requested since the field list was written
+            # and never mapped, so nothing downstream could see it: the
+            # min_thread_count filter reads the RAW row, and ingest
+            # prioritisation had no way to tell a one-line ticket from a
+            # forty-message investigation.
+            "thread_count": _int(row.get("threadCount")),
+            "comment_count": _int(row.get("commentCount")),
             "status": _text(row.get("status")) or None,
             "sub_status": _text(row.get("subStatus")) or None,
             "priority": _text(row.get("priority")) or None,

@@ -1,7 +1,9 @@
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+from contextedge.services.ingest_priority import INGEST_PRIORITIES
 
 
 class SourceCreate(BaseModel):
@@ -99,6 +101,19 @@ class SourceObjectApproval(BaseModel):
     approved_for_backfill: bool | None = None
     approved_for_sync: bool | None = None
     backfill_window_days: int | None = Field(None, ge=1, le=365)
+    # Which records get enriched first. A backfill is a queue, and what sits
+    # at its head decides what the graph is worth after the first hour rather
+    # than after the last. See services/ingest_priority.py.
+    ingest_priority: str | None = Field(
+        None, description=f"One of {list(INGEST_PRIORITIES)}"
+    )
+
+    @field_validator("ingest_priority")
+    @classmethod
+    def _validate_priority(cls, v: str | None) -> str | None:
+        if v is not None and v not in INGEST_PRIORITIES:
+            raise ValueError(f"ingest_priority must be one of {list(INGEST_PRIORITIES)}")
+        return v
 
 
 class SyncRunResponse(BaseModel):

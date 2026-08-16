@@ -7,7 +7,9 @@ The budget endpoints (W7-9.1) let operators configure and inspect the
 daily token / cost cap per tenant.
 """
 
+from datetime import UTC, datetime
 from decimal import Decimal
+from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Query
 
@@ -44,6 +46,10 @@ async def admin_llm_usage(
         le=50,
         description="How many (model, task) rows to return, ranked by cost.",
     ),
+    all_time: bool = Query(False, description="Ignore the window: everything to date."),
+    sync_run_id: UUID | None = Query(
+        None, description="Scope to one sync run's own start/end window."
+    ),
 ):
     """Per-tenant LLM usage + cost aggregation.
 
@@ -52,11 +58,30 @@ async def admin_llm_usage(
     (model, task). Intended for the admin cost dashboard.
     """
     user.require_role("tenant_admin")
+    since = until = None
+    if sync_run_id is not None:
+        # "This sync": bounded by the run's own start and end, so the number
+        # answers "what did THAT cost" rather than "what happened in a window
+        # that happens to contain it". A run still going has no end yet, which
+        # is what makes the meter live.
+        from contextedge.models.source import SyncRun
+
+        run = await db.get(SyncRun, sync_run_id)
+        if run is None or run.tenant_id != user.tenant_id:
+            raise HTTPException(status_code=404, detail="Sync run not found")
+        since = run.started_at or run.created_at
+        until = run.completed_at
+    elif all_time:
+        # The rolling window caps at 30 days; "overall to date" is a
+        # different question and needs no lower bound at all.
+        since = datetime(1970, 1, 1, tzinfo=UTC)
     return await get_llm_usage(
         db,
         tenant_id=user.tenant_id,
         window_hours=window_hours,
         top_n_breakdown=top_n_breakdown,
+        since=since,
+        until=until,
     )
 
 

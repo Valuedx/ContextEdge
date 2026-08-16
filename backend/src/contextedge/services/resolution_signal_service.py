@@ -91,6 +91,31 @@ async def cluster_has_resolution_signal(
 
     if not evidence_ids:
         return False
+    # Tier 1, structural: the source system's own verdict. This module has
+    # always claimed a "closed/resolved status vocabulary" as its first tier
+    # and implemented it as a regex over prose — including a literal
+    # `resolved by agent` alternation, which is Zoho's STATUS VALUE being
+    # matched as text. Reading the field is both cheaper and right: a ticket
+    # its own service desk marked resolved is resolved whether or not anybody
+    # typed a resolution phrase into it.
+    #
+    # `cancelled` deliberately does not qualify. The case is over and there is
+    # no fix in it; synthesising one spends exactly what this gate exists to
+    # save.
+    resolved = (
+        await db.execute(
+            select(func.count())
+            .select_from(EvidenceItem)
+            .where(
+                EvidenceItem.tenant_id == tenant_id,
+                EvidenceItem.id.in_(evidence_ids),
+                EvidenceItem.case_state == "resolved",
+            )
+        )
+    ).scalar()
+    if resolved:
+        return True
+
     rows = (
         await db.execute(
             select(

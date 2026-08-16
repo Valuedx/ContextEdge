@@ -5,7 +5,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ColumnDef } from "@tanstack/react-table";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { Loader2, RefreshCw, KeyRound } from "lucide-react";
+import { Loader2, RefreshCw, KeyRound, Pause, Play, Square } from "lucide-react";
 import { toast } from "sonner";
 
 import { PageHeader } from "@/components/common/page-header";
@@ -96,6 +96,11 @@ export default function SourceDetailPage() {
     queryKey: ["source-sync-runs", id],
     queryFn: () => api.get<SyncRun[]>(`/sources/${id}/sync-runs`),
     enabled: !!id,
+    // Polled while a run is active: a backfill writes nothing until its
+    // connector call returns, so without this the page cannot tell a working
+    // sync from a hung one — which is also what makes the controls legible.
+    refetchInterval: (query) =>
+      (query.state.data ?? []).some((r: SyncRun) => r.status === "running") ? 5000 : false,
   });
 
   const discoverMut = useMutation({
@@ -120,6 +125,28 @@ export default function SourceDetailPage() {
       toast.success("Credential rotation initiated");
     },
     onError: (err: Error) => toast.error(err.message || "Rotation failed"),
+  });
+
+  // A backfill lives inside one connector call for minutes at a time — the
+  // live Zoho corpus measured 913 seconds — so the run list is polled while
+  // one is active, and the controls act on the run rather than the schedule.
+  const runningRun = (syncRuns ?? []).find((r) => r.status === "running") ?? null;
+
+  const controlMut = useMutation({
+    mutationFn: (action: "pause" | "resume" | "cancel") =>
+      api.post(`/sources/${id}/sync/control`, { action }),
+    onSuccess: (_data, action) => {
+      qc.invalidateQueries({ queryKey: ["source-sync-runs", id] });
+      qc.invalidateQueries({ queryKey: ["source-objects", id] });
+      toast.success(
+        action === "resume"
+          ? "Sync resumed — the next run continues from the last checkpoint."
+          : action === "pause"
+            ? "Pause signalled. The running sync stops at its next checkpoint and keeps what it has already fetched."
+            : "Cancel signalled. Records already fetched are kept; nothing restarts."
+      );
+    },
+    onError: (err: Error) => toast.error(err.message || "Control failed"),
   });
 
   const srvRetention = source?.retention_policy_id ?? null;
@@ -191,6 +218,39 @@ export default function SourceDetailPage() {
             >
               Discovery inventory
             </Link>
+            {canDiscover && runningRun && (
+              <>
+                <Button
+                  variant="outline"
+                  disabled={controlMut.isPending}
+                  onClick={() => controlMut.mutate("pause")}
+                  title="Stops at the next checkpoint. Records already fetched are kept."
+                >
+                  <Pause className="mr-2 h-4 w-4" />
+                  Pause sync
+                </Button>
+                <Button
+                  variant="outline"
+                  disabled={controlMut.isPending}
+                  onClick={() => controlMut.mutate("cancel")}
+                  title="Ends the run. What was already ingested stays ingested."
+                >
+                  <Square className="mr-2 h-4 w-4" />
+                  Cancel sync
+                </Button>
+              </>
+            )}
+            {canDiscover && !runningRun && (
+              <Button
+                variant="outline"
+                disabled={controlMut.isPending}
+                onClick={() => controlMut.mutate("resume")}
+                title="Clears a pause so the next run continues from the checkpoint."
+              >
+                <Play className="mr-2 h-4 w-4" />
+                Resume sync
+              </Button>
+            )}
             {canDiscover && (
               <Button
                 variant="outline"
