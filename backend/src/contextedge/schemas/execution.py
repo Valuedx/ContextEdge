@@ -57,6 +57,55 @@ class ApprovalModificationRequest(BaseModel):
         return v
 
 
+# A recorded invocation is a call that has FINISHED. `running` is absent
+# because a row written mid-call would have to be updated to be true, and
+# `deduplicated` is absent because that verdict is minted by the duplicate
+# check — a caller declaring it would be asserting the control's own finding.
+TOOL_INVOCATION_STATUSES = ("completed", "failed", "timeout", "cancelled")
+
+
+class ToolInvocationRequest(BaseModel):
+    """Record a tool call against a step run.
+
+    The executor reports what it ran and what happened; ContextEdge decides
+    what that means — the artifact binding is re-checked, the attempt is
+    numbered, and a duplicate is refused. None of that is the caller's to
+    assert, which is why this body carries no attempt number and no
+    idempotency key.
+    """
+
+    tool_name: str = Field(..., min_length=1, max_length=200)
+    tool_version: str | None = Field(default=None, max_length=50)
+    safety_class: str = Field(
+        "read_only",
+        description="Must not exceed the step's own class; the step was approved at that level",
+    )
+    inputs: dict = Field(default_factory=dict)
+    outputs: dict = Field(default_factory=dict)
+    status: str = Field("completed", description=f"One of {TOOL_INVOCATION_STATUSES}")
+    error_message: str | None = None
+    duration_ms: int | None = Field(default=None, ge=0)
+
+    @field_validator("status")
+    @classmethod
+    def _validate_status(cls, v: str) -> str:
+        if v not in TOOL_INVOCATION_STATUSES:
+            raise ValueError(f"status must be one of {list(TOOL_INVOCATION_STATUSES)}")
+        return v
+
+
+class StepCompletionRequest(BaseModel):
+    """Close a step run. An `error_message` makes it a failure.
+
+    Deliberately not a status field: "completed with an error_message" and
+    "failed with none" are both incoherent, and a body that can express them
+    invites a ledger that contradicts itself.
+    """
+
+    outputs: dict = Field(default_factory=dict)
+    error_message: str | None = Field(default=None, max_length=4_000)
+
+
 class ToolInvocationResponse(BaseModel):
     id: UUID
     step_run_id: UUID

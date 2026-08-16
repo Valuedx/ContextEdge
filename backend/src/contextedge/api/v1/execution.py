@@ -4,13 +4,17 @@ from fastapi import APIRouter, HTTPException, Query, status
 from sqlalchemy import select
 
 from contextedge.deps import AuthUser, DbSession
-from contextedge.models.execution import ApprovalRequest, ExecutionRun
+from contextedge.models.execution import ApprovalRequest, ExecutionRun, ExecutionStepRun
 from contextedge.schemas.execution import (
     ApprovalDecision,
     ApprovalModificationRequest,
     ApprovalRequestResponse,
     ExecutionRunResponse,
+    ExecutionStepRunResponse,
     StartExecutionRequest,
+    StepCompletionRequest,
+    ToolInvocationRequest,
+    ToolInvocationResponse,
 )
 from contextedge.services.execution_service import (
     ExecutionPolicyError,
@@ -18,8 +22,11 @@ from contextedge.services.execution_service import (
     complete_execution,
     decide_approval,
     get_execution_run,
+    get_step_run,
     list_execution_runs,
     modify_approval,
+    record_step_completion,
+    record_tool_invocation,
     start_execution,
 )
 
@@ -110,6 +117,100 @@ async def get_run(
     if run is None:
         raise HTTPException(status_code=404, detail="Execution run not found")
     return run
+
+
+async def _require_step_on_run(db, user, run_id: UUID, step_run_id: UUID) -> ExecutionStepRun:
+    """The step being recorded against must belong to the run in the URL.
+
+    Same reason as `_require_approval_on_run`: without it, any step in the
+    tenant can be driven through any run's endpoint, and the run id in the
+    audit trail stops meaning anything.
+    """
+    step = await db.get(ExecutionStepRun, step_run_id)
+    if step is None or step.tenant_id != user.tenant_id or step.execution_run_id != run_id:
+        raise HTTPException(status_code=404, detail="Step run not found for this run")
+    return step
+
+
+@router.post(
+    "/runs/{run_id}/steps/{step_run_id}/invocations",
+    response_model=ToolInvocationResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def record_invocation(
+    run_id: UUID,
+    step_run_id: UUID,
+    body: ToolInvocationRequest,
+    db: DbSession,
+    user: AuthUser,
+):
+    """Record a tool call the executor made for this step.
+
+    This is where F7 and F8 actually bite: the approved artifact is
+    re-checked at the last moment before the call is accepted, a step already
+    recognised as a duplicate is refused, and the attempt is numbered from
+    what is already recorded rather than from anything the caller says. Both
+    refusals are 409 — the request is well-formed, the state says no.
+    """
+    await _require_run_control(db, user, run_id)
+    await _require_step_on_run(db, user, run_id, step_run_id)
+    try:
+        invocation = await record_tool_invocation(
+            db,
+            tenant_id=user.tenant_id,
+            step_run_id=step_run_id,
+            tool_name=body.tool_name,
+            tool_version=body.tool_version,
+            safety_class=body.safety_class,
+            inputs=body.inputs,
+            outputs=body.outputs,
+            status=body.status,
+            error_message=body.error_message,
+            duration_ms=body.duration_ms,
+        )
+    except ExecutionPolicyError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    if invocation is None:
+        raise HTTPException(status_code=404, detail="Step run not found")
+    await db.commit()
+    return invocation
+
+
+@router.post(
+    "/runs/{run_id}/steps/{step_run_id}/complete",
+    response_model=ExecutionStepRunResponse,
+)
+async def complete_step(
+    run_id: UUID,
+    step_run_id: UUID,
+    body: StepCompletionRequest,
+    db: DbSession,
+    user: AuthUser,
+):
+    """Close a step run. An `error_message` records it as failed.
+
+    A step still awaiting its approval cannot be reported complete — that
+    would let `complete_execution`'s open-steps check pass with an undecided
+    approval sitting under it.
+    """
+    await _require_run_control(db, user, run_id)
+    await _require_step_on_run(db, user, run_id, step_run_id)
+    try:
+        step = await record_step_completion(
+            db,
+            tenant_id=user.tenant_id,
+            step_run_id=step_run_id,
+            outputs=body.outputs,
+            error_message=body.error_message,
+        )
+    except ExecutionPolicyError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    if step is None:
+        raise HTTPException(status_code=404, detail="Step run not found")
+    await db.commit()
+    # Re-read with the invocations loaded: the response embeds them, and a
+    # lazy relationship on an async session raises from inside the serializer.
+    return await get_step_run(db, tenant_id=user.tenant_id, step_run_id=step_run_id)
 
 
 @router.post("/runs/{run_id}/abort", response_model=ExecutionRunResponse)

@@ -560,6 +560,9 @@ async def test_record_tool_invocation_under_shadow_tags_outputs_and_status():
         # F8: record_tool_invocation refuses a step already recognised as a
         # duplicate, so the fixture has to be able to answer that question.
         step_index=0, duplicate_check_status=None, idempotency_key=None,
+        # A call cannot out-rank the step it belongs to, and this test
+        # invokes a destructive tool — so that is the step's own class.
+        safety_class="destructive",
     )
     run = SimpleNamespace(id=execution_run_id, automation_mode="shadow")
 
@@ -819,6 +822,9 @@ async def test_record_tool_invocation_non_shadow_unchanged():
         # F8: record_tool_invocation refuses a step already recognised as a
         # duplicate, so the fixture has to be able to answer that question.
         step_index=0, duplicate_check_status=None, idempotency_key=None,
+        # A call cannot out-rank the step it belongs to, so the fixture has
+        # to carry the step's authorised class.
+        safety_class="read_only",
     )
     run = SimpleNamespace(id=execution_run_id, automation_mode="full_auto")
 

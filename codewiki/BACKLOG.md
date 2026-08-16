@@ -941,6 +941,40 @@ the alternatives that were rejected.
 verification result; an escalation hands a human the evidence bundle and rejected
 alternatives.
 
+### F12 · Step-level execution endpoints — S — **SHIPPED 2026-08-16**
+**Shipped.** `POST /api/v1/execution/runs/{run_id}/steps/{step_run_id}/invocations` and
+`.../complete`. Found while scoping the SupportFlo (Bajaj) integration:
+`record_tool_invocation` and `record_step_completion` had **no caller anywhere in the
+codebase and no route**, which meant F7's artifact re-check, F8's duplicate refusal and
+the whole attempt ledger were unreachable by any external executor. Built, correct, wired
+to nothing — the shape F1 exists to stop, one layer up.
+
+Same gate as abort and complete (initiator or `domain_admin`), and the step must belong to
+the run in the URL — without that, any step in the tenant can be driven through any run's
+endpoint and the run id in the audit trail stops meaning anything. Service refusals surface
+as **409, not 500**: a duplicate replay and a stale approval binding are well-formed
+requests that the *state* declines, and a caller needs to tell that apart from a bug. The
+request body carries **no attempt number and no idempotency key** — both are derived from
+what is already recorded, and a caller that can renumber history or hand in the key the
+duplicate check tests against defeats the control by asserting the answer.
+
+**Two defects found while building it, fixed here:**
+- An invocation could declare a **higher safety class than its own step**. The step's class
+  is what policy, the approval gate and the caller's `max_safety_class` were all evaluated
+  against, so a destructive call recorded under a read-only step would leave every upstream
+  control reading as satisfied. Refused in the *service*, so any future caller inherits it.
+- `ExecutionStepRunResponse` embeds `tool_invocations`, and the completion path returned a
+  step whose relationship was never loaded — `MissingGreenlet` from inside the serializer,
+  invisible to a suite that runs without Postgres. The route now re-reads through
+  `get_step_run`, which eager-loads; a test pins the loader.
+
+1752 tests.
+
+**Deliberately not shipped:** an executor. This makes the ledger drivable; it does not
+drive it. Nothing schedules or resumes a run either, so a caller that stops calling leaves
+one open — acceptable while the callers are external and few, not acceptable once anything
+unattended uses it.
+
 ### Deferred tail (recorded, not scheduled)
 
 | Item | Why deferred |
