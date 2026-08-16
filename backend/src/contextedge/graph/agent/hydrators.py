@@ -28,6 +28,7 @@ from contextedge.models.policy import TenantPolicy
 from contextedge.models.session import ResolutionSession
 from contextedge.models.tenant import User
 from contextedge.services.evidence_typing import KNOWLEDGE_EVIDENCE_TYPES
+from contextedge.services.knowledge_lifecycle import is_current
 
 NODE_MODELS: dict[str, type[Any]] = {
     "session": ResolutionSession,
@@ -131,6 +132,12 @@ def node_is_visible(
     elif node_type == "episode" and obj.reviewer_state != "approved":
         return False
     elif node_type == "evidence":
+        # The source system's knowledge lifecycle. Naturally inert for
+        # anything that is not knowledge: a ticket has no state, and an
+        # absent state serves. A draft nobody approved or an article a human
+        # retired must not reach the agent, which cites what it is given.
+        if not is_current(getattr(obj, "knowledge_state", None)):
+            return False
         if obj.sensitivity_label == "legal_hold":
             return False
         if obj.redaction_status in {"pending", "pending_redaction"}:

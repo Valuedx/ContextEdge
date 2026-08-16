@@ -138,6 +138,13 @@ class EvidenceItem(Base, TenantScopedMixin):
     # knowledge), and retrieval falls back to lexical extraction.
     applicability: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
+    # What the SOURCE system says about this article's currency — ServiceNow
+    # drafts, reviews, publishes and retires knowledge, and that lifecycle is
+    # the customer's governance. NULL means the source has no lifecycle (a
+    # file-share SOP, an upload), which serves; see
+    # ``services/knowledge_lifecycle.py`` for why unknown must never withhold.
+    knowledge_state: Mapped[str | None] = mapped_column(String(20), nullable=True)
+
     # Empirical support for a knowledge item — has this procedure ever
     # actually worked? (0057) Computed by knowledge_validation_service from
     # playbook→knowledge links and *verified* execution outcomes, refreshed by

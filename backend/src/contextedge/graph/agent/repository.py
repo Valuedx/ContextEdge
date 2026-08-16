@@ -36,6 +36,7 @@ from contextedge.models.pattern import GraphEdge, Pattern
 from contextedge.models.playbook import Playbook
 from contextedge.search.access_control import resolve_excluded_access_policy_ids
 from contextedge.services.evidence_typing import KNOWLEDGE_EVIDENCE_TYPES
+from contextedge.services.knowledge_lifecycle import current_knowledge_clause
 
 logger = structlog.get_logger()
 
@@ -372,6 +373,10 @@ class SQLAlchemyAgentGraphRepository:
                             EvidenceItem.sensitivity_label.is_distinct_from(
                                 "legal_hold"
                             ),
+                            # The source system's knowledge lifecycle: an
+                            # unapproved draft or a retired article is not
+                            # guidance, and the agent cites what it is given.
+                            current_knowledge_clause(EvidenceItem),
                         )
                         .group_by(EvidenceChunk.evidence_id)
                         .order_by("distance")

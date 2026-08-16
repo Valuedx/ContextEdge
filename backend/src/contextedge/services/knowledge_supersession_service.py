@@ -38,6 +38,10 @@ from contextedge.services.documents.versioning import (
     qualifier_rank,
 )
 from contextedge.services.evidence_typing import KNOWLEDGE_EVIDENCE_TYPES
+from contextedge.services.knowledge_lifecycle import (
+    current_knowledge_clause,
+    is_current,
+)
 
 logger = structlog.get_logger()
 
@@ -116,6 +120,11 @@ async def propose_supersessions(
     for item in knowledge_evidence:
         name = (item.title or "").strip()
         if not name:
+            continue
+        # An article its own source system has retired or not yet published
+        # is not a candidate on either side: it cannot supersede anything,
+        # and proposing to retire what is already retired is queue noise.
+        if not is_current(getattr(item, "knowledge_state", None)):
             continue
         family = document_family(name)
         if family:
@@ -200,6 +209,9 @@ async def scan_tenant_knowledge(
         .where(
             EvidenceItem.tenant_id == tenant_id,
             EvidenceItem.evidence_type.in_(tuple(KNOWLEDGE_EVIDENCE_TYPES)),
+            # Whatever the source system has withdrawn or not yet published
+            # is not a candidate on either side of a supersession.
+            current_knowledge_clause(EvidenceItem),
         )
         .order_by(
             # Source date when the connector knew one, ingest date otherwise —
