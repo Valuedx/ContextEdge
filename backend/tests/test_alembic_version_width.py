@@ -95,6 +95,47 @@ def test_a_database_with_no_version_table_is_left_to_alembic():
     connection.execute.assert_not_called()
 
 
+def test_the_widening_never_touches_the_migration_connection():
+    """The bug this pins cost a silent no-op upgrade.
+
+    Merely INSPECTING the version table opens an implicit transaction on that
+    connection. Alembic then sees a transaction it did not start, leaves the
+    commit to whoever did, and the migration rolls back when the connection
+    closes — while `alembic upgrade` prints "Running upgrade ..." and exits 0.
+    A database can sit one revision behind while every log line says it
+    succeeded.
+
+    So the widening gets its own connection, and this test fails if the two
+    ever share one again.
+    """
+    import ast
+
+    source = (_VERSIONS.parent / "env.py").read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    online = next(
+        node for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "run_migrations_online"
+    )
+
+    def calls(node) -> set[str]:
+        names = set()
+        for child in ast.walk(node):
+            if isinstance(child, ast.Call):
+                func = child.func
+                names.add(getattr(func, "id", None) or getattr(func, "attr", ""))
+        return names
+
+    blocks = [n for n in online.body if isinstance(n, ast.With)]
+    widening = [b for b in blocks if "widen_alembic_version_column" in calls(b)]
+    migrating = [b for b in blocks if "run_migrations" in calls(b)]
+    assert widening, "the widening moved out of run_migrations_online"
+    assert migrating, "run_migrations moved out of its own with-block"
+    assert not set(map(id, widening)) & set(map(id, migrating)), (
+        "the widening and the migration share a connection block — inspecting "
+        "the version table there opens a transaction Alembic will not commit"
+    )
+
+
 def test_env_runs_the_widening_before_migrations():
     """The order is the whole point: after `run_migrations` it is too late,
     because the failure happens on the first stamp."""
@@ -102,7 +143,7 @@ def test_env_runs_the_widening_before_migrations():
     # Scoped to the online path: offline mode has no connection to alter, and
     # its own `run_migrations()` call comes first in the file.
     online = source[source.index("def run_migrations_online"):]
-    assert "widen_alembic_version_column(connection)" in online
-    assert online.index("widen_alembic_version_column(connection)") < online.index(
+    assert "widen_alembic_version_column(" in online
+    assert online.index("widen_alembic_version_column(") < online.index(
         "context.run_migrations()"
     )
