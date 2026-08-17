@@ -342,11 +342,29 @@ async def deduplicate_patterns_and_playbooks(
 
     from contextedge.models.pattern import GraphEdge
     from contextedge.models.playbook import Playbook, PlaybookVersion
-    from contextedge.services.episode_service import deduplicate_episodes
+    from contextedge.services.episode_service import (
+        deduplicate_episodes,
+        supersede_contained_episodes,
+        supersede_similar_episodes,
+    )
 
     # 0. Deduplicate Evidence Items & Episodes first
     merged_evidence_count = await deduplicate_evidence_items(db, tenant_id)
     merged_episodes_count = await deduplicate_episodes(db, tenant_id)
+
+    # Title-based dedup above cannot see the duplicates a growing cluster
+    # produces: each re-narration is worded differently, so exact-title
+    # matching never fires. On the live corpus one ticket held 44 accounts of
+    # a single incident with zero title matches between any pair. These two
+    # passes close that, in order — containment is strict and cheap, so it
+    # runs first and leaves less for the judgement-based pass to consider.
+    #
+    # `_reconstruct`'s growth gate now prevents most of this duplication at
+    # the source; these remain the safety net for what slips past it, and for
+    # graphs built before that gate existed.
+    contained = await supersede_contained_episodes(db, tenant_id)
+    similar = await supersede_similar_episodes(db, tenant_id)
+    merged_episodes_count += contained["retired"] + similar["retired"]
 
     # 1. Group patterns by normalized title
     pats = (

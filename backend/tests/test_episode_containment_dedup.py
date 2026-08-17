@@ -119,3 +119,25 @@ async def test_dry_run_writes_nothing():
     assert out["retired"] == 1
     db.flush.assert_not_awaited()
     assert small.reviewer_state == "pending_review"  # untouched
+
+
+def test_the_dedup_entry_point_runs_both_new_passes():
+    """Wiring, not logic.
+
+    Both passes are correct in isolation and worthless if nothing calls
+    them: the graph re-inflates between manual runs. `deduplicate_
+    patterns_and_playbooks` is the single entry point the API and the
+    pattern task both use, so both passes belong in it.
+    """
+    import inspect
+
+    from contextedge.services.pattern_service import deduplicate_patterns_and_playbooks
+
+    source = inspect.getsource(deduplicate_patterns_and_playbooks)
+    assert "supersede_contained_episodes" in source
+    assert "supersede_similar_episodes" in source
+    # Containment is strict and cheap; running it first leaves less for the
+    # judgement-based pass to weigh.
+    assert source.index("supersede_contained_episodes") < source.index(
+        "supersede_similar_episodes"
+    )
