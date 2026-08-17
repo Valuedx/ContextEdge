@@ -3,7 +3,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import { api } from "@/lib/api";
-import { Loader2, Info, Network, HelpCircle, FileText, Activity, BookOpen, Layers, ExternalLink, X } from "lucide-react";
+import { Loader2, Info, Network, HelpCircle, ExternalLink, X } from "lucide-react";
 import { useEffect, useCallback, useState } from "react";
 import { toast } from "sonner";
 import {
@@ -224,7 +224,7 @@ function FlowCanvas({
                 </button>
               </div>
               <h4 className="text-sm font-semibold text-slate-100 leading-snug">
-                "{activeNodeLabel}"
+                &ldquo;{activeNodeLabel}&rdquo;
               </h4>
               <p className="text-xs text-slate-300 leading-relaxed">
                 {activeInfo.desc}
@@ -251,7 +251,7 @@ function FlowCanvas({
                 <span>{hoveredInfo.label}</span>
               </div>
               <p className="text-xs text-slate-200 font-medium line-clamp-1">
-                "{hoveredNodeLabel}"
+                &ldquo;{hoveredNodeLabel}&rdquo;
               </p>
               <p className="text-[11px] text-slate-400 leading-snug">
                 {hoveredInfo.desc}

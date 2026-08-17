@@ -9,7 +9,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
-import { Loader2, Network, Search, Info, ExternalLink, X, HelpCircle } from "lucide-react";
+import { Loader2, Network, Search, ExternalLink, X, HelpCircle } from "lucide-react";
 import {
   ReactFlow,
   ReactFlowProvider,
@@ -209,7 +209,7 @@ function FlowCanvas({
               </button>
             </div>
             <h4 className="text-sm font-semibold text-slate-100 leading-snug">
-              "{activeNodeLabel}"
+              &ldquo;{activeNodeLabel}&rdquo;
             </h4>
             <p className="text-xs text-slate-300 leading-relaxed">
               {activeInfo.desc}
@@ -241,7 +241,7 @@ function FlowCanvas({
               <span>{hoveredInfo.label}</span>
             </div>
             <p className="text-xs text-slate-200 font-medium line-clamp-1">
-              "{hoveredNodeLabel}"
+              &ldquo;{hoveredNodeLabel}&rdquo;
             </p>
             <p className="text-[11px] text-slate-400 leading-snug">
               {hoveredInfo.desc}

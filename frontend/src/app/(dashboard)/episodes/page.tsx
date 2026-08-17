@@ -1,5 +1,11 @@
 "use client";
 
+/** What /episodes/bulk-approve returns. Typed rather than `any` so a field
+ *  rename shows up here instead of as an undefined at runtime. */
+type BulkApproveResult = {
+  approved_count?: number;
+};
+
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ColumnDef } from "@tanstack/react-table";
 import { Sparkles, Loader2, Trash2, CheckCircle2 } from "lucide-react";
@@ -168,8 +174,9 @@ export default function EpisodesPage() {
   });
 
   const bulkApproveMutation = useMutation({
-    mutationFn: (ids: string[]) => api.post("/episodes/bulk-approve", { ids }),
-    onSuccess: (res: any) => {
+    mutationFn: (ids: string[]) =>
+      api.post<BulkApproveResult>("/episodes/bulk-approve", { ids }),
+    onSuccess: (res: BulkApproveResult) => {
       queryClient.invalidateQueries({ queryKey: ["episodes"] });
       queryClient.invalidateQueries({ queryKey: ["patterns"] });
       queryClient.invalidateQueries({ queryKey: ["playbooks"] });

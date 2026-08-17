@@ -57,7 +57,11 @@ export function DataTable<TData, TValue>({
         if (onSelectionChange) {
             // Get the IDs from the selected rows. 
             // This assumes TData has an 'id' property.
-            const selectedRows = Object.keys(next).map(idx => (data[parseInt(idx)] as any)?.id).filter(Boolean);
+            // Selection is by row id, so a row without one cannot be
+            // selected — filtered rather than passed on as undefined.
+            const selectedRows = Object.keys(next)
+                .map((idx) => (data[parseInt(idx)] as { id?: string } | undefined)?.id)
+                .filter((id): id is string => Boolean(id));
             onSelectionChange(selectedRows);
         }
     },

@@ -1,5 +1,14 @@
 "use client";
 
+/** What /patterns/deduplicate returns. */
+type DeduplicateResult = {
+  data?: {
+    merged_episodes?: number;
+    merged_patterns?: number;
+    merged_playbooks?: number;
+  };
+};
+
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { ColumnDef } from "@tanstack/react-table";
 import { BookOpen, Loader2, Network, List, Trash2, BookCheck, RefreshCw } from "lucide-react";
@@ -182,8 +191,8 @@ export default function PatternsPage() {
   });
 
   const dedupMutation = useMutation({
-    mutationFn: () => api.post("/patterns/deduplicate", {}),
-    onSuccess: (res: any) => {
+    mutationFn: () => api.post<DeduplicateResult>("/patterns/deduplicate", {}),
+    onSuccess: (res: DeduplicateResult) => {
       const mergedEps = res?.data?.merged_episodes || 0;
       const mergedPats = res?.data?.merged_patterns || 0;
       const mergedPbs = res?.data?.merged_playbooks || 0;

@@ -446,7 +446,41 @@ The hybrid ranker uses a hard-coded `quality_score = 0.5` for all playbooks. A p
 - **Poison messages on the pattern queue**: `generate_playbook_candidate`
   tasks with malformed UUID args (from 2026-08-07 evening testing) cycle
   on bounded retries in workerB's log. Harmless but noisy; they expire at
-  max_retries.
+  max_retries. *(Confirmed again on the 2026-08-17 fresh-DB run: 42
+  failures in one burst, `pattern_id=None`, then gone. They survive a
+  database rebuild because they live in the broker, not the DB — a Redis
+  purge that targets db 0 misses them, since the broker is db 1.)*
+
+## Open items from the 2026-08-17 cold-start run
+
+- **Patterns never form without an operator.** `pattern.cluster_episodes`
+  has **no `beat_schedule` entry**; it is dispatched only from
+  `api/v1/patterns.py` and `api/v1/episodes.py`. Episodes therefore
+  accumulate and the chain stops there until somebody triggers clustering
+  from the UI. This is arguably the intended "ContextEdge suggests, a human
+  approves" model, but nothing in the product says so, and the operator
+  sees a stalled graph rather than a pending decision. Decide explicitly:
+  schedule it, or surface "N episodes ready to cluster" as an action.
+
+- **A version that appears only in thread prose is not filterable.**
+  `source_facets.version` comes from the source's custom field (99/99
+  tickets on the Zoho corpus), and `identity_candidacy` deliberately keeps
+  version out of the identity table. So "we upgraded to 8.4.0 and it broke"
+  in a thread, where the ticket's custom field says something else, stays
+  in the evidence body: retrievable by search, but not available as a facet
+  an agent can filter on. Fixing it means promoting prose-derived versions
+  into `source_facets` at a lower precedence than the stated field.
+
+- **`window_days` caps at 365 in the API**, so a UI-driven backfill cannot
+  reach the 340 older `Resolved` Zoho tickets (1,515 of 1,855 fetched).
+  The connector itself has no such limit — the cap is API validation.
+
+- **Worker count is bounded by RAM, not CPU.** Each solo worker is a full
+  process at ~325 MB. On the 15.3 GB dev box with Docker hosting Postgres,
+  Redis and MinIO, available memory allowed 5–7 workers against 8 cores.
+  Stopping other projects' containers does **not** help: WSL2 holds its VM
+  allocation and only returns it on `wsl --shutdown`, which would take our
+  own datastores down with it.
 
 ## Open items from the 2026-08-09 review cycle
 

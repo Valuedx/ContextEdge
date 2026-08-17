@@ -27,7 +27,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Separator } from "@/components/ui/separator";
+import {  } from "@/components/ui/separator";
 import { api } from "@/lib/api";
 import { ThreadConversation } from "@/components/common/thread-conversation";
 import type {
@@ -40,16 +40,11 @@ import type {
 import { useAuthStore } from "@/lib/stores/auth-store";
 import { canListPoliciesForEvidence, canEditEvidenceAccessPolicy } from "@/lib/roles";
 import {
-  Loader2,
   Paperclip,
-  RefreshCw,
   FileText,
   Database,
   ExternalLink,
   ShieldCheck,
-  Tag,
-  Calendar,
-  Layers,
   ArrowRight,
   Sparkles,
 } from "lucide-react";
