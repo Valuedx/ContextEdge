@@ -453,6 +453,27 @@ The hybrid ranker uses a hard-coded `quality_score = 0.5` for all playbooks. A p
 
 ## Open items from the 2026-08-17 cold-start run
 
+- **`cluster_episodes` is one long transaction.** The first full pass over
+  100 approved episodes ran **25 minutes** inside a single DB transaction:
+  ~156 LLM calls (embedding match + AI adjudication per episode) with
+  nothing committed until the end. It succeeded — 79 patterns landed at
+  once — but a failure at minute 24 would roll back every row while the
+  LLM spend stays spent, and an operator watching `patterns` sees 0 the
+  whole time with no way to tell "working" from "wedged" (the pipeline-
+  health page shows the queue, not intra-task progress). Chunked commits
+  (e.g. per 10 episodes) would bound the loss and make progress visible;
+  the tradeoff is that a mid-run failure leaves a partially clustered
+  batch, which the next run must tolerate (it already does — linked
+  episodes are excluded from candidacy).
+
+- **Adjudication spend re-concentrates as the identity table grows.**
+  The candidacy gate cut junk identities, but every real identity added
+  still widens the trigram-candidate pool for every later mention.
+  All-time spend by task now: identity 9.0M, episode 7.1M, adjudication
+  4.2M of 26.1M. Watch adjudication share as message ingestion resumes;
+  if it climbs back past ~25%, candidate-list caps or a cheaper
+  adjudication model are the levers.
+
 - **Patterns never form without an operator.** `pattern.cluster_episodes`
   has **no `beat_schedule` entry**; it is dispatched only from
   `api/v1/patterns.py` and `api/v1/episodes.py`. Episodes therefore
