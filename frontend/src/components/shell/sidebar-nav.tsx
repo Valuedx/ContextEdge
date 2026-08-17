@@ -28,6 +28,7 @@ import {
   CheckCircle2,
   DollarSign,
   ListChecks,
+  Gauge,
 } from "lucide-react";
 import { useAuthStore } from "@/lib/stores/auth-store";
 import { hasRole } from "@/lib/roles";
@@ -64,6 +65,7 @@ const navItems: NavItem[] = [
   { label: "Policies", href: "/policies", icon: Shield, requiredRoles: ["tenant_admin"] },
   { label: "Audit Log", href: "/audit", icon: ClipboardList, requiredRoles: ["tenant_admin", "domain_admin"] },
   { label: "LLM Cost", href: "/admin/cost", icon: DollarSign, requiredRoles: ["tenant_admin"] },
+  { label: "Pipeline Health", href: "/admin/pipeline", icon: Gauge, requiredRoles: ["tenant_admin"] },
   { label: "Settings", href: "/settings", icon: Settings },
 ];
 

@@ -161,3 +161,18 @@ async def get_tenant_budget_status(db: DbSession, user: AuthUser):
         effective_cost_cap_usd=result.cost_cap_usd,
         limit_source=limit_source,
     )
+
+
+@router.get("/pipeline-health")
+async def admin_pipeline_health(db: DbSession, user: AuthUser):
+    """Queue depths, throughput, latency and the graph chain, in one read.
+
+    Separate from `/llm-usage` because the question is different: that one
+    asks what the run cost, this one asks whether it is getting anywhere.
+    A run can be spending steadily and producing nothing — that is exactly
+    the failure this exists to make visible.
+    """
+    user.require_role("tenant_admin")
+    from contextedge.services.pipeline_health_service import get_pipeline_health
+
+    return await get_pipeline_health(db, user.tenant_id)
