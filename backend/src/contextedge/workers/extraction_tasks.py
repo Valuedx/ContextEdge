@@ -11,7 +11,7 @@ from contextedge.ai.classifiers.message_function import classify_message_functio
 from contextedge.ai.classifiers.relevance import classify_relevance as run_relevance_classifier
 from contextedge.ai.embeddings import embed_evidence
 from contextedge.config import settings
-from contextedge.models.episode import Episode, EpisodeStep
+from contextedge.models.episode import Episode, EpisodeEvidenceLink, EpisodeStep
 from contextedge.models.evidence import EvidenceItem, RawEvidenceObject
 from contextedge.models.source import Source
 from contextedge.models.tenant import Domain
@@ -744,6 +744,65 @@ async def _extract_applicability(
 # MAX_SYNTHESIS_DELAY of the cluster's oldest evidence — a long live
 # incident is exactly when episodes matter most.
 RECONSTRUCT_DEBOUNCE_SECONDS = 180
+
+# How much bigger a cluster must be than the account already written for it
+# before re-telling is worth a model call.
+#
+# Set at 50% because the failure was arithmetic, not marginal: a thread
+# delivers its messages one at a time, so without a floor every single
+# message re-narrates the whole incident. Ten messages arriving on a
+# ten-evidence cluster meant ten full syntheses at ~12,700 tokens each, of
+# which dedup then retired nine.
+#
+# A ratio rather than a count, because "one more message" means something
+# different to a 3-evidence cluster than to a 30-evidence one: the first
+# genuinely changes the story, the second barely moves it.
+#
+# This governs only the AUTOMATIC path. A reviewer asking for
+# reconstruction (`settle=False`) always gets a fresh account — an explicit
+# request is not a duplicate.
+MIN_RESYNTHESIS_GROWTH = 0.5
+
+
+async def _largest_covered_episode(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    evidence_ids: list[uuid.UUID],
+) -> tuple[int, uuid.UUID] | None:
+    """The biggest live episode whose evidence this cluster already covers.
+
+    Containment, not overlap: an episode built from evidence the cluster does
+    NOT contain is about different material, and re-telling this cluster does
+    not supersede it. Returns (size, id) or None.
+    """
+    if not evidence_ids:
+        return None
+
+    ids = {str(e) for e in evidence_ids}
+    rows = (
+        await db.execute(
+            select(Episode.id, Episode.evidence_ids)
+            .join(
+                EpisodeEvidenceLink,
+                EpisodeEvidenceLink.episode_id == Episode.id,
+            )
+            .where(
+                Episode.tenant_id == tenant_id,
+                Episode.reviewer_state == "pending_review",
+                EpisodeEvidenceLink.evidence_id.in_(tuple(evidence_ids)),
+            )
+            .distinct()
+        )
+    ).all()
+
+    best: tuple[int, uuid.UUID] | None = None
+    for episode_id, ep_evidence in rows:
+        covered = {str(e) for e in (ep_evidence or [])}
+        if not covered or not covered <= ids:
+            continue
+        if best is None or len(covered) > best[0]:
+            best = (len(covered), episode_id)
+    return best
 MAX_SYNTHESIS_DELAY_SECONDS = 1_800
 
 # Sources whose messages get a message-function classification during
@@ -1038,6 +1097,43 @@ async def _reconstruct(
             "cluster_fingerprint": cluster.fingerprint,
             "episode_ids": [str(existing_draft)],
         }
+
+    # The same guard, for the case the fingerprint cannot see.
+    #
+    # The check above asks "has this EXACT membership been synthesized", and
+    # a fingerprint is derived from membership — so one more thread message
+    # yields a new fingerprint, the check misses, and a full synthesis runs.
+    # That is how a single ticket accumulated 44 accounts of one incident:
+    # the idempotency guard was defeated by exactly the thing it exists to
+    # prevent. Measured on the live corpus, re-running 207 messages produced
+    # 111 episodes of which 112 were retired by dedup minutes later — about
+    # 1.4M tokens, nearly the entire cost of the run, spent writing accounts
+    # that were immediately superseded.
+    #
+    # So: if a live episode already covers this material, only re-tell it
+    # when the cluster has actually grown enough to say something new.
+    # Dedup still runs behind this as the safety net, but it should not be
+    # the mechanism — cleaning up afterwards recovers the graph, never the
+    # money.
+    if settle:
+        prior = await _largest_covered_episode(db, tenant_id, cluster.evidence_ids)
+        if prior is not None:
+            prior_size, prior_id = prior
+            if len(cluster.evidence_ids) < prior_size * (1 + MIN_RESYNTHESIS_GROWTH):
+                logger.info(
+                    "episode_reconstruct.skipped_insufficient_growth",
+                    tenant_id=str(tenant_id),
+                    cluster_size=len(cluster.evidence_ids),
+                    prior_size=prior_size,
+                    episode_id=str(prior_id),
+                )
+                return {
+                    "status": "skipped_insufficient_growth",
+                    "cluster_fingerprint": cluster.fingerprint,
+                    "cluster_size": len(cluster.evidence_ids),
+                    "prior_size": prior_size,
+                    "episode_ids": [str(prior_id)],
+                }
 
     if domain_id is None:
         # Resolve a default domain for the tenant if not provided
