@@ -254,8 +254,19 @@ Run **two** workers with different pools, plus exactly one beat:
 
 ```powershell
 # Worker A — the parallel one. Ticket processing is ~95% waiting on the LLM,
-# so a threads pool gives near-linear speedup. Prefork is not usable on Windows.
-python -m celery -A contextedge.workers.celery_app worker -l INFO -n workerA@%h -Q extraction,hydration,default -P threads -c 8
+# so parallelism gives near-linear speedup. Prefork is not usable on Windows,
+# and `-P threads` is NOT usable either: litellm holds asyncio locks bound to
+# the loop that created them, so a threads pool raises "Lock is bound to a
+# different event loop" on every enrichment call, which trips the provider
+# circuit breaker and fails the whole run silently-ish. Measured on a live
+# backfill 2026-08-16.
+#
+# Parallelism therefore has to come from PROCESSES, each with its own loop:
+# start N solo workers with distinct node names.
+1..4 | ForEach-Object {
+  Start-Process python -ArgumentList "-m","celery","-A","contextedge.workers.celery_app",`
+    "worker","-l","INFO","-n","workerA$_@%h","-Q","extraction,hydration,default","-P","solo"
+}
 
 # Worker B — the serialized one. Clustering and playbook generation operate on
 # the whole graph and have no advisory lock (unlike sync), so two concurrent

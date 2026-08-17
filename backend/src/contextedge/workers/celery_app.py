@@ -198,6 +198,31 @@ celery_app.conf.update(
     task_track_started=True,
     task_acks_late=True,
     worker_prefetch_multiplier=1,
+    # Survive a broker connection reset instead of dying on it.
+    #
+    # On this Windows dev box the broker is reached through WSL's port relay
+    # (`wslrelay.exe` owns 127.0.0.1:6379, which beats Docker's 0.0.0.0 bind),
+    # and that relay drops TCP connections intermittently under concurrent
+    # load. Without these settings a single reset raises
+    # `kombu.exceptions.OperationalError` and the worker EXITS — measured
+    # 2026-08-17, when four of eight workers died to one blip and throughput
+    # halved with nothing reporting a failure. Silent capacity loss is worse
+    # than a crash: the queue simply drains slower and looks healthy.
+    #
+    # `max_retries=None` means retry forever rather than give up after 100
+    # attempts: a broker outage should pause a worker, never terminate it.
+    # The keepalive keeps idle connections from being reaped by the relay in
+    # the first place, which is the cheaper half of the fix.
+    broker_connection_retry=True,
+    broker_connection_retry_on_startup=True,
+    broker_connection_max_retries=None,
+    broker_transport_options={
+        "socket_keepalive": True,
+        "retry_on_timeout": True,
+        "health_check_interval": 30,
+    },
+    redis_socket_keepalive=True,
+    redis_retry_on_timeout=True,
     task_routes={
         "sync.*": {"queue": "sync"},
         "hydration.*": {"queue": "hydration"},
@@ -206,6 +231,41 @@ celery_app.conf.update(
         # ingest, 500 classifications starved ~40 minutes in extraction's
         # FIFO. Routes are matched in order, so this wins the wildcard.
         "extraction.classify_relevance": {"queue": "default"},
+        # Graph lane — the same starvation, one link further down.
+        #
+        # `normalize_evidence` -> `correlate_evidence` -> (if it created
+        # correlations) `reconstruct_episode` is the chain that turns a pile
+        # of evidence into a context graph. Every link was routed to
+        # `extraction`, so each one queued BEHIND the bulk normalization that
+        # produces it — and thread hydration means normalization feeds itself:
+        # one ticket hydrates into ~41 message rows, each of which is another
+        # normalize task. Measured on the live Zoho backfill (2026-08-17), the
+        # extraction queue was GROWING by ~70 tasks/minute at 8,255 deep with
+        # ~55,000 message tasks still to come, while the head of the queue was
+        # 60/60 normalize. Correlation had been dispatched and never once been
+        # received; episodes, patterns and playbooks were all still zero after
+        # 193 evidence items.
+        #
+        # FIFO makes this unbounded, not merely slow: the graph could not
+        # begin forming until the entire ingest finished, so the product's
+        # whole downstream half waited on its own upstream.
+        #
+        # A separate lane is the fix already proven for `classify_relevance`
+        # directly above. Baseline computation rides along because it is
+        # per-evidence follow-up work with the same starvation profile.
+        "extraction.correlate_evidence": {"queue": "correlation"},
+        "extraction.reconstruct_episode": {"queue": "correlation"},
+        "extraction.compute_evidence_baseline": {"queue": "correlation"},
+        # Retrieval lane, starved by the same FIFO and with a worse symptom.
+        # Chunking and chunk embedding are what make evidence findable: an
+        # unembedded chunk is invisible to vector search, so an agent asking
+        # the graph a question simply does not see it. Measured in the same
+        # run: 1,879 chunks existed and 289 were embedded (15%), with 309
+        # `embed_chunks_batch` tasks queued behind 10,226 normalizations.
+        # Nothing reported an error — the evidence was ingested, and silently
+        # unretrievable.
+        "extraction.chunk_evidence": {"queue": "embedding"},
+        "extraction.embed_chunks_batch": {"queue": "embedding"},
         "extraction.*": {"queue": "extraction"},
         "artifact.*": {"queue": "extraction"},
         "pattern.*": {"queue": "pattern"},
