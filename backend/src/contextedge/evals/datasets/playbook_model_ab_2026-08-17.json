@@ -1,0 +1,146 @@
+[
+ {
+  "pattern": "Automation Edge Version Upgrade Management",
+  "episodes": 6,
+  "gemini-2.5-flash": {
+   "steps": 15,
+   "grounded_steps": 10,
+   "grounded_share": 0.67,
+   "source_refs": 13,
+   "confidence": null,
+   "has_rollback": true,
+   "has_verification": false,
+   "latency_s": 21.8
+  },
+  "gemini-3.7-flash": {
+   "steps": 6,
+   "grounded_steps": 5,
+   "grounded_share": 0.83,
+   "source_refs": 10,
+   "confidence": null,
+   "has_rollback": true,
+   "has_verification": false,
+   "latency_s": 15.1
+  }
+ },
+ {
+  "pattern": "Process Studio Registration and Connectivity Failure",
+  "episodes": 6,
+  "gemini-2.5-flash": {
+   "steps": 15,
+   "grounded_steps": 12,
+   "grounded_share": 0.8,
+   "source_refs": 17,
+   "confidence": null,
+   "has_rollback": true,
+   "has_verification": false,
+   "latency_s": 34.5
+  },
+  "gemini-3.7-flash": {
+   "steps": 9,
+   "grounded_steps": 9,
+   "grounded_share": 1.0,
+   "source_refs": 20,
+   "confidence": null,
+   "has_rollback": true,
+   "has_verification": false,
+   "latency_s": 15.6
+  }
+ },
+ {
+  "pattern": "AutomationEdge/DocEdge System Upgrade and Migration Process",
+  "episodes": 5,
+  "gemini-2.5-flash": {
+   "steps": 15,
+   "grounded_steps": 12,
+   "grounded_share": 0.8,
+   "source_refs": 14,
+   "confidence": null,
+   "has_rollback": true,
+   "has_verification": false,
+   "latency_s": 35.6
+  },
+  "gemini-3.7-flash": {
+   "steps": 5,
+   "grounded_steps": 4,
+   "grounded_share": 0.8,
+   "source_refs": 10,
+   "confidence": null,
+   "has_rollback": true,
+   "has_verification": false,
+   "latency_s": 12.9
+  }
+ },
+ {
+  "pattern": "DocEdge Decommission Runbook Management",
+  "episodes": 2,
+  "gemini-2.5-flash": {
+   "steps": 9,
+   "grounded_steps": 7,
+   "grounded_share": 0.78,
+   "source_refs": 12,
+   "confidence": null,
+   "has_rollback": true,
+   "has_verification": false,
+   "latency_s": 21.3
+  },
+  "gemini-3.7-flash": {
+   "steps": 5,
+   "grounded_steps": 4,
+   "grounded_share": 0.8,
+   "source_refs": 6,
+   "confidence": null,
+   "has_rollback": true,
+   "has_verification": false,
+   "latency_s": 13.2
+  }
+ },
+ {
+  "pattern": "SSO Concurrent Session Restriction Misunderstanding",
+  "episodes": 1,
+  "gemini-2.5-flash": {
+   "steps": 4,
+   "grounded_steps": 2,
+   "grounded_share": 0.5,
+   "source_refs": 2,
+   "confidence": null,
+   "has_rollback": true,
+   "has_verification": false,
+   "latency_s": 20.1
+  },
+  "gemini-3.7-flash": {
+   "steps": 4,
+   "grounded_steps": 3,
+   "grounded_share": 0.75,
+   "source_refs": 3,
+   "confidence": null,
+   "has_rollback": true,
+   "has_verification": false,
+   "latency_s": 12.1
+  }
+ },
+ {
+  "pattern": "Unsupported Direct Database Migration: DocEdge to AEUI",
+  "episodes": 2,
+  "gemini-2.5-flash": {
+   "steps": 6,
+   "grounded_steps": 4,
+   "grounded_share": 0.67,
+   "source_refs": 8,
+   "confidence": null,
+   "has_rollback": true,
+   "has_verification": false,
+   "latency_s": 19.5
+  },
+  "gemini-3.7-flash": {
+   "steps": 6,
+   "grounded_steps": 4,
+   "grounded_share": 0.67,
+   "source_refs": 7,
+   "confidence": null,
+   "has_rollback": true,
+   "has_verification": false,
+   "latency_s": 18.4
+  }
+ }
+]

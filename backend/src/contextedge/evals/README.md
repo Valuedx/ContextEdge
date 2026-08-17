@@ -105,6 +105,28 @@ entities* are especially valuable: a set where every case expects
 entities cannot detect over-extraction, which is the failure that filled
 this graph with ticket numbers.
 
+## Playbook model A/B
+
+`playbook_model_ab.py` answers the model question for the playbook lane
+the same way: the REAL generator on the same pattern inputs with only
+the model swapped. The deciding metric is `grounded_share`, because
+`grounding_status` comes from validated citations — the model cannot
+claim it. Live patterns, not stored cases, so run it against a graph
+that has some (the 2026-08-17 run used 6 spanning multi-episode to
+singleton).
+
+```bash
+cd backend
+python -m contextedge.evals.playbook_model_ab \
+  vertex_ai/gemini-2.5-flash vertex_ai/gemini-3.7-flash
+```
+
+The 2026-08-17 verdict (snapshot in
+`datasets/playbook_model_ab_2026-08-17.json`): 3.7-flash won — grounded
+share 0.70 → 0.81, steps halved with refs held, latency halved — and
+`playbook_model` now defaults to it. Full write-up in
+`codewiki/18-cost-observability-and-containment.md`.
+
 ## Known gap
 
 There is no applicability harness yet. `knowledge_applicability` has the

@@ -58,10 +58,13 @@ class Settings(BaseSettings):
     default_embedding_model: str = "text-embedding-3-small"
     # Defaults match what these lanes actually run today (and what
     # .env.example pins) — wiring a lane must not switch its model as a
-    # side effect. Upgrading to gemini-3.6-flash is a deliberate env
-    # change gated on the measure-first A/B (KNOWN_GAPS).
+    # side effect. The playbook lane runs gemini-3.7-flash on the
+    # 2026-08-17 A/B verdict (evals/playbook_model_ab.py: grounded share
+    # 0.70 -> 0.81, latency halved, never worse on any pattern). The
+    # pattern lane was NOT measured there and stays on 2.5-flash until
+    # its own measure-first A/B (KNOWN_GAPS).
     pattern_model: str = "vertex_ai/gemini-2.5-flash"
-    playbook_model: str = "vertex_ai/gemini-2.5-flash"
+    playbook_model: str = "vertex_ai/gemini-3.7-flash"
 
     # Per-task locations
     classification_location: str = "global"

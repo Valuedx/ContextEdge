@@ -443,6 +443,14 @@ The hybrid ranker uses a hard-coded `quality_score = 0.5` for all playbooks. A p
   defaults now match what the lanes actually run (and what
   `.env.example` pins): `vertex_ai/gemini-2.5-flash`. Upgrading to
   3.6-flash is a deliberate env change gated on the measure-first A/B.
+  *(2026-08-17: that A/B ran for the **playbook** lane — against
+  3.7-flash, which had superseded 3.6 by then — and won on grounding
+  0.70 → 0.81 with latency halved, so `playbook_model` now defaults to
+  `vertex_ai/gemini-3.7-flash`; verdict + method in
+  [18-cost-observability-and-containment](./18-cost-observability-and-containment.md),
+  snapshot in `evals/datasets/playbook_model_ab_2026-08-17.json`. The
+  **pattern** lane remains unmeasured and stays on 2.5-flash behind the
+  same gate.)*
 - **Poison messages on the pattern queue**: `generate_playbook_candidate`
   tasks with malformed UUID args (from 2026-08-07 evening testing) cycle
   on bounded retries in workerB's log. Harmless but noisy; they expire at

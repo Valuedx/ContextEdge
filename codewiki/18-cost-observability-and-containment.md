@@ -33,7 +33,7 @@ Four ceilings, all in `config.py`, all overridable via env (documented in `.env.
 
 Beyond the ceilings, two **spend-avoidance** knobs route or skip work instead of capping it (both default to changing nothing):
 
-- **Per-task model & location routing** (`3f6d3c3`): `pattern_model` / `playbook_model` plus per-task `*_LOCATION` settings let each pipeline lane target its own model and Vertex region (`ai/provider.MODEL_ROUTING` / `LOCATION_ROUTING`) — the lever for pointing high-volume lanes at cheaper models without touching quality lanes. Caveat recorded in [KNOWN_GAPS](./KNOWN_GAPS.md): the code defaults for the two new lanes name `gemini-3.6-flash` with no A/B behind the switch.
+- **Per-task model & location routing** (`3f6d3c3`): `pattern_model` / `playbook_model` plus per-task `*_LOCATION` settings let each pipeline lane target its own model and Vertex region (`ai/provider.MODEL_ROUTING` / `LOCATION_ROUTING`) — the lever for pointing high-volume lanes at cheaper models without touching quality lanes. The playbook lane runs `gemini-3.7-flash` on the measured verdict below (2026-08-17); the pattern lane stays on `gemini-2.5-flash` because it has not been measured — the same measure-first gate applies before flipping it ([KNOWN_GAPS](./KNOWN_GAPS.md)).
 - **Resolution gate** (`EPISODE_RESOLUTION_GATE=cluster`, default `off`): episode synthesis — the costliest lane, 73% of e2e spend — is deferred for clusters carrying no resolution signal anywhere, at zero LLM cost (deterministic scan). Deferred, not dropped; design in [07-episodes-patterns-playbooks](./07-episodes-patterns-playbooks.md).
 
 5. **Budget enforcement path** — `llm_complete` calls `tenant_budget_service.check_budget` before spending. A tenant's own budget row wins when present; otherwise the deployment defaults flow through the *same* evaluation (`_DefaultBudget` carries exactly the attributes `_check_budget_locked` reads — no second implementation of the limit logic to drift). `block` raises `TenantBudgetExceeded` so callers can degrade; `warn` logs, emits an `llm.budget_warning` event, and lets the call through — roll out as `warn`, flip to `block`.
@@ -49,6 +49,21 @@ Beyond the ceilings, two **spend-avoidance** knobs route or skip work instead of
 - **`identity_adjudication` / `identity_reconciliation` / `message_function`**: confidence-threshold-coupled (`AUTO_LINK_THRESHOLDS` 0.95, reconciliation `MIN_CONFIDENCE` 0.95, `CLASSIFIER_TRUST_FLOOR`). A measured run showed capping adjudication moved confidence 0.95 → 0.80 at unchanged verdicts — capping silently converts auto-links into review-queue items unless thresholds are re-tuned in the same change (see `test_thinking_budget.py`).
 
 Also measured: Vertex per-call latency varies 3–4× at identical token counts, so thinking caps are a **cost** lever, not a latency lever. Per-ticket latency comes from worker concurrency (RUNBOOK), not from trimming reasoning.
+
+### Playbook model: gemini-3.7-flash measured better (2026-08-17)
+
+The lane-routing switch shipped with an explicit gate: no model upgrade without a measurement. This is that measurement, for the playbook lane. `evals/playbook_model_ab.py` ran the REAL generator — prompt, source-ref validation, structural grounding classification — on 6 patterns from the live Zoho corpus (spread: 3 multi-episode, 2 pairs, 1 singleton) with only the model swapped, so the comparison isolates the model. Grounding is the axis that decides: `grounding_status` comes from validated citations, so the model cannot claim it.
+
+| | gemini-2.5-flash | gemini-3.7-flash |
+| --- | --- | --- |
+| grounded-step share | 0.70 | **0.81** (never worse on any of the 6) |
+| steps per playbook | 10.7 | **5.8** |
+| latency | 25.5s | **14.5s** |
+| rollback notes | 6/6 | 6/6 |
+
+**Why it shipped:** 3.7-flash is better-grounded, not merely shorter — source-ref counts held while step counts halved, which reads as less invented best-practice padding, and it cost half the wall-clock. `playbook_model` defaults to `vertex_ai/gemini-3.7-flash` (config.py, `.env.example`); snapshot pinned at `evals/datasets/playbook_model_ab_2026-08-17.json`.
+
+**Tradeoff / what this does not license:** the flip is a quality-and-latency call, not a saving — 3.7-flash is per-token pricier ($0.75/$3.75 per M vs 2.5-flash's $0.30/$2.50, introductory until 2026-12-31, doubling 2027-01-01), roughly a wash per playbook only because step counts halved. The rate is in `admin_cost_service.MODEL_COST_USD_PER_M_TOKENS`; re-check the math when the introductory window closes. And 6 patterns is a decision-grade sample, not a benchmark — the verdict was unanimous across the spread, which is what made it sufficient. It says nothing about the **pattern** lane (different prompt, different failure modes: over-merging clusters rather than padding steps); that lane keeps 2.5-flash until its own A/B. `has_verification` was 0/6 on *both* models — a prompt property, not a model differentiator, and a known open item.
 
 ### Local models: feasibility measured (2026-08-07)
 

@@ -43,6 +43,9 @@ MODEL_COST_USD_PER_M_TOKENS: dict[str, dict[str, float]] = {
     "gemini-2.5-flash": {"input": 0.30, "output": 2.50, "cached_input": 0.075},
     "gemini-2.5-pro": {"input": 1.25, "output": 10.00, "cached_input": 0.31},
     "gemini-2.0-flash": {"input": 0.10, "output": 0.40, "cached_input": 0.025},
+    # Introductory rate through 2026-12-31; doubles to 1.50/7.50 on
+    # 2027-01-01 (cached_input assumed at Google's usual 25% of input).
+    "gemini-3.7-flash": {"input": 0.75, "output": 3.75, "cached_input": 0.19},
     "gemini-embedding": {"input": 0.15, "output": 0.0, "cached_input": 0.0},
 }
 
