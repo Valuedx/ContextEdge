@@ -3,7 +3,7 @@ import uuid
 from datetime import datetime
 
 import structlog
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -11,7 +11,7 @@ from contextedge.ai.classifiers.message_function import classify_message_functio
 from contextedge.ai.classifiers.relevance import classify_relevance as run_relevance_classifier
 from contextedge.ai.embeddings import embed_evidence
 from contextedge.config import settings
-from contextedge.models.episode import Episode, EpisodeEvidenceLink, EpisodeStep
+from contextedge.models.episode import Episode, EpisodeStep
 from contextedge.models.evidence import EvidenceItem, RawEvidenceObject
 from contextedge.models.source import Source
 from contextedge.models.tenant import Domain
@@ -778,31 +778,49 @@ async def _largest_covered_episode(
     if not evidence_ids:
         return None
 
-    ids = {str(e) for e in evidence_ids}
-    rows = (
-        await db.execute(
-            select(Episode.id, Episode.evidence_ids)
-            .join(
-                EpisodeEvidenceLink,
-                EpisodeEvidenceLink.episode_id == Episode.id,
+    # Containment is asked of `evidence_ids` directly, NOT via
+    # `episode_evidence_links`. The link table is not reliably populated —
+    # 1,489 of 2,111 live episodes carry evidence_ids with no link rows at
+    # all — so a join against it silently matched nothing and this returned
+    # None every time, leaving the growth gate dead. `evidence_ids` is the
+    # authoritative membership; `<@` ("is contained by") is exactly the
+    # question, and Postgres answers it without loading every episode.
+    ids = json.dumps([str(e) for e in evidence_ids])
+    # Raw `<@` rather than the ORM's `contained_by`: `evidence_ids` is
+    # already jsonb, and the ORM expression built a cast chain that silently
+    # matched nothing — including an episode against its own evidence set,
+    # which must always match. Written as SQL so the operator is the one
+    # that was verified against the database.
+    # Fail OPEN on anything unexpected: this helper exists to save money,
+    # and the worst failure mode is the inverse — an error here suppressing
+    # synthesis and silently stopping the graph from forming. A miss costs
+    # one redundant synthesis that dedup then retires.
+    try:
+        row = (
+            await db.execute(
+                text("""
+                    select id, jsonb_array_length(evidence_ids) as n
+                    from episodes
+                    where tenant_id = :t
+                      and reviewer_state = 'pending_review'
+                      and jsonb_array_length(evidence_ids) > 0
+                      and evidence_ids <@ cast(:ids as jsonb)
+                    order by n desc
+                    limit 1
+                """),
+                {"t": str(tenant_id), "ids": ids},
             )
-            .where(
-                Episode.tenant_id == tenant_id,
-                Episode.reviewer_state == "pending_review",
-                EpisodeEvidenceLink.evidence_id.in_(tuple(evidence_ids)),
-            )
-            .distinct()
+        ).first()
+        if row is None:
+            return None
+        return (int(row[1]), row[0])
+    except (TypeError, ValueError, IndexError) as exc:
+        logger.warning(
+            "episode_reconstruct.growth_gate_check_failed",
+            tenant_id=str(tenant_id),
+            error_type=type(exc).__name__,
         )
-    ).all()
-
-    best: tuple[int, uuid.UUID] | None = None
-    for episode_id, ep_evidence in rows:
-        covered = {str(e) for e in (ep_evidence or [])}
-        if not covered or not covered <= ids:
-            continue
-        if best is None or len(covered) > best[0]:
-            best = (len(covered), episode_id)
-    return best
+        return None
 MAX_SYNTHESIS_DELAY_SECONDS = 1_800
 
 # Sources whose messages get a message-function classification during

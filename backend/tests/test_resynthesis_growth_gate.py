@@ -24,50 +24,47 @@ from contextedge.workers.extraction_tasks import (
 )
 
 
-def _db(rows):
+def _db(row):
+    """`_largest_covered_episode` now asks Postgres for the answer.
+
+    NOTE ON WHAT THESE TESTS DO NOT COVER. The first version of this helper
+    filtered candidates in Python, and mocked-db tests like these passed
+    while it was DEAD IN PRODUCTION: it joined `episode_evidence_links`,
+    which 1,489 of 2,111 live episodes have no rows in, so it returned None
+    every time and the gate never fired. The containment test is now `<@`
+    inside SQL, which a mock cannot exercise — mocking `execute` only
+    asserts that the caller reads the result correctly.
+
+    So these cover plumbing, and the SQL was verified against the live
+    database instead: a cluster of 20 found its covered episode, and
+    cluster+1 (21) was suppressed against a threshold of 30.
+    """
     return SimpleNamespace(
-        execute=AsyncMock(return_value=SimpleNamespace(all=lambda: rows))
+        execute=AsyncMock(return_value=SimpleNamespace(first=lambda: row))
     )
 
 
 @pytest.mark.asyncio
-async def test_finds_the_biggest_episode_the_cluster_covers():
-    cluster = [uuid.uuid4() for _ in range(5)]
-    small, big = uuid.uuid4(), uuid.uuid4()
-    rows = [
-        (small, [str(cluster[0]), str(cluster[1])]),
-        (big, [str(c) for c in cluster[:4]]),
-    ]
-
-    found = await _largest_covered_episode(_db(rows), uuid.uuid4(), cluster)
-
-    assert found == (4, big)
+async def test_returns_size_and_id_of_the_covered_episode():
+    episode_id = uuid.uuid4()
+    found = await _largest_covered_episode(
+        _db((episode_id, 4)), uuid.uuid4(), [uuid.uuid4() for _ in range(5)]
+    )
+    assert found == (4, episode_id)
 
 
 @pytest.mark.asyncio
-async def test_an_episode_citing_outside_evidence_is_not_covered():
-    """Containment, not overlap.
-
-    An episode built partly from evidence this cluster does not contain is
-    about different material — re-telling this cluster does not supersede it,
-    so it must not suppress the synthesis either.
-    """
-    cluster = [uuid.uuid4() for _ in range(3)]
-    outsider = uuid.uuid4()
-    rows = [(uuid.uuid4(), [str(cluster[0]), str(outsider)])]
-
-    assert await _largest_covered_episode(_db(rows), uuid.uuid4(), cluster) is None
+async def test_no_covered_episode_means_no_suppression():
+    """Nothing found must never be read as "suppress" — that would stop the
+    graph forming at all."""
+    assert await _largest_covered_episode(_db(None), uuid.uuid4(), [uuid.uuid4()]) is None
 
 
 @pytest.mark.asyncio
-async def test_no_prior_episode_means_no_suppression():
-    cluster = [uuid.uuid4()]
-    assert await _largest_covered_episode(_db([]), uuid.uuid4(), cluster) is None
-
-
-@pytest.mark.asyncio
-async def test_empty_cluster_is_handled():
-    assert await _largest_covered_episode(_db([]), uuid.uuid4(), []) is None
+async def test_empty_cluster_short_circuits_without_a_query():
+    db = _db(None)
+    assert await _largest_covered_episode(db, uuid.uuid4(), []) is None
+    db.execute.assert_not_awaited()
 
 
 def test_growth_threshold_suppresses_a_trickle_but_not_real_growth():
