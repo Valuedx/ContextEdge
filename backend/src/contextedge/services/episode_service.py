@@ -3,7 +3,7 @@
 import uuid
 
 import structlog
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from contextedge.ai.extractors.episode_extractor import reconstruct_episode
@@ -331,8 +331,6 @@ async def deduplicate_episodes(
     tenant_id: uuid.UUID,
 ) -> int:
     """Merge duplicate episodes with matching normalized titles for a tenant."""
-    from contextedge.models.episode import EpisodeStep
-    from contextedge.models.pattern import GraphEdge, PatternEvidenceLink
 
     eps = (
         await db.execute(
@@ -394,101 +392,346 @@ async def deduplicate_episodes(
         duplicates = group[1:]
 
         for dup in duplicates:
-            # 1. Re-link EpisodeEvidenceLink
-            dup_ev_links = (
-                await db.execute(
-                    select(EpisodeEvidenceLink).where(
-                        EpisodeEvidenceLink.episode_id == dup.id
-                    )
-                )
-            ).scalars().all()
-
-            for link in dup_ev_links:
-                existing_link = (
-                    await db.execute(
-                        select(EpisodeEvidenceLink).where(
-                            EpisodeEvidenceLink.episode_id == canonical.id,
-                            EpisodeEvidenceLink.evidence_id == link.evidence_id,
-                        )
-                    )
-                ).scalar_one_or_none()
-
-                if not existing_link:
-                    link.episode_id = canonical.id
-                else:
-                    await db.delete(link)
-
-            # 2. Re-link PatternEvidenceLink
-            dup_pat_links = (
-                await db.execute(
-                    select(PatternEvidenceLink).where(
-                        PatternEvidenceLink.episode_id == dup.id
-                    )
-                )
-            ).scalars().all()
-
-            for plink in dup_pat_links:
-                existing_plink = (
-                    await db.execute(
-                        select(PatternEvidenceLink).where(
-                            PatternEvidenceLink.pattern_id == plink.pattern_id,
-                            PatternEvidenceLink.episode_id == canonical.id,
-                        )
-                    )
-                ).scalar_one_or_none()
-
-                if not existing_plink:
-                    plink.episode_id = canonical.id
-                else:
-                    await db.delete(plink)
-
-            # 3. Re-link EpisodeStep
-            steps = (
-                await db.execute(
-                    select(EpisodeStep).where(EpisodeStep.episode_id == dup.id)
-                )
-            ).scalars().all()
-            for step in steps:
-                step.episode_id = canonical.id
-
-            # 4. Re-link Graph edges
-            edges = (
-                await db.execute(
-                    select(GraphEdge).where(
-                        (GraphEdge.source_node_id == dup.id)
-                        | (GraphEdge.target_node_id == dup.id)
-                    )
-                )
-            ).scalars().all()
-
-            for edge in edges:
-                new_src = canonical.id if edge.source_node_id == dup.id else edge.source_node_id
-                new_tgt = canonical.id if edge.target_node_id == dup.id else edge.target_node_id
-
-                existing_edge = (
-                    await db.execute(
-                        select(GraphEdge).where(
-                            GraphEdge.tenant_id == edge.tenant_id,
-                            GraphEdge.source_node_type == edge.source_node_type,
-                            GraphEdge.source_node_id == new_src,
-                            GraphEdge.target_node_type == edge.target_node_type,
-                            GraphEdge.target_node_id == new_tgt,
-                            GraphEdge.edge_type == edge.edge_type,
-                        )
-                    )
-                ).scalar_one_or_none()
-
-                if existing_edge and existing_edge.id != edge.id:
-                    await db.delete(edge)
-                else:
-                    edge.source_node_id = new_src
-                    edge.target_node_id = new_tgt
-
-            # Supersede, never hard-delete: the governed lifecycle keeps
-            # the audit trail and stays reversible (same rule as the
-            # reconstruction-race cleanup).
-            dup.reviewer_state = "superseded"
+            await _merge_episode_into(db, dup, canonical)
             merged_count += 1
 
     await db.flush()
     return merged_count
+
+
+async def _merge_episode_into(db: AsyncSession, dup: "Episode", canonical: "Episode") -> None:
+    """Fold ``dup`` into ``canonical``: re-link everything, then supersede.
+
+    Extracted so the title-based sweep and the containment sweep share one
+    implementation — two copies of this re-linking would drift, and a missed
+    link type leaves orphaned rows pointing at a superseded episode.
+    """
+    from contextedge.models.episode import EpisodeStep
+    from contextedge.models.pattern import GraphEdge, PatternEvidenceLink
+
+    # 1. Re-link EpisodeEvidenceLink
+    dup_ev_links = (
+        await db.execute(
+            select(EpisodeEvidenceLink).where(
+                EpisodeEvidenceLink.episode_id == dup.id
+            )
+        )
+    ).scalars().all()
+
+    for link in dup_ev_links:
+        existing_link = (
+            await db.execute(
+                select(EpisodeEvidenceLink).where(
+                    EpisodeEvidenceLink.episode_id == canonical.id,
+                    EpisodeEvidenceLink.evidence_id == link.evidence_id,
+                )
+            )
+        ).scalar_one_or_none()
+
+        if not existing_link:
+            link.episode_id = canonical.id
+        else:
+            await db.delete(link)
+
+    # 2. Re-link PatternEvidenceLink
+    dup_pat_links = (
+        await db.execute(
+            select(PatternEvidenceLink).where(
+                PatternEvidenceLink.episode_id == dup.id
+            )
+        )
+    ).scalars().all()
+
+    for plink in dup_pat_links:
+        existing_plink = (
+            await db.execute(
+                select(PatternEvidenceLink).where(
+                    PatternEvidenceLink.pattern_id == plink.pattern_id,
+                    PatternEvidenceLink.episode_id == canonical.id,
+                )
+            )
+        ).scalar_one_or_none()
+
+        if not existing_plink:
+            plink.episode_id = canonical.id
+        else:
+            await db.delete(plink)
+
+    # 3. Re-link EpisodeStep
+    steps = (
+        await db.execute(
+            select(EpisodeStep).where(EpisodeStep.episode_id == dup.id)
+        )
+    ).scalars().all()
+    for step in steps:
+        step.episode_id = canonical.id
+
+    # 4. Re-link Graph edges
+    edges = (
+        await db.execute(
+            select(GraphEdge).where(
+                (GraphEdge.source_node_id == dup.id)
+                | (GraphEdge.target_node_id == dup.id)
+            )
+        )
+    ).scalars().all()
+
+    for edge in edges:
+        new_src = canonical.id if edge.source_node_id == dup.id else edge.source_node_id
+        new_tgt = canonical.id if edge.target_node_id == dup.id else edge.target_node_id
+
+        existing_edge = (
+            await db.execute(
+                select(GraphEdge).where(
+                    GraphEdge.tenant_id == edge.tenant_id,
+                    GraphEdge.source_node_type == edge.source_node_type,
+                    GraphEdge.source_node_id == new_src,
+                    GraphEdge.target_node_type == edge.target_node_type,
+                    GraphEdge.target_node_id == new_tgt,
+                    GraphEdge.edge_type == edge.edge_type,
+                )
+            )
+        ).scalar_one_or_none()
+
+        if existing_edge and existing_edge.id != edge.id:
+            await db.delete(edge)
+        else:
+            edge.source_node_id = new_src
+            edge.target_node_id = new_tgt
+
+    # Supersede, never hard-delete: the governed lifecycle keeps
+    # the audit trail and stays reversible (same rule as the
+    # reconstruction-race cleanup).
+    dup.reviewer_state = "superseded"
+
+
+async def supersede_contained_episodes(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    *,
+    dry_run: bool = False,
+) -> dict:
+    """Retire episodes whose evidence is wholly contained in a bigger one.
+
+    The gap this closes. Title-based dedup requires the two episodes to carry
+    the SAME normalized title, and a regrown cluster never does: each time a
+    thread message lands, the extractor writes a fresh, differently-worded
+    account of the same incident. Measured on the live corpus, one ticket
+    accumulated **44 live episodes** of a single "Agent Unknown State"
+    incident with **zero** exact-title matches between any pair — so dedup
+    could not fire even once — while **97 pairs** had one evidence set fully
+    containing another. 190 of 434 covered tickets carried 4+ episodes.
+
+    Containment is the right test precisely because it is strict. If every
+    piece of evidence behind B is also behind A, then A is an account of the
+    same material and a more complete one; keeping B adds no fact and costs
+    the reader a choice between near-identical write-ups. That is the whole
+    observed failure: a cluster grows, gets re-narrated, and the earlier
+    telling is never retired.
+
+    What it deliberately does NOT do is merge on partial overlap. On the same
+    ticket, 148 pairs overlapped without containment at Jaccard 0.04-0.33 —
+    "BOT Failures After OS Upgrade" against "Agent VSM01 Unknown State".
+    Those share a ticket, not an incident, and a threshold low enough to
+    catch them would fuse genuinely different problems. Strict containment
+    needs no threshold to tune and cannot make that mistake.
+
+    Largest-first, so a chain (A ⊇ B ⊇ C) collapses into A in one pass rather
+    than leaving C pointing at a superseded B.
+    """
+    episodes = (
+        await db.execute(
+            select(Episode).where(
+                Episode.tenant_id == tenant_id,
+                Episode.reviewer_state.notin_(("superseded", "rejected")),
+            )
+        )
+    ).scalars().all()
+
+    sets: dict[uuid.UUID, set[str]] = {}
+    for ep in episodes:
+        ids = {str(e) for e in (ep.evidence_ids or [])}
+        if ids:
+            sets[ep.id] = ids
+
+    # Biggest first: a container must be processed before what it contains,
+    # or the chain collapses one link per sweep instead of all at once.
+    ordered = sorted(
+        (ep for ep in episodes if ep.id in sets),
+        key=lambda ep: (
+            len(sets[ep.id]),
+            1 if ep.reviewer_state == "approved" else 0,
+            ep.extraction_confidence or 0.0,
+        ),
+        reverse=True,
+    )
+
+    retired: set[uuid.UUID] = set()
+    planned: list[tuple[str, str]] = []
+    for container in ordered:
+        if container.id in retired:
+            continue
+        big = sets[container.id]
+        for other in ordered:
+            if other.id == container.id or other.id in retired:
+                continue
+            small = sets[other.id]
+            # Strict containment. Equal sets are containment both ways; the
+            # ordering above already put the better-kept one first, so the
+            # later one is the duplicate.
+            if small <= big and len(small) < len(big) or (
+                small == big and other.id != container.id
+            ):
+                retired.add(other.id)
+                planned.append((str(other.id), str(container.id)))
+                if not dry_run:
+                    await _merge_episode_into(db, other, container)
+
+    if not dry_run:
+        await db.flush()
+        logger.info(
+            "episode.contained_superseded",
+            tenant_id=str(tenant_id),
+            retired=len(retired),
+            live_before=len(episodes),
+        )
+
+    return {
+        "live_before": len(episodes),
+        "retired": len(retired),
+        "live_after": len(episodes) - len(retired),
+        "pairs": planned[:20],
+    }
+
+
+# Semantic sibling threshold. Chosen from the live corpus, not by feel:
+# pairs describing clearly DIFFERENT incidents on the same ticket topped out
+# at cosine 0.578 ("BOT Failures After OS Upgrade" vs "Agent Unknown State
+# Investigation" = 0.526; "VAPT Vulnerabilities" vs "Agent VSM01 Unknown
+# State" = 0.571), while re-narrations of one incident ran 0.81-0.98
+# ("Process Studio SSO Login 'Address Already In Use: Bind' Error" vs
+# 'Process Studio "Address already in use: bind" error with SSO' = 0.950).
+#
+# 0.85 sits well clear of the highest observed false pair. Note the corpus-
+# wide distribution is CONTINUOUS — there is no natural gap to snap to — so
+# this threshold is a judgement backed by sampling, and it is deliberately
+# on the strict side. It is also never used alone; see below.
+SIMILAR_EPISODE_MIN_COSINE = 0.85
+
+
+async def supersede_similar_episodes(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    *,
+    min_cosine: float = SIMILAR_EPISODE_MIN_COSINE,
+    dry_run: bool = False,
+) -> dict:
+    """Retire episodes that re-tell the same incident from a different slice.
+
+    Containment dedup handles a cluster that GREW: the later account contains
+    the earlier one's evidence outright. It cannot touch the other half of
+    the problem — repeated reconstructions of the SAME cluster, where the
+    extractor splits it differently each time and produces equal-sized,
+    overlapping-but-not-nested accounts. On the live corpus the worst ticket
+    still held 20 episodes after containment, roughly half of them one
+    "Agent Unknown State" incident told from different subsets.
+
+    **Shared evidence is required, and that is not a tuning knob.** At
+    cosine >= 0.85 the corpus holds 319 pairs that share evidence and 29 that
+    share none. The disjoint ones — "SSO 403 Forbidden Error" against "SSO
+    Configuration and Login Failure (HTTP 403 Forbidden)" — are exactly the
+    case the correlation layer already rules on: *similar problem, never the
+    same occurrence*. An embedding cannot distinguish one incident from its
+    recurrence next month; only shared evidence can, so merging without it
+    would fuse two real occurrences into one and silently destroy the
+    recurrence signal. This pass therefore refuses them, even though several
+    are visibly duplicates, because being right about the ones we can prove
+    matters more than catching every one.
+
+    Highest-evidence account wins, so the survivor is the fullest telling.
+    """
+    episodes = (
+        await db.execute(
+            select(Episode).where(
+                Episode.tenant_id == tenant_id,
+                Episode.reviewer_state.notin_(("superseded", "rejected")),
+                Episode.embedding.isnot(None),
+            )
+        )
+    ).scalars().all()
+    by_id = {ep.id: ep for ep in episodes}
+    sets = {
+        ep.id: {str(e) for e in (ep.evidence_ids or [])}
+        for ep in episodes
+    }
+
+    # pgvector does the distance work; the evidence-overlap test is cheap in
+    # Python and keeps the SQL readable.
+    pairs = (
+        await db.execute(
+            text("""
+                select a.id as a_id, b.id as b_id,
+                       1 - (a.embedding <=> b.embedding) as cosine
+                from episodes a
+                join episodes b
+                  on a.id < b.id
+                 and a.tenant_id = b.tenant_id
+                where a.tenant_id = :t
+                  and a.reviewer_state not in ('superseded','rejected')
+                  and b.reviewer_state not in ('superseded','rejected')
+                  and a.embedding is not null and b.embedding is not null
+                  and 1 - (a.embedding <=> b.embedding) >= :c
+                order by 1 - (a.embedding <=> b.embedding) desc
+            """),
+            {"t": str(tenant_id), "c": min_cosine},
+        )
+    ).mappings().all()
+
+    retired: set[uuid.UUID] = set()
+    planned: list[dict] = []
+    skipped_no_shared_evidence = 0
+
+    for row in pairs:
+        a, b = by_id.get(row["a_id"]), by_id.get(row["b_id"])
+        if a is None or b is None or a.id in retired or b.id in retired:
+            continue
+        if not (sets.get(a.id) and sets.get(b.id)):
+            continue
+        if not (sets[a.id] & sets[b.id]):
+            skipped_no_shared_evidence += 1
+            continue
+
+        # Keep the fullest account: most evidence, then approved, then
+        # confidence. The survivor should be the one a reader learns most from.
+        keep, drop = sorted(
+            (a, b),
+            key=lambda ep: (
+                len(sets[ep.id]),
+                1 if ep.reviewer_state == "approved" else 0,
+                ep.extraction_confidence or 0.0,
+            ),
+            reverse=True,
+        )
+        retired.add(drop.id)
+        planned.append({
+            "kept": keep.title, "retired": drop.title, "cosine": round(float(row["cosine"]), 3)
+        })
+        if not dry_run:
+            await _merge_episode_into(db, drop, keep)
+
+    if not dry_run:
+        await db.flush()
+        logger.info(
+            "episode.similar_superseded",
+            tenant_id=str(tenant_id),
+            retired=len(retired),
+            refused_no_shared_evidence=skipped_no_shared_evidence,
+        )
+
+    return {
+        "live_before": len(episodes),
+        "retired": len(retired),
+        "live_after": len(episodes) - len(retired),
+        "refused_no_shared_evidence": skipped_no_shared_evidence,
+        "examples": planned[:12],
+    }
