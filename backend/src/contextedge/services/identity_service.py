@@ -44,10 +44,12 @@ from contextedge.models.episode import (
 from contextedge.models.evidence import EvidenceItem
 from contextedge.models.pattern import GraphEdge
 from contextedge.services.event_log_service import append_operational_event
+from contextedge.services.identity_candidacy import identity_rejection_reason
 from contextedge.services.identity_normalizer import (
     NormalizedEntity,
     normalize_extracted_entity,
 )
+from contextedge.services.identity_promotion import promote_corroborated_identities
 
 logger = structlog.get_logger()
 
@@ -618,6 +620,7 @@ async def resolve_extracted_entities(
     source_id: uuid.UUID | None = None,
 ) -> list[dict]:
     resolved: list[dict] = []
+    rejected: dict[str, int] = {}
 
     for raw_entity in extracted:
         entity = normalize_extracted_entity(raw_entity)
@@ -653,6 +656,23 @@ async def resolve_extracted_entities(
                     canonical, entity, matched_via="alias_exact", confidence=0.95
                 )
             )
+            continue
+
+        # Is this the kind of thing an identity space is for?
+        #
+        # Placed BELOW layers 1-2 and above layer 3 deliberately. Those two
+        # are pure SQL against rows that already exist, and they are how a
+        # lowercase mention in prose ("acme vpn") finds the identity it
+        # belongs to ("Acme VPN"). Gating above them would stop the graph
+        # recognising things it already knows — the opposite of the intent,
+        # which is only to stop new junk being created.
+        #
+        # Everything below this line costs an LLM call or writes a row, and
+        # that is where identity spend concentrated: 78% of all model spend
+        # on the live corpus, 451 adjudications for 134 evidence items.
+        rejection = identity_rejection_reason(entity)
+        if rejection is not None:
+            rejected[rejection] = rejected.get(rejection, 0) + 1
             continue
 
         # Layer 3: candidate generation + LLM adjudication (may abstain).
@@ -762,6 +782,17 @@ async def resolve_extracted_entities(
             candidate_ids=candidate_ids,
         )
 
+    if rejected:
+        # Once per call, not once per entity: this runs over every item of
+        # a backfill, and a per-entity line would bury the ingest log.
+        logger.info(
+            "identity.candidates_rejected",
+            tenant_id=str(tenant_id),
+            extracted=len(extracted),
+            admitted=len(resolved),
+            **{f"rejected_{reason}": n for reason, n in sorted(rejected.items())},
+        )
+
     return resolved
 
 
@@ -842,6 +873,17 @@ async def link_evidence_identities(
     existing_refs["identities"] = merged_refs
     evidence.canonical_entity_refs = existing_refs
     await db.flush()
+
+    # An identity seen in a second document has been corroborated by the
+    # corpus. That is the moment it becomes both trustworthy AND useful —
+    # correlation needs two evidence items sharing an identity, so this is
+    # the first instant it can contribute anything. Promoted here rather
+    # than on a schedule: the information is already in hand, it needs no
+    # scheduler, and it fires exactly when the threshold is crossed.
+    #
+    # Must follow the flush above, so the degree count includes the link
+    # that just crossed it.
+    await promote_corroborated_identities(db, tenant_id, linked_identity_ids)
 
     # Edge weight carries the resolution confidence so graph consumers see
     # a provisional mention (0.5) as weaker than a strong-identifier match

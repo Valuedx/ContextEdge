@@ -238,6 +238,163 @@ register_prompt(
     default=True,
 )
 
+# v4 asks for less because the pipeline keeps less.
+#
+# `services/identity_candidacy` refuses four of v3's eight categories at the
+# persistence boundary: environment, version, patch and vendor describe an
+# incident rather than name a participant in it, and this pipeline already
+# derives the first three deterministically from the source's own custom
+# fields (`services/source_facets`). On the live Zoho corpus v3 spent output
+# tokens producing 132 of them per 729 resolutions, and every one was
+# adjudicated against its trigram neighbours before being stored — "India"
+# three times over. Asking a model for output that is then discarded is the
+# most expensive kind of waste, because it is paid for twice.
+#
+# The second change is the residual v3's own note records: it "still names an
+# unnamed category noun when it is the subject of the incident". The live
+# table shows what that looks like at scale — "the project", "customer
+# query", "query timeout", "screenshot" — so the name-versus-description
+# test is stated here as a property of the STRING, which is the form the
+# gate also applies and the form that survives translation (the corpus
+# contains Portuguese ticket subjects).
+#
+# NOT THE DEFAULT, AND MEASURED THAT WAY. v3 stays.
+#
+# `evals/extraction_eval.py`, 19 labelled cases at 3 samples each:
+#
+#                     v3        v4
+#   entities          42        39
+#   junk (by shape)    0         0
+#   MISSING labels     0         0
+#   forbidden          3         6
+#   stability (J)      1.00      0.988
+#
+# v4 is worse where it was supposed to be better: twice the forbidden
+# extractions, and less stable. Removing four categories did not make the
+# model more careful about the four that remain — it appears to have
+# redistributed some of the excluded strings into `service` and
+# `application` rather than dropping them, which is exactly the failure a
+# category list is supposed to prevent.
+#
+# The cost argument for v4 does not survive that. It is kept, unregistered
+# as default, because the reasoning above is sound and a stronger model or
+# a reworded exclusion may yet realise it — and because a deleted negative
+# result gets re-derived by the next person to notice that v3 asks for
+# categories the pipeline discards.
+#
+# What shipped instead: `services/identity_candidacy`, which enforces the
+# same policy at the persistence boundary, where it costs no tokens, cannot
+# regress extraction quality, and holds regardless of prompt version. On the
+# live corpus it removes 41% of adjudication calls and 39% of identity rows.
+_V4_SYSTEM = """Extract operational entities from the provided evidence content.
+
+An entity is something the organisation RUNS, OWNS or STAFFS — the kind of thing that would appear in a CMDB, an asset inventory or a staff directory. An engineer would say "we run it", "it is assigned to someone", or "it broke".
+
+Extract every such thing the content names. Be thorough: a real incident touches gateways, hosts, services and people, and the graph is only as useful as the connections it holds.
+
+A string is not an entity merely because it appears in the text. Most tokens in a log line are evidence ABOUT an entity, not entities. The exclusions below remove noise — they are not a reason to return a short list when the content genuinely names many systems.
+
+Categories — there are four, and every entity must be one of them:
+- person: named individuals — users, engineers, agents
+- device: named hosts, servers, endpoints, hardware assets
+- application: named software products the organisation runs
+- service: named services, middleware and infrastructure components
+
+DO NOT extract, in any category:
+- Environment tiers and deployment labels: "production", "staging", "UAT", "on-premise", "T3", or a country name used to mean a deployment ("India"). These describe WHERE something ran, not a thing that runs. A named FACILITY is different and IS extractable: a data centre, office or site that has its own name ("London DC") is an asset the organisation owns — record it as a device.
+- Versions, builds and patch identifiers: "8.2.5", "4.6 plugin release", "KB5001234". These describe WHICH BUILD, not a thing.
+- Companies: vendors, customers, partners and suppliers. The account is recorded with the record itself.
+- File names, extensions and paths — anything ending .dll, .exe, .msc, .log, .conf, or written as a filesystem path
+- Executable and process names — extract the SERVICE or PRODUCT the process belongs to instead of the binary that implements it
+- Error, event and status codes, in any vendor's format: hex codes, numeric status codes, and prefixed log identifiers
+- File formats, encodings and MIME types
+- Programming languages, libraries and runtimes named only in passing — UNLESS the incident is about that component itself, in which case it is an application
+- Bare generic nouns with NOTHING identifying them: "computer", "the server", "headset", "desk phone", "printer", "database"
+- Ticket, incident and change record numbers: INC0020341, CHG0044131 — these reference a record, not a system, and are linked separately
+- Commands, menu paths, UI labels, registry keys, protocols, ports
+- Queue names, table names, thread names, class names
+
+The first three exclusions are not judgements about importance. That information is captured separately and precisely from the record's own fields; extracting it here produces a duplicate that is then treated as a thing in its own right.
+
+A NAME, NOT A DESCRIPTION
+
+The display_name must be the thing's NAME — what it is called — never a description of it or of what went wrong with it.
+
+Apply this test to the string itself: would it appear in an inventory, a login banner, or a monitoring dashboard, exactly as written? "ActiveMQ", "vpn-gw-east-01", "Process Studio" would. These would not, and none of them is an entity:
+- "query timeout", "customer query", "the project", "screenshot" — ordinary words describing a situation
+- "Workflow Request Not Executing in Production" — a symptom, and usually the ticket's subject line
+- "AutomationEdge Process Studio JDBC URL setting" — a SETTING INSIDE a named product. Extract the product: "AutomationEdge Process Studio"
+- "Click 'View Documents' issue" — quoted UI text describing an action
+
+When the content describes a problem with a named system, extract the SYSTEM and put the problem in "context". The name field is not where the incident goes.
+
+That test is about the ABSENCE of a name, not about a name built from ordinary words. A named service, appliance, product line or model qualifies however plain its words are: "Queue Service" is a name, "the queue" is not. Dropping a named component because its name reads as a common phrase discards exactly the infrastructure this graph exists to hold.
+
+A useful test: if two different customers could have the same string in their logs and it would mean the same thing, it is probably a code or a format, not an entity of theirs.
+
+NAMES AND ALIASES
+
+Use the fullest, most canonical name as "display_name". When the content gives a SHORT FORM OF THAT SAME NAME — an acronym of its initials, or a truncation of it — put the short form in "aliases" and emit ONE entity, never two.
+
+An alias must be derivable from the name itself. "Field Dispatch Platform (FDP)" is an alias; so is "Queue Service" shortened to "Queue Svc".
+
+A word that merely DESCRIBES the entity is not an alias. "Monitoring" is not an alias for a monitoring product, "the gateway" is not an alias for a named gateway, "database" is not an alias for a database product. Recording one of those would teach that every future mention of that ordinary word means this specific system — which corrupts the graph far more thoroughly than the duplicate it was meant to prevent.
+
+Only include an alias when the content itself shows the two names refer to the same thing. Do not guess expansions. If only the short form appears, use it as the display_name and leave aliases empty.
+
+Also capture any structured identifiers present in the content. Never invent identifiers that are not there.
+
+Return at most 20 entities. When the content contains a repetitive list of similar hostnames or devices, include the most important examples rather than every item.
+
+Respond in JSON with key "entities" containing a list of objects:
+{"entities": [{
+  "entity_type": "...",
+  "display_name": "...",
+  "aliases": [],
+  "context": "brief context",
+  "email": null,
+  "username": null,
+  "hostname": null,
+  "fqdn": null,
+  "serial_number": null,
+  "ip_addresses": [],
+  "source_identifiers": {}
+}]}
+
+Worked example. The names below are invented purely to show the SHAPE of a correct answer — never carry them into a real extraction, and never expect a real environment to contain them.
+
+For "J. Smith (jsmith@example.com) restarted edge-gw-01 in production after the tunnel certificate expired; qsvc.exe was also crashing with error 0x00000042 on the Field Dispatch Platform (FDP) 8.2.5 queue path":
+{"entities": [
+  {"entity_type": "person", "display_name": "J. Smith", "aliases": [],
+    "email": "jsmith@example.com", "username": null, "hostname": null,
+    "fqdn": null, "serial_number": null, "ip_addresses": [],
+    "source_identifiers": {}, "context": "Restarted the gateway"},
+  {"entity_type": "device", "display_name": "edge-gw-01", "aliases": [],
+    "email": null, "username": null, "hostname": "edge-gw-01",
+    "fqdn": null, "serial_number": null, "ip_addresses": [],
+    "source_identifiers": {}, "context": "Gateway restarted in production"},
+  {"entity_type": "service", "display_name": "Queue Service", "aliases": [],
+    "email": null, "username": null, "hostname": null, "fqdn": null,
+    "serial_number": null, "ip_addresses": [], "source_identifiers": {},
+    "context": "Crashing on the queue path"},
+  {"entity_type": "application", "display_name": "Field Dispatch Platform",
+    "aliases": ["FDP"], "email": null, "username": null, "hostname": null,
+    "fqdn": null, "serial_number": null, "ip_addresses": [],
+    "source_identifiers": {}, "context": "Affected queue path, version 8.2.5"}
+]}
+Note what is absent, and why: qsvc.exe (a binary — the service it implements is named instead), 0x00000042 (an error code), "production" (an environment) and "8.2.5" (a version). The last two are not lost — they belong in "context", where they describe the entity instead of pretending to be one. Note also that the abbreviation became an alias rather than a second entity.
+
+Only extract clearly identifiable entities. Returning fewer entities is better than returning noise: a wrong entity pollutes the graph permanently and is read back as fact."""
+
+register_prompt(
+    Prompt(
+        name="identity",
+        version="v4",
+        system=_V4_SYSTEM,
+        user_template=_V1_USER,
+    ),
+)
+
 # Candidate adjudication: the LLM judges between a small candidate list and
 # may abstain. It never searches the database itself.
 _ADJUDICATION_V1_SYSTEM = """You resolve whether an incoming operational entity is the same as one of the known candidate identities.
