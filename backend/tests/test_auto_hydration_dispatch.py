@@ -63,13 +63,24 @@ def test_the_amplification_is_bounded_to_one_dispatch_per_thread():
 
 
 def test_normalize_applies_the_same_rule_it_is_tested_on():
-    """Guards against the check drifting away from this test: the source
-    must key the decision on the object type, not merely on the presence
-    of a thread id."""
+    """Guards against the check drifting away from this test: the decision
+    must key on the object type, not merely on the presence of a thread id.
+
+    The predicate now lives in `message_filter.is_hydrated_message`, because
+    the message noise gate needs the same question answered and two copies
+    could drift. So the guard follows it: `_normalize` must call the shared
+    predicate, and that predicate must still key on `_connector_object_type`.
+    """
     import inspect
 
+    from contextedge.services import message_filter
     from contextedge.workers import extraction_tasks
 
     source = inspect.getsource(extraction_tasks._normalize)
-    assert "hydrated_message" in source
-    assert "_connector_object_type" in source
+    assert "is_hydrated_message(payload)" in source, (
+        "_normalize must decide via the shared predicate"
+    )
+
+    predicate = inspect.getsource(message_filter.is_hydrated_message)
+    assert "hydrated_message" in predicate
+    assert "_connector_object_type" in predicate

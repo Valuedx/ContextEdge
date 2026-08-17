@@ -31,6 +31,11 @@ from contextedge.services.evidence_normalization import (
 from contextedge.services.evidence_typing import derive_evidence_type
 from contextedge.services.identity_service import link_evidence_identities
 from contextedge.services.knowledge_lifecycle import derive_knowledge_state
+from contextedge.services.message_filter import (
+    MESSAGE_FILTER_VERSION,
+    is_hydrated_message,
+    message_noise_reason,
+)
 from contextedge.services.redaction_service import redact, redact_evidence_fields
 from contextedge.services.source_facets import applicability_from_facets, derive_facets
 from contextedge.workers.asyncio_runner import run_async
@@ -124,6 +129,35 @@ async def _normalize(db: AsyncSession, raw_object_id: str, tenant_id: uuid.UUID)
         payload = await load_raw_payload(raw)
     except ValueError:
         return {"error": "raw_payload_offloaded_without_storage_key"}
+
+    # Thread messages are the volume problem: hydration turns 1,515 tickets
+    # into ~18,900 message rows, and each one that continues past this point
+    # costs a relevance classification at minimum. Measured on the live
+    # corpus, 47% of them are coordination — "Hi Team, Any update?", meeting
+    # invitations, signature-only replies, delivery failures — and paying a
+    # model to discover that is ~4M tokens spent rejecting chatter.
+    #
+    # Dropped before any model call and before an evidence row exists. The
+    # raw object is untouched and the message remains part of its hydrated
+    # thread; only its promotion to standalone evidence is refused.
+    # The filter version travels with every rejection. A dropped message
+    # leaves no evidence row, so without it there is no way to tell a
+    # message nothing ever looked at from one an older rule rejected —
+    # and no way to know what a rule change should re-examine.
+    if is_hydrated_message(payload):
+        noise = message_noise_reason(payload)
+        if noise is not None:
+            logger.info(
+                "normalize.skipped_noise_message",
+                raw_object_id=raw_object_id,
+                reason=noise,
+                filter_version=MESSAGE_FILTER_VERSION,
+            )
+            return {
+                "status": "skipped_noise_message",
+                "reason": noise,
+                "filter_version": MESSAGE_FILTER_VERSION,
+            }
 
     title = evidence_title_from_payload(payload)
     body = evidence_body_from_payload(payload)
@@ -573,10 +607,12 @@ async def _normalize(db: AsyncSession, raw_object_id: str, tenant_id: uuid.UUID)
     # against an API that answers throttling with EMPTY RESULTS rather than
     # an error. That is the failure mode that stored 11 of 20 tickets as
     # empty while reporting success.
-    is_hydrated_message = (
-        (payload or {}).get("_connector_object_type") == "hydrated_message"
+    # Same predicate the noise gate at the top of this function uses — one
+    # definition, in `message_filter`, rather than a local copy that can
+    # drift from it (and that used to shadow the import by name).
+    thread_ext_id = (
+        None if is_hydrated_message(payload) else (payload or {}).get("_thread_id")
     )
-    thread_ext_id = None if is_hydrated_message else (payload or {}).get("_thread_id")
 
     return {
         "evidence_id": str(ev.id),
