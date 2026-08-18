@@ -461,6 +461,22 @@ The hybrid ranker uses a hard-coded `quality_score = 0.5` for all playbooks. A p
 
 ## Open items from the 2026-08-18 message-corpus run
 
+- **P1: multi-chunk synthesis stacks steps — 949 live episodes have
+  corrupted timelines.** Episodes born from chunked extraction (clusters
+  >20 evidence → 2-3 LLM calls) carry each chunk's/narration's steps
+  concatenated, all numbered from #1 — the worst case shows 319 steps
+  across 24 order values, the same complaint restated ~50 times. Row-level
+  fields (title/root cause/outcome) are single-valued and CLEAN; only the
+  steps stack, and only on big clusters, which is why it went unnoticed
+  until full-thread synthesis became the norm. Creation-hour distribution
+  proves it happens at creation, not via the preventive merge (which adds
+  links only). Root-cause target: the episode extractor's chunk-output
+  merge. Interim remediation applied 2026-08-18 23:5x: the 836 affected
+  pending drafts are stamped `hold / timeline_corrupted_pending_repair`
+  (visible to reviewers, skipped by the advisory sweep); repair plan =
+  fix the chunk merge, then re-narrate affected episodes (settle=False)
+  and retire the stacked versions (~$20).
+
 - **AUTO_APPROVE MODE IS BLOCKED on two findings from the 2026-08-18
   external review** (advisory mode is unaffected):
   (1) *Side effects dispatch before commit*: `ai_review_episode` queues
