@@ -87,6 +87,15 @@ async def get_pipeline_health(db: AsyncSession, tenant_id: uuid.UUID) -> dict[st
                    and created_at > now() - interval '10 minutes') as evidence_10min,
               (select count(*) from evidence_items
                  where tenant_id = :t and embedding is not null) as embedded,
+              -- The gap that MATTERS: relevant items retrieval should see
+              -- but can't. not_relevant rows skip embedding BY DESIGN (the
+              -- relevance gate's cost short-circuit), so counting them as
+              -- "awaiting embedding" showed a permanent 3.7k backlog that
+              -- was actually the gate working.
+              (select count(*) from evidence_items
+                 where tenant_id = :t and embedding is null
+                   and relevance_state in ('operational', 'possibly_relevant'))
+                as embed_gap,
               (select count(*) from raw_evidence_objects where tenant_id = :t) as raw_objects,
               (select count(*) from canonical_identities
                  where tenant_id = :t and is_active) as identities,
@@ -279,12 +288,13 @@ async def get_pipeline_health(db: AsyncSession, tenant_id: uuid.UUID) -> dict[st
                     f"its own."
                 ),
             })
-    if counts["evidence"] and counts["embedded"] < counts["evidence"] * 0.9:
+    if counts["embed_gap"] > 0:
         alerts.append({
             "level": "info",
             "message": (
-                f"{counts['evidence'] - counts['embedded']:,} evidence items are not "
-                f"embedded yet, so they are not retrievable by vector search."
+                f"{counts['embed_gap']:,} RELEVANT evidence items are not embedded "
+                f"yet, so they are invisible to vector search. (not_relevant items "
+                f"skip embedding by design and are not counted here.)"
             ),
         })
 

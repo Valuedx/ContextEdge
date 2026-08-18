@@ -47,6 +47,7 @@ interface PipelineHealth {
     evidence: number;
     evidence_10min: number;
     embedded: number;
+    embed_gap: number;
     raw_objects: number;
     identities: number;
     case_links: number;
@@ -172,7 +173,9 @@ export default function PipelineHealthPage() {
   }
 
   const { counts, queues, latency_10min: latency } = data;
-  const embedGap = counts.evidence - counts.embedded;
+  // Only relevant items count as "awaiting": not_relevant rows skip
+  // embedding by design (the relevance gate's cost short-circuit).
+  const embedGap = counts.embed_gap;
 
   return (
     <div className="space-y-6">
@@ -535,7 +538,7 @@ export default function PipelineHealthPage() {
             </div>
             {embedGap > 0 && (
               <Badge variant="outline" className="mt-4">
-                {formatNumber(embedGap)} awaiting embedding
+                {formatNumber(embedGap)} relevant items awaiting embedding
               </Badge>
             )}
           </CardContent>
