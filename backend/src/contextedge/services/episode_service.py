@@ -240,12 +240,19 @@ async def create_episodes_from_evidence(
                 ).scalar_one_or_none()
                 if not link_exists:
                     why = (cluster_reasons or {}).get(str(evidence_id))
+                    # Reasons arrive as a LIST; join like the new-episode
+                    # branch below does. Binding the list raw into this
+                    # String column raised asyncpg DataError on every
+                    # merge once the draft pool grew dense enough for
+                    # same-title merges to become the common path.
+                    if isinstance(why, (list, tuple)):
+                        why = ",".join(str(reason) for reason in why)
                     db.add(
                         EpisodeEvidenceLink(
                             tenant_id=tenant_id,
                             episode_id=existing_ep.id,
                             evidence_id=evidence_id,
-                            link_reason=why or membership_source or "evidence_merged",
+                            link_reason=(why or membership_source or "evidence_merged")[:120],
                         )
                     )
             created_episodes.append(existing_ep)
