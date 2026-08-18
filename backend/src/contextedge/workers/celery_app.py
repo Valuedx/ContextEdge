@@ -369,5 +369,17 @@ celery_app.conf.update(
             "schedule": 3600.0,
             "args": ("all",),
         },
+        # AI first-pass episode review (EPISODE_AI_REVIEW). Scheduled
+        # unconditionally so enabling the setting needs no beat restart;
+        # the task returns "disabled" instantly while the setting is off.
+        # Offset from the dedup sweep's cadence matters less than order:
+        # both defer while ingest is active, and review after dedup means
+        # the model reads consolidated drafts, not about-to-be-superseded
+        # fragments.
+        "ai-review-episodes-hourly": {
+            "task": "evaluation.ai_review_episodes",
+            "schedule": 3600.0,
+            "args": ("all",),
+        },
     },
 )

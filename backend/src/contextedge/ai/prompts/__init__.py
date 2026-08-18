@@ -191,6 +191,7 @@ from contextedge.ai.prompts import (  # noqa: E402, F401
     contradiction,
     decision,
     episode,
+    episode_review,
     identity,
     issue_signature,
     message_function,

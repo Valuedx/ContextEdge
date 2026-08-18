@@ -173,6 +173,18 @@ class Settings(BaseSettings):
     # Ticket-level gating for single-source deployments is a connector
     # concern (module_filters/table_filters on status), not this knob.
     episode_resolution_gate: str = Field(default="off", pattern="^(off|cluster)$")
+    # AI first-pass review of pending episode drafts (hourly sweep +
+    # /episodes/ai-review). "off" (default): the stage does nothing.
+    # "advisory": drafts get an AI verdict stamped on episodes.ai_review
+    # for the human queue, nothing is approved. "auto_approve": drafts
+    # that clear BOTH the model verdict AND the deterministic floors in
+    # episode_review_service are approved with reviewer_user_id NULL —
+    # permanently distinguishable from a human approval. The API can
+    # DOWNGRADE this per dispatch (run advisory under auto_approve),
+    # never escalate it.
+    episode_ai_review: str = Field(
+        default="off", pattern="^(off|advisory|auto_approve)$"
+    )
     llm_thinking_budgets: dict[str, int] = Field(
         default_factory=lambda: {"relevance": 0}
     )

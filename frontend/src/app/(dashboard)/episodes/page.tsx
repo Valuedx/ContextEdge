@@ -208,6 +208,28 @@ export default function EpisodesPage() {
     }
   };
 
+  const [isAiReviewing, setIsAiReviewing] = useState(false);
+  const handleAiReview = async () => {
+    try {
+      setIsAiReviewing(true);
+      const res = await api.post<{ status: string; task_id?: string; detail?: { mode?: string; limit?: number } }>(
+        "/episodes/ai-review",
+        {},
+      );
+      const mode = res.detail?.mode ?? "advisory";
+      toast.success(
+        mode === "auto_approve"
+          ? "AI review queued — drafts clearing the model verdict AND the deterministic floors will be auto-approved; everything else stays in your queue with the verdict attached."
+          : "AI review queued in advisory mode — every draft gets an AI verdict for your review; nothing is approved automatically.",
+      );
+      queryClient.invalidateQueries({ queryKey: ["episodes"] });
+    } catch (err) {
+      toast.error((err as Error).message || "Failed to dispatch AI review");
+    } finally {
+      setIsAiReviewing(false);
+    }
+  };
+
   const handleConstructPattern = async () => {
     try {
       setIsClustering(true);
@@ -258,6 +280,20 @@ export default function EpisodesPage() {
               title="Review priority ranks resolution-bearing, well-evidenced drafts first"
             >
               Sort: {sortMode === "review_priority" ? "Review priority" : "Newest"}
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={handleAiReview}
+              disabled={isAiReviewing}
+              title="AI first-pass review of pending drafts. Approval only happens when EPISODE_AI_REVIEW=auto_approve AND deterministic floors pass; otherwise verdicts are advisory annotations for your queue."
+            >
+              {isAiReviewing ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : (
+                <Sparkles className="mr-2 h-4 w-4" />
+              )}
+              AI Review
             </Button>
             <Button
               onClick={handleConstructPattern}

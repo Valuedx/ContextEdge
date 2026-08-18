@@ -3,7 +3,7 @@ from uuid import UUID
 
 import structlog
 from fastapi import APIRouter, HTTPException, Query, status
-from sqlalchemy import case, func, select
+from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
 from contextedge.deps import AuthUser, DbSession
@@ -29,45 +29,12 @@ router = APIRouter()
 EPISODE_SORTS = ("newest", "review_priority")
 
 
-def _review_priority():
-    """Deterministic review-priority score, computed in SQL so the database
-    orders the queue instead of Python paging through it.
-
-    Transparent additive factors (the change-risk convention — the weights
-    ARE the explanation):
-
-      +40  substantive final outcome (>= 20 chars). Resolution is what
-           patterns and playbooks learn from; an unresolved draft teaches
-           the reviewer little and downstream nothing.
-      +20  substantive root cause (>= 20 chars).
-      +3   per linked evidence item, capped at 10 (+30) — corroborated,
-           full-thread accounts ahead of single-message fragments.
-      +10  x extraction_confidence — the synthesizer's own signal, kept
-           the weakest factor because it is the only self-reported one.
-
-    Newest-first buried exactly the wrong drafts: with 1,400 pending after
-    a bulk ingest, recency put the last trickle of fragments first and the
-    resolution-bearing multi-evidence accounts pages deep.
-    """
-    evidence_count = case(
-        (
-            func.jsonb_typeof(Episode.evidence_ids) == "array",
-            func.jsonb_array_length(Episode.evidence_ids),
-        ),
-        else_=0,
-    )
-    return (
-        case(
-            (func.length(func.coalesce(Episode.final_outcome, "")) >= 20, 40),
-            else_=0,
-        )
-        + case(
-            (func.length(func.coalesce(Episode.root_cause_summary, "")) >= 20, 20),
-            else_=0,
-        )
-        + func.least(func.coalesce(evidence_count, 0), 10) * 3
-        + func.coalesce(Episode.extraction_confidence, 0.0) * 10
-    )
+# Shared with the AI-review sweep, which reviews in the same order the
+# human queue displays. Kept under the old private name too because the
+# ordering tests pin it here.
+from contextedge.services.episode_review_service import (  # noqa: E402
+    review_priority_expression as _review_priority,
+)
 
 
 @router.get("", response_model=list[EpisodeResponse])
@@ -570,3 +537,57 @@ async def delete_episode(episode_id: UUID, db: DbSession, user: AuthUser):
         details={"title": episode.title},
     )
     return None
+
+
+@router.post("/ai-review", response_model=TaskDispatchResponse)
+async def dispatch_ai_review(
+    db: DbSession,
+    user: AuthUser,
+    limit: int = Query(100, ge=1, le=500),
+    advisory: bool = Query(
+        False,
+        description=(
+            "Force advisory mode for this run: assess and annotate only, "
+            "approve nothing — a downgrade of EPISODE_AI_REVIEW, never an "
+            "escalation."
+        ),
+    ),
+):
+    """Dispatch the AI first-pass review sweep for this tenant.
+
+    The sweep reviews pending drafts in review-priority order and stamps
+    each with a verdict; in ``auto_approve`` mode it also approves the
+    subset clearing the deterministic floors. The configured mode is a
+    deployment setting (EPISODE_AI_REVIEW); this endpoint can run a
+    weaker mode than configured, never a stronger one — with the setting
+    ``off`` the dispatch always runs advisory-only.
+    """
+    user.require_role("knowledge_manager")
+    from contextedge.config import settings
+
+    effective = settings.episode_ai_review
+    if advisory or effective == "off":
+        effective = "advisory"
+
+    from contextedge.workers.evaluation_tasks import ai_review_episodes
+
+    task = ai_review_episodes.delay(
+        str(user.tenant_id),
+        limit=limit,
+        mode_override="advisory" if (advisory or settings.episode_ai_review == "off") else None,
+    )
+    await log_audit_event(
+        db,
+        tenant_id=user.tenant_id,
+        actor_id=user.user_id,
+        actor_email=user.email,
+        action="episode.ai_review_dispatched",
+        resource_type="episode",
+        resource_id="batch",
+        details={"limit": limit, "mode": effective},
+    )
+    return TaskDispatchResponse(
+        status="queued",
+        task_id=task.id,
+        detail={"mode": effective, "limit": limit},
+    )

@@ -252,6 +252,13 @@ class Episode(Base, TenantScopedMixin):
     # events carrying the SERVING model. NULL means unknown — never "the
     # current default", which is what re-deriving it at read time would claim.
     generation_provenance: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    # The AI reviewer's assessment (0070): verdict, confidence, reasons,
+    # prompt version, reviewed_at, and — when the sweep approved — the
+    # deterministic floors it passed. NULL means never AI-reviewed; the
+    # sweep uses that to avoid paying twice for the same draft. An
+    # auto-approval is permanently distinguishable from a human one:
+    # reviewer_user_id stays NULL and this field says why.
+    ai_review: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
     steps: Mapped[list["EpisodeStep"]] = relationship(
         back_populates="episode",
