@@ -9,7 +9,11 @@ from pathlib import Path
 BACKEND_ROOT = Path(__file__).resolve().parent
 SRC_DIR = BACKEND_ROOT / "src"
 MIN_PYTHON = (3, 12)
-DEFAULT_QUEUES = "default,sync,hydration,extraction,pattern,evaluation"
+# Every routed lane. correlation/embedding were missing for a month:
+# a stock deployment finished normalization and then silently never
+# built episodes or embedded chunks - the graph chain's two middle
+# links had no consumer (found by external review, 2026-08-18).
+DEFAULT_QUEUES = "default,sync,hydration,extraction,correlation,embedding,pattern,evaluation"
 
 
 def _build_env() -> dict[str, str]:

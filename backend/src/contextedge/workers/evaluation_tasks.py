@@ -213,7 +213,8 @@ def ai_review_episodes(
                 )
             ).scalars().all()
 
-            approved_any = False
+            approved_domains: set = set()
+            consecutive_transient = 0
             for episode in drafts:
                 try:
                     outcome = await ai_review_episode(
@@ -226,21 +227,40 @@ def ai_review_episodes(
                         error=str(exc),
                     )
                     continue
+                if outcome.get("transient_failure"):
+                    # Provider outage / budget block: NOTHING was persisted,
+                    # so the draft stays eligible for the next sweep. A run
+                    # of these means the provider is down for everyone —
+                    # stop burning the batch instead of holding 100 drafts.
+                    totals["transient_failures"] = totals.get("transient_failures", 0) + 1
+                    consecutive_transient += 1
+                    if consecutive_transient >= 5:
+                        logger.warning(
+                            "episode_ai_review.aborting_sweep_provider_down",
+                            tenant_id=str(tid),
+                        )
+                        break
+                    continue
+                consecutive_transient = 0
                 totals["reviewed"] += 1
                 if outcome["approved"]:
                     totals["approved"] += 1
-                    approved_any = True
+                    approved_domains.add(episode.domain_id)
                 else:
                     totals["held"] += 1
 
-            if approved_any:
-                # One clustering dispatch per tenant per sweep — the human
-                # approve endpoint dispatches per approval, but a sweep
-                # approving dozens must not queue dozens of cluster runs.
+            # One clustering dispatch PER DOMAIN with approvals — passing
+            # None here clustered nothing: the global pass deliberately
+            # sees only NULL-domain episodes (domain-safe mining), and on
+            # the live graph every episode is domain-scoped. Found by
+            # external review 2026-08-18.
+            for domain_id in approved_domains:
                 try:
                     from contextedge.workers.pattern_tasks import cluster_episodes
 
-                    cluster_episodes.delay(None, str(tid))
+                    cluster_episodes.delay(
+                        str(domain_id) if domain_id else None, str(tid)
+                    )
                 except Exception as exc:
                     logger.warning(
                         "episode_ai_review.cluster_dispatch_failed", error=str(exc)

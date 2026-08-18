@@ -151,3 +151,50 @@ def test_prompt_family_registered():
     prompt = get_prompt("episode_review", None)
     assert prompt.version == "v1"
     assert "hold" in prompt.system
+
+
+# ---------------------------------------------------------------------------
+# 2026-08-18 external-review fixes.
+# ---------------------------------------------------------------------------
+
+
+def test_transient_provider_failure_is_not_persisted():
+    """A provider outage must leave the draft retryable: the classifier
+    marks the verdict transient, the service persists nothing, and the
+    next sweep (which selects ai_review IS NULL) picks the draft up
+    again. Stamping the outage turned a one-hour blip into a permanent
+    'never reviewed' for a whole batch."""
+    from contextedge.ai.classifiers.episode_review import HELD
+
+    transient = dict(HELD)
+    transient["transient_failure"] = True
+    assert transient["verdict"] == "hold"
+    # The service-side contract: transient verdicts return early and do
+    # not touch episode.ai_review — pinned by inspecting the source, the
+    # same wiring-not-logic style as the dedup entry-point test.
+    import inspect
+
+    from contextedge.services import episode_review_service
+
+    source = inspect.getsource(episode_review_service.ai_review_episode)
+    assert "transient_failure" in source
+    transient_pos = source.index("transient_failure")
+    stamp_pos = source.index("episode.ai_review =")
+    assert transient_pos < stamp_pos, (
+        "the transient short-circuit must run BEFORE the assessment is stamped"
+    )
+
+
+def test_sweep_dispatches_clustering_per_approved_domain():
+    """cluster_episodes(None, tenant) clusters only NULL-domain episodes
+    (domain-safe mining), and on the live graph every episode is
+    domain-scoped — so the sweep must dispatch per approved domain."""
+    import inspect
+
+    from contextedge.workers import evaluation_tasks
+
+    source = inspect.getsource(evaluation_tasks.ai_review_episodes)
+    assert "approved_domains" in source
+    assert "for domain_id in approved_domains" in source
+    # The old bug: a single unconditional None dispatch.
+    assert "cluster_episodes.delay(None," not in source

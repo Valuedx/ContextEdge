@@ -40,7 +40,16 @@ logger = structlog.get_logger()
 
 # The lanes a bulk ingest actually uses, in pipeline order so the display
 # reads as a flow rather than an alphabetised list.
-QUEUES = ("extraction", "correlation", "hydration", "pattern", "evaluation", "sync", "default")
+QUEUES = (
+    "extraction",
+    "correlation",
+    "embedding",
+    "hydration",
+    "pattern",
+    "evaluation",
+    "sync",
+    "default",
+)
 
 # Below this, a queue is not meaningfully backlogged and its growth is noise.
 BACKLOG_ALERT_DEPTH = 500

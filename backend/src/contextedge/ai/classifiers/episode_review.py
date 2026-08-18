@@ -85,8 +85,13 @@ async def review_episode_llm(
             subject_id=episode_id,
         )
     except Exception:
-        # Provider failure is a held draft, never an approved one.
+        # Provider failure holds the draft for THIS sweep but must stay
+        # retryable: the caller sees transient_failure and persists
+        # nothing, so the next sweep picks the draft up again. Stamping
+        # the outage onto the row turned a one-hour provider blip into
+        # a permanent "never AI-reviewed" for a whole batch.
         parsed = dict(HELD)
+        parsed["transient_failure"] = True
     else:
         parsed = _parse(result)
     parsed["prompt_version"] = prompt.version

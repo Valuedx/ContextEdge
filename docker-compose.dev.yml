@@ -44,7 +44,7 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    command: celery -A contextedge.workers.celery_app worker -l INFO -Q default,sync,hydration,extraction,pattern,evaluation
+    command: celery -A contextedge.workers.celery_app worker -l INFO -Q default,sync,hydration,extraction,correlation,embedding,pattern,evaluation
     volumes:
       - ./backend/src:/app/src
     env_file:

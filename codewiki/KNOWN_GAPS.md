@@ -461,6 +461,32 @@ The hybrid ranker uses a hard-coded `quality_score = 0.5` for all playbooks. A p
 
 ## Open items from the 2026-08-18 message-corpus run
 
+- **AUTO_APPROVE MODE IS BLOCKED on two findings from the 2026-08-18
+  external review** (advisory mode is unaffected):
+  (1) *Side effects dispatch before commit*: `ai_review_episode` queues
+  signature extraction inside the sweep's transaction, which commits only
+  after up to 100 reviews (~25 min); the signature task sees the
+  uncommitted pending state and no-ops WITHOUT retry
+  (`not_approved_or_missing`), so auto-approved episodes would silently
+  never mint signatures. Same class as the human approve endpoint's race
+  but with a window measured in minutes, not milliseconds. Fix: bounded
+  batch commits + post-commit dispatch (outbox-style), which also
+  retires the 100-LLM-calls-one-transaction exposure.
+  (2) *Dedup/review sweeps have no ordering*: both run hourly with no
+  dependency; today's topology serializes them by accident (both queues
+  on the solo pattern/evaluation worker) — a topology change would let
+  review load a pending duplicate, dedup supersede it, and review's
+  commit overwrite it back to approved. Fix: tenant-scoped advisory lock
+  shared by both sweeps, or a chained dispatch.
+- **Stable two-evidence clusters are terminally skipped, not deferred.**
+  `MIN_AUTO_SYNTHESIS_CLUSTER = 3` only re-tells when a NEW correlation
+  edge fires a dispatch; a pair that never grows gets no retry and no
+  episode. The corpus holds 2,322 two-evidence episodes (20 approved), so
+  pairs are not universally fragments. Fix direction: a low-frequency
+  stable-pair sweep (only pairs untouched for N days, batched, capped)
+  or a review-surface list of unnarrated stable pairs for manual
+  reconstruction.
+
 - **Reconstruction dispatch is evidence-keyed, and should be case-keyed.**
   `correlate_evidence` schedules a reconstruct seeded by whichever evidence
   just correlated; the resolver then narrates whatever sub-cluster that

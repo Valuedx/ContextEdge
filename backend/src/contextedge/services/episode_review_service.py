@@ -97,6 +97,15 @@ def passes_auto_approve_floors(episode: Episode, verdict: dict) -> tuple[bool, l
 
 
 async def _evidence_excerpts(db: AsyncSession, episode: Episode) -> str:
+    """Chronological HEAD and TAIL of the cluster, not just the head.
+
+    Ascending-only selection showed the reviewer the complaint and hid
+    the resolution: on long threads the closing messages — the fix
+    confirmation, the correction, the outcome — are exactly what check
+    #3 (does the outcome follow?) needs, and they were never in the
+    context (external review 2026-08-18). Half the budget goes to the
+    opening, half to the ending; the middle is the safest part to omit.
+    """
     ids: list[uuid.UUID] = []
     for raw in episode.evidence_ids or []:
         try:
@@ -105,7 +114,8 @@ async def _evidence_excerpts(db: AsyncSession, episode: Episode) -> str:
             continue
     if not ids:
         return ""
-    rows = (
+    half = max(MAX_EVIDENCE_ITEMS // 2, 1)
+    head = (
         await db.execute(
             select(EvidenceItem)
             .where(
@@ -113,11 +123,29 @@ async def _evidence_excerpts(db: AsyncSession, episode: Episode) -> str:
                 EvidenceItem.id.in_(tuple(ids)),
             )
             .order_by(EvidenceItem.created_at_source.asc().nulls_last())
-            .limit(MAX_EVIDENCE_ITEMS)
+            .limit(half)
         )
     ).scalars().all()
+    tail = (
+        await db.execute(
+            select(EvidenceItem)
+            .where(
+                EvidenceItem.tenant_id == episode.tenant_id,
+                EvidenceItem.id.in_(tuple(ids)),
+            )
+            .order_by(EvidenceItem.created_at_source.desc().nulls_last())
+            .limit(half)
+        )
+    ).scalars().all()
+    seen: set = set()
+    ordered = []
+    for item in list(head) + list(reversed(tail)):
+        if item.id in seen:
+            continue
+        seen.add(item.id)
+        ordered.append(item)
     parts = []
-    for item in rows:
+    for item in ordered:
         body = (item.body_summary or item.body_text or "").strip()
         parts.append(
             f"[{item.evidence_type}] {item.title or '(untitled)'}\n"
@@ -152,9 +180,19 @@ async def ai_review_episode(
         f"{step.step_order}. [{step.step_type}] {(step.text or '')[:200]}"
         for step in steps
     )
-    contradictions_text = (
-        f"{len(episode.contradictions)} recorded" if episode.contradictions else ""
-    )
+    # The actual conflicting claims, not a bare count — "2 recorded" gave
+    # the reviewer nothing to judge honesty-of-representation against.
+    contradiction_lines = []
+    for contradiction in (episode.contradictions or [])[:2]:
+        if isinstance(contradiction, dict):
+            topic = str(contradiction.get("topic", "?"))[:80]
+            claims = " vs ".join(
+                str(account.get("claim", ""))[:120]
+                for account in (contradiction.get("accounts") or [])[:2]
+                if isinstance(account, dict)
+            )
+            contradiction_lines.append(f"- {topic}: {claims}")
+    contradictions_text = "\n".join(contradiction_lines)
     evidence_text = await _evidence_excerpts(db, episode)
 
     verdict = await review_episode_llm(
@@ -168,6 +206,17 @@ async def ai_review_episode(
         db=db,
         episode_id=episode.id,
     )
+
+    if verdict.get("transient_failure"):
+        # Provider outage / budget block: persist NOTHING so the next
+        # sweep retries this draft. Stamping the outage made a one-hour
+        # blip a permanent "never reviewed" for the whole batch.
+        return {
+            "episode_id": str(episode.id),
+            "verdict": "hold",
+            "approved": False,
+            "transient_failure": True,
+        }
 
     passes, failed_floors = passes_auto_approve_floors(episode, verdict)
     approved = mode == "auto_approve" and passes
