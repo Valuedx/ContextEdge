@@ -23,6 +23,7 @@
  */
 
 import { useQuery } from "@tanstack/react-query";
+import { useEffect, useRef, useState } from "react";
 import {
   Activity,
   AlertTriangle,
@@ -50,10 +51,18 @@ interface PipelineHealth {
     identities: number;
     case_links: number;
     episodes: number;
+    episodes_10min: number;
+    episodes_pending: number;
+    episodes_approved: number;
+    chunks_total: number;
+    chunks_embedded: number;
     patterns: number;
     playbooks: number;
   };
   throughput_per_10min: number;
+  episodes_per_10min: number;
+  in_flight: number;
+  spend_last_hour_usd: number;
   queues: Record<string, number>;
   latency_10min: { calls: number; p50_ms: number; p95_ms: number; max_ms: number };
   by_call_60min: { call: string; calls: number; p50_ms: number; tokens: number }[];
@@ -74,6 +83,51 @@ function formatMs(ms: number): string {
   return `${ms}ms`;
 }
 
+function formatDuration(seconds: number): string {
+  if (seconds < 90) return "under 2 min";
+  if (seconds < 3600) return `~${Math.round(seconds / 60)} min`;
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.round((seconds % 3600) / 60);
+  return `~${hours}h ${minutes}m`;
+}
+
+/**
+ * Live drain-rate estimate from consecutive poll samples.
+ *
+ * The server is deliberately stateless, so the rate comes from watching
+ * `remaining` (queued + in-flight) move between polls in THIS browser tab.
+ * A two-minute sliding window smooths worker burstiness; until the window
+ * has ≥60s of samples the ETA reads "estimating". A non-positive rate is
+ * reported as such (backlog growing), never as a fake ETA.
+ */
+function useDrainRate(remaining: number | undefined): {
+  perMinute: number | null;
+  warmedUp: boolean;
+} {
+  const samples = useRef<{ t: number; remaining: number }[]>([]);
+  const [rate, setRate] = useState<{ perMinute: number | null; warmedUp: boolean }>({
+    perMinute: null,
+    warmedUp: false,
+  });
+
+  useEffect(() => {
+    if (remaining === undefined) return;
+    const now = Date.now();
+    samples.current.push({ t: now, remaining });
+    samples.current = samples.current.filter((s) => now - s.t <= 120_000);
+    const first = samples.current[0];
+    const spanSeconds = (now - first.t) / 1000;
+    if (spanSeconds < 60) {
+      setRate({ perMinute: null, warmedUp: false });
+      return;
+    }
+    const drained = first.remaining - remaining;
+    setRate({ perMinute: (drained / spanSeconds) * 60, warmedUp: true });
+  }, [remaining]);
+
+  return rate;
+}
+
 const ALERT_STYLES: Record<string, string> = {
   critical: "border-destructive/50 bg-destructive/10 text-destructive",
   warning: "border-amber-500/50 bg-amber-500/10 text-amber-700 dark:text-amber-400",
@@ -84,8 +138,14 @@ export default function PipelineHealthPage() {
   const { data, isLoading, isError } = useQuery<PipelineHealth>({
     queryKey: ["pipeline-health"],
     queryFn: () => api.get<PipelineHealth>("/admin/pipeline-health"),
-    refetchInterval: 10_000,
+    refetchInterval: 5_000,
   });
+
+  const remaining =
+    data === undefined
+      ? undefined
+      : Object.values(data.queues).reduce((a, b) => a + b, 0) + data.in_flight;
+  const drain = useDrainRate(remaining);
 
   if (isLoading) {
     return (
@@ -143,6 +203,79 @@ export default function PipelineHealthPage() {
           ))}
         </div>
       )}
+
+      {/* The run projection: what's left, how fast it's draining, when it
+          lands, what it will cost. Rate is measured in THIS tab from poll
+          deltas, so it reflects the pipeline as currently staffed. */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-base">
+            <Timer className="h-4 w-4" />
+            Run projection
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          {remaining !== undefined && remaining <= 10 ? (
+            <p className="text-sm text-muted-foreground">
+              No meaningful backlog — the pipeline is idle or serving steady-state
+              trickle. Burn last hour: ${data.spend_last_hour_usd.toFixed(2)}.
+            </p>
+          ) : (
+            <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
+              <div>
+                <div className="text-2xl font-semibold tabular-nums">
+                  {formatNumber(remaining ?? 0)}
+                </div>
+                <div className="text-xs text-muted-foreground">
+                  tasks remaining (queued + in flight)
+                </div>
+              </div>
+              <div>
+                <div className="text-2xl font-semibold tabular-nums">
+                  {!drain.warmedUp
+                    ? "…"
+                    : drain.perMinute !== null && drain.perMinute > 0
+                      ? drain.perMinute.toFixed(1)
+                      : "0"}
+                </div>
+                <div className="text-xs text-muted-foreground">
+                  drain rate / min{" "}
+                  {!drain.warmedUp && "(measuring — needs a minute of samples)"}
+                  {drain.warmedUp &&
+                    drain.perMinute !== null &&
+                    drain.perMinute <= 0 &&
+                    "(backlog holding or growing)"}
+                </div>
+              </div>
+              <div>
+                <div className="text-2xl font-semibold tabular-nums">
+                  {drain.warmedUp && drain.perMinute !== null && drain.perMinute > 0
+                    ? formatDuration(((remaining ?? 0) / drain.perMinute) * 60)
+                    : "—"}
+                </div>
+                <div className="text-xs text-muted-foreground">
+                  estimated time to complete
+                </div>
+              </div>
+              <div>
+                <div className="text-2xl font-semibold tabular-nums">
+                  {drain.warmedUp && drain.perMinute !== null && drain.perMinute > 0
+                    ? `$${(
+                        data.spend_last_hour_usd *
+                        ((remaining ?? 0) / drain.perMinute / 60)
+                      ).toFixed(2)}`
+                    : `$${data.spend_last_hour_usd.toFixed(2)}/hr`}
+                </div>
+                <div className="text-xs text-muted-foreground">
+                  {drain.warmedUp && drain.perMinute !== null && drain.perMinute > 0
+                    ? `projected cost to finish (at $${data.spend_last_hour_usd.toFixed(2)}/hr)`
+                    : "burn rate, last hour"}
+                </div>
+              </div>
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
       {/* The graph chain. Each stage feeds the next, so it is drawn as a flow
           rather than five cards — the point is which link is empty. */}
@@ -232,9 +365,27 @@ export default function PipelineHealthPage() {
                 ))}
               </div>
             )}
+            {/* In-flight is work DELIVERED to workers but unfinished —
+                including every debounced reconstruction held to its ETA.
+                During the reconstruction phase this is where ALL remaining
+                work lives, and the queues above legitimately read zero. */}
+            <div className="mt-3 flex items-center justify-between gap-3 border-t pt-3 text-sm">
+              <span className="font-mono text-xs text-muted-foreground">
+                in flight (held by workers)
+              </span>
+              <span
+                className={cn(
+                  "font-medium tabular-nums",
+                  data.in_flight > 50 && "text-sky-500",
+                )}
+              >
+                {formatNumber(data.in_flight)}
+              </span>
+            </div>
             <p className="mt-3 text-xs text-muted-foreground">
               Tasks sharing a lane run in order, so a fast task queued behind a
-              long backlog waits for all of it.
+              long backlog waits for all of it. Empty queues with work in
+              flight means workers are holding debounced tasks, not idling.
             </p>
           </CardContent>
         </Card>
@@ -249,13 +400,21 @@ export default function PipelineHealthPage() {
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-3 gap-3">
               <div>
                 <div className="text-2xl font-semibold tabular-nums">
                   {data.throughput_per_10min}
                 </div>
                 <div className="text-xs text-muted-foreground">
                   evidence / 10 min
+                </div>
+              </div>
+              <div>
+                <div className="text-2xl font-semibold tabular-nums">
+                  {data.episodes_per_10min}
+                </div>
+                <div className="text-xs text-muted-foreground">
+                  episodes / 10 min
                 </div>
               </div>
               <div>
@@ -353,6 +512,26 @@ export default function PipelineHealthPage() {
                   <div className="text-xs text-muted-foreground">{m.label}</div>
                 </div>
               ))}
+            </div>
+            <div className="mt-4 space-y-2 border-t pt-3 text-sm">
+              <div className="flex items-center justify-between">
+                <span className="text-xs text-muted-foreground">
+                  chunks embedded
+                </span>
+                <span className="tabular-nums">
+                  {formatNumber(counts.chunks_embedded)} /{" "}
+                  {formatNumber(counts.chunks_total)}
+                </span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-xs text-muted-foreground">
+                  episodes pending review / approved
+                </span>
+                <span className="tabular-nums">
+                  {formatNumber(counts.episodes_pending)} /{" "}
+                  {formatNumber(counts.episodes_approved)}
+                </span>
+              </div>
             </div>
             {embedGap > 0 && (
               <Badge variant="outline" className="mt-4">

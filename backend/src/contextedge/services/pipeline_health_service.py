@@ -46,8 +46,18 @@ QUEUES = ("extraction", "correlation", "hydration", "pattern", "evaluation", "sy
 BACKLOG_ALERT_DEPTH = 500
 
 
-async def _queue_depths() -> dict[str, int]:
-    """Depth per lane. Never raises — a broker hiccup must not 500 the page."""
+async def _queue_depths() -> tuple[dict[str, int], int]:
+    """(depth per lane, tasks held in-flight). Never raises — a broker
+    hiccup must not 500 the page.
+
+    In-flight is the broker's ``unacked`` hash: work DELIVERED to a
+    worker but not finished — which includes every countdown/ETA task a
+    worker holds in its heap. During the reconstruction phase of a bulk
+    ingest this is where ALL the remaining work lives: 5,800 debounced
+    reconstructs churned for hours while every queue read zero, and the
+    page said "idle" about a pipeline burning a dollar a minute. HLEN is
+    O(1), so this is as pollable as LLEN.
+    """
     try:
         import redis.asyncio as aioredis
 
@@ -55,12 +65,14 @@ async def _queue_depths() -> dict[str, int]:
 
         client = aioredis.from_url(settings.celery_broker_url)
         try:
-            return {q: int(await client.llen(q)) for q in QUEUES}
+            depths = {q: int(await client.llen(q)) for q in QUEUES}
+            in_flight = int(await client.hlen("unacked"))
+            return depths, in_flight
         finally:
             await client.aclose()
     except Exception as exc:  # noqa: BLE001
         logger.warning("pipeline_health.queue_read_failed", error_type=type(exc).__name__)
-        return {}
+        return {}, 0
 
 
 async def get_pipeline_health(db: AsyncSession, tenant_id: uuid.UUID) -> dict[str, Any]:
@@ -88,6 +100,19 @@ async def get_pipeline_health(db: AsyncSession, tenant_id: uuid.UUID) -> dict[st
               (select count(*) from correlation_edges
                  where tenant_id = :t) as correlation_edges,
               (select count(*) from episodes where tenant_id = :t) as episodes,
+              (select count(*) from episodes
+                 where tenant_id = :t
+                   and created_at > now() - interval '10 minutes') as episodes_10min,
+              (select count(*) from episodes
+                 where tenant_id = :t
+                   and reviewer_state = 'pending_review') as episodes_pending,
+              (select count(*) from episodes
+                 where tenant_id = :t
+                   and reviewer_state = 'approved') as episodes_approved,
+              (select count(*) from evidence_chunks
+                 where tenant_id = :t) as chunks_total,
+              (select count(*) from evidence_chunks
+                 where tenant_id = :t and embedding is not null) as chunks_embedded,
               (select count(*) from patterns where tenant_id = :t) as patterns,
               (select count(*) from playbooks where tenant_id = :t) as playbooks
             """),
@@ -131,7 +156,35 @@ async def get_pipeline_health(db: AsyncSession, tenant_id: uuid.UUID) -> dict[st
         )
     ).mappings().all()
 
-    queues = await _queue_depths()
+    # Burn rate at real model prices, so the page can project cost to
+    # completion instead of leaving the operator to multiply in their head.
+    # Grouped by model because the lanes run different models at different
+    # rates (playbook on 3.7-flash, everything else on 2.5-flash).
+    spend_rows = (
+        await db.execute(
+            text("""
+            select payload->>'model' as model,
+                   coalesce(sum((payload->>'prompt_tokens')::bigint), 0) as in_tok,
+                   coalesce(sum((payload->>'completion_tokens')::bigint), 0) as out_tok
+            from operational_events
+            where tenant_id = :t and event_type = 'llm.usage'
+              and occurred_at > now() - interval '60 minutes'
+            group by 1
+            """),
+            {"t": str(tenant_id)},
+        )
+    ).mappings().all()
+    from contextedge.services.admin_cost_service import _lookup_rate
+
+    spend_last_hour_usd = 0.0
+    for spend in spend_rows:
+        rate = _lookup_rate(spend["model"] or "")
+        spend_last_hour_usd += (
+            spend["in_tok"] / 1_000_000 * rate["input"]
+            + spend["out_tok"] / 1_000_000 * rate["output"]
+        )
+
+    queues, in_flight = await _queue_depths()
     counts = dict(row)
 
     # The graph chain, in order. The first zero is the diagnosis — everything
@@ -199,6 +252,31 @@ async def get_pipeline_health(db: AsyncSession, tenant_id: uuid.UUID) -> dict[st
             "level": "critical",
             "message": "No evidence produced in 10 minutes while work is still queued.",
         })
+    # Empty queues with substantial in-flight work is the RECONSTRUCTION
+    # phase, not idleness — say so, and name the number that proves the
+    # pipeline is alive (episodes produced, since this phase produces
+    # episodes, not evidence).
+    if in_flight > 50 and sum(queues.values()) < 50:
+        if counts["episodes_10min"] > 0:
+            alerts.append({
+                "level": "info",
+                "message": (
+                    f"{in_flight:,} tasks are held in-flight by workers (debounced "
+                    f"reconstructions and other ETA holds). Queues reading empty "
+                    f"does not mean idle: {counts['episodes_10min']:,} episodes were "
+                    f"produced in the last 10 minutes."
+                ),
+            })
+        elif counts["evidence_10min"] == 0:
+            alerts.append({
+                "level": "critical",
+                "message": (
+                    f"{in_flight:,} tasks are held in-flight but nothing — no "
+                    f"evidence, no episodes — was produced in 10 minutes. The "
+                    f"holding workers may be dead; their work will not resume on "
+                    f"its own."
+                ),
+            })
     if counts["evidence"] and counts["embedded"] < counts["evidence"] * 0.9:
         alerts.append({
             "level": "info",
@@ -211,6 +289,9 @@ async def get_pipeline_health(db: AsyncSession, tenant_id: uuid.UUID) -> dict[st
     return {
         "counts": counts,
         "throughput_per_10min": counts["evidence_10min"],
+        "episodes_per_10min": counts["episodes_10min"],
+        "in_flight": in_flight,
+        "spend_last_hour_usd": round(spend_last_hour_usd, 2),
         "queues": queues,
         "latency_10min": dict(latency),
         "by_call_60min": [dict(r) for r in by_call],
