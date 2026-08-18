@@ -682,3 +682,88 @@ def generate_playbook_candidate(self, pattern_id: str, tenant_id: str):
     except Exception as exc:
         logger.exception("playbook.generate_failed", pattern_id=pattern_id, error=str(exc))
         raise self.retry(exc=exc) from exc
+
+
+# Fresh evidence per tenant, in the last window, that marks a bulk ingest
+# still landing. Hourly dedup during a backfill retires drafts that the very
+# next message burst regrows — pure churn — so the sweep steps aside and the
+# next hourly tick catches up once the tenant is quiet. 50 rows in ten
+# minutes is far above steady-state (a handful per sync tick) and far below
+# backfill rates (hundreds), so the guard cannot flap on normal traffic.
+DEDUP_ACTIVITY_WINDOW_MINUTES = 10
+DEDUP_ACTIVITY_THRESHOLD = 50
+
+
+async def _deduplicate_knowledge(db, tenant_id: str) -> dict:
+    """Scheduled sweep of the shared dedup entry point.
+
+    Beat passes the literal string ``all`` to sweep every tenant. The
+    entry point is the same one the dedup API and the pattern task call
+    (`deduplicate_patterns_and_playbooks`), so scheduling adds no second
+    dedup mechanism — only a clock for the existing one.
+    """
+    from datetime import UTC, datetime, timedelta
+
+    from contextedge.models.evidence import EvidenceItem
+    from contextedge.models.tenant import Tenant
+    from contextedge.services.pattern_service import (
+        deduplicate_patterns_and_playbooks,
+    )
+
+    if tenant_id == "all":
+        r = await db.execute(select(Tenant.id))
+        tids = [row[0] for row in r.all()]
+    else:
+        tids = [uuid.UUID(tenant_id)]
+
+    window_start = datetime.now(UTC) - timedelta(
+        minutes=DEDUP_ACTIVITY_WINDOW_MINUTES
+    )
+    swept: dict[str, dict] = {}
+    deferred = 0
+    for tid in tids:
+        recent = (
+            await db.execute(
+                select(func.count())
+                .select_from(EvidenceItem)
+                .where(
+                    EvidenceItem.tenant_id == tid,
+                    EvidenceItem.ingested_at >= window_start,
+                )
+            )
+        ).scalar() or 0
+        if recent > DEDUP_ACTIVITY_THRESHOLD:
+            deferred += 1
+            logger.info(
+                "knowledge_dedup.deferred_ingest_active",
+                tenant_id=str(tid),
+                recent_evidence=recent,
+            )
+            continue
+        result = await deduplicate_patterns_and_playbooks(db, tid)
+        if any(result.values()):
+            logger.info("knowledge_dedup.swept", tenant_id=str(tid), **result)
+        swept[str(tid)] = result
+
+    return {"tenants": len(tids), "deferred": deferred, "results": swept}
+
+
+@celery_app.task(
+    bind=True,
+    max_retries=1,
+    default_retry_delay=600,
+    name="pattern.deduplicate_knowledge",
+)
+def deduplicate_knowledge(self, tenant_id: str):
+    """Hourly hygiene sweep; `pattern.*` routes to the pattern queue, so it
+    serializes behind clustering and playbook generation on the solo worker
+    instead of racing them."""
+
+    async def work(db):
+        return await _deduplicate_knowledge(db, tenant_id)
+
+    try:
+        return run_async(work)
+    except Exception as exc:
+        logger.exception("knowledge_dedup.failed", error=str(exc))
+        raise self.retry(exc=exc) from exc

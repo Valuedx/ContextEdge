@@ -356,5 +356,18 @@ celery_app.conf.update(
             "task": "evaluation.detect_fleet_groups",
             "schedule": 1800.0,
         },
+        # Knowledge dedup on a clock. The passes were correct and called by
+        # nothing on a schedule — the graph re-inflated between manual runs
+        # (measured: 643 -> 2,869 pending drafts across one bulk-ingest
+        # night, consolidated to ~950 by one manual sweep). Hourly because
+        # the passes are idempotent and near-free when there is nothing to
+        # do; the task itself defers per-tenant while a bulk ingest is
+        # landing (see DEDUP_ACTIVITY_THRESHOLD) so it never churns drafts
+        # that the next message burst would regrow.
+        "deduplicate-knowledge-hourly": {
+            "task": "pattern.deduplicate_knowledge",
+            "schedule": 3600.0,
+            "args": ("all",),
+        },
     },
 )
