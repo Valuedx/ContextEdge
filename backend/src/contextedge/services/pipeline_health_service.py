@@ -179,9 +179,11 @@ async def get_pipeline_health(db: AsyncSession, tenant_id: uuid.UUID) -> dict[st
     spend_last_hour_usd = 0.0
     for spend in spend_rows:
         rate = _lookup_rate(spend["model"] or "")
+        # float() up front: SUM(bigint) arrives as decimal.Decimal, and
+        # Decimal * float raises TypeError — which 500'd this whole page.
         spend_last_hour_usd += (
-            spend["in_tok"] / 1_000_000 * rate["input"]
-            + spend["out_tok"] / 1_000_000 * rate["output"]
+            float(spend["in_tok"] or 0) / 1_000_000 * rate["input"]
+            + float(spend["out_tok"] or 0) / 1_000_000 * rate["output"]
         )
 
     queues, in_flight = await _queue_depths()
