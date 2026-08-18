@@ -184,6 +184,16 @@ export interface EvidenceItemDetail extends EvidenceItem {
   applicability?: EvidenceApplicability | null;
 }
 
+export interface EpisodeAiReview {
+  verdict: "approve" | "hold";
+  confidence: number;
+  reasons?: string[];
+  auto_approved?: boolean;
+  failed_floors?: string[];
+  mode?: string;
+  reviewed_at?: string;
+}
+
 export interface Episode {
   id: string;
   tenant_id: string;
@@ -194,6 +204,7 @@ export interface Episode {
   root_cause_summary: string | null;
   final_outcome: string | null;
   reviewer_state: string;
+  ai_review: EpisodeAiReview | null;
   created_at: string;
   updated_at: string;
 }

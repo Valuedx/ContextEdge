@@ -141,6 +141,36 @@ const columns: ColumnDef<Episode>[] = [
     cell: ({ row }) => <StatusBadge status={row.getValue("reviewer_state")} />,
   },
   {
+    accessorKey: "ai_review",
+    header: "AI verdict",
+    enableSorting: false,
+    cell: ({ row }) => {
+      const review = row.original.ai_review;
+      if (!review) return <span className="text-xs text-muted-foreground">—</span>;
+      const approve = review.verdict === "approve";
+      const label = review.auto_approved
+        ? "auto-approved"
+        : `${review.verdict} ${(review.confidence * 100).toFixed(0)}%`;
+      const reasons = (review.reasons ?? []).join("; ");
+      const floors = (review.failed_floors ?? []).join(", ");
+      return (
+        <span
+          title={[reasons, floors && `floors: ${floors}`].filter(Boolean).join(" | ")}
+          className={
+            "inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium " +
+            (review.auto_approved
+              ? "bg-emerald-500/15 text-emerald-500"
+              : approve
+                ? "bg-sky-500/15 text-sky-500"
+                : "bg-amber-500/15 text-amber-500")
+          }
+        >
+          {label}
+        </span>
+      );
+    },
+  },
+  {
     accessorKey: "created_at",
     header: "Created",
     cell: ({ row }) => new Date(row.getValue("created_at")).toLocaleString(),

@@ -105,6 +105,11 @@ class EpisodeResponse(BaseModel):
     # Conflicting source accounts, preserved instead of merged (P4) —
     # the review surface shows reviewers exactly what disagrees.
     contradictions: list | None = None
+    # The AI reviewer's assessment (0070): verdict, confidence, reasons,
+    # auto_approved, failed_floors. Advisory mode is pointless if the
+    # reviewer can't see the verdict — this is the field the review
+    # surface renders as the AI badge.
+    ai_review: dict | None = None
     created_at: datetime
     updated_at: datetime
 

@@ -232,6 +232,40 @@ export default function EpisodeDetailPage() {
         </div>
       )}
 
+      {/* The AI reviewer's assessment, when one exists. Advisory by design:
+          the verdict names its reasons so the human can agree or override,
+          and an auto-approval says so instead of impersonating a person. */}
+      {episode.ai_review && (
+        <div
+          className={
+            "flex items-start gap-2 rounded-lg border p-3 text-sm " +
+            (episode.ai_review.verdict === "approve"
+              ? "border-sky-500/40 bg-sky-500/10"
+              : "border-amber-500/40 bg-amber-500/10")
+          }
+        >
+          <div>
+            <p className="font-medium">
+              AI review: {episode.ai_review.auto_approved
+                ? "auto-approved"
+                : `${episode.ai_review.verdict} (${(episode.ai_review.confidence * 100).toFixed(0)}% confidence)`}
+            </p>
+            {(episode.ai_review.reasons ?? []).length > 0 && (
+              <ul className="mt-1 list-disc pl-5 text-xs text-muted-foreground">
+                {(episode.ai_review.reasons ?? []).map((reason, i) => (
+                  <li key={i}>{reason}</li>
+                ))}
+              </ul>
+            )}
+            {(episode.ai_review.failed_floors ?? []).length > 0 && (
+              <p className="mt-1 text-xs text-muted-foreground">
+                Floors not met: {(episode.ai_review.failed_floors ?? []).join(", ")}
+              </p>
+            )}
+          </div>
+        </div>
+      )}
+
       <div className="grid gap-4 md:grid-cols-2">
         <Card>
           <CardHeader>

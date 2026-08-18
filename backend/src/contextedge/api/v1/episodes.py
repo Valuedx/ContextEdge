@@ -142,6 +142,7 @@ async def get_episode(episode_id: UUID, db: DbSession, user: AuthUser):
         "final_outcome": episode.final_outcome,
         "reviewer_state": episode.reviewer_state,
         "reviewer_user_id": episode.reviewer_user_id,
+        "ai_review": episode.ai_review,
         "evidence_ids": [str(evidence_id) for evidence_id in evidence_ids],
         "evidence_count": len(evidence_items),
         "evidence_items": evidence_items,
