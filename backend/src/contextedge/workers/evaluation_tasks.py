@@ -133,6 +133,8 @@ def ai_review_episodes(
     tenant_id: str,
     limit: int = 100,
     mode_override: str | None = None,
+    shard: int | None = None,
+    shards: int | None = None,
 ):
     """AI first-pass review sweep over pending episode drafts.
 
@@ -151,7 +153,7 @@ def ai_review_episodes(
     """
     from datetime import UTC, datetime, timedelta
 
-    from sqlalchemy import select
+    from sqlalchemy import func, select
 
     from contextedge.config import settings
     from contextedge.models.episode import Episode
@@ -236,18 +238,35 @@ def ai_review_episodes(
                         "issue_signature.redispatch_failed", episode_id=str(orphan_id)
                     )
 
-            drafts = (
-                await db.execute(
-                    select(Episode)
-                    .where(
-                        Episode.tenant_id == tid,
-                        Episode.reviewer_state == "pending_review",
-                        Episode.ai_review.is_(None),
-                    )
-                    .order_by(review_priority_expression().desc())
-                    .limit(limit)
+            draft_query = (
+                select(Episode)
+                .where(
+                    Episode.tenant_id == tid,
+                    Episode.reviewer_state == "pending_review",
+                    Episode.ai_review.is_(None),
                 )
-            ).scalars().all()
+                .order_by(review_priority_expression().desc())
+                .limit(limit)
+            )
+            if shard is not None and shards:
+                # Concurrent sweep workers each take a disjoint hash
+                # slice of the draft pool. Correctness never depends on
+                # this (the FOR UPDATE re-check already prevents double
+                # stamping); it prevents double PAYING — unsharded
+                # concurrent batches select the same priority-ordered
+                # list and review the same drafts in lockstep, wasting
+                # every second worker's calls. hashtext is
+                # Postgres-specific, which is fine: unsharded dispatch
+                # (the default) never reaches this branch.
+                from sqlalchemy import String, cast
+
+                draft_query = draft_query.where(
+                    func.mod(
+                        func.abs(func.hashtext(cast(Episode.id, String))), shards
+                    )
+                    == shard
+                )
+            drafts = (await db.execute(draft_query)).scalars().all()
 
             approved_domains: set = set()
             consecutive_transient = 0

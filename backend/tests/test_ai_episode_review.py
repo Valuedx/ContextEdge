@@ -361,3 +361,21 @@ def test_human_approve_endpoints_commit_before_dispatch():
         assert commit_pos < dispatch_pos, (
             f"{endpoint.__name__} must make the approval durable before workers hear of it"
         )
+
+
+def test_sweep_sharding_is_optional_and_disjoint():
+    """Concurrent sweep workers may take disjoint hash slices of the
+    draft pool (double-PAY prevention; double-STAMP is already
+    impossible via the FOR UPDATE re-check). Default dispatch is
+    unsharded and must not touch the Postgres-specific hashtext path."""
+    import inspect
+
+    from contextedge.workers import evaluation_tasks
+
+    sig = inspect.signature(evaluation_tasks.ai_review_episodes.run)
+    assert sig.parameters["shard"].default is None
+    assert sig.parameters["shards"].default is None
+
+    source = inspect.getsource(evaluation_tasks.ai_review_episodes)
+    assert "hashtext" in source
+    assert "if shard is not None and shards:" in source
