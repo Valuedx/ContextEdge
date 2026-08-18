@@ -167,10 +167,14 @@ export default function EpisodesPage() {
 
   const pg = usePagination(50);
   const queryClient = useQueryClient();
+  // Review priority is the default: newest-first buried the resolution-
+  // bearing multi-evidence drafts (the ones worth a reviewer's first hour)
+  // beneath the last trickle of fragments after every bulk ingest.
+  const [sortMode, setSortMode] = useState<"review_priority" | "newest">("review_priority");
 
   const { data = [], isLoading } = useQuery<Episode[]>({
-    queryKey: ["episodes", pg.page],
-    queryFn: () => api.get("/episodes", pg.params),
+    queryKey: ["episodes", pg.page, sortMode],
+    queryFn: () => api.get("/episodes", { ...pg.params, sort: sortMode }),
   });
 
   const bulkApproveMutation = useMutation({
@@ -245,8 +249,18 @@ export default function EpisodesPage() {
               </Button>
             )}
 
-            <Button 
-              onClick={handleConstructPattern} 
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() =>
+                setSortMode((m) => (m === "review_priority" ? "newest" : "review_priority"))
+              }
+              title="Review priority ranks resolution-bearing, well-evidenced drafts first"
+            >
+              Sort: {sortMode === "review_priority" ? "Review priority" : "Newest"}
+            </Button>
+            <Button
+              onClick={handleConstructPattern}
               disabled={isClustering}
               variant="outline"
               className="border-indigo-500/50 text-indigo-400 hover:bg-indigo-500/10 hover:text-indigo-300"

@@ -3,7 +3,7 @@ from uuid import UUID
 
 import structlog
 from fastapi import APIRouter, HTTPException, Query, status
-from sqlalchemy import select
+from sqlalchemy import case, func, select
 from sqlalchemy.orm import selectinload
 
 from contextedge.deps import AuthUser, DbSession
@@ -26,6 +26,49 @@ logger = structlog.get_logger()
 
 router = APIRouter()
 
+EPISODE_SORTS = ("newest", "review_priority")
+
+
+def _review_priority():
+    """Deterministic review-priority score, computed in SQL so the database
+    orders the queue instead of Python paging through it.
+
+    Transparent additive factors (the change-risk convention — the weights
+    ARE the explanation):
+
+      +40  substantive final outcome (>= 20 chars). Resolution is what
+           patterns and playbooks learn from; an unresolved draft teaches
+           the reviewer little and downstream nothing.
+      +20  substantive root cause (>= 20 chars).
+      +3   per linked evidence item, capped at 10 (+30) — corroborated,
+           full-thread accounts ahead of single-message fragments.
+      +10  x extraction_confidence — the synthesizer's own signal, kept
+           the weakest factor because it is the only self-reported one.
+
+    Newest-first buried exactly the wrong drafts: with 1,400 pending after
+    a bulk ingest, recency put the last trickle of fragments first and the
+    resolution-bearing multi-evidence accounts pages deep.
+    """
+    evidence_count = case(
+        (
+            func.jsonb_typeof(Episode.evidence_ids) == "array",
+            func.jsonb_array_length(Episode.evidence_ids),
+        ),
+        else_=0,
+    )
+    return (
+        case(
+            (func.length(func.coalesce(Episode.final_outcome, "")) >= 20, 40),
+            else_=0,
+        )
+        + case(
+            (func.length(func.coalesce(Episode.root_cause_summary, "")) >= 20, 20),
+            else_=0,
+        )
+        + func.least(func.coalesce(evidence_count, 0), 10) * 3
+        + func.coalesce(Episode.extraction_confidence, 0.0) * 10
+    )
+
 
 @router.get("", response_model=list[EpisodeResponse])
 async def list_episodes(
@@ -35,6 +78,7 @@ async def list_episodes(
     status: str | None = None,
     reviewer_state: str | None = None,
     include_superseded: bool = False,
+    sort: str = "newest",
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
 ):
@@ -63,7 +107,16 @@ async def list_episodes(
         q = q.where(Episode.reviewer_state == reviewer_state)
     elif not include_superseded:
         q = q.where(Episode.reviewer_state != "superseded")
-    q = q.order_by(Episode.created_at.desc()).limit(limit).offset(offset)
+    if sort not in EPISODE_SORTS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"sort must be one of {EPISODE_SORTS}",
+        )
+    if sort == "review_priority":
+        q = q.order_by(_review_priority().desc(), Episode.created_at.desc())
+    else:
+        q = q.order_by(Episode.created_at.desc())
+    q = q.limit(limit).offset(offset)
     result = await db.execute(q)
     return result.scalars().all()
 
