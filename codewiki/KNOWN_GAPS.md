@@ -477,23 +477,28 @@ The hybrid ranker uses a hard-coded `quality_score = 0.5` for all playbooks. A p
   fix the chunk merge, then re-narrate affected episodes (settle=False)
   and retire the stacked versions (~$20).
 
-- **AUTO_APPROVE MODE IS BLOCKED on two findings from the 2026-08-18
-  external review** (advisory mode is unaffected):
-  (1) *Side effects dispatch before commit*: `ai_review_episode` queues
-  signature extraction inside the sweep's transaction, which commits only
-  after up to 100 reviews (~25 min); the signature task sees the
-  uncommitted pending state and no-ops WITHOUT retry
-  (`not_approved_or_missing`), so auto-approved episodes would silently
-  never mint signatures. Same class as the human approve endpoint's race
-  but with a window measured in minutes, not milliseconds. Fix: bounded
-  batch commits + post-commit dispatch (outbox-style), which also
-  retires the 100-LLM-calls-one-transaction exposure.
-  (2) *Dedup/review sweeps have no ordering*: both run hourly with no
-  dependency; today's topology serializes them by accident (both queues
-  on the solo pattern/evaluation worker) — a topology change would let
-  review load a pending duplicate, dedup supersede it, and review's
-  commit overwrite it back to approved. Fix: tenant-scoped advisory lock
-  shared by both sweeps, or a chained dispatch.
+- **RESOLVED 2026-08-19 — auto_approve unblocked.** The two 2026-08-18
+  external-review findings that blocked it are fixed on
+  `feat/auto-approve-hardening`:
+  (1) *Side effects dispatched before commit* → the sweep now commits
+  PER EPISODE and dispatches signature extraction only after that
+  episode's commit is durable; the human approve/bulk-approve endpoints
+  commit before dispatching for the same reason. A bounded mop-up at
+  sweep start re-dispatches signatures for auto-approved episodes that
+  lost theirs to a crash-after-commit or broker outage (idempotent
+  task, limit 20/sweep, scoped to auto-approvals so the pre-signature
+  era is never surprise-backfilled). Per-episode commits also retire
+  the 50-LLM-calls-one-transaction exposure: a deadlock now costs one
+  review, not a batch.
+  (2) *Sweep/human/dedup write ordering* → `ai_review_episode` re-reads
+  the row `FOR UPDATE` (with `populate_existing`, without which the
+  identity map returns stale attributes and the check is vacuous)
+  after the LLM call and before writing; any state change during the
+  ~14s review window — human approve/reject, dedup supersede, a twin
+  sweep's stamp — causes a skip, so a concurrent decision always wins.
+  The lock spans only stamp→commit (milliseconds), never the LLM await.
+  This closes the ordering hazard row-by-row for ALL writers rather
+  than serializing whole sweeps behind a tenant advisory lock.
 - **Stable two-evidence clusters are terminally skipped, not deferred.**
   `MIN_AUTO_SYNTHESIS_CLUSTER = 3` only re-tells when a NEW correlation
   edge fires a dispatch; a pair that never grows gets no retry and no

@@ -252,9 +252,14 @@ async def approve_episode(episode_id: UUID, db: DbSession, user: AuthUser):
         resource_type="episode",
         resource_id=str(episode.id),
     )
-    # B3: approved stories mint their issue signature. The task re-reads
-    # the episode and no-ops unless approved, so the small dispatch-vs-
-    # commit race resolves via its retry.
+    # Commit BEFORE dispatching. The signature task re-reads the episode
+    # and no-ops WITHOUT retry when it isn't approved yet — so a message
+    # consumed before this request's commit landed silently lost the
+    # signature (and a rollback after dispatch left tasks running for an
+    # approval that never happened). The request-scoped session commits
+    # again at request end; that second commit is an empty no-op.
+    await db.commit()
+    # B3: approved stories mint their issue signature.
     try:
         from contextedge.workers.signature_tasks import extract_issue_signature_task
 
@@ -307,12 +312,20 @@ async def bulk_approve_episodes(body: EpisodeBulkApproveRequest, db: DbSession, 
             resource_id=str(ep.id),
         )
 
+    # Same ordering rule as the single-approve endpoint: approvals and
+    # their audit trail become durable first, then the workers hear
+    # about them.
+    await db.commit()
+
+    for ep in episodes:
         try:
             from contextedge.workers.signature_tasks import extract_issue_signature_task
 
             extract_issue_signature_task.delay(str(ep.id), str(user.tenant_id))
         except Exception:
-            pass
+            logger.warning(
+                "issue_signature.dispatch_failed", episode_id=str(ep.id)
+            )
 
     # Trigger pattern clustering automatically for all affected domains
     try:

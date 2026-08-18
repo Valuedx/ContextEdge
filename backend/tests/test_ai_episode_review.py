@@ -198,3 +198,166 @@ def test_sweep_dispatches_clustering_per_approved_domain():
     assert "for domain_id in approved_domains" in source
     # The old bug: a single unconditional None dispatch.
     assert "cluster_episodes.delay(None," not in source
+
+
+# ---------------------------------------------------------------------------
+# 2026-08-19 auto-approve hardening: commit-before-dispatch and the
+# concurrent-writer lock. These are the two findings that blocked
+# auto_approve mode; the ordering contracts are pinned the same
+# wiring-not-logic way as the transient and clustering tests above.
+# ---------------------------------------------------------------------------
+
+
+def test_service_never_dispatches_inside_transaction():
+    """The review service runs inside an open transaction; a message
+    sent from there can be consumed before the commit lands, and the
+    signature task no-ops WITHOUT retry on the uncommitted state. All
+    dispatching lives in the sweep task, after the per-episode commit."""
+    import inspect
+
+    from contextedge.services import episode_review_service
+
+    source = inspect.getsource(episode_review_service.ai_review_episode)
+    assert "extract_issue_signature_task" not in source
+    assert "domain_id" in source  # caller needs it to dispatch clustering
+
+
+def test_sweep_commits_each_episode_before_dispatching():
+    import inspect
+
+    from contextedge.workers import evaluation_tasks
+
+    source = inspect.getsource(evaluation_tasks.ai_review_episodes)
+    commit_pos = source.index("await db.commit()")
+    approved_pos = source.index('totals["approved"] += 1')
+    assert commit_pos < approved_pos, (
+        "the per-episode commit must precede the approved-branch dispatch"
+    )
+    # A failed review rolls back alone instead of poisoning the session
+    # for the rest of the batch (the PendingRollbackError lesson).
+    assert "await db.rollback()" in source
+    assert "skipped_state_changed" in source
+
+
+def test_review_write_is_lock_guarded():
+    """Between the LLM call (~14s, no locks) and the write, a human may
+    decide or dedup may supersede. The service must re-read FOR UPDATE
+    — with populate_existing, or the identity map returns the stale
+    pre-review attributes and the check is vacuous — and skip if the
+    state moved. Concurrent decisions always win over the model's."""
+    import inspect
+
+    from contextedge.services import episode_review_service
+
+    source = inspect.getsource(episode_review_service.ai_review_episode)
+    lock_pos = source.index("with_for_update")
+    stamp_pos = source.index("episode.ai_review =")
+    assert lock_pos < stamp_pos
+    assert "populate_existing" in source
+    assert 'reviewer_state != "pending_review"' in source
+
+
+async def test_state_change_during_review_skips_write(monkeypatch):
+    """Functional pin for the lock guard: the draft is approved by a
+    human while the model is thinking; the service must skip without
+    stamping anything."""
+    import uuid as _uuid
+    from types import SimpleNamespace
+
+    from contextedge.services.episode_review_service import ai_review_episode
+
+    async def fake_llm(**kwargs):
+        return {"verdict": "approve", "confidence": 0.95, "reasons": []}
+
+    monkeypatch.setattr(
+        "contextedge.ai.classifiers.episode_review.review_episode_llm", fake_llm
+    )
+
+    async def fake_excerpts(db, episode, steps=None):
+        return ""
+
+    monkeypatch.setattr(
+        "contextedge.services.episode_review_service._evidence_excerpts",
+        fake_excerpts,
+    )
+
+    episode = SimpleNamespace(
+        id=_uuid.uuid4(),
+        tenant_id=_uuid.uuid4(),
+        title="t",
+        root_cause_summary="r" * 30,
+        final_outcome="o" * 30,
+        contradictions=[],
+        evidence_ids=[str(_uuid.uuid4()), str(_uuid.uuid4())],
+        reviewer_state="pending_review",
+        ai_review=None,
+        status="pending",
+        domain_id=None,
+    )
+
+    class FakeResult:
+        def __init__(self, steps=None, fresh=None):
+            self._steps, self._fresh = steps, fresh
+
+        def scalars(self):
+            return SimpleNamespace(all=lambda: self._steps or [])
+
+        def scalar_one_or_none(self):
+            return self._fresh
+
+    class FakeDB:
+        def __init__(self):
+            self.calls = 0
+            self.flushed = False
+
+        async def execute(self, *a, **k):
+            self.calls += 1
+            if self.calls == 1:  # steps query
+                return FakeResult(steps=[])
+            # the FOR UPDATE re-read: a human approved meanwhile
+            return FakeResult(
+                fresh=SimpleNamespace(
+                    reviewer_state="approved", ai_review=None
+                )
+            )
+
+        async def flush(self):
+            self.flushed = True
+
+    db = FakeDB()
+    out = await ai_review_episode(
+        db, episode.tenant_id, episode, mode="auto_approve"
+    )
+    assert out["skipped_state_changed"] is True
+    assert out["approved"] is False
+    assert episode.ai_review is None, "nothing may be stamped over a human decision"
+    assert episode.status == "pending", "state must not change"
+    assert db.flushed is False
+
+
+def test_orphaned_auto_approvals_get_signature_redispatch():
+    """Crash-after-commit recovery: an auto-approved episode with no
+    signature link gets its dispatch re-sent (bounded, idempotent,
+    scoped to auto-approvals so the pre-signature era is untouched)."""
+    import inspect
+
+    from contextedge.workers import evaluation_tasks
+
+    source = inspect.getsource(evaluation_tasks.ai_review_episodes)
+    assert "EpisodeIssueSignature" in source
+    assert "auto_approved" in source
+    assert ".exists()" in source
+
+
+def test_human_approve_endpoints_commit_before_dispatch():
+    import inspect
+
+    from contextedge.api.v1 import episodes as episodes_api
+
+    for endpoint in (episodes_api.approve_episode, episodes_api.bulk_approve_episodes):
+        source = inspect.getsource(endpoint)
+        commit_pos = source.index("await db.commit()")
+        dispatch_pos = source.index("extract_issue_signature_task.delay")
+        assert commit_pos < dispatch_pos, (
+            f"{endpoint.__name__} must make the approval durable before workers hear of it"
+        )

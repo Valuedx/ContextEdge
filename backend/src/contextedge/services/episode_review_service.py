@@ -235,6 +235,35 @@ async def ai_review_episode(
             "transient_failure": True,
         }
 
+    # Re-read the row UNDER LOCK before writing anything. The LLM call
+    # above takes ~14s and holds no locks; in that window a human may
+    # have approved/rejected this draft or the dedup sweep may have
+    # superseded it. Whatever changed the state wins — stamping (or
+    # worse, auto-approving) over a concurrent decision is the
+    # overwrite bug that kept auto_approve blocked. populate_existing
+    # is load-bearing: without it the identity map hands back the stale
+    # pre-review attributes and the check is vacuous. The lock is held
+    # only from here until the caller's per-episode commit.
+    fresh = (
+        await db.execute(
+            select(Episode)
+            .where(Episode.id == episode.id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+    ).scalar_one_or_none()
+    if (
+        fresh is None
+        or fresh.reviewer_state != "pending_review"
+        or fresh.ai_review is not None
+    ):
+        return {
+            "episode_id": str(episode.id),
+            "verdict": verdict.get("verdict"),
+            "approved": False,
+            "skipped_state_changed": True,
+        }
+
     passes, failed_floors = passes_auto_approve_floors(episode, verdict)
     approved = mode == "auto_approve" and passes
 
@@ -264,20 +293,16 @@ async def ai_review_episode(
                 "prompt_version": verdict.get("prompt_version"),
             },
         )
-        # B3: approved stories mint their issue signature — same dispatch
-        # the human approve endpoint makes, same crash-tolerance.
-        try:
-            from contextedge.workers.signature_tasks import extract_issue_signature_task
-
-            extract_issue_signature_task.delay(str(episode.id), str(tenant_id))
-        except Exception:  # broker down must not fail the review sweep
-            logger.warning(
-                "issue_signature.dispatch_failed", episode_id=str(episode.id)
-            )
+        # Deliberately NO task dispatch here: this function runs inside
+        # an open transaction, and a message sent now can be consumed
+        # before (or without) the commit landing — the signature task
+        # would read the pending state and no-op WITHOUT retry. The
+        # caller commits first, then dispatches (see ai_review_episodes).
 
     await db.flush()
     return {
         "episode_id": str(episode.id),
         "verdict": verdict.get("verdict"),
         "approved": approved,
+        "domain_id": str(episode.domain_id) if episode.domain_id else None,
     }

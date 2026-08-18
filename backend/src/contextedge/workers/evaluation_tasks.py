@@ -200,6 +200,42 @@ def ai_review_episodes(
                 )
                 continue
 
+            # Crash recovery for the post-commit dispatch below: an
+            # auto-approved episode whose signature dispatch was lost
+            # (process death between commit and send, broker outage)
+            # is approved in the DB but never minted a signature. Small
+            # bounded re-dispatch each sweep; the signature task is
+            # idempotent. Scoped to auto-approvals only — widening to
+            # every approved-without-signature episode would surprise-
+            # backfill the pre-signature era at one LLM call apiece.
+            from contextedge.models.issue_signature import EpisodeIssueSignature
+
+            orphaned = (
+                await db.execute(
+                    select(Episode.id)
+                    .where(
+                        Episode.tenant_id == tid,
+                        Episode.reviewer_state == "approved",
+                        Episode.ai_review["auto_approved"].as_boolean().is_(True),
+                        ~select(EpisodeIssueSignature.id)
+                        .where(EpisodeIssueSignature.episode_id == Episode.id)
+                        .exists(),
+                    )
+                    .limit(20)
+                )
+            ).scalars().all()
+            for orphan_id in orphaned:
+                try:
+                    from contextedge.workers.signature_tasks import (
+                        extract_issue_signature_task,
+                    )
+
+                    extract_issue_signature_task.delay(str(orphan_id), str(tid))
+                except Exception:
+                    logger.warning(
+                        "issue_signature.redispatch_failed", episode_id=str(orphan_id)
+                    )
+
             drafts = (
                 await db.execute(
                     select(Episode)
@@ -220,11 +256,23 @@ def ai_review_episodes(
                     outcome = await ai_review_episode(
                         db, tid, episode, mode=mode
                     )
+                    # Commit PER EPISODE, before any dispatch. Durability
+                    # first: a batch-end commit made every verdict in the
+                    # batch hostage to the last one (one deadlock = 50
+                    # LLM calls re-paid), and it held the review-service
+                    # row lock for minutes instead of milliseconds.
+                    await db.commit()
                 except Exception as exc:  # one bad draft never ends the sweep
+                    await db.rollback()
                     logger.warning(
                         "episode_ai_review.failed",
                         episode_id=str(episode.id),
                         error=str(exc),
+                    )
+                    continue
+                if outcome.get("skipped_state_changed"):
+                    totals["skipped_state_changed"] = (
+                        totals.get("skipped_state_changed", 0) + 1
                     )
                     continue
                 if outcome.get("transient_failure"):
@@ -245,7 +293,23 @@ def ai_review_episodes(
                 totals["reviewed"] += 1
                 if outcome["approved"]:
                     totals["approved"] += 1
-                    approved_domains.add(episode.domain_id)
+                    approved_domains.add(outcome.get("domain_id"))
+                    # The commit above already landed: the signature task
+                    # can only ever observe the approved state, and a
+                    # rollback can no longer orphan this dispatch.
+                    try:
+                        from contextedge.workers.signature_tasks import (
+                            extract_issue_signature_task,
+                        )
+
+                        extract_issue_signature_task.delay(
+                            outcome["episode_id"], str(tid)
+                        )
+                    except Exception:  # broker down: mop-up re-dispatches
+                        logger.warning(
+                            "issue_signature.dispatch_failed",
+                            episode_id=outcome["episode_id"],
+                        )
                 else:
                     totals["held"] += 1
 
@@ -258,9 +322,10 @@ def ai_review_episodes(
                 try:
                     from contextedge.workers.pattern_tasks import cluster_episodes
 
-                    cluster_episodes.delay(
-                        str(domain_id) if domain_id else None, str(tid)
-                    )
+                    # domain_id is already a string (or None) from the
+                    # service's post-lock read; every approval feeding
+                    # this set committed before we got here.
+                    cluster_episodes.delay(domain_id, str(tid))
                 except Exception as exc:
                     logger.warning(
                         "episode_ai_review.cluster_dispatch_failed", error=str(exc)
