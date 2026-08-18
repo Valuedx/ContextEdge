@@ -44,9 +44,14 @@ MIN_OUTCOME_CHARS = 20
 MIN_VERDICT_CONFIDENCE = 0.8
 
 # Bounded context: enough evidence for grounding judgement, never the
-# whole thread. 6 items x 700 chars ~= one salient page.
-MAX_EVIDENCE_ITEMS = 6
-MAX_EVIDENCE_CHARS = 700
+# whole thread. Selection is CITATION-DRIVEN: the first sweep sent a
+# blind head+tail sample, and the reviewer held 100/100 drafts with
+# "steps not supported by the provided evidence excerpts" — structurally
+# true, since most steps' cited evidence was never in the window. The
+# excerpts now cover what the steps cite, so a grounding verdict judges
+# the episode instead of the sampling.
+MAX_EVIDENCE_ITEMS = 10
+MAX_EVIDENCE_CHARS = 450
 
 
 def review_priority_expression():
@@ -96,15 +101,20 @@ def passes_auto_approve_floors(episode: Episode, verdict: dict) -> tuple[bool, l
     return (not failed, failed)
 
 
-async def _evidence_excerpts(db: AsyncSession, episode: Episode) -> str:
-    """Chronological HEAD and TAIL of the cluster, not just the head.
+async def _evidence_excerpts(
+    db: AsyncSession, episode: Episode, steps: list | None = None
+) -> str:
+    """Citation-driven excerpts: show the reviewer what the steps cite.
 
-    Ascending-only selection showed the reviewer the complaint and hid
-    the resolution: on long threads the closing messages — the fix
-    confirmation, the correction, the outcome — are exactly what check
-    #3 (does the outcome follow?) needs, and they were never in the
-    context (external review 2026-08-18). Half the budget goes to the
-    opening, half to the ending; the middle is the safest part to omit.
+    Priority order for the item budget:
+    1. Evidence the steps actually cite (``evidence_refs``) — a grounding
+       check against excerpts that omit the cited evidence can only
+       produce false "unsupported" verdicts, which is exactly what the
+       first sweep did (100/100 held on grounding).
+    2. The chronologically LAST item — the fix confirmation lives at the
+       thread's end and check #3 (does the outcome follow?) needs it.
+    3. The chronologically FIRST item — the original complaint.
+    Remaining budget fills with uncited items, oldest first.
     """
     ids: list[uuid.UUID] = []
     for raw in episode.evidence_ids or []:
@@ -114,8 +124,12 @@ async def _evidence_excerpts(db: AsyncSession, episode: Episode) -> str:
             continue
     if not ids:
         return ""
-    half = max(MAX_EVIDENCE_ITEMS // 2, 1)
-    head = (
+    cited: set[str] = set()
+    for step in steps or []:
+        for ref in step.evidence_refs or []:
+            cited.add(str(ref))
+
+    rows = (
         await db.execute(
             select(EvidenceItem)
             .where(
@@ -123,32 +137,35 @@ async def _evidence_excerpts(db: AsyncSession, episode: Episode) -> str:
                 EvidenceItem.id.in_(tuple(ids)),
             )
             .order_by(EvidenceItem.created_at_source.asc().nulls_last())
-            .limit(half)
         )
     ).scalars().all()
-    tail = (
-        await db.execute(
-            select(EvidenceItem)
-            .where(
-                EvidenceItem.tenant_id == episode.tenant_id,
-                EvidenceItem.id.in_(tuple(ids)),
-            )
-            .order_by(EvidenceItem.created_at_source.desc().nulls_last())
-            .limit(half)
-        )
-    ).scalars().all()
-    seen: set = set()
-    ordered = []
-    for item in list(head) + list(reversed(tail)):
-        if item.id in seen:
-            continue
-        seen.add(item.id)
-        ordered.append(item)
+    if not rows:
+        return ""
+
+    chosen: list = []
+    chosen_ids: set = set()
+
+    def take(item) -> None:
+        if item.id not in chosen_ids and len(chosen) < MAX_EVIDENCE_ITEMS:
+            chosen.append(item)
+            chosen_ids.add(item.id)
+
+    # Cited first, then the ends, then chronological fill.
+    for item in rows:
+        if str(item.id) in cited:
+            take(item)
+    take(rows[-1])
+    take(rows[0])
+    for item in rows:
+        take(item)
+
+    chosen.sort(key=lambda i: (i.created_at_source is None, i.created_at_source))
     parts = []
-    for item in ordered:
+    for item in chosen:
         body = (item.body_summary or item.body_text or "").strip()
+        marker = " [cited]" if str(item.id) in cited else ""
         parts.append(
-            f"[{item.evidence_type}] {item.title or '(untitled)'}\n"
+            f"[{item.evidence_type}]{marker} {item.title or '(untitled)'}\n"
             f"{body[:MAX_EVIDENCE_CHARS]}"
         )
     return "\n\n".join(parts)
@@ -193,7 +210,7 @@ async def ai_review_episode(
             )
             contradiction_lines.append(f"- {topic}: {claims}")
     contradictions_text = "\n".join(contradiction_lines)
-    evidence_text = await _evidence_excerpts(db, episode)
+    evidence_text = await _evidence_excerpts(db, episode, steps)
 
     verdict = await review_episode_llm(
         title=episode.title,

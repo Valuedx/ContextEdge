@@ -141,3 +141,21 @@ def test_the_dedup_entry_point_runs_both_new_passes():
     assert source.index("supersede_contained_episodes") < source.index(
         "supersede_similar_episodes"
     )
+
+
+@pytest.mark.asyncio
+async def test_merge_fold_leaves_steps_with_the_duplicate():
+    """Steps must NOT move onto the canonical: every dedup sweep that did
+    so concatenated whole narrations — 949 live episodes ended up with
+    timelines repeating the same complaint dozens of times (worst: 319
+    steps from ~13 tellings). The canonical keeps its own narrative; the
+    superseded duplicate keeps its steps as audit history. Pinned on the
+    source because the fold is shared by the title sweep and the
+    containment sweep."""
+    import inspect
+
+    from contextedge.services.episode_service import _merge_episode_into
+
+    source = inspect.getsource(_merge_episode_into)
+    assert "step.episode_id = canonical.id" not in source
+    assert "Steps deliberately STAY" in source

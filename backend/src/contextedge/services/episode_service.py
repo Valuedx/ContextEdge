@@ -413,7 +413,6 @@ async def _merge_episode_into(db: AsyncSession, dup: "Episode", canonical: "Epis
     implementation — two copies of this re-linking would drift, and a missed
     link type leaves orphaned rows pointing at a superseded episode.
     """
-    from contextedge.models.episode import EpisodeStep
     from contextedge.models.pattern import GraphEdge, PatternEvidenceLink
 
     # 1. Re-link EpisodeEvidenceLink
@@ -464,14 +463,15 @@ async def _merge_episode_into(db: AsyncSession, dup: "Episode", canonical: "Epis
         else:
             await db.delete(plink)
 
-    # 3. Re-link EpisodeStep
-    steps = (
-        await db.execute(
-            select(EpisodeStep).where(EpisodeStep.episode_id == dup.id)
-        )
-    ).scalars().all()
-    for step in steps:
-        step.episode_id = canonical.id
+    # 3. Steps deliberately STAY with the duplicate. Moving them onto the
+    # canonical concatenated whole narrations — the 2026-08-18 corpus
+    # ended up with 949 episodes whose timelines repeated the same
+    # complaint dozens of times (worst: 319 steps), because every dedup
+    # sweep folded another telling's steps in. A timeline is one authored
+    # narrative, not an accumulation: the canonical keeps ITS OWN steps,
+    # and the superseded duplicate keeps its steps as audit history —
+    # which also means migration 0071's UNIQUE (episode_id, step_order)
+    # holds by construction instead of by luck.
 
     # 4. Re-link Graph edges
     edges = (
