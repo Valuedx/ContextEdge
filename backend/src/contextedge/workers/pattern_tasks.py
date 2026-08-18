@@ -692,6 +692,52 @@ def generate_playbook_candidate(self, pattern_id: str, tenant_id: str):
 # backfill rates (hundreds), so the guard cannot flap on normal traffic.
 DEDUP_ACTIVITY_WINDOW_MINUTES = 10
 DEDUP_ACTIVITY_THRESHOLD = 50
+# Episodes minted per tenant in the same window. Evidence inflow alone
+# missed the RECONSTRUCTION phase: the tail of a bulk ingest creates
+# episodes for hours after the last evidence row lands, and the 12:29
+# sweep retired 446 drafts mid-tail because it only watched evidence —
+# some of those clusters then paid a full re-synthesis. 30/10min is
+# several times steady-state (a handful per settle window) and well
+# below any tail (40-70 observed).
+EPISODE_ACTIVITY_THRESHOLD = 30
+
+
+async def tenant_pipeline_active(db, tenant_id, window_start) -> tuple[bool, dict]:
+    """Is this tenant's pipeline mid-flight? Shared by every sweep that
+    must not churn work another stage is still producing (dedup, AI
+    review). Active means EITHER fresh evidence is landing (ingest) OR
+    episodes are being minted (reconstruction tail)."""
+    from contextedge.models.episode import Episode
+    from contextedge.models.evidence import EvidenceItem
+
+    recent_evidence = (
+        await db.execute(
+            select(func.count())
+            .select_from(EvidenceItem)
+            .where(
+                EvidenceItem.tenant_id == tenant_id,
+                EvidenceItem.ingested_at >= window_start,
+            )
+        )
+    ).scalar() or 0
+    recent_episodes = (
+        await db.execute(
+            select(func.count())
+            .select_from(Episode)
+            .where(
+                Episode.tenant_id == tenant_id,
+                Episode.created_at >= window_start,
+            )
+        )
+    ).scalar() or 0
+    active = (
+        recent_evidence > DEDUP_ACTIVITY_THRESHOLD
+        or recent_episodes > EPISODE_ACTIVITY_THRESHOLD
+    )
+    return active, {
+        "recent_evidence": recent_evidence,
+        "recent_episodes": recent_episodes,
+    }
 
 
 async def _deduplicate_knowledge(db, tenant_id: str) -> dict:
@@ -704,7 +750,6 @@ async def _deduplicate_knowledge(db, tenant_id: str) -> dict:
     """
     from datetime import UTC, datetime, timedelta
 
-    from contextedge.models.evidence import EvidenceItem
     from contextedge.models.tenant import Tenant
     from contextedge.services.pattern_service import (
         deduplicate_patterns_and_playbooks,
@@ -722,22 +767,13 @@ async def _deduplicate_knowledge(db, tenant_id: str) -> dict:
     swept: dict[str, dict] = {}
     deferred = 0
     for tid in tids:
-        recent = (
-            await db.execute(
-                select(func.count())
-                .select_from(EvidenceItem)
-                .where(
-                    EvidenceItem.tenant_id == tid,
-                    EvidenceItem.ingested_at >= window_start,
-                )
-            )
-        ).scalar() or 0
-        if recent > DEDUP_ACTIVITY_THRESHOLD:
+        active, activity = await tenant_pipeline_active(db, tid, window_start)
+        if active:
             deferred += 1
             logger.info(
                 "knowledge_dedup.deferred_ingest_active",
                 tenant_id=str(tid),
-                recent_evidence=recent,
+                **activity,
             )
             continue
         result = await deduplicate_patterns_and_playbooks(db, tid)

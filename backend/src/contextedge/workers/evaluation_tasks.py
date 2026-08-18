@@ -151,11 +151,10 @@ def ai_review_episodes(
     """
     from datetime import UTC, datetime, timedelta
 
-    from sqlalchemy import func, select
+    from sqlalchemy import select
 
     from contextedge.config import settings
     from contextedge.models.episode import Episode
-    from contextedge.models.evidence import EvidenceItem
     from contextedge.models.tenant import Tenant
     from contextedge.services.episode_review_service import (
         REVIEW_MODES,
@@ -163,8 +162,8 @@ def ai_review_episodes(
         review_priority_expression,
     )
     from contextedge.workers.pattern_tasks import (
-        DEDUP_ACTIVITY_THRESHOLD,
         DEDUP_ACTIVITY_WINDOW_MINUTES,
+        tenant_pipeline_active,
     )
 
     configured = settings.episode_ai_review
@@ -191,22 +190,13 @@ def ai_review_episodes(
         )
         totals = {"reviewed": 0, "approved": 0, "held": 0, "deferred_tenants": 0}
         for tid in tids:
-            recent = (
-                await db.execute(
-                    select(func.count())
-                    .select_from(EvidenceItem)
-                    .where(
-                        EvidenceItem.tenant_id == tid,
-                        EvidenceItem.ingested_at >= window_start,
-                    )
-                )
-            ).scalar() or 0
-            if recent > DEDUP_ACTIVITY_THRESHOLD:
+            active, activity = await tenant_pipeline_active(db, tid, window_start)
+            if active:
                 totals["deferred_tenants"] += 1
                 logger.info(
                     "episode_ai_review.deferred_ingest_active",
                     tenant_id=str(tid),
-                    recent_evidence=recent,
+                    **activity,
                 )
                 continue
 

@@ -4,6 +4,12 @@ Wiring and guard behavior, not dedup logic — the passes themselves are
 covered by test_episode_containment_dedup / test_episode_similarity_dedup,
 and the entry-point composition by
 test_the_dedup_entry_point_runs_both_new_passes.
+
+The guard watches BOTH evidence inflow (bulk ingest) and episode creation
+(reconstruction tail). The second condition is a scar: the 2026-08-18
+12:29 sweep retired 446 drafts mid-tail because evidence had gone quiet
+while reconstruction was still minting 40+ episodes per 10 minutes — some
+of those clusters then paid a full re-synthesis.
 """
 
 import uuid
@@ -13,29 +19,31 @@ import pytest
 
 from contextedge.workers.pattern_tasks import (
     DEDUP_ACTIVITY_THRESHOLD,
+    EPISODE_ACTIVITY_THRESHOLD,
     _deduplicate_knowledge,
 )
 
 TENANT = uuid.uuid4()
 
 
-def _db(recent_count: int, tenant_ids=None):
-    """A db whose tenant listing and activity count are canned.
+def _count(n):
+    result = MagicMock()
+    result.scalar.return_value = n
+    return result
 
-    Execute is called with: tenant SELECT (only for "all"), then per tenant
-    one COUNT, and the entry point is monkeypatched — so canned results per
-    call order are enough.
-    """
+
+def _db(activity, tenant_ids=None):
+    """Canned results: optional tenant listing, then per tenant an
+    (evidence, episodes) count pair in query order."""
     db = MagicMock()
     results = []
     if tenant_ids is not None:
         tenants = MagicMock()
         tenants.all.return_value = [(tid,) for tid in tenant_ids]
         results.append(tenants)
-    for _ in tenant_ids or [TENANT]:
-        count = MagicMock()
-        count.scalar.return_value = recent_count
-        results.append(count)
+    for evidence, episodes in activity:
+        results.append(_count(evidence))
+        results.append(_count(episodes))
     db.execute = AsyncMock(side_effect=results)
     return db
 
@@ -48,7 +56,7 @@ async def test_quiet_tenant_is_swept(monkeypatch):
         swept,
     )
 
-    out = await _deduplicate_knowledge(_db(recent_count=0), str(TENANT))
+    out = await _deduplicate_knowledge(_db([(0, 0)]), str(TENANT))
 
     swept.assert_awaited_once()
     assert out["deferred"] == 0
@@ -56,10 +64,9 @@ async def test_quiet_tenant_is_swept(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_busy_tenant_defers_without_touching_the_entry_point(monkeypatch):
+async def test_evidence_inflow_defers(monkeypatch):
     """During a bulk ingest the sweep must step aside: retiring drafts the
-    next message burst regrows is pure churn, and the next hourly tick
-    catches up once the tenant is quiet."""
+    next message burst regrows is pure churn."""
     swept = AsyncMock()
     monkeypatch.setattr(
         "contextedge.services.pattern_service.deduplicate_patterns_and_playbooks",
@@ -67,28 +74,40 @@ async def test_busy_tenant_defers_without_touching_the_entry_point(monkeypatch):
     )
 
     out = await _deduplicate_knowledge(
-        _db(recent_count=DEDUP_ACTIVITY_THRESHOLD + 1), str(TENANT)
+        _db([(DEDUP_ACTIVITY_THRESHOLD + 1, 0)]), str(TENANT)
     )
 
     swept.assert_not_awaited()
     assert out["deferred"] == 1
-    assert out["results"] == {}
+
+
+@pytest.mark.asyncio
+async def test_episode_churn_defers_even_with_quiet_evidence(monkeypatch):
+    """The 12:29 regression: evidence quiet, reconstruction tail minting
+    episodes — the sweep must NOT run and retire accounts mid-build."""
+    swept = AsyncMock()
+    monkeypatch.setattr(
+        "contextedge.services.pattern_service.deduplicate_patterns_and_playbooks",
+        swept,
+    )
+
+    out = await _deduplicate_knowledge(
+        _db([(0, EPISODE_ACTIVITY_THRESHOLD + 1)]), str(TENANT)
+    )
+
+    swept.assert_not_awaited()
+    assert out["deferred"] == 1
 
 
 @pytest.mark.asyncio
 async def test_all_fans_out_per_tenant_and_defers_only_the_busy_one(monkeypatch):
-    """The guard is per tenant: one tenant's backfill must not silence the
+    """The guard is per tenant: one tenant's tail must not silence the
     hygiene sweep for everyone else."""
     quiet, busy = uuid.uuid4(), uuid.uuid4()
-
-    db = MagicMock()
-    tenants = MagicMock()
-    tenants.all.return_value = [(quiet,), (busy,)]
-    quiet_count = MagicMock()
-    quiet_count.scalar.return_value = 0
-    busy_count = MagicMock()
-    busy_count.scalar.return_value = DEDUP_ACTIVITY_THRESHOLD + 100
-    db.execute = AsyncMock(side_effect=[tenants, quiet_count, busy_count])
+    db = _db(
+        [(0, 0), (0, EPISODE_ACTIVITY_THRESHOLD + 100)],
+        tenant_ids=[quiet, busy],
+    )
 
     swept = AsyncMock(return_value={"merged_episodes": 0})
     monkeypatch.setattr(
