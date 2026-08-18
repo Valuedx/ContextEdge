@@ -31,7 +31,7 @@ async def test_reconstruct_defers_while_cluster_is_unsettled():
     tenant_id = uuid4()
     seed = uuid4()
     cluster = EpisodeCluster(
-        fingerprint="fp-busy", evidence_ids=[seed, uuid4()], reasons={str(seed): ["seed"]}
+        fingerprint="fp-busy", evidence_ids=[seed, uuid4(), uuid4()], reasons={str(seed): ["seed"]}
     )
     # Newest member ingested 30 seconds ago (inside the window); oldest
     # 5 minutes ago (not yet overdue for the starvation guard).
@@ -186,7 +186,7 @@ async def test_starvation_guard_forces_synthesis_on_never_quiet_clusters():
     tenant_id = uuid4()
     seed = uuid4()
     cluster = EpisodeCluster(
-        fingerprint="fp-storm", evidence_ids=[seed, uuid4()], reasons={str(seed): ["seed"]}
+        fingerprint="fp-storm", evidence_ids=[seed, uuid4(), uuid4()], reasons={str(seed): ["seed"]}
     )
     bounds_result = Mock()
     # Oldest member 40 minutes old (overdue), newest 10 seconds (unsettled).

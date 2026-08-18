@@ -40,13 +40,29 @@ async def test_singleton_cluster_skips_without_llm():
         new=AsyncMock(return_value=_cluster(1)),
     ):
         out = await extraction_tasks._reconstruct(db, str(uuid.uuid4()), uuid.uuid4())
-    assert out == {"status": "skipped_single_evidence"}
+    assert out["status"] == "skipped_below_min_cluster"
+    db.execute.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_pair_cluster_also_skips_the_automatic_path():
+    """Message-seeded pairs are sub-cluster fragments of a fuller ticket
+    story: 58% of one bulk-ingest day's drafts were 1-2 evidence fragments
+    that containment dedup immediately retired. The floor is 3."""
+    db = MagicMock()
+    with patch(
+        "contextedge.services.episode_cluster_service.resolve_episode_cluster",
+        new=AsyncMock(return_value=_cluster(2)),
+    ):
+        out = await extraction_tasks._reconstruct(db, str(uuid.uuid4()), uuid.uuid4())
+    assert out["status"] == "skipped_below_min_cluster"
+    assert out["cluster_size"] == 2
     db.execute.assert_not_called()
 
 
 @pytest.mark.asyncio
 async def test_manual_trigger_may_reconstruct_a_singleton():
-    """settle=False (reviewer-triggered) bypasses the gate â€” the demo's
+    """settle=False (reviewer-triggered) bypasses the gate — the demo's
     per-ticket reconstruct endpoint depends on this."""
     db = _db_with_lock(acquired=False)  # then stops at the lock, fine
     with patch(
@@ -56,7 +72,7 @@ async def test_manual_trigger_may_reconstruct_a_singleton():
         out = await extraction_tasks._reconstruct(
             db, str(uuid.uuid4()), uuid.uuid4(), settle=False
         )
-    assert out != {"status": "skipped_single_evidence"}
+    assert out.get("status") != "skipped_below_min_cluster"
 
 
 @pytest.mark.asyncio

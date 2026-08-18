@@ -459,6 +459,23 @@ The hybrid ranker uses a hard-coded `quality_score = 0.5` for all playbooks. A p
   database rebuild because they live in the broker, not the DB — a Redis
   purge that targets db 0 misses them, since the broker is db 1.)*
 
+## Open items from the 2026-08-18 message-corpus run
+
+- **Reconstruction dispatch is evidence-keyed, and should be case-keyed.**
+  `correlate_evidence` schedules a reconstruct seeded by whichever evidence
+  just correlated; the resolver then narrates whatever sub-cluster that
+  seed's (possibly sparse) correlations reach. On the message corpus this
+  minted 2,450 one-to-two-evidence fragment drafts in a day — 58% of all
+  drafts, nearly all retired by containment dedup minutes later — while the
+  same tickets' full-thread accounts were being written from other seeds.
+  Shipped mitigation: `MIN_AUTO_SYNTHESIS_CLUSTER = 3` defers (never drops)
+  automatic narration of fragments. Full fix direction: debounce and
+  dispatch reconstruction PER CASE/TICKET ANCHOR (one pending reconstruct
+  per case, seeded from the case's anchor evidence), so cluster resolution
+  starts from the story's spine rather than a leaf. Belongs with the
+  DB-backed debounce rework (the ETA-heap replacement), since both change
+  the same dispatch site.
+
 ## Open items from the 2026-08-17 cold-start run
 
 - **`cluster_episodes` is one long transaction.** The first full pass over

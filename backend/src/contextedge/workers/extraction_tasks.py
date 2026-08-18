@@ -745,6 +745,16 @@ async def _extract_applicability(
 # incident is exactly when episodes matter most.
 RECONSTRUCT_DEBOUNCE_SECONDS = 180
 
+# Smallest cluster the AUTOMATIC path will narrate. 3, not 2: the live
+# backfill showed message-seeded pairs are overwhelmingly sub-cluster
+# fragments of a fuller ticket story (58% of a day's drafts, near-all
+# retired by containment dedup). A genuine 2-evidence incident still gets
+# told — when its cluster stops growing at 2 it eventually merges nowhere,
+# and a reviewer or the per-ticket manual path (settle=False) narrates it
+# deliberately; what this floor removes is paying per-fragment while the
+# full cluster is still assembling.
+MIN_AUTO_SYNTHESIS_CLUSTER = 3
+
 # How much bigger a cluster must be than the account already written for it
 # before re-telling is worth a model call.
 #
@@ -1003,13 +1013,22 @@ async def _reconstruct(
     if not cluster.evidence_ids:
         return {"error": "no_evidence_found"}
 
-    if settle and len(cluster.evidence_ids) < 2:
-        # A single-evidence "cluster" has no timeline to reconstruct, and
-        # per-message ingestion makes them the COMMON case: the e2e run
-        # measured episode extraction at 73% of total spend, much of it
-        # on one-message cases. Manual reviewer triggers (settle=False)
-        # may still reconstruct a singleton deliberately.
-        return {"status": "skipped_single_evidence"}
+    if settle and len(cluster.evidence_ids) < MIN_AUTO_SYNTHESIS_CLUSTER:
+        # Automatic synthesis needs a story worth telling. Singletons have
+        # no timeline at all, and PAIRS proved nearly as bad on the live
+        # Zoho backfill: message-seeded dispatch resolves whatever
+        # sub-cluster the seed's sparse correlations reach, and 2,450 of
+        # one day's 4,189 drafts (58%) were 1-2 evidence fragments that
+        # containment dedup then retired against fuller accounts — paid
+        # narration of material another synthesis already covered.
+        # Deferred, not dropped: the evidence and its correlations persist,
+        # and when the fragment's cluster merges into the case's fuller
+        # cluster, that dispatch tells the whole story once. Manual
+        # triggers (settle=False) still reconstruct anything deliberately.
+        return {
+            "status": "skipped_below_min_cluster",
+            "cluster_size": len(cluster.evidence_ids),
+        }
 
     if settle and settings.episode_resolution_gate == "cluster":
         # Resolution gate: a cluster with no solution signal ANYWHERE
