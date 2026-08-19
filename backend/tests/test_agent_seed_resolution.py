@@ -18,6 +18,7 @@ from sqlalchemy.dialects import postgresql
 from contextedge.graph.agent.contracts import AgentGraphAccessScope, AgentGraphRequest
 from contextedge.graph.agent.repository import (
     SQLAlchemyAgentGraphRepository,
+    _fts_seed_relevance,
     extract_identifier_tokens,
 )
 
@@ -329,6 +330,86 @@ async def test_seeds_are_deduplicated_capped_and_sorted():
     assert seeds == sorted(
         seeds, key=lambda s: (-s.relevance, s.ref.type, str(s.ref.id))
     )
+
+
+# ---- FTS rank scaling ----
+
+
+def test_fts_relevance_grades_by_match_strength():
+    """Flat per-layer constants let any node sharing one stemmed word with
+    the OR-composed tsquery outrank every semantic hit. The graded mapping
+    keeps one-common-word noise (ts_rank ~0.0101 with default D weights)
+    below the semantic layer's admitted band [0.75, 0.9] and saturates at
+    the top of that band for multi-term matches."""
+    assert _fts_seed_relevance(0.0101) < 0.7
+    assert _fts_seed_relevance(0.04) == 0.9
+    assert _fts_seed_relevance(2.5) == 0.9  # saturates, never exceeds band
+    assert _fts_seed_relevance(-1.0) == 0.6  # clamped at the floor
+    ranks = [0.0, 0.0101, 0.0203, 0.0304, 0.04, 1.0]
+    values = [_fts_seed_relevance(r) for r in ranks]
+    assert values == sorted(values)
+
+
+@pytest.mark.asyncio
+async def test_weak_fts_match_ranks_below_semantic_hit():
+    """Live failure this pins: an unrelated 'payroll processing' playbook
+    matched the query word 'process' and its flat 0.9 outranked every
+    semantically matched Process Studio precedent."""
+    tenant_id = uuid4()
+    playbook_id = uuid4()
+    episode_id = uuid4()
+
+    db, _, _ = _dispatching_db(
+        [
+            ("search_tsvector", _RowsResult([(playbook_id, 0.0101)])),
+            ("episodes", _RowsResult([(episode_id, 0.25)])),
+        ]
+    )
+    repo = SQLAlchemyAgentGraphRepository(db)
+
+    with patch(
+        "contextedge.ai.provider.generate_embedding",
+        AsyncMock(return_value=[0.1] * 3072),
+    ):
+        seeds = await repo.resolve_seeds(
+            AgentGraphRequest(query="create knowledge article about process studio failures"),
+            _scope(tenant_id),
+        )
+
+    fts = next(s for s in seeds if s.reason == "query_fts")
+    semantic = next(
+        s for s in seeds if s.reason == "query_semantic" and s.ref.id == episode_id
+    )
+    assert fts.relevance < semantic.relevance
+
+
+@pytest.mark.asyncio
+async def test_pattern_and_signature_fts_are_rank_ordered():
+    """Unordered LIMIT handed the pattern seed slots to arbitrary physical
+    rows, and popularity-first signature ordering was a lottery on tenants
+    where nearly every signature ties at episode_count=1."""
+    tenant_id = uuid4()
+    db, executed_sql, _ = _dispatching_db([])
+    repo = SQLAlchemyAgentGraphRepository(db)
+
+    with patch(
+        "contextedge.ai.provider.generate_embedding",
+        AsyncMock(side_effect=RuntimeError("skip semantic")),
+    ):
+        await repo.resolve_seeds(
+            AgentGraphRequest(query="process studio registration failures"),
+            _scope(tenant_id),
+        )
+
+    pattern_sql = next(
+        s for s in executed_sql if "FROM patterns" in s and "websearch_to_tsquery" in s
+    )
+    assert "ORDER BY ts_rank" in pattern_sql
+
+    sig_sql = next(s for s in executed_sql if "issue_signatures" in s)
+    order_clause = sig_sql[sig_sql.index("ORDER BY") :]
+    assert order_clause.startswith("ORDER BY ts_rank")
+    assert "episode_count" in order_clause  # kept, but only as tie-break
 
 
 @pytest.mark.asyncio

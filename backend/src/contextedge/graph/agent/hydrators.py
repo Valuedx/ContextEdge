@@ -94,6 +94,26 @@ def _float(value: Any) -> float | None:
 
 _MISSING_TENANT = object()
 
+# Episode states the agent may see. ``approved`` is precedent; a draft is
+# REFERENCE ONLY and is labelled as such at hydration (see
+# UNAPPROVED_EPISODE_CAVEAT) so the agent can weigh it accordingly rather
+# than citing it as settled fact.
+#
+# ``superseded`` stays out deliberately and is not an oversight: it is the
+# state a merge/dedup gives the LOSER, so the corpus holds ~9x more
+# superseded episodes than live ones. Admitting them would bury the agent
+# in stale duplicates of episodes it can already see, each one a
+# near-copy that reads as independent corroboration. Same for any future
+# ``rejected``: a human said no, which is a stronger signal than silence.
+AGENT_VISIBLE_EPISODE_STATES = frozenset({"approved", "pending_review"})
+
+UNAPPROVED_EPISODE_CAVEAT = (
+    "UNAPPROVED DRAFT — reference only. This episode was reconstructed "
+    "automatically and no reviewer has confirmed it. Treat it as a lead to "
+    "verify, not as established precedent; prefer approved episodes where "
+    "they disagree, and say it is unconfirmed if you cite it."
+)
+
 
 def node_is_visible(
     node_type: str,
@@ -129,7 +149,7 @@ def node_is_visible(
             return False
     elif node_type == "pattern" and not obj.active_flag:
         return False
-    elif node_type == "episode" and obj.reviewer_state != "approved":
+    elif node_type == "episode" and obj.reviewer_state not in AGENT_VISIBLE_EPISODE_STATES:
         return False
     elif node_type == "evidence":
         # The source system's knowledge lifecycle. Naturally inert for
@@ -418,6 +438,15 @@ def hydrate_node(node_type: str, obj: Any) -> HydratedGraphNode:
     elif node_type == "episode":
         label = obj.title
         summary = _text(obj.root_cause_summary or obj.final_outcome)
+        # An unapproved draft is admitted as reference material, so the
+        # warning has to travel WITH it. `reviewer_state` alone was already
+        # projected and is not enough: "pending_review" is a bare enum the
+        # model has to interpret, and it sits among a dozen sibling facts.
+        # The label carries the flag because that is what a citation shows
+        # a reader, and the caveat states in words what the agent should do
+        # about it.
+        if obj.reviewer_state != "approved":
+            label = f"[UNAPPROVED DRAFT] {obj.title or ''}".strip()
         # `primary_case_ref` is the ticket this episode was reconstructed
         # from (INC0009002, RITM0000004). Without it an agent can name an
         # episode but never the record behind it, so an engineer has nothing
@@ -430,6 +459,8 @@ def hydrate_node(node_type: str, obj: Any) -> HydratedGraphNode:
             "reviewer_state",
             "final_outcome",
         )
+        if obj.reviewer_state != "approved":
+            facts["agent_caveat"] = UNAPPROVED_EPISODE_CAVEAT
         confidence = _float(obj.extraction_confidence)
         # C6: an agent consuming an episode must see that its sources
         # DISAGREED (P4 preserved the accounts; the projection was

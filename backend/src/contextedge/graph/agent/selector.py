@@ -136,6 +136,16 @@ class AgentGraphSelector:
         character_count = 0
         truncation_reasons: list[str] = []
 
+        # Node admission may not spend the whole character budget when there
+        # are edges to emit: without a reserve, a node-rich selection leaves
+        # zero characters for relationships and the "graph" degrades to a
+        # flat list. A tenth of the budget is ~8 relationship JSONs at the
+        # default budget. Relationships still draw from the FULL budget, so
+        # the reserve is only ever idle if no selected pair is connected.
+        node_character_budget = budget.max_characters
+        if edge_records:
+            node_character_budget -= budget.max_characters // 10
+
         def chain_for(key: str) -> list[str]:
             chain = [key]
             while chain[-1] in parent:
@@ -173,7 +183,7 @@ class AgentGraphSelector:
                 )
                 additions.append((item, node, len(node.model_dump_json())))
             addition_chars = sum(item[2] for item in additions)
-            if character_count + addition_chars > budget.max_characters:
+            if character_count + addition_chars > node_character_budget:
                 if "max_characters" not in truncation_reasons:
                     truncation_reasons.append("max_characters")
                 continue

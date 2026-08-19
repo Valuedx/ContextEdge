@@ -92,6 +92,40 @@ def _is_caps_word_token(token: str) -> bool:
     return token.isalpha() and token.isupper()
 
 
+# ts_rank at which an FTS seed earns the full band: with default D-weight
+# lexemes a single occurrence of one plain query word scores ~0.0101, and
+# ~0.04 means three distinct query terms landed (measured on live tenants).
+# The tsquery is OR-composed, so a one-common-word match ("process",
+# "failure") is the NOISE floor, not evidence of relevance — it must land
+# below the semantic layer's admitted band (0.75-0.9), while a multi-term
+# title match should compete with the best semantic seeds.
+_FTS_FULL_CREDIT_RANK = 0.04
+_FTS_RELEVANCE_FLOOR = 0.6
+_FTS_RELEVANCE_SPAN = 0.3
+
+# Seed slots for unapproved episode drafts, allocated SEPARATELY from the
+# three approved-episode slots so a draft can never evict a reviewed
+# precedent. Deliberately smaller than the approved allocation: drafts are
+# reference material, and the agent should meet them as the exception in
+# its context rather than the norm.
+UNAPPROVED_EPISODE_SEED_LIMIT = 2
+
+# Relevance multiplier for unapproved episode seeds. 0.8 is chosen to be
+# smaller than the spread the similarity term can produce across the
+# admitted band (0.6-0.9), so an approved episode outranks a draft of equal
+# similarity and a draft only ever wins on a clearly better match.
+UNAPPROVED_SEED_RELEVANCE_FACTOR = 0.8
+
+
+def _fts_seed_relevance(rank: float) -> float:
+    """Map a raw ts_rank to seed relevance in [0.6, 0.9] — linear up to
+    _FTS_FULL_CREDIT_RANK, saturated above it. Flat per-layer constants
+    (the old behavior) let any playbook sharing one stemmed word with the
+    query outrank every semantically-matched precedent."""
+    credit = min(max(float(rank), 0.0) / _FTS_FULL_CREDIT_RANK, 1.0)
+    return round(_FTS_RELEVANCE_FLOOR + _FTS_RELEVANCE_SPAN * credit, 4)
+
+
 class AgentGraphRepository(Protocol):
     async def resolve_seeds(
         self,
@@ -172,27 +206,34 @@ class SQLAlchemyAgentGraphRepository:
                 else None
             )
         if query and tsquery is not None:
+            playbook_rank = func.ts_rank(Playbook.search_tsvector, tsquery)
             playbook_q = (
-                select(Playbook.id, func.ts_rank(Playbook.search_tsvector, tsquery))
+                select(Playbook.id, playbook_rank)
                 .where(
                     Playbook.tenant_id == scope.tenant_id,
                     Playbook.lifecycle_state == "approved",
                     Playbook.search_tsvector.op("@@")(tsquery),
                 )
-                .order_by(func.ts_rank(Playbook.search_tsvector, tsquery).desc())
+                .order_by(playbook_rank.desc(), Playbook.id)
                 .limit(3)
             )
             pattern_tsvector = func.to_tsvector(
                 "english",
                 Pattern.title + " " + func.coalesce(Pattern.description, ""),
             )
+            pattern_rank = func.ts_rank(pattern_tsvector, tsquery)
             pattern_q = (
-                select(Pattern.id)
+                select(Pattern.id, pattern_rank)
                 .where(
                     Pattern.tenant_id == scope.tenant_id,
                     Pattern.active_flag.is_(True),
                     pattern_tsvector.op("@@")(tsquery),
                 )
+                # Rank-ordered: the OR-composed tsquery matches every node
+                # sharing one stemmed word, and an unordered LIMIT hands the
+                # seed slots to arbitrary physical-order rows instead of the
+                # best matches.
+                .order_by(pattern_rank.desc(), Pattern.id)
                 .limit(3)
             )
             playbook_domain = self._domain_predicate(Playbook.domain_id, scope)
@@ -205,15 +246,15 @@ class SQLAlchemyAgentGraphRepository:
                 seeds.append(
                     RankedGraphSeed(
                         ref=GraphNodeRef(type="playbook", id=row[0]),
-                        relevance=0.9,
+                        relevance=_fts_seed_relevance(row[1]),
                         reason="query_fts",
                     )
                 )
-            for row in (await self.db.execute(pattern_q)).scalars().all():
+            for row in (await self.db.execute(pattern_q)).all():
                 seeds.append(
                     RankedGraphSeed(
-                        ref=GraphNodeRef(type="pattern", id=row),
-                        relevance=0.85,
+                        ref=GraphNodeRef(type="pattern", id=row[0]),
+                        relevance=_fts_seed_relevance(row[1]),
                         reason="query_fts",
                     )
                 )
@@ -242,20 +283,28 @@ class SQLAlchemyAgentGraphRepository:
                     " ",
                 ),
             )
+            sig_rank = func.ts_rank(sig_tsvector, tsquery)
             sig_q = (
-                select(IssueSignature.id)
+                select(IssueSignature.id, sig_rank)
                 .where(
                     IssueSignature.tenant_id == scope.tenant_id,
                     sig_tsvector.op("@@")(tsquery),
                 )
-                .order_by(IssueSignature.episode_count.desc())
+                # Match quality first; episode_count only breaks rank ties.
+                # Popularity-first made the slot assignment a lottery on
+                # tenants where most signatures tie at episode_count=1.
+                .order_by(
+                    sig_rank.desc(),
+                    IssueSignature.episode_count.desc(),
+                    IssueSignature.id,
+                )
                 .limit(3)
             )
-            for row in (await self.db.execute(sig_q)).scalars().all():
+            for row in (await self.db.execute(sig_q)).all():
                 seeds.append(
                     RankedGraphSeed(
-                        ref=GraphNodeRef(type="issue_signature", id=row),
-                        relevance=0.85,
+                        ref=GraphNodeRef(type="issue_signature", id=row[0]),
+                        relevance=_fts_seed_relevance(row[1]),
                         reason="signature_match",
                     )
                 )
@@ -268,6 +317,7 @@ class SQLAlchemyAgentGraphRepository:
             # would otherwise leave the whole session aborted and every
             # later query in this projection raising InFailedSQLTransaction.
             episode_rows: list = []
+            draft_episode_rows: list = []
             playbook_rows: list = []
             knowledge_rows: list = []
             try:
@@ -293,10 +343,13 @@ class SQLAlchemyAgentGraphRepository:
                         .where(
                             Episode.tenant_id == scope.tenant_id,
                             Episode.embedding.is_not(None),
-                            # Mirrors the playbook layer's approved filter:
-                            # embeddings are written pre-review, so without
-                            # this the 3 ANN slots go to pending episodes
-                            # that hydration then (correctly) drops.
+                            # Approved episodes keep their own slots. The
+                            # filter stays rather than widening to every
+                            # agent-visible state, because the two kinds of
+                            # episode must not compete: drafts outnumber
+                            # approved episodes on a live graph, and a
+                            # single shared ORDER BY would let unreviewed
+                            # material take every slot on a close match.
                             Episode.reviewer_state == "approved",
                         )
                         .order_by(distance)
@@ -306,6 +359,29 @@ class SQLAlchemyAgentGraphRepository:
                     if episode_domain is not None:
                         episode_q = episode_q.where(episode_domain)
                     episode_rows = list((await self.db.execute(episode_q)).all())
+
+                    # Unapproved drafts as SUPPLEMENTARY reference, in their
+                    # own small allocation. A draft is often the only record
+                    # of a recent incident — the reviewer queue lags ingestion
+                    # — so hiding it entirely means the agent cannot see this
+                    # week's outage while answering about it. Hydration labels
+                    # every one of these "[UNAPPROVED DRAFT]" and attaches
+                    # `agent_caveat` (hydrators.AGENT_VISIBLE_EPISODE_STATES),
+                    # so the agent can weigh them; what it must never do is
+                    # lose an approved precedent to make room for one.
+                    draft_q = (
+                        select(Episode.id, distance)
+                        .where(
+                            Episode.tenant_id == scope.tenant_id,
+                            Episode.embedding.is_not(None),
+                            Episode.reviewer_state == "pending_review",
+                        )
+                        .order_by(distance)
+                        .limit(UNAPPROVED_EPISODE_SEED_LIMIT)
+                    )
+                    if episode_domain is not None:
+                        draft_q = draft_q.where(episode_domain)
+                    draft_episode_rows = list((await self.db.execute(draft_q)).all())
 
                     # Direct semantic playbook match (0035): the embedding
                     # text includes trigger conditions and step titles, so
@@ -406,6 +482,29 @@ class SQLAlchemyAgentGraphRepository:
                         ref=GraphNodeRef(type="episode", id=episode_id),
                         relevance=round(0.6 + 0.3 * similarity, 4),
                         reason="query_semantic",
+                    )
+                )
+            for episode_id, episode_distance in draft_episode_rows:
+                similarity = 1.0 - min(max(float(episode_distance), 0.0), 1.0)
+                if similarity < 0.5:
+                    continue
+                # Discounted below the approved band and given its own
+                # reason. Relevance here is pure embedding distance, which
+                # measures topical closeness and knows nothing about whether
+                # anyone checked the episode — so a draft that merely reads
+                # more like the query would otherwise outrank reviewed
+                # precedent. The penalty keeps an approved episode ahead of a
+                # draft of comparable similarity, and the distinct reason
+                # makes an unapproved seed identifiable in a decision trace
+                # rather than indistinguishable from vetted history.
+                seeds.append(
+                    RankedGraphSeed(
+                        ref=GraphNodeRef(type="episode", id=episode_id),
+                        relevance=round(
+                            (0.6 + 0.3 * similarity) * UNAPPROVED_SEED_RELEVANCE_FACTOR,
+                            4,
+                        ),
+                        reason="query_semantic_unapproved",
                     )
                 )
             for playbook_id, playbook_distance in playbook_rows:

@@ -172,6 +172,55 @@ def test_selector_reports_budget_truncation():
     assert subset.usage.nodes == 1
 
 
+def test_selector_reserves_characters_for_relationships():
+    """A node-rich selection must not spend the whole character budget:
+    without a reserve the projection degrades to a flat, edge-less node
+    list (observed live: 24,927/25,000 characters on nodes, 0 of 80
+    relationship slots used)."""
+    repository = FakeRepository()
+    repository.nodes = {
+        key: FakeRepository._node(
+            node.ref.type, node.ref.id, node.label + " " + "x" * 1200
+        )
+        for key, node in repository.nodes.items()
+    }
+    scope = AgentGraphAccessScope(
+        tenant_id=uuid4(),
+        principal_id=uuid4(),
+        principal_type="user",
+    )
+
+    def run(budget=None):
+        return asyncio.run(
+            AgentGraphSelector().select(
+                repository,
+                AgentGraphRequest(query="root cause", max_depth=2, budget=budget),
+                scope,
+                MAF_V1,
+            )
+        )
+
+    generous = run()
+    assert generous.usage.relationships >= 1  # precondition for the probe
+    node_chars = sum(len(n.model_dump_json()) for n in generous.nodes)
+    rel_chars = len(generous.relationships[0].model_dump_json())
+
+    # Sized so every node fits but the first relationship would not: the
+    # exact live failure shape. The reserve must trade a tail node for
+    # keeping the topology.
+    subset = run(
+        AgentGraphBudget(
+            max_nodes=24,
+            max_relationships=48,
+            max_depth=2,
+            max_characters=node_chars + rel_chars - 1,
+        )
+    )
+    assert subset.usage.relationships >= 1
+    assert subset.usage.nodes >= 2
+    assert "max_characters" in subset.truncation_reasons
+
+
 def test_as_of_requires_offset_and_rejects_future_values():
     with pytest.raises(HTTPException):
         normalize_graph_as_of(datetime.now())
