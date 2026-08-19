@@ -1,0 +1,230 @@
+[
+ {
+  "pattern": "Automation Edge Version Upgrade Management",
+  "episodes": 6,
+  "v5": {
+   "steps": 7,
+   "grounded_steps": 6,
+   "grounded_share": 0.86,
+   "source_refs": 10,
+   "confidence": null,
+   "has_rollback": true,
+   "has_verification": false,
+   "latency_s": 18.8,
+   "judge": {
+    "sequencing_violations": 0,
+    "redundant_steps": 0,
+    "logic_flaws": 0,
+    "language_grade": 5,
+    "language_notes": "The language is plain, imperative, and concrete, providing clear instructions and expected outcomes."
+   }
+  },
+  "v6": {
+   "steps": 6,
+   "grounded_steps": 6,
+   "grounded_share": 1.0,
+   "source_refs": 10,
+   "confidence": null,
+   "has_rollback": true,
+   "has_verification": false,
+   "latency_s": 15.6,
+   "judge": {
+    "sequencing_violations": 0,
+    "redundant_steps": 0,
+    "logic_flaws": 0,
+    "language_grade": 5,
+    "language_notes": "The language is consistently clear, direct, and uses imperative verbs, making the instructions easy to follow."
+   }
+  }
+ },
+ {
+  "pattern": "AutomationEdge/DocEdge System Upgrade and Migration Process",
+  "episodes": 6,
+  "v5": {
+   "steps": 7,
+   "grounded_steps": 6,
+   "grounded_share": 0.86,
+   "source_refs": 11,
+   "confidence": null,
+   "has_rollback": true,
+   "has_verification": false,
+   "latency_s": 18.1,
+   "judge": {
+    "sequencing_violations": 0,
+    "redundant_steps": 0,
+    "logic_flaws": 0,
+    "language_grade": 5,
+    "language_notes": "The language is consistently clear, imperative, and uses precise technical terminology without corporate jargon."
+   }
+  },
+  "v6": {
+   "steps": 6,
+   "grounded_steps": 5,
+   "grounded_share": 0.83,
+   "source_refs": 12,
+   "confidence": null,
+   "has_rollback": true,
+   "has_verification": false,
+   "latency_s": 21.0,
+   "judge": {
+    "sequencing_violations": 0,
+    "redundant_steps": 0,
+    "logic_flaws": 0,
+    "language_grade": 5,
+    "language_notes": "The language is clear, concise, and uses imperative verbs effectively to guide the operator."
+   }
+  }
+ },
+ {
+  "pattern": "Process Studio Registration and Connectivity Failure",
+  "episodes": 6,
+  "v5": {
+   "steps": 7,
+   "grounded_steps": 6,
+   "grounded_share": 0.86,
+   "source_refs": 16,
+   "confidence": null,
+   "has_rollback": true,
+   "has_verification": false,
+   "latency_s": 13.0,
+   "judge": {
+    "sequencing_violations": 0,
+    "redundant_steps": 0,
+    "logic_flaws": 1,
+    "language_grade": 5,
+    "language_notes": "The language is consistently clear, imperative, and provides concrete examples and specific details for each step."
+   }
+  },
+  "v6": {
+   "steps": 7,
+   "grounded_steps": 7,
+   "grounded_share": 1.0,
+   "source_refs": 17,
+   "confidence": null,
+   "has_rollback": true,
+   "has_verification": false,
+   "latency_s": 20.4,
+   "judge": {
+    "sequencing_violations": 0,
+    "redundant_steps": 0,
+    "logic_flaws": 3,
+    "language_grade": 5,
+    "language_notes": "The language is plain, imperative, and uses specific technical terms appropriate for an IT operations audience, making the instructions clear and actionable."
+   }
+  }
+ },
+ {
+  "pattern": "Browser Automation Driver Compatibility and Deployment Issues",
+  "episodes": 4,
+  "v5": {
+   "steps": 8,
+   "grounded_steps": 7,
+   "grounded_share": 0.88,
+   "source_refs": 19,
+   "confidence": null,
+   "has_rollback": true,
+   "has_verification": false,
+   "latency_s": 22.1,
+   "judge": {
+    "sequencing_violations": 0,
+    "redundant_steps": 0,
+    "logic_flaws": 1,
+    "language_grade": 4,
+    "language_notes": "The language is generally clear and uses imperative verbs, but some steps combine multiple instructions into a single, dense sentence."
+   }
+  },
+  "v6": {
+   "steps": 6,
+   "grounded_steps": 6,
+   "grounded_share": 1.0,
+   "source_refs": 15,
+   "confidence": null,
+   "has_rollback": true,
+   "has_verification": false,
+   "latency_s": 19.0,
+   "judge": {
+    "sequencing_violations": 0,
+    "redundant_steps": 0,
+    "logic_flaws": 1,
+    "language_grade": 5,
+    "language_notes": "The language is consistently clear, imperative, and provides concrete, actionable instructions with specific version-dependent details."
+   }
+  }
+ },
+ {
+  "pattern": "RPA Agent RDP Session Blocked by Unexpected UI Popup",
+  "episodes": 1,
+  "v5": {
+   "steps": 5,
+   "grounded_steps": 4,
+   "grounded_share": 0.8,
+   "source_refs": 4,
+   "confidence": null,
+   "has_rollback": true,
+   "has_verification": false,
+   "latency_s": 15.4,
+   "judge": {
+    "sequencing_violations": 0,
+    "redundant_steps": 0,
+    "logic_flaws": 1,
+    "language_grade": 4,
+    "language_notes": "The language is generally clear, imperative, and concrete, providing actionable instructions."
+   }
+  },
+  "v6": {
+   "steps": 3,
+   "grounded_steps": 3,
+   "grounded_share": 1.0,
+   "source_refs": 3,
+   "confidence": null,
+   "has_rollback": true,
+   "has_verification": false,
+   "latency_s": 11.7,
+   "judge": {
+    "sequencing_violations": 0,
+    "redundant_steps": 0,
+    "logic_flaws": 1,
+    "language_grade": 5,
+    "language_notes": "The language is plain, imperative, and concrete, providing clear instructions and expected outcomes."
+   }
+  }
+ },
+ {
+  "pattern": "Python Server Initialization Failure After Server Restart",
+  "episodes": 1,
+  "v5": {
+   "steps": 4,
+   "grounded_steps": 2,
+   "grounded_share": 0.5,
+   "source_refs": 2,
+   "confidence": null,
+   "has_rollback": true,
+   "has_verification": false,
+   "latency_s": 12.4,
+   "judge": {
+    "sequencing_violations": 0,
+    "redundant_steps": 0,
+    "logic_flaws": 1,
+    "language_grade": 5,
+    "language_notes": "The language is plain, imperative, and uses concrete technical terms appropriate for the IT operations context."
+   }
+  },
+  "v6": {
+   "steps": 5,
+   "grounded_steps": 4,
+   "grounded_share": 0.8,
+   "source_refs": 4,
+   "confidence": null,
+   "has_rollback": true,
+   "has_verification": false,
+   "latency_s": 11.8,
+   "judge": {
+    "sequencing_violations": 0,
+    "redundant_steps": 0,
+    "logic_flaws": 1,
+    "language_grade": 5,
+    "language_notes": "The language is plain, imperative, and concrete, using specific technical terms effectively to guide the operator through the troubleshooting process."
+   }
+  }
+ }
+]

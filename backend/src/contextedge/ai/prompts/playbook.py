@@ -354,5 +354,70 @@ register_prompt(
         system=_V5_SYSTEM,
         user_template=_V3_USER,
     ),
+    # Default moved to v6 below on the 2026-08-19 A/B; the registry allows
+    # exactly one default per prompt name.
+)
+
+
+# v6 — sequencing, step economy, and readable language (2026-08-19).
+# Directive from playbook review: steps must be logically correct,
+# meaningfully sequenced, and free of padding, in plain friendly prose.
+# v5 constrains what a step may CLAIM (grounding, citations, verbatim
+# commands) but not how the procedure reads as a whole: nothing stops a
+# generation whose steps are individually grounded yet out of causal
+# order, near-duplicated, or written in committee English. Rules 10-12
+# constrain the procedure itself.
+#
+# A/B verdict (2026-08-19, 6 patterns, judge + 8 patterns structural —
+# evals/playbook_prompt_ab.py, datasets/playbook_prompt_ab_2026-08-19.json):
+# v6 won on economy (6.3 -> 5.5 steps at 62 -> 61 refs: tighter, not
+# thinner), grounding (0.79 -> 0.94), and language (4.67 -> 5.0), with
+# rollback 6/6 and latency unchanged on both.
+#
+# Rule 10's sequencing half did NOT hold up: on the deterministic branch
+# audit both versions produced valid control flow on 5 of 8 patterns, and
+# v6 emitted MORE defect occurrences (6 vs 3). Prompting cannot make a
+# model reliably emit consistent branch targets, which is why
+# ``sanitize_branching_logic`` enforces that structurally instead. Rule 10
+# is kept for its ordering guidance, not credited for branch validity.
+_V6_SYSTEM = _V5_SYSTEM.replace(
+    """   Place best-practice steps at their natural position in the execution
+   sequence. Prefer grounded steps whenever the sources support them;
+   add best-practice steps ONLY where their absence would leave the
+   playbook incomplete or unsafe — not to pad it.""",
+    """   Place best-practice steps at their natural position in the execution
+   sequence. Prefer grounded steps whenever the sources support them;
+   add best-practice steps ONLY where their absence would leave the
+   playbook incomplete or unsafe — not to pad it.
+10. Sequence by causality, not by category. Diagnose before you change
+    anything; verify after every change; escalate or roll back last.
+    Each step's "expected_outcome" is the gate for the next step — if
+    reordering two steps would not break the procedure, ask whether one
+    of them is doing any work. Every "decision_points" entry must
+    reference step orders that exist, and a branch must land on a step
+    that makes sense given the condition.
+11. Produce the MINIMAL COMPLETE set of steps. Merge actions that are
+    always executed together into one step. Do not emit a step that
+    neither changes the system, narrows the diagnosis, nor reduces
+    risk — "review the logs", "document findings", "monitor the
+    situation" are filler unless a supplied source requires them for
+    this specific pattern. No near-duplicate steps. The test: a
+    reviewer should be unable to delete any step without losing
+    coverage or safety.
+12. Write step text in plain, friendly language for a tired on-call
+    engineer: short imperative sentences, second person, concrete nouns
+    ("restart the RADIUS service on vpn-gw-01", not "initiate a service
+    restart procedure"). No corporate filler — never "leverage",
+    "utilize", "ensure alignment", "as appropriate". Expand an acronym
+    at first use unless it is universally known (DNS, VPN, SSL).""",
+)
+
+register_prompt(
+    Prompt(
+        name="playbook",
+        version="v6",
+        system=_V6_SYSTEM,
+        user_template=_V3_USER,
+    ),
     default=True,
 )

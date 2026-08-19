@@ -174,9 +174,11 @@ def test_all_migrated_prompt_families_registered():
         "identity_adjudication": "v2",
         "pattern": "v2",
         # v3 adds approved KB/SOP as a distinct input, step-level source
-        # citations, and the conflicts block. v1/v2 remain registered and
-        # immutable for eval baselines.
-        "playbook": "v5",
+        # citations, and the conflicts block; v5 the grounded/best-practice
+        # taxonomy; v6 causal sequencing, a minimal step set, and plain
+        # language (A/B 2026-08-19). Superseded versions remain registered
+        # and immutable for eval baselines.
+        "playbook": "v6",
         "contradiction": "v1",
     }
     for name, default_version in expected_defaults.items():

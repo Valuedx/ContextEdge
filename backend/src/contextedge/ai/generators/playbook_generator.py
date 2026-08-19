@@ -90,6 +90,7 @@ async def generate_playbook_candidate(
     if isinstance(result, dict):
         validate_source_refs(result, ref_map)
         classify_step_grounding(result)
+        sanitize_branching_logic(result)
         # F5: stamped by the caller after validation, so the model can neither
         # supply nor influence the record of what produced it.
         result[GENERATION_PROVENANCE_KEY] = generation_provenance(prompt, task="playbook")
@@ -100,6 +101,156 @@ BEST_PRACTICE_REASON = (
     "Generated from industry/support engineering best practices; "
     "not explicitly present in the source."
 )
+
+
+def _unreachable_orders(orders: set[int], points: list[dict]) -> set[int]:
+    """Step orders no execution path visits.
+
+    Traversal, not arithmetic: several points may share one anchor (the
+    switch shape — one diagnosis routing to several remedies), so a step
+    that one point jumps over is often reached by its sibling's branch.
+    Judging points one at a time reports correct playbooks as broken.
+    """
+    if not orders:
+        return set()
+    by_anchor: dict[int, set[int]] = {}
+    for point in points:
+        anchor = point.get("after_step")
+        if anchor not in orders:
+            continue
+        targets = {
+            t
+            for t in (point.get("if_true_goto"), point.get("if_false_goto"))
+            if t in orders
+        }
+        by_anchor.setdefault(anchor, set()).update(targets)
+
+    start = min(orders)
+    reached, worklist = {start}, [start]
+    while worklist:
+        step = worklist.pop()
+        successors = by_anchor.get(step)
+        if not successors:
+            # No decision at this step: control falls through to the next.
+            successors = {step + 1} if (step + 1) in orders else set()
+        for nxt in successors:
+            if nxt not in reached:
+                reached.add(nxt)
+                worklist.append(nxt)
+    return orders - reached
+
+
+def _skips_any(point: dict, stranded: set[int]) -> bool:
+    """True when this point's jumps hop over one of the stranded steps."""
+    anchor = point.get("after_step")
+    if not isinstance(anchor, int):
+        return False
+    for target in (point.get("if_true_goto"), point.get("if_false_goto")):
+        if isinstance(target, int) and any(anchor < s < target for s in stranded):
+            return True
+    return False
+
+
+def sanitize_branching_logic(result: dict) -> dict[str, int]:
+    """Drop decision points that cannot execute, in place.
+
+    Same philosophy as ``validate_source_refs``: a structure that looks
+    authoritative and resolves to nothing is worse than its absence,
+    because it survives review on appearance. Auditing the 190 generated
+    playbooks found 20 with branching defects — 39% of the 51 that branch
+    at all: targets naming steps that do not exist, decision points whose
+    true and false paths are identical (deciding nothing), and steps no
+    path can reach.
+
+    Repair, not rejection. The steps of such a playbook are usually fine
+    and it is only ``decision_points`` that is junk, so failing the whole
+    generation would discard good work over a bad appendix. Dropped
+    points are counted and logged so a prompt that starts emitting them
+    is visible in the counters rather than only in a reviewer's
+    confusion.
+    """
+    counts = {"kept": 0, "dropped": 0}
+    branching = result.get("branching_logic")
+    if not isinstance(branching, dict):
+        return counts
+    points = branching.get("decision_points")
+    if not isinstance(points, list):
+        return counts
+
+    orders = {
+        step.get("order")
+        for step in (result.get("steps") or [])
+        if isinstance(step, dict) and isinstance(step.get("order"), int)
+    }
+    kept: list = []
+    reasons: list[str] = []
+    for point in points:
+        if not isinstance(point, dict):
+            counts["dropped"] += 1
+            reasons.append("not_an_object")
+            continue
+        anchor = point.get("after_step")
+        target_true = point.get("if_true_goto")
+        target_false = point.get("if_false_goto")
+        if anchor not in orders:
+            counts["dropped"] += 1
+            reasons.append("anchor_not_a_step")
+            continue
+        if any(t is not None and t not in orders for t in (target_true, target_false)):
+            counts["dropped"] += 1
+            reasons.append("target_not_a_step")
+            continue
+        if anchor in (target_true, target_false):
+            # Jumping back to the step you just finished is an infinite
+            # loop for anything that executes this literally.
+            counts["dropped"] += 1
+            reasons.append("self_loop")
+            continue
+        if target_true is not None and target_true == target_false:
+            # Both paths land in the same place: the condition changes
+            # nothing, and presenting it as a decision misleads.
+            counts["dropped"] += 1
+            reasons.append("decides_nothing")
+            continue
+        kept.append(point)
+        counts["kept"] += 1
+
+    # Stranded steps are the one defect that is invisible per point. Every
+    # surviving point above is individually well-formed, yet together they
+    # can leave a step no path reaches — seen live on "Process/Workflow
+    # Stuck During Database-Related Plugin Update", where step 1 branched
+    # to 3 or 4 and nothing ever reached step 2. The step still prints, so
+    # a reader sees instructions the flow never visits.
+    #
+    # Repaired by dropping jumps, not by inventing them: removing a point
+    # restores plain fall-through from its anchor, which can only reach
+    # more steps, so this terminates. Rewriting a target would be guessing
+    # at intent.
+    while kept:
+        stranded = _unreachable_orders(orders, kept)
+        if not stranded:
+            break
+        culprit = next(
+            (p for p in kept if _skips_any(p, stranded)),
+            kept[0],
+        )
+        kept.remove(culprit)
+        counts["kept"] -= 1  # it was counted as kept by the per-point pass
+        counts["dropped"] += 1
+        reasons.append("stranded_a_step")
+
+    branching["decision_points"] = kept
+    if counts["dropped"]:
+        import structlog
+
+        structlog.get_logger().warning(
+            "playbook.invalid_decision_points_dropped",
+            dropped=counts["dropped"],
+            kept=counts["kept"],
+            reasons=sorted(set(reasons)),
+        )
+    result["branching_validation"] = counts
+    return counts
 
 
 def classify_step_grounding(result: dict) -> dict[str, int]:

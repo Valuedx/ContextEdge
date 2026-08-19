@@ -266,7 +266,7 @@ def test_default_prompt_instructs_the_model_to_surface_disagreement_not_resolve_
     from contextedge.ai.prompts import get_prompt
 
     prompt = get_prompt("playbook", None)
-    assert prompt.version == "v5"  # grounded/best-practice taxonomy (2026-08-08)
+    assert prompt.version == "v6"  # sequencing/economy/language (2026-08-19)
     # Whitespace-normalized: the prompt is hard-wrapped, so asserting on
     # raw text would break whenever a line is reflowed â€” a failure that
     # says nothing about the contract being tested.
@@ -288,9 +288,10 @@ def test_earlier_prompt_versions_remain_registered_and_immutable():
     from contextedge.ai.prompts import list_prompt_versions
 
     # v4 added: verbatim commands, no prompt labels in prose, unsourced
-    # steps must state their verification. Earlier versions stay for eval
+    # steps must state their verification. v6 added: causal sequencing,
+    # minimal step set, plain language. Earlier versions stay for eval
     # baselines and historical llm.usage attribution.
-    assert list_prompt_versions("playbook") == ["v1", "v2", "v3", "v4", "v5"]
+    assert list_prompt_versions("playbook") == ["v1", "v2", "v3", "v4", "v5", "v6"]
 
 
 # --- provenance --------------------------------------------------------------

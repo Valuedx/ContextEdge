@@ -77,10 +77,14 @@ def test_projection_marks_best_practice_steps():
     assert facts["steps"][1].startswith("2. [best practice] ")
 
 
-def test_prompt_v5_is_default_and_v4_untouched():
+def test_prompt_v6_is_default_and_earlier_versions_untouched():
+    """v6 took the default on the 2026-08-19 A/B. The grounded /
+    best-practice taxonomy this module covers came in at v5 and must
+    survive into whatever is current — it is inherited, not re-stated."""
     from contextedge.ai import prompts as prompts_mod
 
-    assert prompts_mod._DEFAULTS["playbook"] == "v5"
-    assert "v4" in prompts_mod._REGISTRY["playbook"]
-    v5 = prompts_mod._REGISTRY["playbook"]["v5"].system
-    assert "non_grounded" in v5 and "best_practice" in v5
+    assert prompts_mod._DEFAULTS["playbook"] == "v6"
+    for superseded in ("v4", "v5"):
+        assert superseded in prompts_mod._REGISTRY["playbook"]
+    current = prompts_mod._REGISTRY["playbook"]["v6"].system
+    assert "non_grounded" in current and "best_practice" in current
