@@ -28,7 +28,10 @@ from contextedge.services.evidence_normalization import (
     evidence_content_hash_from_payload,
     evidence_title_from_payload,
 )
-from contextedge.services.evidence_typing import derive_evidence_type
+from contextedge.services.evidence_typing import (
+    KNOWLEDGE_EVIDENCE_TYPES,
+    derive_evidence_type,
+)
 from contextedge.services.identity_service import link_evidence_identities
 from contextedge.services.knowledge_lifecycle import derive_knowledge_state
 from contextedge.services.message_filter import (
@@ -638,6 +641,9 @@ async def _normalize(db: AsyncSession, raw_object_id: str, tenant_id: uuid.UUID)
         "attachment_ids": [str(artifact.id) for artifact in attachments],
         "_thread_external_id": thread_ext_id,
         "_source_id": str(raw.source_id),
+        # Carried so the caller can skip dispatching hydration for evidence
+        # that has no conversation to hydrate. See the auto-hydration block.
+        "_evidence_type": ev.evidence_type,
     }
 
 
@@ -1428,7 +1434,20 @@ def normalize_evidence(self, raw_object_id: str, tenant_id: str):
             # ThreadConversation component showed "not yet hydrated".
             thread_ext_id = res.get("_thread_external_id")
             source_id = res.get("_source_id")
-            if thread_ext_id and source_id and not res.get("deduped"):
+            # Knowledge has no conversation to hydrate. A KB article's body,
+            # fetched at sync time, IS its content — the Zoho connector says
+            # so explicitly and returns `hydration: not_applicable` without
+            # making a call, as do the SapphireIMS connector and ServiceNow
+            # alert rollups.
+            #
+            # The connector short-circuit means dispatching anyway was never
+            # WRONG, just pointless, which is why nothing ever failed: a
+            # 630-article backfill queued 578 tasks that each did nothing.
+            # Harmless per task, and it puts hundreds of no-ops in a shared
+            # lane where real hydration then waits behind them. Cheaper not
+            # to ask.
+            hydratable = res.get("_evidence_type") not in KNOWLEDGE_EVIDENCE_TYPES
+            if thread_ext_id and source_id and not res.get("deduped") and hydratable:
                 from contextedge.workers.hydration_tasks import hydrate_thread
 
                 hydrate_thread.delay(thread_ext_id, source_id, tenant_id)
