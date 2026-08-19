@@ -134,7 +134,25 @@ _DECISION = frozenset(
     }
 )
 
-EDGE_TYPES: frozenset[str] = _EVIDENCE | _TOPOLOGY | _CAUSALITY | _LEARNING | _DECISION
+# --- Situations: one bounded operational occurrence -----------------------
+# Distinct from correlation edges on purpose. `correlates_with` says two
+# pieces of evidence look related; these say many signals describe ONE
+# occurrence, which is a stronger claim and a different object.
+_SITUATION = frozenset(
+    {
+        "part_of_situation",    # evidence -> situation membership
+        "situation_affects",    # situation -> entity (incl. healthy controls)
+        "suspected_change",     # situation -> change evidence, ranked candidate
+        "confirmed_change",     # situation -> change evidence, governed evidence only
+        "similar_situation",    # situation -> situation, precedent not membership
+        "recurred_from",        # situation -> earlier situation of the same failure
+        "merged_into",          # situation -> surviving situation
+    }
+)
+
+EDGE_TYPES: frozenset[str] = (
+    _EVIDENCE | _TOPOLOGY | _CAUSALITY | _LEARNING | _DECISION | _SITUATION
+)
 
 # Registered, written, and deliberately NOT traversable by maf.v1. Each entry
 # is the argument for the exclusion — the projection has a finite budget and
@@ -179,6 +197,22 @@ PROJECTION_EXCLUSIONS: dict[str, str] = {
     "causes": (
         "enrichment scaffolding — a root-cause *string* node, not a causal claim "
         "between real entities, which is what caused_by_change carries"
+    ),
+    # --- situation relations the agent does NOT traverse ------------------
+    "part_of_situation": (
+        "an incident storm is hundreds of memberships; traversing them would "
+        "spend the whole budget re-deriving a count the situation node already "
+        "carries. The agent reads the situation summary and drills down through "
+        "the diagnostic-context tool, which can aggregate and cap"
+    ),
+    "merged_into": (
+        "audit lineage, not reasoning: it answers 'where did this row go', and "
+        "the surviving situation is what the agent should be reading anyway"
+    ),
+    "recurred_from": (
+        "precedent belongs to the historical half of diagnostic context, which "
+        "ranks it against episodes; traversing it here would surface an older "
+        "occurrence beside current signals as though it were also happening now"
     ),
 }
 

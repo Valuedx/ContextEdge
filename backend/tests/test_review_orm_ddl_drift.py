@@ -209,6 +209,11 @@ _EXPECTED_MARKERS: set[tuple[str, str]] = {
      'UniqueConstraint("tenant_id", "signature_key", name="uq_issue_signature_key"),'),
     ('issue_signature.py',
      'UniqueConstraint( "episode_id", "issue_signature_id", name="uq_episode_issue_signature" ),'),
+    # situation.py (migration 0074): operational situations and their
+    # membership/impact/change-candidate tables. The unique markers are the
+    # idempotency constraints that make retrying the evaluator safe; all are
+    # on tables the same migration CREATEs, so no ALTER is owed.
+    ('situation.py', 'unique=True,'),
     # knowledge_case.py (migration 0072): documented resolutions as their own
     # object, so a source's claim can never be counted as an observed
     # outcome. Both markers are on tables the same migration CREATEs, so no

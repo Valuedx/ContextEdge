@@ -45,6 +45,34 @@ _MODELS = _SRC / "models"
 # (model file, column) -> (owner, reason). Owner is an Epic F item where the
 # column is scheduled, or a category when no work is pending.
 EXPECTED_UNWRITTEN: dict[tuple[str, str], tuple[str, str]] = {
+    # --- situations: schema landed in 0074 ahead of the correlation that
+    # populates it, deliberately, so the shape could be reviewed against a
+    # real schema. Every entry here should LEAVE this register when the
+    # situation correlation service lands; any that does not is a column
+    # nobody needed. The ServiceNow/monitoring/CMDB connectors that supply
+    # changes, alerts and topology are not connected in this deployment yet,
+    # which is why the writers are a separate phase rather than an omission.
+    **{
+        ("situation.py", col): (
+            "situation-correlation",
+            "written by the situation evaluator, not yet built",
+        )
+        for col in (
+            "situation_type", "severity", "situation_confidence",
+            "onset_at", "detected_at", "last_signal_at", "stabilizing_at",
+            "resolved_at", "primary_entity_id", "primary_service_entity_id",
+            "incident_count", "alert_count", "event_count",
+            "change_candidate_count", "affected_entity_count",
+            "correlation_version", "merged_into_situation_id",
+            "situation_id", "evidence_role", "membership_status",
+            "membership_confidence", "correlation_method", "score_breakdown",
+            "source_lineage_group", "first_seen_at", "machine_decision_version",
+            "review_status", "review_reason",
+            "impact_role", "basis", "signal_observed_at", "topology_distance",
+            "correlation_score", "temporal_relation", "minutes_from_onset",
+            "reason_summary", "confirmation_basis",
+        )
+    },
     # --- knowledge_case / pattern_evidence: schema landed in 0072 ahead of
     # its writers, deliberately. The tables exist so the reconstruction
     # branch and the 299-episode migration can be reviewed against a real

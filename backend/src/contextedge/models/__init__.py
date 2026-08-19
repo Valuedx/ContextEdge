@@ -94,6 +94,19 @@ from contextedge.models.remediation import (
     RollbackPlan,
 )
 from contextedge.models.session import CaseLink, DecisionTraceEvent, ResolutionSession
+from contextedge.models.situation import (
+    CHANGE_CANDIDATE_STATUSES,
+    EVIDENCE_ROLES,
+    IMPACT_ROLES,
+    MEMBERSHIP_STATUSES,
+    SITUATION_STATES,
+    SITUATION_TYPES,
+    TEMPORAL_RELATIONS,
+    OperationalSituation,
+    SituationChangeCandidate,
+    SituationEntityImpact,
+    SituationEvidenceMembership,
+)
 from contextedge.models.skill import (
     CONCURRENCY_POLICIES,
     IDEMPOTENCY_MODES,
@@ -137,6 +150,10 @@ __all__ = [
     "Pattern", "PatternEvidenceLink", "PatternEvidence", "NegativeKnowledgeItem",
     "Contradiction", "GraphEdge",
     "KnowledgeCase", "KnowledgeCaseStep",
+    "OperationalSituation", "SituationEvidenceMembership", "SituationEntityImpact",
+    "SituationChangeCandidate",
+    "SITUATION_TYPES", "SITUATION_STATES", "EVIDENCE_ROLES", "MEMBERSHIP_STATUSES",
+    "IMPACT_ROLES", "CHANGE_CANDIDATE_STATUSES", "TEMPORAL_RELATIONS",
     "Playbook", "PlaybookVersion", "PlaybookEvidenceLink", "PlaybookApproval",
     "ResolutionSession", "DecisionTraceEvent", "CaseLink",
     "Decision", "DecisionOption", "DecisionOutcome",

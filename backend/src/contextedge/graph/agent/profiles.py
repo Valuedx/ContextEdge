@@ -88,6 +88,19 @@ MAF_NODE_TYPES = frozenset(
 
 MAF_RELATIONSHIP_TYPES = frozenset(
     {
+        # --- situations: what is happening now ------------------------------
+        # These four are traversable because they are what an agent needs to
+        # reason about a live occurrence: what it hit, what changed, and what
+        # it resembles. The other three situation relations are excluded in
+        # edge_types.PROJECTION_EXCLUSIONS with their reasons —
+        # part_of_situation because an incident storm is hundreds of hub
+        # edges, merged_into because it is audit lineage, recurred_from
+        # because precedent belongs to the historical section rather than
+        # beside current signals.
+        "situation_affects",
+        "suspected_change",
+        "confirmed_change",
+        "similar_situation",
         "based_on",
         "supported_by",
         "contradicted_by",
