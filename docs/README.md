@@ -109,13 +109,13 @@ answered by finding the first stage in this list that has stopped.
 |---|-------|------------------|-------|---------------------|
 | 1 | Pull records from a source system | `sync.run_backfill` / `sync.run_incremental_sync` | `sync` | `backend/src/contextedge/workers/sync_tasks.py:39,68` |
 | 2 | Store the raw payload (>32 KB goes to MinIO) | (inline, inside the sync job) | `sync` | `backend/src/contextedge/services/ingestion_persistence.py:16,85` |
-| 3 | Clean, redact, classify, extract identities and decisions | `extraction.normalize_evidence` | `extraction` | `backend/src/contextedge/workers/extraction_tasks.py:122,1304` |
-| 4 | Re-run just the relevance gate (fast lane) | `extraction.classify_relevance` | `default` | `backend/src/contextedge/workers/extraction_tasks.py:1361` |
+| 3 | Clean, redact, classify, extract identities and decisions | `extraction.normalize_evidence` | `extraction` | `backend/src/contextedge/workers/extraction_tasks.py:122,1317` |
+| 4 | Re-run just the relevance gate (fast lane) | `extraction.classify_relevance` | `default` | `backend/src/contextedge/workers/extraction_tasks.py:1374` |
 | 5 | Pull the rest of a conversation from the source | `hydration.hydrate_thread` | `hydration` | `backend/src/contextedge/workers/hydration_tasks.py:189` |
 | 6 | Split long bodies into retrievable chunks | `extraction.chunk_evidence` | `embedding` | `backend/src/contextedge/workers/chunk_tasks.py:210` |
 | 7 | Embed those chunks in batches of 32 | `extraction.embed_chunks_batch` | `embedding` | `backend/src/contextedge/workers/chunk_tasks.py:238` |
 | 8 | Link this record to related records | `extraction.correlate_evidence` | `correlation` | `backend/src/contextedge/workers/correlation_tasks.py:16` |
-| 9 | Turn a correlated cluster into an episode | `extraction.reconstruct_episode` | `correlation` | `backend/src/contextedge/workers/extraction_tasks.py:1391` |
+| 9 | Turn a correlated cluster into an episode | `extraction.reconstruct_episode` | `correlation` | `backend/src/contextedge/workers/extraction_tasks.py:1404` |
 | 10 | Let the model pre-review episode drafts | `evaluation.ai_review_episodes` | `evaluation` | `backend/src/contextedge/workers/evaluation_tasks.py:129` |
 | 11 | Fingerprint an approved episode, link recurrences | `evaluation.extract_issue_signature` | `evaluation` | `backend/src/contextedge/workers/signature_tasks.py:24` |
 | 12 | Cluster approved episodes into patterns | `pattern.cluster_episodes` | `pattern` | `backend/src/contextedge/workers/pattern_tasks.py:422` |
@@ -124,7 +124,7 @@ answered by finding the first stage in this list that has stopped.
 
 There are **eight** queues in total: `default`, `sync`, `hydration`, `extraction`,
 `correlation`, `embedding`, `pattern`, `evaluation`. The routing table that assigns
-tasks to them is `backend/src/contextedge/workers/celery_app.py:226-280`, and the
+tasks to them is `backend/src/contextedge/workers/celery_app.py:226-279`, and the
 launcher consumes all eight by default (`backend/dev.py:16`). `correlation` and
 `embedding` are separate lanes on purpose: when they shared the `extraction` queue,
 graph building and chunk embedding starved behind bulk normalization and evidence was

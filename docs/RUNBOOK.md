@@ -36,7 +36,7 @@ If you are starting from scratch, go to [SETUP_GUIDE.md](SETUP_GUIDE.md) first.
 
 ## 3. Configuration Checklist
 
-Settings are loaded through `contextedge.config.Settings`, which reads the repo-root `.env` then `backend/.env` and ignores unknown keys (`backend/src/contextedge/config.py:10-15`).
+Settings are loaded through `contextedge.config.Settings`, which reads the repo-root `.env` then `backend/.env` and ignores unknown keys (`backend/src/contextedge/config.py:10-15`). Both files are read; the later one (`backend/.env`) wins on any key set in both, which is worth remembering before you spend an hour on a value that will not change.
 
 | Area | Representative variables |
 | --- | --- |
@@ -253,7 +253,7 @@ The `python dev.py ...` launcher adds `backend/src` to `PYTHONPATH` automaticall
 default   sync   hydration   extraction   correlation   embedding   pattern   evaluation
 ```
 
-`python dev.py worker` consumes every one of them by default (`backend/dev.py:16`). The routing table is `backend/src/contextedge/workers/celery_app.py:226-280` and is **matched in order**, so an earlier specific key beats a later wildcard.
+`python dev.py worker` consumes every one of them by default (`backend/dev.py:16`). The routing table is `backend/src/contextedge/workers/celery_app.py:226-279` and is **matched in order**, so an earlier specific key beats a later wildcard. Anything the table does not match falls to `task_default_queue="default"` (`celery_app.py:280`).
 
 | Route key | Queue | Why it is separate |
 | --- | --- | --- |
@@ -350,7 +350,7 @@ One beat process only. Every fan-out task takes the literal sentinel `"all"` and
 
 Source: `backend/src/contextedge/workers/celery_app.py:281-384`.
 
-**The shared ingest-activity gate.** Both the hourly dedup sweep and the hourly AI-review sweep call `tenant_pipeline_active` before doing anything (`backend/src/contextedge/workers/pattern_tasks.py:748-810`). A tenant counts as mid-flight when, in the last 10 minutes, either more than 50 evidence rows arrived **or** more than 30 episodes were created (`pattern_tasks.py:736-745`). Those tenants are deferred to the next tick and counted as `deferred_tenants` rather than churning. The episode threshold exists because watching evidence inflow alone missed the reconstruction tail — a 12:29 sweep once retired 446 drafts mid-tail and some clusters re-paid full synthesis.
+**The shared ingest-activity gate.** Both the hourly dedup sweep and the hourly AI-review sweep call `tenant_pipeline_active` before doing anything (`backend/src/contextedge/workers/pattern_tasks.py:748-785`). A tenant counts as mid-flight when, in the last 10 minutes, either more than 50 evidence rows arrived **or** more than 30 episodes were created (`DEDUP_ACTIVITY_WINDOW_MINUTES`, `DEDUP_ACTIVITY_THRESHOLD`, `EPISODE_ACTIVITY_THRESHOLD` at `pattern_tasks.py:736-745`). Those tenants are deferred to the next tick and counted as `deferred_tenants` rather than churning. The episode threshold exists because watching evidence inflow alone missed the reconstruction tail — a 12:29 sweep once retired 446 drafts mid-tail and some clusters re-paid full synthesis.
 
 ### 7.5 Episode AI review (`EPISODE_AI_REVIEW`)
 
@@ -410,7 +410,7 @@ If a signature never appears: check that the episode is actually `approved`, the
 - `extraction.chunk_evidence` (`backend/src/contextedge/workers/chunk_tasks.py:210`, 3 retries / 60 s). Idempotent on `chunker_version`: replaying it on evidence whose existing chunks already match the resolved chunker's version is a no-op. It reloads the raw payload; if the payload was offloaded to MinIO without a storage key it degrades to body-text-only chunking rather than failing.
 - `extraction.embed_chunks_batch` (`chunk_tasks.py:238`, 3 retries / 30 s). Filters `embedding IS NULL`, then embeds in batches of `EMBED_BATCH_SIZE = 32` (`chunk_tasks.py:51`). Per-tenant budget enforcement fires per batch, not per chunk. On a batch failure it breaks without raising, leaving NULL rows for the next replay.
 
-**Which chunker runs** is decided by record shape first, then source type (`services/chunkers/registry.py`): `kb_article` → the document chunker; ticket sources → the ticket chunker; `gmail`/`teams` → the thread chunker; `evidence_type == "attachment"` → the attachment chunker; everything else → fallback.
+**Which chunker runs** is decided by record shape first, then source type (`get_chunker`, `services/chunkers/registry.py:116-143`), in this order: `evidence_type == "kb_article"` → the document chunker (or the attachment chunker if the document one failed to register); ticket sources (`jira_sm`, `servicenow`, `sapphireims`, `zoho_desk`) → the ticket chunker; `gmail`/`teams` → the thread chunker; `evidence_type == "attachment"` → the attachment chunker; everything else → fallback. Shape wins over source because one source emits more than one shape — a Zoho Desk source produces both tickets and KB articles, and an article's headings are the meaningful split boundaries. `get_chunker` always returns something; the fallback chunker is the floor, and it never returns `None`.
 
 **The vector index (§ this is the part that silently doesn't work).** pgvector's HNSW caps the plain `vector` type at 2,000 dimensions and this application stores 3,072, which means migration `0021`'s indexes never actually existed and every similarity query was a sequential scan. Real ANN indexing landed in `0032` as HNSW **expression** indexes over `(embedding::halfvec(3072))`. Consequences for operators:
 
@@ -420,7 +420,7 @@ If a signature never appears: check that the episode is actually `approved`, the
 
 **Operational caveats:**
 
-- There is a brief window after chunks are written where `EvidenceChunk.embedding IS NULL`. The chunk vector query skips NULL-embedding rows naturally. If chunks stay NULL past your expected window, check `llm.usage` events for `outcome = budget_exceeded` — a tripped per-tenant LLM budget blocks embedding without a hard error.
+- There is a brief window after chunks are written where `EvidenceChunk.embedding IS NULL`. The chunk vector query skips NULL-embedding rows naturally. If chunks stay NULL past your expected window, suspect a tripped per-tenant LLM budget: `check_budget` raises `TenantBudgetExceeded` *before* the call is made, so there is **no `llm.usage` event to grep for** — the tenant's spend line simply goes flat. The visible trace is a `chunk_embedding_failed` structlog warning whose `error` names `TenantBudgetExceeded` (`workers/chunk_tasks.py:172-181`); the batch loop `break`s and returns normally, so nothing raises. Confirm with `GET /api/v1/admin/tenant-budget/status`.
 - Chunks **are** read at query time now. Semantic search runs an oversampled chunk ANN pass, diversifies with MMR, rolls up to one hit per parent, and merges a parent-embedding pass so unchunked evidence still surfaces. Documentation that says chunks are written but never read is stale.
 - A backfill task for legacy `EvidenceItem` rows with `chunked_at IS NULL` **has still not landed**. Until it does, only newly normalized evidence gets chunked. The partial index `ix_evidence_items_chunked_at_null` is in place to drive it cheaply when it does.
 - Identity and decision extraction still run once on the parent body, not per chunk.
@@ -437,11 +437,13 @@ See [codewiki/CHUNKING_DESIGN.md](../codewiki/CHUNKING_DESIGN.md) for the full p
 
 A domain pass sees only episodes in that domain; the global pass sees only episodes with a NULL domain. They never mix, because whichever pass ran first would otherwise capture the NULL rows arbitrarily.
 
-Inside one pass (`_cluster`, `pattern_tasks.py:153`): approved episodes missing an embedding are repaired first; then each unlinked candidate is probed against existing patterns by cosine distance `< 0.35` and adjudicated by an LLM; on no match, similar unlinked episodes within cosine distance `< 0.20` form a cluster, and one LLM call synthesizes a pattern from it. Candidates are capped at 100 per run. If synthesis fails for any reason, a basic fallback pattern is still created at confidence 0.75 with no synthesized fields.
+Inside one pass (`_cluster`, `pattern_tasks.py:153`): approved episodes missing an embedding are repaired first; then each unlinked candidate is matched against the pattern owning its **single nearest member episode** within `PATTERN_MATCH_MAX_DISTANCE = 0.30` (`pattern_tasks.py:50`, `ORDER BY member_distance ASC LIMIT 1` at `:243-256`) and that one candidate is adjudicated by an LLM; on no match, similar unlinked episodes within `CLUSTER_GROUP_MAX_DISTANCE = 0.27` (`:60`, applied at `:308-309`) form a cluster, and one LLM call synthesizes a pattern from it. Candidates are capped at 100 per run (`:214`). If synthesis fails for any reason, a basic fallback pattern is still created at confidence 0.75 with no synthesized fields (`:390`).
 
-Creating a pattern auto-enqueues `pattern.generate_playbook_candidate` for it, and growing a pattern's membership re-enqueues the same task.
+The `ORDER BY` is the point, not a detail. Everything in this corpus is an AutomationEdge support incident, so embeddings bunch: measured 2026-08-19, the pairwise episode distance spread was min 0.157 / p01 0.257 / median 0.409, which meant an unordered `LIMIT 1` handed the validator an essentially arbitrary qualifying pattern. Asking about the *nearest* pattern took the validator's accept rate from 12% to 40% on the same corpus. If you see these numbers written as `0.35` and `0.20` anywhere, that document predates the change.
 
-**Two operational facts about clustering:** the adjudication call **fails open** — during a provider outage or a budget block it returns `is_match: true`, so the 0.35 embedding probe alone decides membership. And a full 100-episode pass has been observed running 25 minutes inside a *single* database transaction with roughly 156 LLM calls; a late failure rolls back every row while the spend stays spent, and `patterns` reads zero the whole time.
+Creating a pattern enqueues `pattern.generate_playbook_candidate` for it, and growing a pattern's membership re-enqueues the same task — but the send goes through `services/deferred_dispatch.dispatch_after_commit` (`services/pattern_service.py:192,247`), which holds it until the transaction commits. Sending inside the transaction failed in both directions: a rolled-back clustering pass once left 65 queued tasks naming patterns that never existed, and on the success path a worker could read "not found" before the commit landed and silently skip a pattern's playbook.
+
+**Two operational facts about clustering:** the adjudication call **fails open** — during a provider outage or a budget block it returns `is_match: true`, so the 0.30 embedding probe alone decides membership. And a full 100-episode pass has been observed running 25 minutes inside a *single* database transaction with roughly 156 LLM calls; a late failure rolls back every row while the spend stays spent, and `patterns` reads zero the whole time.
 
 **The dedup sweep** (`pattern.deduplicate_knowledge`, `pattern_tasks.py:834`, 1 retry / 600 s) runs hourly on beat, rides along at the end of every clustering pass, and is also exposed at `POST /api/v1/patterns/deduplicate`. It merges, in this order: duplicate evidence items, episodes by title (split into evidence-overlap components so a shared label never merges different incidents), episodes whose evidence set is a strict subset of another's, semantically similar episodes at cosine ≥ 0.85 **that share evidence**, then patterns, then playbooks. Episodes are never hard-deleted — the loser is marked `superseded`.
 
@@ -449,11 +451,11 @@ The "shares evidence" requirement on the semantic pass is not a tuning knob: pai
 
 ### 7.9 Sync controls: single-flight, pause, cancel, resume
 
-**Single-flight.** Each sync job takes a transaction-scoped Postgres advisory lock, `pg_try_advisory_xact_lock(hashtext('sync:<object_id>'))` (`backend/src/contextedge/services/sync_worker_service.py:379-395`). A second worker on the same source object returns `{"status": "skipped_locked"}` rather than racing the checkpoint. Being transaction-scoped, the lock releases on commit or rollback, so a crashed worker cannot leak it. Retries: `sync.run_backfill` 3 attempts at 120 s, `sync.run_incremental_sync` 5 attempts at 30 s.
+**Single-flight.** Each sync job takes a transaction-scoped Postgres advisory lock, `pg_try_advisory_xact_lock(hashtext('sync:<object_id>'))` (`acquire_sync_lock`, `backend/src/contextedge/services/sync_worker_service.py:379-395`). A second worker on the same source object returns `{"status": "skipped_locked"}` rather than racing the checkpoint (backfill at `:427-433`, incremental at `:532-538`). Being transaction-scoped, the lock releases on commit or rollback, so a crashed worker cannot leak it. Retries: `sync.run_backfill` 3 attempts at 120 s, `sync.run_incremental_sync` 5 attempts at 30 s.
 
 **Incremental with no checkpoint is skipped, not escalated.** A scheduled incremental run against an object that has never been backfilled completes with status `skipped_no_checkpoint` and an explanatory error blob. It never silently turns into a first full pull.
 
-**Cooperative pause / cancel / resume** (migration `0069`): `POST /api/v1/sources/{source_id}/sync/control` with `{action: pause|resume|cancel, source_object_id?}`, gated on `domain_admin` (`backend/src/contextedge/api/v1/sources.py:295-312`). Pause and cancel set a gate on the source object and, if a run is active, write `sync_runs.control`. The running job polls that column **on a fresh connection** — its own transaction predates the operator's write and cannot see it — once per page and every 25 detail records. The check never raises: a failing control channel must not kill a sync. Both stops persist everything already fetched, with a checkpoint; cancel is not a rollback. `resume` only clears the gate — the paused run already ended, and the next run continues from the checkpoint. `sync_runs.celery_task_id` is the escape hatch for a genuinely wedged worker: revoke by id. Every control action is audited as `sync.<action>`.
+**Cooperative pause / cancel / resume** (migration `0069`): `POST /api/v1/sources/{source_id}/sync/control` with `{action: pause|resume|cancel, source_object_id?}`, gated on `domain_admin` (`backend/src/contextedge/api/v1/sources.py:295-312`). Pause and cancel set a gate on the source object and, if a run is active, write `sync_runs.control`. The running job polls that column **on a fresh connection** — its own transaction predates the operator's write and cannot see it. How often depends on the connector: `BaseConnector` supplies `set_control_check` / `_check_control` with a no-op default and each connector chooses where to call it (`connectors/base.py:94-107`). Zoho Desk, the one exercised against a live instance, checks once per page and every 25 detail records (`CONTROL_CHECK_EVERY = 25`, `connectors/zoho_desk/connector.py:128,818,946`); a connector that never calls the hook simply runs to completion. The check never raises: a failing control channel must not kill a sync. Both stops persist everything already fetched, with a checkpoint; cancel is not a rollback. `resume` only clears the gate — the paused run already ended, and the next run continues from the checkpoint. `sync_runs.celery_task_id` is the escape hatch for a genuinely wedged worker: revoke by id. Every control action is audited as `sync.<action>`.
 
 ### 7.10 Retention and data lifecycle
 
@@ -512,7 +514,7 @@ Before any bulk backfill:
 
 Deterministic artifact extraction runs on the `extraction` queue as `artifact.extract_attachment` (`backend/src/contextedge/workers/artifact_tasks.py:15`, 3 retries / 60 s).
 
-- Text-ish formats: `text/*`, `.txt`, `.text`, `.md`, `.csv`, `.log`, `.out`, `.err`, `.json`, `.jsonl`, `.ndjson`, `.srt`, `.vtt`, `.transcript`.
+- Text-ish formats: `text/*`, `.txt`, `.text`, `.md`, `.csv`, `.log`, `.out`, `.err`, `.json`, `.jsonl`, `.ndjson`, `.srt`, `.vtt`, `.transcript` (`backend/src/contextedge/services/artifact_extraction_service.py:51-56`).
 - **Documents:** PDF and DOCX are parsed natively (`pdf_native` via pdfplumber, `docx_native`), registered lazily so a deployment without the document extras degrades to "unsupported format" instead of failing at import (`backend/src/contextedge/services/documents/registry.py:20-38`).
 - Budgets differ by kind, deliberately: log-ish attachments are capped at 4,000 chars of extracted text and 16,000 chars of combined body, while documents get 200,000 / 400,000, because applying the log caps to a 60-page SOP truncated it to roughly its title page (`backend/src/contextedge/services/artifact_extraction_service.py:26-46`).
 - A vision pass interprets figures in documents that produced figure elements needing it, gated by `DOCUMENT_VISION_ENABLED` (default true).
@@ -551,7 +553,7 @@ Logging:
 
 It reports two things side by side:
 
-1. **Queue depth per lane**, read straight from Redis with `LLEN` over the queues in pipeline order, plus `HLEN unacked` for in-flight work. The unacked count matters more than it sounds: during the reconstruction phase, 5,800 debounced reconstruct tasks churned for hours while every queue length read zero. Backlog alert threshold is 500 (`pipeline_health_service.py:43-55`).
+1. **Queue depth per lane**, read straight from Redis with `LLEN` over the queues in pipeline order, plus `HLEN unacked` for in-flight work (`_queue_depths`, `pipeline_health_service.py:58-84`; the lane list is `QUEUES` at `:43-52`). The unacked count matters more than it sounds: during the reconstruction phase, 5,800 debounced reconstruct tasks churned for hours while every queue length read zero. Backlog alert threshold is `BACKLOG_ALERT_DEPTH = 500` (`:55`).
 2. **Stage counts along the graph chain** in one SQL read — evidence → embedded → identities → and onward. **The first zero in that sequence is the diagnosis.**
 
 It never raises on broker failure; it returns empty depths instead. The module exists because of a specific incident: every per-task metric said "healthy" while `correlate_evidence` starved behind 8,000 normalizations and episodes stayed at zero.
@@ -570,9 +572,9 @@ It never raises on broker failure; it returns empty depths instead. The module e
 
 Current state:
 
-- The backend suite is large: **172 test files** holding roughly **1,800 test functions** before parametrization. Do not quote a fixed pass count in a document — run the suite and record the number it prints (the repo convention is to put that number in the commit message).
+- The backend suite is large: **173 test files** holding roughly **1,900 test functions** before parametrization. Do not quote a fixed pass count in a document — run the suite and record the number it prints (the repo convention is to put that number in the commit message).
 - Coverage spans security hardening (RBAC, JSON parsing, config validation), evidence FTS and semantic search, chunking and chunk rollup, retention and legal hold, async episode reconstruction and review, identity resolution and candidacy, correlation and case bridging, contradiction detection, governed execution, graph edge-type registry and projection, ORM/migration column parity, and connector behaviour.
-- `npm test` runs `vitest run` against real frontend unit tests (roles, graph API client, applicability and playbook-step components, graph query controls). Older revisions of this runbook described it as a placeholder; that is no longer true.
+- `npm test` runs `vitest run` against real frontend unit tests — seven files today: role predicates, the graph API client, graph constants, graph query controls, and the applicability, playbook-step, and thread-conversation components. Older revisions of this runbook described it as a placeholder; that is no longer true.
 
 ---
 
@@ -603,7 +605,7 @@ Current state:
 | Missing tables or columns | Run migrations and verify against `alembic heads` — the chain moves frequently, so trust the command, not a number written in a doc |
 | FTS queries return no results | Verify migration `0007_fts_gin_indexes` was applied and `search_tsvector` columns exist |
 | **Evidence is ingested but no episodes ever appear** | Almost always no worker consuming `correlation`. Check `GET /api/v1/admin/pipeline-health` — the first zero in the stage chain is the diagnosis (§8.1) |
-| **Chunks exist but search cannot find them** | No worker consuming `embedding`, or a tripped tenant budget. Check `llm.usage` events for `outcome = budget_exceeded` |
+| **Chunks exist but search cannot find them** | No worker consuming `embedding`, or a tripped tenant budget. A block writes no `llm.usage` event at all — check `GET /api/v1/admin/tenant-budget/status` and grep worker logs for `chunk_embedding_failed` |
 | Semantic search returns fewer rows than `limit` | pgvector extension below 0.7 (so `0032`'s halfvec HNSW indexes never built), or a query path bypassing `halfvec_cosine_distance` (§7.7) |
 | `ModuleNotFoundError: No module named 'contextedge'` | Start host-run services with `cd backend && python dev.py ...` so `src/` is added automatically. If it still fails, check `python -c "import sys; print(sys.executable); print(sys.version)"` and verify a Python 3.12+ backend virtualenv with dependencies installed |
 | Celery tasks do not execute | Worker not running, Redis misconfigured, broker URL mismatch — **or the task routes to a queue nobody is consuming** (§7.1) |
@@ -612,7 +614,7 @@ Current state:
 | Object-store offload not working | Verify MinIO is reachable from the worker; check `MINIO_ENDPOINT` and credentials. Client timeouts are 1 s with one attempt, so failures are fast and loud |
 | Attachment extraction stays `pending` or `failed` | Verify the `extraction` worker is running, the artifact object exists in MinIO/S3, and the format is supported. PDF/DOCX need the document extras installed — look for `document_parser.register_failed` at startup |
 | Evidence chunking is not running (`chunked_at IS NULL`) | Verify a worker consumes the **`embedding`** queue. For rows ingested before `0030`, the backfill task is still not wired — only newly normalized evidence chunks today. Check structlog `chunking_failed` in the normalize worker for chunker bugs |
-| Chunks persist with `embedding IS NULL` past expected window | Likely a tripped per-tenant LLM budget. Check `llm.usage` for `outcome = budget_exceeded` and `GET /admin/tenant-budget/status`; raise the cap or wait for the daily reset. The next replay of the batch task is idempotent and picks up `embedding IS NULL` rows automatically |
+| Chunks persist with `embedding IS NULL` past expected window | Likely a tripped per-tenant LLM budget. There is no `llm.usage` row for a blocked call — use `GET /admin/tenant-budget/status` (`allowed: false`, `reason` of `token_limit_exceeded` or `cost_cap_exceeded`) and the `chunk_embedding_failed` log line; raise the cap or wait for the daily reset. The next replay of the batch task is idempotent and picks up `embedding IS NULL` rows automatically |
 | Episodes approve but no signature row appears | Look for `issue_signature.invalid_draft` — a schema-gate failure returns normally, so Celery does not retry (§7.6) |
 | Patterns never form | Clustering has no beat entry. It fires on episode approval and from `POST /api/v1/patterns/cluster`. If nothing is approving episodes, nothing clusters (§7.8) |
 | Frontend cannot reach API | `NEXT_PUBLIC_API_URL`, backend port, and `APP_CORS_ORIGINS` |

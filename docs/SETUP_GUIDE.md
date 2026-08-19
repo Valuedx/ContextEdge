@@ -50,9 +50,9 @@ Copy-Item .env.example .env
 cp .env.example .env
 ```
 
-Settings are loaded by one pydantic-settings class, `contextedge.config.Settings`, which reads the repo-root `.env` first and then `backend/.env`, ignoring unknown keys (`backend/src/contextedge/config.py:10-15`).
+Settings are loaded by one pydantic-settings class, `contextedge.config.Settings`, which reads the repo-root `.env` and then `backend/.env`, ignoring unknown keys (`backend/src/contextedge/config.py:10-15`). With two files listed, the **later** one wins, so a key set in `backend/.env` overrides the same key in the repo-root `.env`. Keep one file if you can — a value that "will not change" is usually being overridden by the other file.
 
-Important variables in [`.env.example`](/d:/Projects/github/ContextEdge/ContextEdge/.env.example):
+Important variables in [`.env.example`](../.env.example):
 
 - `DATABASE_URL` (asyncpg) and `DATABASE_URL_SYNC` (psycopg, used by Alembic)
 - `REDIS_URL` (db 0), `CELERY_BROKER_URL` (db 1), `CELERY_RESULT_BACKEND` (db 2) — three different Redis databases on purpose (`backend/src/contextedge/config.py:26-28`)
@@ -372,12 +372,12 @@ tenant-wide playbooks only.
 
 - Set `allowed_domain_ids` explicitly on service tokens unless tenant-wide runtime access is intended.
 - **Role bindings are stored with a scope but the scope is not enforced.** `RoleBinding.scope_type` / `scope_id` exist in the schema, but login only reads role *names* and `has_role` is a pure name check, so a "domain admin for one domain" holds that role across the whole tenant on every `require_role` route (`backend/src/contextedge/deps.py:37-51`). Finer scoping comes only from token claims that individual routes consult. Single-domain tenants are unaffected; multi-domain tenants must treat grants as tenant-wide. Tracked in `codewiki/KNOWN_GAPS.md`.
-- **Concurrent syncs for one source object are now serialized**, which is a change from older versions of this guide. Each sync job takes a transaction-scoped Postgres advisory lock (`pg_try_advisory_xact_lock('sync:<object_id>')`) and a second worker returns `{"status": "skipped_locked"}` instead of racing the checkpoint (`backend/src/contextedge/services/sync_worker_service.py:379-395`). You can still create confusing state by triggering a backfill and an incremental at the same time, but you will not corrupt a checkpoint.
+- **Concurrent syncs for one source object are now serialized**, which is a change from older versions of this guide. Each sync job takes a transaction-scoped Postgres advisory lock (`pg_try_advisory_xact_lock(hashtext('sync:<object_id>'))`, `backend/src/contextedge/services/sync_worker_service.py:379-395`) and a second worker returns `{"status": "skipped_locked"}` instead of racing the checkpoint (`sync_worker_service.py:427-433`). You can still create confusing state by triggering a backfill and an incremental at the same time, but you will not corrupt a checkpoint.
 - **Evidence dedupe is now enforced by the database too.** There is still an application-layer content-hash check, but migration `0026` added a unique index on `(tenant_id, content_hash)`, and the normalize worker catches the `IntegrityError`, rolls back, adopts the winning row, and returns `{"deduped": true, "raced": true}` without re-spending LLM calls (`backend/src/contextedge/workers/extraction_tasks.py:374-409`).
 - **Raw payloads over 32 KB are not in the database.** They are uploaded to MinIO at `raw/{tenant}/{raw_id}.json` and the `raw_payload` column keeps only `{"_offloaded": true, "size_bytes": N}` (`backend/src/contextedge/services/ingestion_persistence.py:16,84-87`). Any SQL you write that filters on `raw_evidence_objects.raw_payload` will silently skip the biggest records — which are exactly the longest tickets and articles.
 - MinIO bucket is auto-created on startup. If MinIO is unreachable the backend still starts but logs a warning and reports `object_store: degraded` on `/ready`; raw payload offload will fail until the store is available.
 - **The correlation and embedding stages need their own queues.** Start `make celery-dev` (which listens on all eight) plus `make celery-beat-dev`. A worker started with a hand-written `-Q extraction,hydration,default` will normalize evidence forever and never build a single episode or embed a single chunk, with no error anywhere.
-- Access policy filtering is active on evidence search, runtime match, and the evidence detail endpoint. Non-admin roles will not see items attached to restricted access policies; `platform_super_admin`, `tenant_admin`, and `domain_admin` bypass the filter (`backend/src/contextedge/search/access_control.py:12-39`).
+- Access policy filtering is active on the evidence list, evidence search, and evidence detail endpoints (`api/v1/evidence.py:42,100,240`), on runtime playbook ranking (`search/hybrid_ranker.py:235`), and on the agent graph projection (`graph/agent/repository.py:860`). Non-admin roles will not see items attached to restricted access policies; `platform_super_admin`, `tenant_admin`, and `domain_admin` bypass the filter (`backend/src/contextedge/search/access_control.py:12-39`).
 
 ---
 
@@ -403,8 +403,8 @@ tenant-wide playbooks only.
 Notes:
 
 - `make test` runs the backend suite (`python -m pytest`) and then the frontend suite.
-- The backend suite is large — 172 test files holding roughly 1,800 test functions before parametrization. Do not quote a fixed pass count in a document; run the suite and read the number it prints.
-- `npm test` runs `vitest run` against the frontend unit tests (roles, graph API client, applicability and playbook-step components, graph query controls). Older docs describe this as a placeholder script; that is no longer true.
+- The backend suite is large — 173 test files holding roughly 1,900 test functions before parametrization. Do not quote a fixed pass count in a document; run the suite and read the number it prints.
+- `npm test` runs `vitest run` against the frontend unit tests (roles, graph API client, graph constants, graph query controls, and the applicability, playbook-step, and thread-conversation components). Older docs describe this as a placeholder script; that is no longer true.
 
 ---
 

@@ -41,8 +41,11 @@ End users in a browser. It talks to exactly one backend, `NEXT_PUBLIC_API_URL`, 
 **Input**
 Clicks, form submissions, search strings. Most list pages keep their filters in React state; the
 Review Queue also pushes its selection into the URL with a `router.replace` onto
-`/review?<params>`, so a reviewer can share a link to the exact item they are looking at
-(`frontend/src/app/(dashboard)/review/page.tsx`).
+`/review?session=<id>`, so a reviewer can share a link to the exact item they are looking at
+(`frontend/src/app/(dashboard)/review/page.tsx:866-875`). That page reads the param with
+`useSearchParams`, which forces a client-side bailout during prerender, so the whole page body sits
+inside a `<Suspense>` boundary just to let `next build` succeed on the route
+(`review/page.tsx:848-858`).
 
 **Output**
 Rendered DOM plus `fetch` calls to `/api/v1/*`, all carrying a Bearer token and a fresh
@@ -108,7 +111,7 @@ from older releases; read `node_modules/next/dist/docs/` before writing routing 
 **Where**: `frontend/next.config.ts`
 **Who calls it**: The Next build and dev server.
 **What happens next**: Sets `distDir` from `NEXT_DIST_DIR`, defaulting to `.next`
-(`frontend/next.config.ts:5-8`).
+(`frontend/next.config.ts:4-7`).
 **Input**: Env var.
 **Output**: A per-instance build directory.
 **Failure behavior**: Two dev servers sharing one `distDir` fight over the lock.
@@ -141,8 +144,8 @@ variables on, aliases `@/components`, `@/lib`, `@/components/ui`
 **Input**: Source code.
 **Output**: Diagnostics.
 **Failure behavior**: `next build` fails on a type error.
-**Design rationale**: `strict: true`, `moduleResolution: "bundler"`, `paths: { "@/*": ["./src/*"] }`
-(`frontend/tsconfig.json:10-28`).
+**Design rationale**: `strict: true` (line 11), `moduleResolution: "bundler"` (line 15),
+`paths: { "@/*": ["./src/*"] }` (lines 25-29) — `frontend/tsconfig.json:11-29`.
 **File Rating**: 10/10
 
 ### `vitest.config.ts`
@@ -239,9 +242,9 @@ the server.
 **What**: The workspace shell for every logged-in page.
 **Why**: One persistent sidebar and header across navigations.
 **What happens next**: `useEffect` checks `isAuthenticated()` and replaces to `/login` on failure
-(`layout.tsx:17-21`); renders a fixed 64-unit `<aside>` with the ContextEdge wordmark and a
-scrollable `<SidebarNav>`, then `<AppHeader>` above a scrollable `<main>` capped at `max-w-[1600px]`
-(`layout.tsx:24-44`).
+(`layout.tsx:17-21`); renders a `w-64` `<aside>` — hidden below the `md` breakpoint, so there is no
+sidebar at all on a phone — carrying the ContextEdge wordmark and a scrollable `<SidebarNav>`, then
+`<AppHeader>` above a scrollable `<main>` capped at `max-w-[1600px]` (`layout.tsx:23-45`).
 **Failure behavior**: Redirects to `/login`.
 **Design rationale — and the load-bearing caveat**: this gate is **UX only**. It runs after mount,
 in the browser, against a token the browser itself holds. Real enforcement is the API's 401/403.
@@ -271,9 +274,12 @@ graph TD;
 (`backend/src/contextedge/api/v1/auth.py:21-32`), valid for `jwt_access_token_expire_minutes`
 (60 minutes, `backend/src/contextedge/config.py:38-41`).
 **Failure behavior**: The backend returns 401 for bad credentials and — worth knowing — also
-returns 401 "Ambiguous account" when the same email plus the same password matches users in more
-than one tenant, rather than guessing (`backend/src/contextedge/api/v1/auth.py:76-89`). Email is
-unique per tenant, not globally (`backend/src/contextedge/models/tenant.py:68-85`).
+returns 401 "Ambiguous account; contact your administrator" when the same email plus the same
+password matches users in more than one tenant, rather than guessing
+(`backend/src/contextedge/api/v1/auth.py:76-89`). The reason that case exists: `users.email` carries
+only a plain non-unique index, with no unique constraint at all — not global, not per tenant
+(`backend/src/contextedge/models/tenant.py:78`). Login therefore fetches every user with that
+address and verifies the password against each one (`auth.py:39-41, 65-75`).
 **File Rating**: 8/10
 
 ### Token Management (`frontend/src/lib/auth.ts`)
@@ -294,7 +300,7 @@ cannot populate. Signature verification happens on the API.
 ### Auth Store (`frontend/src/lib/stores/auth-store.ts`)
 
 **What**: A Zustand store holding `isAuthenticated, userId, tenantId, email, roles`.
-**Where**: `frontend/src/lib/stores/auth-store.ts:15-58`
+**Where**: `frontend/src/lib/stores/auth-store.ts:15-56`
 **Who calls it**: `SidebarNav` (`sidebar-nav.tsx:74`), `AppHeader`, and every page that gates a
 button on a role — for example the Sessions page's outcome-assertion control
 (`frontend/src/app/(dashboard)/sessions/page.tsx:222`).
@@ -449,10 +455,17 @@ ergonomics; typed per-step forms are a named follow-up (`codewiki/KNOWN_GAPS.md:
 **Failure behavior**: Inline form validation; the API returns 403 without `domain_admin`
 (`backend/src/contextedge/api/v1/sources.py` uses `require_role("domain_admin")` on eight routes).
 **Design rationale**: Sync pause/resume/cancel is a real backend feature —
-`POST /sources/{id}/sync/control` with `{action: pause|resume|cancel}` writes `sync_runs.control`,
-which the running connector polls per page and every 25 detail records, then stops cooperatively
-while persisting its checkpoint (`backend/src/contextedge/api/v1/sources.py:295-365`;
-`backend/src/contextedge/services/sync_control_service.py:97-122`).
+`POST /sources/{id}/sync/control` with `{action: pause|resume|cancel, source_object_id?}` flips
+`source_objects.metadata_extra["sync_paused"]` and, when a run is live, writes `sync_runs.control`
+(`backend/src/contextedge/api/v1/sources.py:295-365`). The connector reads that signal on a *fresh*
+connection, because the sync job's own transaction predates the operator's write and cannot see it
+(`backend/src/contextedge/services/sync_control_service.py:97-122`).
+**The caveat that matters**: honouring the signal is per-connector, and today only Zoho Desk does —
+it checks between pages and every `CONTROL_CHECK_EVERY = 25` detail records
+(`backend/src/contextedge/connectors/zoho_desk/connector.py:128, 818, 946`). ServiceNow, Gmail,
+Teams, Jira SM, ManageEngine and SapphireIMS never call the `_check_control` hook
+(`backend/src/contextedge/connectors/base.py:92-105`), so for them a pause only gates the *next*
+scheduled run; the one in flight finishes.
 **File Rating**: 8/10
 
 ### Sync Operations (`/sync`)
@@ -478,10 +491,12 @@ ingestion counts and the crash-recovery `handoff` record.
 **The important mechanism**: when `query` is non-empty the backend runs **Postgres full-text
 search**, not vector search — `search_evidence_fts` over the generated `search_tsvector` column
 (`backend/src/contextedge/api/v1/evidence.py:44-59`). Semantic/vector retrieval lives in the runtime
-ranker, not here. With no query it is an ordered `SELECT` that additionally **hides
-`evidence_type = "thread_message"` rows** by default, because hydrated thread replies belong under
-their parent ticket's conversation view served by `GET /threads/{thread_id}/evidence`
-(`backend/src/contextedge/api/v1/evidence.py:74-80`).
+ranker, not here. Lexical search is not a privacy hole either: `search_evidence_fts` applies the
+same `_visibility_predicates` helper the vector path uses, imported straight from
+`vector_search` (`backend/src/contextedge/search/pg_fts.py:10`). With no query it is an ordered
+`SELECT` that additionally **hides `evidence_type = "thread_message"` rows** by default, because
+hydrated thread replies belong under their parent ticket's conversation view served by
+`GET /threads/{thread_id}/evidence` (`backend/src/contextedge/api/v1/evidence.py:75-81`).
 Access control is applied first: `resolve_excluded_access_policy_ids` filters out evidence whose
 `access_policy_id` the caller may not see (`evidence.py:42`).
 The detail page pulls `/evidence/{id}`, `/evidence/{id}/attachments`, `/evidence/{id}/context`, the
@@ -509,7 +524,7 @@ each of which dispatches real backend work:
   deliberate: a task consumed before the commit reads pending state and no-ops without retry.
 - `POST /episodes/reconstruct` — queues `extraction.reconstruct_episode` work.
 - `POST /episodes/ai-review` — dispatches `evaluation.ai_review_episodes`
-  (`backend/src/contextedge/api/v1/episodes.py:556-604`, role `knowledge_manager`).
+  (`backend/src/contextedge/api/v1/episodes.py:556-607`, role `knowledge_manager`).
 - `POST /patterns/cluster` — dispatches `pattern.cluster_episodes`.
 **Input**: Approve / bulk approve / dispatch clicks.
 **Output**: Episode rows carrying `ai_review`, exposed verbatim to the UI
@@ -546,6 +561,16 @@ runs on the single serialized Worker B — clustering and playbook generation to
 and hold **no** advisory lock, so two concurrent runs could mint duplicate patterns
 (`docs/RUNBOOK.md` "Worker topology"). That is why the dedup sweep deliberately rides the same
 queue: it serializes behind clustering.
+**How an episode finds its pattern**: two named, measured thresholds, not magic numbers. Joining an
+existing pattern prefilters on `PATTERN_MATCH_MAX_DISTANCE = 0.30` and then orders by distance and
+takes the **nearest** member — the `ORDER BY` is the point, because on this corpus almost every
+episode has *some* member within 0.35, so an unordered `LIMIT 1` handed the LLM validator a
+near-random pattern (accept rate 12% → 40% once nearest was used). Forming a brand-new cluster is
+stricter, `CLUSTER_GROUP_MAX_DISTANCE = 0.27`, chosen as the knee of a measured
+singletons/cluster-size curve (`backend/src/contextedge/workers/pattern_tasks.py:44-60, 228-257,
+309`). Generation itself is dispatched **after commit** through
+`services/deferred_dispatch.dispatch_after_commit`, so a worker can never pick the task up before
+the row it needs exists (`backend/src/contextedge/services/pattern_service.py:11`).
 **File Rating**: 9/10
 
 ### Playbooks (`/playbooks`, `/playbooks/[id]`)
@@ -553,10 +578,11 @@ queue: it serializes behind clustering.
 **Where**: `frontend/src/app/(dashboard)/playbooks/page.tsx` (a 125-line list),
 `playbooks/[id]/page.tsx` (1,049 lines — where all the work is)
 **What happens next**: The list is `GET /playbooks` with search and pagination
-(`playbooks/page.tsx:71-72`). The detail page loads the playbook, its `/versions`,
-`/references`, and per-version `/versions/{id}/diff`, and offers `POST /{id}/transition`,
-`POST /{id}/rollback`, and a governance panel that edits `automation_mode`
-(`playbooks/[id]/page.tsx:474-546`).
+(`playbooks/page.tsx:71-72`). The detail page loads the playbook (`playbooks/[id]/page.tsx:838`),
+its `/versions` (`:844`), `/references` (`:61`), and per-version `/versions/{id}/diff` (`:334`),
+and offers `POST /{id}/transition` (`:243`), `POST /{id}/rollback` (`:850`), and a governance panel
+that `PATCH`es `automation_mode` (`:480`) after listing `/policies` for the approval-policy
+selector (`:464`).
 **Input**: Lifecycle transitions and automation-mode changes.
 **Output**: New `playbook_versions` rows and `playbook.version_created` /
 `playbook.version_transitioned` operational events.
@@ -606,15 +632,16 @@ release gate is still a roadmap item (`codewiki/KNOWN_GAPS.md:57`).
 **What happens next**: `POST /runtime/match` with symptoms, entities, optional `session_id` and
 `domain_id` (`runtime/page.tsx:197`). Server-side that call assembles a three-class memory context
 (short-term session + recent evidence, long-term identities and counts, reasoning-class recent
-executions and decisions), computes an effective risk cap from your roles — admins uncapped,
-`knowledge_manager` and service accounts capped at `high`, everyone else at `medium`
-(`backend/src/contextedge/api/v1/runtime.py:42-52`) — then runs `rank_playbooks`
+executions and decisions), computes an effective risk cap from your roles — `platform_super_admin`, `tenant_admin` and
+`domain_admin` uncapped, `knowledge_manager` and service accounts capped at `high`, everyone else at
+`medium` (`backend/src/contextedge/api/v1/runtime.py:42-52`) — then runs `rank_playbooks`
 (`backend/src/contextedge/search/hybrid_ranker.py:213-379`). That ranker blends keyword 0.25,
 semantic 0.30, graph distance 0.15, evidence quality 0.10, identity 0.05, recency 0.10, freshness
 0.05, minus a negative-knowledge penalty of 0.05, and **abstains** below
 `MIN_RECOMMENDATION_SCORE = 0.35` — an empty result means "no recommendation", by contract.
 `GET /runtime/explain/{matchId}` replays the full breakdown from a Redis cache with a one-hour TTL
-(`runtime/page.tsx:208`; `backend/src/contextedge/api/v1/runtime.py:230-267`), which is exactly what
+(`MATCH_CACHE_TTL_SEC = 3600` at `backend/src/contextedge/api/v1/runtime.py:29`; write at
+`runtime.py:230-238`, read at `runtime.py:249-267`; `runtime/page.tsx:208`), which is exactly what
 the page's own description warns about: "Explain requires Redis to have cached the match"
 (`runtime/page.tsx:236`).
 **Input**: Symptom text, entity terms, domain and session selectors
@@ -776,10 +803,15 @@ surfaces but no first-class dashboard workflow (`codewiki/KNOWN_GAPS.md:201-203`
 (`audit/page.tsx:78-84`). Note the endpoint prefix is `/audit-logs`, not `/audit`
 (`backend/src/contextedge/api/v1/__init__.py:46`).
 **Where the rows come from**: `RequestAuditMiddleware` writes one row **after** every
-`POST/PATCH/PUT/DELETE` under `/api/v1` except `/auth/login`, with
-`action = "http.<method>.<path-slug>"` and an outcome derived from the status code
-(`backend/src/contextedge/middleware/request_audit.py:25-124`). Explicit `log_audit_event` calls
-add semantic rows on top (sync control, episode AI-review dispatch, and so on).
+`POST/PATCH/PUT/DELETE` under `/api/v1` except `/auth/login`
+(`backend/src/contextedge/middleware/request_audit.py:25-124`). The action is
+`"http.<method>.<path-slug>"` where the slug is the *whole* path with slashes turned into dots — so
+`POST /api/v1/episodes/ai-review` lands as `http.post.api.v1.episodes.ai-review`
+(`request_audit.py:70-71`). Middleware rows always carry `resource_type = "http_request"` and a NULL
+`resource_id`; the status code becomes `success` / `denied` (401, 403) / `failed` inside `details`
+(`request_audit.py:72-87, 100`). Explicit `log_audit_event` calls add semantic rows on top with real
+resource types — `sync.pause` (`api/v1/sources.py:359`), `episode.ai_review_dispatched`
+(`api/v1/episodes.py:598`), and so on.
 **Failure behavior**: The audit insert runs off-thread on a separate sync engine and swallows its
 own failures — auditing never breaks a request (`request_audit.py:89-119`).
 **Scope caveat**: unauthenticated 401 probes never resolve a tenant, so they exist only in
@@ -805,8 +837,10 @@ before spending, `warn` proceeds and writes an `llm.budget_warning` event
 (`backend/src/contextedge/ai/provider.py:231-279`). A tenant with **no** budget row falls back to
 deployment defaults — 2,000,000 tokens/day, $25/day, action `block`
 (`backend/src/contextedge/config.py:191-198`).
-**Operator tip**: the classic symptom of a hit budget is chunks stuck at `embedding IS NULL` with
-`llm.usage` events showing `outcome = budget_exceeded`.
+**Operator tip**: the classic symptom of a hit budget is chunks stuck at `embedding IS NULL` while the
+tenant's `llm.usage` events **stop arriving entirely** — a `block` raises before the usage recorder
+runs, so there is no error row to find (`outcome` only ever takes `ok` or `error`). Confirm with
+`GET /api/v1/admin/tenant-budget/status`.
 **File Rating**: 9/10
 
 ### Pipeline Health (`/admin/pipeline`)
@@ -819,9 +853,13 @@ document.
 `extraction, correlation, embedding, hydration, pattern, evaluation, sync, default` — plus
 `HLEN unacked` for in-flight work, which is where **all** remaining work lives during the episode
 reconstruction phase (`backend/src/contextedge/services/pipeline_health_service.py:43-84`). Alert
-threshold is a backlog depth of 500 (`pipeline_health_service.py:55`). One SQL read counts the graph
-chain end to end — evidence → embedded → identities → … — so the **first zero in the sequence is
-the diagnosis** (`pipeline_health_service.py:87-110`).
+threshold is a backlog depth of 500 (`pipeline_health_service.py:55`). One SQL read counts every
+stage (`pipeline_health_service.py:89-139`), and five of those counts are assembled into the graph
+chain — **evidence → correlations → episodes → patterns → playbooks** — whose **first zero is the
+diagnosis**, returned as `stalled_at` alongside the chain itself
+(`pipeline_health_service.py:214-231`). The response also carries LLM latency percentiles, a
+per-prompt call breakdown, and the last hour's spend, so the page can project cost to completion
+(`pipeline_health_service.py:141-205, 310-322`).
 **Failure behavior**: A broker failure returns empty depths rather than raising
 (`pipeline_health_service.py:82-84`).
 **Design rationale**: The module docstring records the founding incident — every per-task metric
@@ -929,7 +967,7 @@ unit-tested so the legend cannot drift from the renderer).
 ### `usePagination` — `frontend/src/lib/hooks/use-pagination.ts`
 **What**: Page-index state plus a ready-made query-param object.
 **What happens next**: Returns `{page, pageSize, offset, params: {limit, offset}, nextPage,
-prevPage, reset}` with `pageSize` defaulting to **50** (`use-pagination.ts:14-27`). Pages spread
+prevPage, reset}` with `pageSize` defaulting to **50** (`use-pagination.ts:15-27`). Pages spread
 `pg.params` straight into `api.get`.
 **Failure behavior**: `prevPage` clamps at 0.
 **File Rating**: 9/10
@@ -938,7 +976,7 @@ prevPage, reset}` with `pageSize` defaulting to **50** (`use-pagination.ts:14-27
 **Correction**: despite the filename, this module exports **no** `useTenants`. It exports
 `useWorkspaces()` (`GET /workspaces`, key `["workspaces"]`) and `useDomains(workspaceId?)`
 (`GET /domains`, key `["domains", workspaceId]`, passing `workspace_id` only when supplied) —
-`use-tenants.ts:5-20`. Consumers: Settings and the Runtime domain selector.
+`use-tenants.ts:5-18`. Consumers: Settings and the Runtime domain selector.
 **File Rating**: 8/10
 
 ---
@@ -1014,9 +1052,10 @@ state is tiny.
 ## 12. Theme & Styling
 
 ### `globals.css` — `frontend/src/app/globals.css`
-**What**: Tailwind v4 entry point, OKLCH design tokens, and the glassmorphism utilities
-(`.glass-panel`, `.glass-sidebar`, `.glass-header`, `.glass-nav-item`,
-`.glass-nav-item-active`) that the shell and most cards use.
+**What**: Tailwind v4 entry point, OKLCH design tokens, and the glassmorphism utilities that the
+shell and most cards use — `.glass-panel`, `.glass-panel-strong`, `.glass-sidebar`, `.glass-header`,
+`.glass-nav-item`, `.glass-nav-item-active`, `.glass-tabs-list`, each with an
+`html:not(.dark)` light-mode override (`globals.css:191-300`).
 **Why**: `@theme inline` is how Tailwind v4 consumes CSS variables; there is no `tailwind.config.js`
 (`components.json:6-7` leaves `tailwind.config` empty on purpose).
 **Who calls it**: Root layout (`app/layout.tsx:4`).
@@ -1046,16 +1085,16 @@ chain for the Acme VPN incident, in order, with the task that owns each step.
 | Pull `INC0010427` from ServiceNow | Beat, every 15 min | `sync.trigger_scheduled_syncs` → `sync.run_incremental_sync` (`backend/src/contextedge/workers/sync_tasks.py:16-32, 68`) | `sync` | `/sync`, `/inventory/[id]` |
 | Store the raw payload | `persist_ingestion_events` (`backend/src/contextedge/services/ingestion_persistence.py:19-91`) | — | — | not directly visible |
 | Offload big payloads | Same function: payloads over **32,768 bytes** go to MinIO at `raw/{tenant}/{raw_id}.json`, and the DB row keeps only the stub `{"_offloaded": true, "size_bytes": N}` (`ingestion_persistence.py:84-87`) | — | — | not visible; matters because SQL filters over `raw_payload` silently skip these rows |
-| Normalize into an evidence item | `extraction.normalize_evidence` (`backend/src/contextedge/workers/extraction_tasks.py:1304`) — noise gate → redact → dedupe → relevance classify (LLM) → message function (LLM) → error signatures → identity (LLM) → decisions (LLM) → embed → chunk dispatch | `extraction` | `/evidence` |
-| Split into retrievable chunks | `extraction.chunk_evidence` (`backend/src/contextedge/workers/chunk_tasks.py:210`), or inline inside normalize when the body is under 16 KB and the source is a known type (`extraction_tasks.py:99-103`) | `embedding` | `evidence_chunks` behind `/evidence/[id]` |
-| Embed the chunks | `extraction.embed_chunks_batch` (`chunk_tasks.py:238`), 32 per batch, budget-gated | `embedding` | `/admin/cost`, `/admin/pipeline` |
+| Normalize into an evidence item | `extraction.normalize_evidence` (`backend/src/contextedge/workers/extraction_tasks.py:1317`, body `_normalize` at `:122-642`) — noise gate → redact → dedupe → relevance classify (LLM) → message function (LLM) → error signatures → identity (LLM) → decisions (LLM) → embed → chunk dispatch | `extraction` | `/evidence` |
+| Split into retrievable chunks | `extraction.chunk_evidence` (`backend/src/contextedge/workers/chunk_tasks.py:210`), or inline inside normalize when the body is under `INLINE_CHUNK_BUDGET_BYTES = 16 KB` **and** the source type is on `INLINE_CHUNK_SOURCE_ALLOWLIST` — jira_sm, servicenow, gmail, teams, sapphireims, zoho_desk (`extraction_tasks.py:54, 60-62, 99-103`) | `embedding` | `evidence_chunks` behind `/evidence/[id]` |
+| Embed the chunks | `extraction.embed_chunks_batch` (`chunk_tasks.py:238`), `EMBED_BATCH_SIZE = 32` per batch (`chunk_tasks.py:51`), budget-gated | `embedding` | `/admin/cost`, `/admin/pipeline` |
 | Correlate with the Teams thread and the email | `extraction.correlate_evidence` (`backend/src/contextedge/workers/correlation_tasks.py:16`) | `correlation` | `/correlations`, `/suggestions` |
-| Reconstruct the episode | `extraction.reconstruct_episode` (`extraction_tasks.py:1391`) | `correlation` | `/episodes` |
+| Reconstruct the episode | `extraction.reconstruct_episode` (`extraction_tasks.py:1404`) | `correlation` | `/episodes` |
 | First-pass AI review of the draft | `evaluation.ai_review_episodes`, hourly (`backend/src/contextedge/workers/evaluation_tasks.py:129`); stamps `episodes.ai_review` in advisory mode, approves only under `auto_approve` **and** the four floors | `evaluation` | `/episodes` (the AI-review column) |
 | Distil an issue signature | `evaluation.extract_issue_signature` (`backend/src/contextedge/workers/signature_tasks.py:24`), dispatched after every approval commits | `evaluation` | episode detail; graph explorer |
-| Link the recurrence | `_link_recurrence` inside the same service — a second VPN-certificate outage six months later gets a `recurrence` membership at confidence 0.6 pointing at the original case (`backend/src/contextedge/services/issue_signature_service.py:249-312`) | — | evidence context |
-| Cluster approved episodes into a pattern | `pattern.cluster_episodes` (`backend/src/contextedge/workers/pattern_tasks.py:379`), one dispatch **per domain** | `pattern` | `/patterns` |
-| Generate a playbook candidate | `pattern.generate_playbook_candidate` (`pattern_tasks.py:403`) | `pattern` | `/playbooks` |
+| Link the recurrence | `_link_recurrence` inside the same service — a second VPN-certificate outage six months later gets a `recurrence` membership at `RECURRENCE_CONFIDENCE = 0.6` pointing at the original case (`backend/src/contextedge/services/issue_signature_service.py:36, 249-312`) | — | evidence context |
+| Cluster approved episodes into a pattern | `pattern.cluster_episodes` (`backend/src/contextedge/workers/pattern_tasks.py:422`), one dispatch **per domain** | `pattern` | `/patterns` |
+| Generate a playbook candidate | `pattern.generate_playbook_candidate` (`pattern_tasks.py:446`) | `pattern` | `/playbooks` |
 | Rank playbooks for a live query | `rank_playbooks` over the halfvec HNSW index | synchronous HTTP | `/runtime` |
 | Watch all of the above | `pipeline_health_service.get_pipeline_health` | — | `/admin/pipeline` |
 

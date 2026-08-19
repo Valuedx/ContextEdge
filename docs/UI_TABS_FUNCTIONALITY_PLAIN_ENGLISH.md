@@ -62,7 +62,7 @@ Users need one starting page where they can quickly understand whether the syste
 - Acts as the landing page for daily monitoring.
 
 **How it actually works:**
-There is no dedicated overview API. The page fires four ordinary list calls in parallel - `/sources`, `/evidence`, `/episodes`, `/playbooks` (`frontend/src/app/(dashboard)/overview/page.tsx:110-113`). So the numbers are "first page of that list", not database-wide totals. For real pipeline numbers, use Pipeline Health.
+There is no dedicated overview API. The page fires four ordinary list calls in parallel - `/sources`, `/evidence`, `/episodes`, `/playbooks` (`frontend/src/app/(dashboard)/overview/page.tsx:109-112`), each capped at 200 rows (`overview/page.tsx:25`). So the numbers are "first 200 of that list", not database-wide totals; the page prints "(up to 200 each)" next to them. For real pipeline numbers, use Pipeline Health.
 
 **Example:**
 An Acme admin logs in and sees evidence rising overnight but the ServiceNow source not synced since yesterday. They click into Sources or Sync Operations to investigate.
@@ -78,14 +78,14 @@ ContextEdge can only learn from operational evidence if it knows where to collec
 **Main functionality:**
 
 - Lists configured data sources.
-- Adds new sources. The picker is generated from the connector registry, so a registered connector can never be missing from it (`backend/src/contextedge/connectors/registry.py:24`).
+- Adds new sources. The picker reads one catalog (`backend/src/contextedge/connectors/registry.py:69`) that lists every source type the API accepts and marks each one `available` or `planned` depending on whether a connector class is actually registered for it - so the picker and the API can no longer disagree about what will sync (`connectors/registry.py:24`).
 - Shows source type, sync mode, and status.
 - Opens source details for policy assignment, credential rotation, discovery, and recent sync runs.
 - Pauses, resumes or cancels a running sync (`backend/src/contextedge/api/v1/sources.py:295`).
 - Supports local folder ingest for demos or offline data imports.
 
 **What is live today:**
-Seven connectors are real: Teams, Gmail, ServiceNow, Jira Service Management, ManageEngine SDP, SapphireIMS, and Zoho Desk (`backend/src/contextedge/connectors/registry.py:91`). Confluence, SharePoint and Exchange appear in the catalog marked `planned` only.
+Seven connectors are real: Teams, Gmail, ServiceNow, Jira Service Management, ManageEngine SDP, SapphireIMS, and Zoho Desk (`backend/src/contextedge/connectors/registry.py:100`). Confluence, SharePoint and Exchange appear in the catalog marked `planned` only (`connectors/registry.py:63`).
 
 **Where approval happens:**
 Discovery finds objects; it does not start pulling data. Approving an object for backfill or scheduled sync happens on the Entity Inventory screen reached from the source detail page. Nothing syncs until that switch is on.
@@ -112,7 +112,7 @@ Source setup is not enough. Users also need to know whether data is actually bei
 
 - **Only one sync per object at a time.** A second worker takes a Postgres advisory lock, fails to get it, and returns `skipped_locked` rather than racing the checkpoint (`backend/src/contextedge/services/sync_worker_service.py:379`).
 - **An incremental run with no checkpoint does nothing.** It completes as `skipped_no_checkpoint` with the message "run a backfill for this object first" - deliberately, so a schedule never triggers a surprise full pull (`sync_worker_service.py:571`).
-- **Pause and cancel are cooperative and never lose data.** The connector checks the signal between pages and every 25 detail records; whatever was already fetched is persisted with its checkpoint (`backend/src/contextedge/services/sync_control_service.py:15`).
+- **Pause and cancel are cooperative and never lose data.** Whatever was already fetched is persisted with its checkpoint before the run stops (`backend/src/contextedge/services/sync_control_service.py:15`). How quickly it stops depends on the connector: each one has to consult the signal inside its own loops, and the base class default is a no-op (`backend/src/contextedge/connectors/base.py:99`). **Only Zoho Desk does so today** - between pages and every 25 detail records (`connectors/zoho_desk/connector.py:128`, `:946`). For the other six, a pause takes effect between task invocations, so a long backfill call finishes first.
 
 **Example:**
 A Jira source was added yesterday, but no new tickets appear in Evidence. The admin opens Sync Operations and sees that the sync job failed because the credential expired.
@@ -144,7 +144,7 @@ Every decision, episode, pattern, and playbook must be backed by real evidence. 
 6. A relevance classifier labels the item. Only a confident `not_relevant` (confidence >= 0.75) skips the expensive extraction that follows.
 7. Identities and decisions are extracted, an embedding is written, and the body is split into chunks for search.
 
-**Search, in one line:** typing a query runs full-text search over a generated `search_tsvector` column, with a ticket-number fallback so `INC0010427` is findable by its number (`backend/src/contextedge/search/pg_fts.py:50`). Semantic search runs separately, matching **chunks** rather than whole documents, then rolling up to one hit per evidence item.
+**Search, in one line:** typing a query runs full-text search over a generated `search_tsvector` column, with a ticket-number fallback so `INC0010427` is findable by its number (`backend/src/contextedge/search/pg_fts.py:50`). Semantic search runs separately, matching **chunks** rather than whole documents, then rolling up to one hit per evidence item. Both paths now apply the **same** visibility gate from the same helper (`pg_fts.py:10`), so a legal-hold or pending-redaction record can no longer come back through the lexical path after being hidden from the vector one.
 
 **Example:**
 An Acme analyst searches "VPN gateway authentication failure" and gets the ServiceNow incident, three Teams messages, and the engineer's email - each shown once, with the snippet from whichever chunk actually matched.
@@ -195,9 +195,9 @@ When an incident happens, downstream tools and agents call runtime APIs to find 
 - Records and shows retrieval feedback.
 
 **How the ranking works** (`backend/src/contextedge/search/hybrid_ranker.py:213`):
-The ranker only considers **approved** playbooks that have a published version, filtered by domain and by a risk cap derived from the caller's roles. Each candidate gets a weighted score from seven signals - keyword 0.25, semantic 0.30, graph 0.15, evidence quality 0.10, identity 0.05, recency 0.10, freshness 0.05 - minus a negative-knowledge penalty (`hybrid_ranker.py:22`). The semantic signal is deliberately gated by the keyword signal, so pure vector similarity cannot carry a playbook whose words never appear in the query.
+The ranker only considers **approved** playbooks that have a published version, filtered by domain and by a risk cap derived from the caller's roles (`api/v1/runtime.py:42`). Each candidate gets a weighted score from seven signals - keyword 0.25, semantic 0.30, graph 0.15, evidence quality 0.10, identity 0.05, recency 0.10, freshness 0.05 - minus a negative-knowledge penalty of 0.05 (`hybrid_ranker.py:22`). The semantic signal is deliberately damped by the keyword signal: it is multiplied by `0.6 + 0.4 × keyword_score` (`hybrid_ranker.py:330`), so a playbook whose words never appear in the query keeps only 60% of its semantic score and has to be a much better match to win.
 
-**It is allowed to say nothing.** If every candidate scores below 0.35, Runtime returns an empty list and logs `ranking.abstained` (`hybrid_ranker.py:168`). "No recommendation" is a supported answer, not a failure.
+**It is allowed to say nothing.** If every candidate scores below `MIN_RECOMMENDATION_SCORE = 0.35`, Runtime returns an empty list and logs `ranking.abstained` (`hybrid_ranker.py:171`, `:373`). "No recommendation" is a supported answer, not a failure.
 
 **Two operational notes:** the explain payload is cached in Redis for one hour, so `explain` 404s after that; and the query embedding is budget-gated and attributed to the tenant, unlike some internal call sites.
 
@@ -278,7 +278,7 @@ For trust and auditability, users must be able to see not just what the system d
 - Helps teams inspect why one action was chosen over another.
 
 **Two details that make this trustworthy:**
-`risk_level` is taken from the **selected** option only, never from the riskiest option that was considered (`backend/src/contextedge/services/decision_trace_service.py:86`). And every decision gets an embedding at creation time, which is what powers "show me similar past decisions" and the aggregated success rate behind it (`decision_trace_service.py:517`).
+`risk_level` is taken from the **selected** option only, never from the riskiest option that was considered (`backend/src/contextedge/services/decision_trace_service.py:86`). And a decision is embedded inline at creation time, which is what powers "show me similar past decisions" and the aggregated success rate behind it (`decision_trace_service.py:226`, consumed at `:517`). That embedding is best-effort: if the call fails the decision is still written, and the similarity lookup simply orders it last.
 
 **Honest note:** the page uses list, detail and chain. The richer `/decisions/{id}/provenance` and `/decisions/effectiveness` endpoints are built and tested but have no screen yet.
 
@@ -303,8 +303,8 @@ Raw evidence is often messy. A ticket may have many comments, while the real fix
 - Dispatches an AI review pass over pending drafts.
 - Triggers pattern clustering from approved episodes.
 
-**How an episode gets built** (`backend/src/contextedge/workers/extraction_tasks.py:995`):
-Reconstruction never narrates a single record. It first materialises the whole connected cluster over case links and correlation edges, bounded to 50 members, 3 hops and a 30-day window from the nearest seed (`backend/src/contextedge/services/episode_cluster_service.py:47`). Then a series of deterministic gates decide whether to spend a model call at all: fewer than 3 members is skipped; a per-cluster lock stops eight workers minting eight identical episodes; a 180-second debounce waits for the cluster to settle, with a 30-minute starvation guard so a never-quiet channel still gets narrated; a duplicate cluster fingerprint is skipped; and a cluster that has not grown by at least 50% over an existing draft is skipped. Each of those gates exists because it was measured - a redundant synthesis costs roughly 12,700 tokens.
+**How an episode gets built** (`backend/src/contextedge/workers/extraction_tasks.py:1008`):
+Reconstruction never narrates a single record. It first materialises the whole connected cluster over case links and correlation edges (`backend/src/contextedge/services/episode_cluster_service.py:108`), bounded to 50 members, 3 hops and a 30-day window from the nearest seed (`episode_cluster_service.py:47-49`). Then a series of deterministic gates decide whether to spend a model call at all: fewer than 3 members is skipped; a per-cluster lock stops eight workers minting eight identical episodes; a 180-second debounce waits for the cluster to settle, with a 30-minute starvation guard so a never-quiet channel still gets narrated; a duplicate cluster fingerprint is skipped; and a cluster that has not grown by at least 50% over an existing draft is skipped. Each of those gates exists because it was measured - a redundant synthesis costs roughly 12,700 tokens.
 
 **Grounding is enforced, not requested.** The model labels each evidence item `[ev-N]` and must cite them per episode and per step. Labels it invents are dropped, so a model cannot mint evidence that does not exist (`backend/src/contextedge/ai/extractors/episode_extractor.py:77`).
 
@@ -331,9 +331,14 @@ One incident is useful, but repeated incidents reveal a bigger problem. Patterns
 - Runs a manual clustering pass or a knowledge dedup pass.
 
 **What triggers clustering:**
-There is **no scheduled clustering job**. Clustering runs when episodes are approved - from the single approve route, from bulk approve, from the hourly AI-review sweep for each domain that had auto-approvals, or manually from this tab (`backend/src/contextedge/workers/pattern_tasks.py:379` and its callers). If nobody approves episodes, no patterns form.
+There is **no scheduled clustering job**. Clustering runs when episodes are approved - from the single approve route, from bulk approve, from the hourly AI-review sweep for each domain that had auto-approvals, or manually from this tab (`backend/src/contextedge/workers/pattern_tasks.py:418` and its callers). If nobody approves episodes, no patterns form.
 
-**Two distances, not one:** an episode joins an **existing** pattern when it is within cosine distance 0.35 of a member and an adjudication call agrees; a **new** cluster is grouped from neighbours within 0.20 (`pattern_tasks.py:201`, `:254`). Clustering is also strictly domain-scoped - a domain pass sees only that domain's episodes - because a pattern is synthesized content that becomes visible through the domain predicate.
+**Two distances, not one**, both cosine and both re-measured against the live corpus on 2026-08-19 (`pattern_tasks.py:36-60`):
+
+- To join an **existing** pattern, the episode's nearest pattern member must be within `PATTERN_MATCH_MAX_DISTANCE = 0.30` (`pattern_tasks.py:50`) **and** an adjudication call has to agree. "Nearest" is the load-bearing word: the query orders by distance and asks about the single closest member (`pattern_tasks.py:252-257`). Without that ordering it asked about an arbitrary qualifying pattern, and the adjudicator - correctly - said no to almost all of them.
+- To form a **new** cluster, neighbours must be within `CLUSTER_GROUP_MAX_DISTANCE = 0.27` (`pattern_tasks.py:60`). If nothing qualifies, the episode becomes a single-episode pattern rather than being dropped.
+
+Clustering is also strictly domain-scoped - a domain pass sees only that domain's episodes - because a pattern is synthesized content that becomes visible through the domain predicate.
 
 **Example:**
 ContextEdge finds three past incidents where a VPN or RADIUS certificate expired unnoticed and creates a pattern: "Gateway certificate expiry causes tunnel flapping; the successful fix was renewal plus a service restart, and monitoring the expiry date prevented recurrence."
@@ -355,14 +360,15 @@ The main goal of ContextEdge is to turn past operational experience into trusted
 - Supports version comparison and rollback.
 - Generates a candidate playbook from a pattern.
 
-**How a candidate is generated** (`backend/src/contextedge/workers/pattern_tasks.py:403`):
-The generator reads four different things and keeps them separate on purpose - the pattern itself, its episodes (what people actually did), retrieved knowledge articles and SOPs (what the documentation says), and negative knowledge (what not to do). Where documentation and practice disagree, the disagreement is written into a `conflicts` field for the reviewer rather than silently resolved.
+**How a candidate is generated** (`backend/src/contextedge/workers/pattern_tasks.py:442`):
+The generator reads four different things and keeps them separate on purpose - the pattern itself, its episodes (what people actually did), retrieved knowledge articles and SOPs (what the documentation says), and negative knowledge (what not to do). Where documentation and practice disagree, the disagreement is written into a `conflicts` field for the reviewer rather than silently resolved. The prompt is versioned and immutable; the current default is **v6** (`backend/src/contextedge/ai/prompts/playbook.py:415`).
 
-**Three deterministic guards sit around the model:**
+**Four deterministic guards sit around the model:**
 
-- **Citations are validated.** Only labels that were actually shown to the model can survive; invented ones are dropped and counted.
-- **Grounding is structural.** A step with no surviving citation is forced to `best_practice`, whatever the model claimed about itself (`backend/src/contextedge/ai/generators/playbook_generator.py:99`).
-- **Risk is policy, not model output.** The step safety classes set a floor; the model's suggested risk tier may only raise it (`pattern_tasks.py:36`).
+- **Citations are validated.** Only labels that were actually shown to the model can survive; invented ones are dropped and counted (`backend/src/contextedge/ai/generators/playbook_generator.py:331`).
+- **Grounding is structural.** A step with no surviving citation is forced to `best_practice`, whatever the model claimed about itself (`playbook_generator.py:256`).
+- **Branching is sanitised.** Decision points that cannot execute are dropped: a target naming a step that does not exist, a branch whose true and false paths are identical, a step no path can reach (`playbook_generator.py:154`). It repairs rather than rejects - the steps are usually fine and only the branching appendix is junk - and it counts what it dropped so a prompt that starts emitting nonsense shows up in the counters.
+- **Risk is policy, not model output.** The step safety classes set a floor; the model's suggested risk tier may only raise it (`pattern_tasks.py:65`, `:73`).
 
 A response with no steps fails the task instead of creating an empty playbook - a truncated response once produced a "complete" playbook with zero steps.
 
@@ -385,7 +391,7 @@ Good operational memory should remember failures too. This prevents the system a
 - Categorizes entries as ineffective, conditional, deprecated, or prohibited.
 - Feeds safer retrieval and recommendations.
 
-**Where it is actually consumed:** in two places, both real. It lowers a playbook's ranking score in Runtime (`backend/src/contextedge/search/hybrid_ranker.py:140`), and up to 20 entries are written into the playbook-generation prompt so new candidates avoid the same step (`backend/src/contextedge/workers/pattern_tasks.py:494`).
+**Where it is actually consumed:** in two places, both real. It lowers a playbook's ranking score in Runtime (`backend/src/contextedge/search/hybrid_ranker.py:140`), and up to 20 entries for the pattern's domain are written into the playbook-generation prompt so new candidates avoid the same step (`backend/src/contextedge/workers/pattern_tasks.py:537`).
 
 **Example:**
 For VPN tunnel flapping, the Acme team records: "Do not fail over to the secondary gateway before checking certificate expiry - failover hides the expiry and the problem returns within a day."
@@ -412,9 +418,9 @@ The same person, system, workflow, or service may appear under different names i
 1. **Strong identifier** - an email, hostname, FQDN, IP, serial number or external id matches exactly. Confidence 1.0, no model call. A single-token device name like `vpn-gw-east-01` is recognised as a hostname and resolves this way forever after its first sighting (`backend/src/contextedge/services/identity_normalizer.py:134`).
 2. **Typed exact alias** - the same normalised name, scoped to compatible entity types. Confidence 0.95.
 3. **Model adjudication** - only for genuinely ambiguous cases, against at most 5 candidates. It links automatically only above the threshold for that type (people need 0.95, everything else 0.9). Below that, or if the model abstains, it creates a **new identity marked `needs_review`** rather than guessing.
-4. **Provisional creation** - an unmatched mention becomes a provisional identity at 0.5, promoted to `resolved` once at least two distinct evidence items cite it.
+4. **Provisional creation** - an unmatched mention becomes a provisional identity at 0.5, promoted to `resolved` once at least two - and at most five - distinct evidence items cite it (`backend/src/contextedge/services/identity_promotion.py:72`). The upper bound is the rarity guard: an entity that shows up everywhere is not identifying anything.
 
-**Nothing merges by itself.** The daily reconciliation pass proposes merges above 0.95 confidence and a human decides; rejections stick so the same pair is never re-raised (`backend/src/contextedge/services/identity_reconciliation_service.py:29`).
+**Nothing merges by itself.** The daily reconciliation pass proposes merges at 0.95 confidence or above and a human decides; rejections stick so the same pair is never re-raised (`backend/src/contextedge/services/identity_reconciliation_service.py:306`, threshold at `:68`).
 
 **Example:**
 "vpn-gw-east-01", "VPN-GW-EAST-01" and "vpn-gw-east-01.acme.local" resolve to one device identity. "Priya Sharma" from the ticket and "Priya" from Teams go to adjudication and only link at 0.95 or above, because people carry the stricter threshold.
@@ -461,7 +467,7 @@ Several parts of ContextEdge deliberately refuse to act on their own when confid
 
 **Nothing here has been applied yet.** Accepting is what writes the correlation edge or resolves the identity. Rejections are durable, so a scheduled pass never re-raises the same pair.
 
-**Who can see it:** `knowledge_manager`, `domain_admin` or `tenant_admin`.
+**Who can see it:** every route here calls `require_role("knowledge_manager")`. `platform_super_admin`, `tenant_admin` and `admin` also get in, because `has_role` short-circuits for those three (`backend/src/contextedge/deps.py:37`). `domain_admin` does not - it needs an explicit `knowledge_manager` binding.
 
 **Example:**
 A suggestion proposes linking a firewall change record to the Acme VPN incident because their chunk embeddings are close. A reviewer opens both, sees the change touched the same gateway, and accepts - and the episode cluster grows.
@@ -485,12 +491,14 @@ Some operational questions are relationship questions. A table can show records,
 
 **What keeps the graph honest:**
 
-- **Edge types are a closed vocabulary.** 69 registered types; writing an unregistered one raises (`backend/src/contextedge/graph/edge_types.py:1`).
+- **Edge types are a closed vocabulary.** 69 registered types across five semantic groups; writing an unregistered one raises (`backend/src/contextedge/graph/edge_types.py:137`, `require_registered` at `:186`).
 - **`weight` and `confidence` mean different things** - traversal importance versus belief - and both are written where both are meant (`backend/src/contextedge/graph/builder.py:63`).
-- **Edges are temporal.** They carry `valid_from` / `valid_to`, so a point-in-time read is possible. The caveat is stated in the API response itself: historical edges combine with **current** node facts.
-- **Relational rows become edges every 6 hours** through a materializer that is idempotent and additive-only (`backend/src/contextedge/graph/agent/materializer.py:54`).
+- **Edges are temporal.** They carry `valid_from` / `valid_to` (`models/pattern.py:174`), so a point-in-time read is possible. The caveat is stated in the API response itself: historical edges combine with **current** node facts.
+- **Relational rows become edges every 6 hours** through a materializer that is idempotent and additive-only (`backend/src/contextedge/graph/agent/materializer.py:107`).
 
-**Agent proposals never become topology silently.** When an agent proposes a dependency it writes a `proposed_depends_on` edge at confidence 0.3, which is deliberately not traversable; approving it promotes it to `depends_on` and supersedes the proposal rather than deleting it (`backend/src/contextedge/api/v1/graph.py:142`).
+**Agent proposals never become topology silently.** When an agent proposes a dependency it writes a `proposed_depends_on` edge at confidence 0.3, which is deliberately not traversable; approving it writes a `depends_on` edge at 0.7 and closes the proposal as `approved` rather than deleting it (`backend/src/contextedge/api/v1/graph.py:142`, `services/edge_proposal_service.py:125`).
+
+**Unapproved episodes are visible to the agent, and labelled.** This is easy to state backwards. The projection admits `approved` **and** `pending_review` episodes (`graph/agent/hydrators.py:108`), because the reviewer queue lags ingestion and hiding drafts means the agent cannot see this week's outage while answering about it. Every draft is relabelled `[UNAPPROVED DRAFT]` and carries an `agent_caveat` telling the model to treat it as a lead, not precedent (`hydrators.py:448`, `:463`). Drafts also get their own two seed slots at a 0.8 relevance multiplier, so a draft can never push out a reviewed precedent (`graph/agent/repository.py:111`, `:117`). Playbooks and retired KB articles are still fail-closed: an unapproved playbook or a retired article simply does not appear.
 
 **Example:**
 An Acme auditor opens the VPN session graph and sees the evidence, the episode, the pattern, the playbook, the decision, the approval request, and the execution run connected in one view.
@@ -528,7 +536,7 @@ Operational procedures change. A playbook that worked six months ago may become 
 - Lists drift alerts.
 - Shows signals such as validation age, expiry, and negative retrieval feedback.
 - Helps users decide which playbooks need review.
-- Offers a shortcut to regenerate a playbook from its pattern.
+- Offers a "Verify & Regenerate" shortcut on any alert that names a pattern. Worth knowing before you demo it: that button posts to `/playbooks/generate` (`frontend/src/app/(dashboard)/drift/page.tsx:23`), which is the leaner **manual** generation route described under Playbooks - no knowledge retrieval, no confidence floor, no deterministic risk floor, and no `[ep-N]` citations.
 - Runs on a schedule through background workers - every 6 hours (`backend/src/contextedge/workers/evaluation_tasks.py:41`).
 
 **What raises an alert** (`backend/src/contextedge/services/drift_service.py:13`) - read-only heuristics over approved playbooks: an `expiry_at` in the past; a `last_validated_at` older than **90 days**; three or more negative retrieval feedback events in the last 30 days; or the source pattern having grown after the playbook was generated.
@@ -626,9 +634,9 @@ AI calls cost money. Admins need visibility and budget controls so usage does no
 
 **How the numbers are produced:** there is exactly one recorder. Every model and embedding call writes an `llm.usage` operational event, and both this dashboard and the budget gate sum the same events - there is no second counter to drift (`backend/src/contextedge/ai/observability.py:133`). Costs shown are estimates for dashboard use; the provider's bill is authoritative.
 
-**Defaults matter in a demo:** a tenant with no budget row still gets the deployment defaults of 2,000,000 tokens/day, $25/day, action `block` (`backend/src/contextedge/config.py:191`). That default has frozen a live bulk backfill mid-run. Before a large first import, either raise the cap or set the action to `warn` for the window.
+**Defaults matter in a demo:** a tenant with no budget row still gets the deployment defaults of 2,000,000 tokens/day, $25/day, action `block` (`backend/src/contextedge/config.py:194-198`). That default has frozen a live bulk backfill mid-run. Before a large first import, either raise the cap or set the action to `warn` for the window.
 
-**A blocked tenant fails softly, not loudly.** Ingestion still lands rows; they just arrive without embeddings and without extracted identities. The signature is chunks stuck with a NULL embedding plus `llm.usage` events showing `outcome = budget_exceeded`.
+**A blocked tenant fails softly, not loudly.** Ingestion still lands rows; they just arrive without embeddings and without extracted identities. The signature is chunks stuck with a NULL embedding plus a tenant whose `llm.usage` events stop arriving - a block raises before the recorder runs, so there is no error row, only silence. Confirm with `GET /api/v1/admin/tenant-budget/status`. In `warn` mode you do get a trail: one `llm.budget_warning` operational event per call.
 
 **Example:**
 After Acme enables episode reconstruction on a backlog, daily cost rises. The tenant admin sets a daily budget in warn mode first, watches for a week, then switches to block.
@@ -676,7 +684,7 @@ ContextEdge is multi-tenant and role-aware. Settings gives admins one place to m
 - The **Retention** tab is a pointer, not a console. It states that retention is managed through the policies API and backend defaults (`frontend/src/app/(dashboard)/settings/page.tsx:398`).
 - Role bindings can be created through the API (`POST /api/v1/users/{id}/roles`) but there is no first-class screen for managing them here.
 - **Role scope is stored but not enforced.** `RoleBinding` carries `scope_type` and `scope_id`, but the permission check is a plain name check (`backend/src/contextedge/deps.py:37`), so a domain admin bound to one domain effectively holds that role tenant-wide. Narrower scope exists only through service-token `allowed_domain_ids` on routes that consult it. Single-domain tenants are unaffected; multi-domain tenants must treat a role grant as tenant-wide.
-- **Sidebar visibility is not security.** The frontend treats only `platform_super_admin` as a super-role while the backend also short-circuits `tenant_admin` and `admin`, so a tenant admin may not see a nav item the API would happily authorize.
+- **Sidebar visibility is not security.** The frontend treats only `platform_super_admin` as a super-role (`frontend/src/lib/roles.ts:8`) while the backend also short-circuits `tenant_admin` and `admin` (`deps.py:37`), so a tenant admin may not see a nav item the API would happily authorize.
 
 **Example:**
 An Acme tenant admin creates a "Network Operations" domain so VPN-related evidence, playbooks, and policies are managed separately from Finance Operations.

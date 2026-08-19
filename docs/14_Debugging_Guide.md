@@ -70,7 +70,7 @@ That is `DEFAULT_QUEUES` at `backend/dev.py:16`, and the routing table lives at 
 
 **The failure this prevents is silent, not loud.** The `correlation` and `embedding` lanes were split out on 2026-08-17 after measured starvation: the extraction queue was growing ~70 tasks/min at 8,255 deep, `correlate_evidence` was dispatched but never consumed, and 1,879 chunks existed with only 289 embedded (15 %). Normalization finished, everything looked healthy, and episodes stayed at zero while newly ingested evidence was unretrievable. `dev.py:12-16` records that a stock deployment ran a month that way.
 
-> **`docs/RUNBOOK.md`'s queue list and its Windows PowerShell worker block predate those two lanes.** A fleet started verbatim from that block never consumes `correlation` or `embedding` — the exact failure the lanes were created to fix. Use `dev.py:16` as the authority until the runbook catches up.
+> **Check the `-Q` list on every worker you did not start yourself.** A fleet started from an older command — `-Q extraction,hydration,default` was in circulation for a while — never consumes `correlation` or `embedding`, which is the exact failure the lanes were created to fix. [RUNBOOK.md §7.1](RUNBOOK.md) now lists all eight and its Windows worker block includes both lanes; `dev.py:16` is the authority if the two ever disagree.
 
 ### Windows worker topology
 Prefork does not work on Windows, and `-P threads` does not work for LLM-bearing lanes either: LiteLLM holds asyncio locks bound to the loop that created them, so a threads pool raises "Lock is bound to a different event loop" on every enrichment call, trips the provider circuit breaker, and fails the run near-silently (measured on a live backfill, 2026-08-16). Parallelism therefore comes from **separate `-P solo` processes**, each with its own loop. Full commands are in [13_Developer_Guide.md §3.4](13_Developer_Guide.md#34-windows-worker-topology).
@@ -85,7 +85,7 @@ Exactly **one** beat process, always. A second one double-dispatches every sched
 `structlog` gives structured, searchable logs. You find things by `request_id`, `tenant_id` or event name rather than by grepping prose.
 
 ### Where it is defined
-- `backend/src/contextedge/main.py:15-23` — the structlog configuration itself. When `APP_ENV=development` it uses `ConsoleRenderer` (pretty, human-readable); otherwise `JSONRenderer` (machine-readable).
+- `backend/src/contextedge/main.py:15-27` — the structlog configuration itself. The renderer is chosen by **`APP_DEBUG`**, not `APP_ENV`: `app_debug` true gives `ConsoleRenderer` (pretty, human-readable), false gives `JSONRenderer` (machine-readable). `APP_DEBUG` defaults to true (`config.py:202`), so a deployment that sets `APP_ENV=production` and forgets `APP_DEBUG=false` still emits console-formatted logs.
 - `backend/src/contextedge/config.py` — `APP_LOG_LEVEL`.
 - `backend/src/contextedge/middleware/request_context.py` — correlation ids.
 - `backend/src/contextedge/middleware/request_audit.py` — HTTP mutation logging.
@@ -136,15 +136,15 @@ Defined in `backend/src/contextedge/ai/observability.py:39-60`:
 | Metric | Labels | Meaning |
 | --- | --- | --- |
 | `contextedge_llm_tokens_total` | tenant_id, model, task, token_type | tokens by type (prompt / completion / cached) |
-| `contextedge_llm_requests_total` | tenant_id, model, task, outcome | request count; `outcome` includes `budget_exceeded` |
+| `contextedge_llm_requests_total` | tenant_id, model, task, outcome | request count; `outcome` is only ever `ok` or `error` (`ai/provider.py:324, 383`). A budget block raises before the recorder runs, so it increments **nothing** |
 | `contextedge_llm_reasoning_tokens_total` | tenant_id, model, task | thinking tokens — **a subset of completion tokens, deliberately a separate metric** so a dashboard summing across `token_type` cannot double-count |
 
 ### What `record_llm_usage` does on every call
-`ai/observability.py:133-250`, in order:
+`ai/observability.py:133-252`, in order:
 1. Extract token usage from the LiteLLM response.
 2. Increment the three Prometheus counters.
 3. Write one structlog `llm.usage` line, enriched with `request_id` / `correlation_id` / `causation_id` from the ContextVar.
-4. Insert one `OperationalEvent(event_type="llm.usage")` whose payload carries `model`, `task`, `prompt_tokens`, `completion_tokens`, `reasoning_tokens`, `cached_tokens`, `total_tokens`, `outcome`, `duration_ms`, `prompt_name`, `prompt_version`. When the call is *about* an existing row it anchors via `entity_type` / `entity_id`.
+4. Insert one `OperationalEvent(event_type="llm.usage")` whose payload carries `model`, `task`, `prompt_tokens`, `completion_tokens`, `reasoning_tokens`, `cached_tokens`, `total_tokens`, `outcome`, `duration_ms`, `prompt_name`, `prompt_version`. When the call is *about* an existing row, the caller passes `subject_type` / `subject_id` and the event's `entity_type` / `entity_id` columns carry them; otherwise `entity_type` is the literal `"llm_usage"` (`:227`).
 5. Failures here are caught and logged as `llm.usage_event_failed` — **observability must never break the LLM work it is observing.**
 
 **That operational-events table is the source of truth for budgets and the cost dashboard.** There is no second aggregation column, so nothing can drift.
@@ -170,7 +170,7 @@ Two deliberate design details you should know so you do not misread it:
 **Error:** `could not connect to server` / `ConnectionRefusedError` on port 5432 or 5433.
 **Fix:** `make up`, then check `DATABASE_URL`.
 
-> **The trap most people hit on day one:** `.env.example` ships `DATABASE_URL=...@localhost:5433/...` (`.env.example:12-15`) while `docker-compose.yml` publishes **5432:5432** (`docker-compose.yml:9-10`). Copying the template verbatim gives you connection refused. Change the port in your `.env` to 5432, or add a compose override that maps 5433. Credentials come from the same `.env` (`POSTGRES_USER` / `POSTGRES_PASSWORD`), and changing them after the volume exists has no effect until the volume is dropped.
+> **The trap most people hit on day one:** `.env.example` ships `DATABASE_URL=...@localhost:5433/...` (`.env.example:11-14`) while `docker-compose.yml` publishes **5432:5432** (`docker-compose.yml:9-10`). Copying the template verbatim gives you connection refused. Change the port in your `.env` to 5432, or add a compose override that maps 5433. Credentials come from the same `.env` (`POSTGRES_USER` / `POSTGRES_PASSWORD`), and changing them after the volume exists has no effect until the volume is dropped.
 
 ### Migration errors
 **Error:** missing tables or columns; or `alembic upgrade` reports success but nothing changed.
@@ -212,7 +212,7 @@ Two deliberate design details you should know so you do not misread it:
 **Error:** `embedding IS NULL` persists past the expected window.
 Work through these in order:
 1. **Is a worker consuming the `embedding` queue?** See §1. This is the most common cause by a wide margin.
-2. **Budget block.** Query `llm.usage` events for `outcome = 'budget_exceeded'`, or call `GET /api/v1/admin/tenant-budget/status`. Raise the cap at `/admin/cost` or via `PUT /api/v1/admin/tenant-budget`.
+2. **Budget block.** Call `GET /api/v1/admin/tenant-budget/status` — a blocked tenant writes **no `llm.usage` event at all**, so there is nothing to query for; the tell is that the day's usage line stops growing. In worker logs look for `chunk_embedding_failed` naming `TenantBudgetExceeded`. Raise the cap at `/admin/cost` or via `PUT /api/v1/admin/tenant-budget`.
 3. **Dimension mismatch** — see §11.
 4. **The item is `not_relevant`.** That is the gate working, not a bug.
 
@@ -294,11 +294,12 @@ WHERE tenant_id = :t AND event_type = 'llm.usage'
   AND occurred_at > now() - interval '1 day'
 GROUP BY 1, 2 ORDER BY tokens DESC;
 
--- Calls that were refused by the budget gate.
-SELECT occurred_at, payload->>'model', payload->>'task'
+-- Calls the budget gate WARNED about (action = 'warn' lets the call through).
+-- Note: there is no equivalent query for BLOCKED calls. A block raises
+-- TenantBudgetExceeded before the call is made, so no event is written at all.
+SELECT occurred_at, payload->>'model', payload->>'task', payload->>'reason'
 FROM operational_events
-WHERE tenant_id = :t AND event_type = 'llm.usage'
-  AND payload->>'outcome' = 'budget_exceeded'
+WHERE tenant_id = :t AND event_type = 'llm.budget_warning'
 ORDER BY occurred_at DESC LIMIT 50;
 
 -- Relevant evidence that retrieval cannot see.
@@ -343,7 +344,7 @@ Celery takes heavy jobs out of the HTTP cycle. Extracting entities from 1,000 ti
 | --- | --- | --- |
 | `sync` | `sync.trigger_scheduled_syncs`, `run_backfill`, `run_incremental_sync` | backfills never start; retries pile up |
 | `hydration` | `hydration.hydrate_thread` | tickets exist but the conversation around them never appears |
-| `extraction` | `extraction.normalize_evidence`, `artifact.extract_attachment`, `backfill_evidence_types`, `rebuild_identity_snapshots` | raw objects exist, `evidence_items` stays flat |
+| `extraction` | `extraction.normalize_evidence`, `artifact.extract_attachment`, `extraction.rebuild_identity_snapshots` | raw objects exist, `evidence_items` stays flat |
 | `default` | `extraction.classify_relevance` (fast lane), `identity.*`, `maintenance.*`, `review_queue.*` | re-classification never completes |
 | `correlation` | `extraction.correlate_evidence`, `reconstruct_episode`, `compute_evidence_baseline` | **evidence grows, `correlation_edges` and `episodes` stay at zero** |
 | `embedding` | `extraction.chunk_evidence`, `embed_chunks_batch` | **chunks exist, `embedding IS NULL`, nothing is retrievable** |
@@ -351,6 +352,8 @@ Celery takes heavy jobs out of the HTTP cycle. Extracting entities from 1,000 ti
 | `evaluation` | drift, contradictions, retention, cleanup, verification, `ai_review_episodes`, `extract_issue_signature`, graph reconciliation | scheduled sweeps silently never run |
 
 `extraction.classify_relevance` is routed to `default` on purpose: it is a ~2.5 s gate call and must not queue behind 20–60 s episode tasks. Five hundred classifications once starved for about 40 minutes in the extraction FIFO.
+
+**`extraction.backfill_evidence_types` is not in this table because no worker knows it.** `workers/evidence_typing_tasks.py` is neither in the Celery app's `include` list nor imported by anything under `backend/src`, so a worker started from `celery_app` rejects the name instead of running it. If you dispatched it and nothing happened, that is why — not a queue problem.
 
 ### Monitoring the queues
 
@@ -369,7 +372,7 @@ redis-cli -n 1 hlen unacked
 Or just call `GET /api/v1/admin/pipeline-health`, which does exactly this plus the chain counts (`services/pipeline_health_service.py:58-84`).
 
 ### Retry behavior
-`task_acks_late=True` (`workers/celery_app.py:196`) means a task whose worker crashes mid-run is re-delivered to another worker. Application exceptions retry per the task's own decorator — for example `sync.run_backfill` retries 3× at 120 s, `sync.run_incremental_sync` 5× at 30 s, `extraction.normalize_evidence` 3× at 60 s.
+`task_acks_late=True` (`workers/celery_app.py:199`) means a task whose worker crashes mid-run is re-delivered to another worker. Application exceptions retry per the task's own decorator — for example `sync.run_backfill` retries 3× at 120 s, `sync.run_incremental_sync` 5× at 30 s, `extraction.normalize_evidence` 3× at 60 s.
 
 ### Dead-letter queue
 There is none. A task that exhausts its retries disappears from the active queue, leaving an error trace in structlog.
@@ -377,7 +380,9 @@ There is none. A task that exhausts its retries disappears from the active queue
 **Related trap:** poison messages live in the Redis broker (DB 1), not in Postgres, so they **survive a database rebuild**. If a queue keeps failing on the same task after you reset the database, flush the broker DB rather than hunting the code.
 
 ### Timing rule that explains several past bugs
-**Commit before you dispatch.** A task consumed before its transaction commits reads stale state and no-ops **without retry**. Every correct call site follows commit → `.delay(...)` → treat a broker failure as a warning, not a rollback (`api/v1/episodes.py:255-268`; `workers/evaluation_tasks.py:273-331`). The AI-review sweep goes further and commits **per episode** before dispatching, because a batch-end commit made every verdict hostage to the last one — one deadlock meant re-paying 50 LLM calls.
+**Commit before you dispatch.** A task consumed before its transaction commits reads stale state and no-ops **without retry**. Call sites that own their transaction follow commit → `.delay(...)` → treat a broker failure as a warning, not a rollback (`api/v1/episodes.py:255-278`; `workers/evaluation_tasks.py:273-331`). The AI-review sweep goes further and commits **per episode** before dispatching, because a batch-end commit made every verdict hostage to the last one — one deadlock meant re-paying 50 LLM calls.
+
+Services that do **not** own their transaction go through `dispatch_after_commit` (`services/deferred_dispatch.py:72-95`), which parks the send on the session and fires it from SQLAlchemy's `after_commit` event, dropping it on `after_rollback`. If you see queued tasks naming rows that do not exist, look for a service dispatching inline instead of through that helper — a rolled-back clustering pass once left 65 `pattern.generate_playbook_candidate` messages naming patterns that were never committed.
 
 ---
 
@@ -427,7 +432,7 @@ The response gives you `{"detail": "Internal server error", "request_id": "..."}
 2. **Output-token clamp** — `ceiling = settings.llm_task_output_tokens.get(task, settings.llm_max_output_tokens)` (`:290-291`).
 3. **Circuit breaker and timeout** — 120 s per call; 5 consecutive failures opens the breaker for 60 s with a single half-open probe (`ai/resilience.py:28-30`). The breaker is per-worker process by design; there is no cross-process coordination.
 4. **One fallback-model attempt** if `LLM_FALLBACK_MODEL` is set (`:365`).
-5. **JSON repair ladder** for truncated output (`:549-597`).
+5. **JSON repair ladder** for truncated output (`:544-597`).
 6. **Usage recorded in a `finally` block**, even on error.
 
 ### Budget debugging
@@ -437,7 +442,7 @@ The response gives you `{"detail": "Internal server error", "request_id": "..."}
 - **Token limit is checked before the cost cap**, so a tenant with only a token cap never sees `cost_cap_exceeded`.
 - There is a 60-second module-level usage cache (`:51`), so at most one over-cap call slips through per minute per process. Cross-worker races are unbounded and documented as such.
 
-**Operator symptom to recognize:** chunks stuck at `embedding IS NULL` plus `llm.usage` events with `outcome = 'budget_exceeded'`. Fix at `/admin/cost` or `PUT /api/v1/admin/tenant-budget`. Before a bulk backfill, provision a real budget row — a measured 84-ticket Zoho backfill burned the 2M default in about two hours and froze mid-run.
+**Operator symptom to recognize:** chunks stuck at `embedding IS NULL` plus a tenant whose `llm.usage` events simply **stop** — a blocked call raises before the usage recorder runs, so silence is the signal, not an error row. Confirm with `GET /api/v1/admin/tenant-budget/status`. Fix at `/admin/cost` or `PUT /api/v1/admin/tenant-budget`. Before a bulk backfill, provision a real budget row — a measured 84-ticket Zoho backfill burned the 2M default in about two hours and froze mid-run.
 
 ### Prompt debugging
 Prompts are **immutable per version**. To change behavior you add a new version and update the default; you never edit a shipped one, because evaluation baselines pin the exact strings.
@@ -477,7 +482,7 @@ Check `sync_runs`: `status`, `items_processed`, and the `errors` JSONB.
 ### Stage 2 — did the raw payload land?
 `SELECT count(*) FROM raw_evidence_objects WHERE tenant_id = :t;`
 
-**Then check for offload.** Any payload over `OFFLOAD_THRESHOLD_BYTES = 32_768` is uploaded to MinIO and the column keeps only `{"_offloaded": true, "size_bytes": N}` (`services/ingestion_persistence.py:16, 84-87`).
+**Then check for offload.** Any payload over `OFFLOAD_THRESHOLD_BYTES = 32_768` is uploaded to MinIO and the column keeps only `{"_offloaded": true, "size_bytes": N}` (`services/ingestion_persistence.py:16, 85-87`).
 
 > **This is the single most under-appreciated debugging fact in the system: every code path and every ad-hoc SQL query that reads `raw_payload` fields silently sees the stub for large rows.** Ingest-priority ordering sorts them as zero-thread/no-resolution; reply-inheritance reconciliation explicitly skips them; and any backfill you write over payload fields will silently skip **the biggest tickets — exactly the longest conversations**. If a SQL backfill "worked" but the longest articles are still NULL, this is why.
 >
@@ -487,17 +492,17 @@ Check `sync_runs`: `status`, `items_processed`, and the `errors` JSONB.
 > ```
 
 ### Stage 3 — did normalization create evidence?
-The ordered pipeline is `_normalize` (`workers/extraction_tasks.py:122-628`). Reasons an evidence row may legitimately not exist:
+The ordered pipeline is `_normalize` (`workers/extraction_tasks.py:122-641`). Reasons an evidence row may legitimately not exist:
 
-- **The noise gate rejected it.** For hydrated messages only, `message_noise_reason` (`services/message_filter.py:81, 174-206`) returns `delivery_failure`, `quote_only`, `empty` or `coordination_only`. `coordination_only` means under `MIN_DIAGNOSTIC_CHARS = 150` (`:52`) **and** carrying no technical signal across 15 regexes (error codes, paths, versions, hosts, URLs, IPs, emails, identifier-shaped tokens, stack traces, SQL, shell). Measured: 47 % of 18,907 live messages rejected. The task returns `{"status": "skipped_noise_message", "reason": ..., "filter_version": "v1"}` and **no evidence row is created** — but the raw object stays, so a rule change can re-judge every rejected message exactly.
-- **It deduped.** `content_hash` is a SHA-256 over the **raw** body, computed pre-cleaning and pre-redaction so tuning a regex never breaks dedupe. A hit *refreshes* the existing row (facets, `case_state`, `knowledge_state`, a missing embedding, attachments) and returns `{"deduped": true}` — and the wrapper then **skips** the correlation/baseline/hydration fan-out for that row.
+- **The noise gate rejected it.** For hydrated messages only, `message_noise_reason` (`services/message_filter.py:174-206`) returns one of the four values in `NOISE_REASONS` (`:81`): `delivery_failure`, `quote_only`, `empty` or `coordination_only`. `coordination_only` means under `MIN_DIAGNOSTIC_CHARS = 150` (`:52`) **and** carrying no technical signal across the 16 regexes in `_TECHNICAL_SIGNALS` (`:56-79` — error codes, paths, files with extensions, versions, URLs, IPs, emails, hostnames, identifier-shaped tokens, stack traces, SQL, shell). Measured: 47 % of 18,907 live messages rejected. The task returns `{"status": "skipped_noise_message", "reason": ..., "filter_version": "v1"}` and **no evidence row is created** — but the raw object stays, so a rule change can re-judge every rejected message exactly.
+- **It deduped.** `content_hash` is a SHA-256 over the **raw** body, computed pre-cleaning and pre-redaction so tuning a regex never breaks dedupe. A hit *refreshes* the existing row (facets, `case_state`, `knowledge_state`, a missing embedding, identities, decisions, attachments) and returns `{"deduped": true}`. Correlation and baseline (or attachment extraction) **still** fire for that row; the only thing suppressed is auto-hydration, guarded by `not res.get("deduped")` in the wrapper (`extraction_tasks.py:1356`).
 - **An insert race.** `IntegrityError` on the `(tenant_id, content_hash)` unique index → rollback → adopt the winner → `{"deduped": true, "raced": true}`, with no repeated LLM spend.
 - **The offloaded payload has no storage key** → `{"error": "raw_payload_offloaded_without_storage_key"}` (legacy corruption).
 
 ### Stage 4 — is the evidence enriched?
 Look at the row's columns:
 - **`relevance_state`** — `unclassified` means the classifier has not run or failed (fail-open: it logs `relevance_classification_failed` and continues into the full pipeline).
-- **`not_relevant` with confidence ≥ 0.75** trips the extraction gate (`extraction_tasks.py:475-479`). Those rows keep their evidence row for audit but get **no** message-function call, no identity, no decisions, **no embedding and no chunking** — they are invisible to vector search by construction. That is the design, not a bug.
+- **`not_relevant` with confidence ≥ 0.75** trips the extraction gate (`extraction_tasks.py:484-492`). Those rows keep their evidence row for audit but get **no** message-function call, no identity, no decisions, **no embedding and no chunking** — they are invisible to vector search by construction. That is the design, not a bug. Error-signature fingerprinting still runs on them (`:520-539`), because a confidently-irrelevant thread can still carry a pasted stack trace.
 - **`embedding IS NULL`** on a relevant row — see §11.
 - **`canonical_entity_refs`** — an empty `identities` list is the "already attempted" marker; a missing key means identity extraction never ran.
 - **`chunked_at IS NULL`** — chunking never ran. Note that evidence ingested before the chunking pipeline landed keeps `chunked_at IS NULL`, and a standalone backfill drainer has not shipped.
@@ -510,7 +515,7 @@ If a sync run shows `errors["handoff"]` with `message: normalize_enqueue_failed`
 ### Stage 6 — thread hydration
 A ticket exists but the conversation around it does not:
 - `threads.hydration_status` should move `pending` → `complete`.
-- Auto-hydration fires from `_normalize` only when the payload carried a `_thread_id`, the record is **not itself a hydrated message**, and the row was not deduped (`extraction_tasks.py:611-615`). That `is_hydrated_message` guard is what prevents a 10–50× re-hydration amplification loop.
+- Auto-hydration is decided in two places: `_normalize` only reports a `_thread_external_id` when the record is **not itself a hydrated message** (`extraction_tasks.py:626-628`), and the task wrapper only dispatches `hydrate_thread` when that id is present and the row was not deduped (`:1354-1359`). That `is_hydrated_message` guard is what prevents a 10–50× re-hydration amplification loop.
 - Threads are created lazily by normalization, so calling the manual hydration API before normalize processed the parent returns 404.
 - Hydration strips text already seen earlier in the same thread (`clean_thread_bodies`), because only hydration holds the whole thread in arrival order. Measured: 89 % of substantive text was repetition.
 
@@ -546,14 +551,16 @@ JOIN pg_index i ON i.indexrelid = c.oid
 WHERE c.relname LIKE '%halfvec%' OR c.relname LIKE '%hnsw%';
 ```
 
-**3. Recall, not correctness.** The HNSW indexes are global across tenants while every query post-filters by `tenant_id`. At pgvector's default `ef_search = 40`, a small tenant's rows can be **entirely absent** from the candidate set and the query silently returns fewer rows than `limit`. Every caller therefore runs `tune_ann_recall(db)` → `SET LOCAL hnsw.ef_search = 200` before the ORDER BY (`search/vector_ops.py:26-37`). If you write a new ANN query and skip that call, you will see exactly this symptom.
+**3. Recall, not correctness.** The HNSW indexes are global across tenants while every query post-filters by `tenant_id`. At pgvector's default `ef_search = 40`, a small tenant's rows can be **entirely absent** from the candidate set and the query silently returns fewer rows than `limit`. Every caller therefore runs `tune_ann_recall(db)` → `SET LOCAL hnsw.ef_search = ANN_EF_SEARCH` (200) before the ORDER BY (`search/vector_ops.py:31-37`). If you write a new ANN query and skip that call, you will see exactly this symptom.
 
-**4. Visibility filters.** Both passes apply `_visibility_predicates` (`search/vector_search.py:49-70`): not `sensitivity_label = 'legal_hold'`, `redaction_status` not in `('pending','pending_redaction')`, and `access_policy_id` not in the caller's excluded set. Admin roles (`platform_super_admin`, `tenant_admin`, `domain_admin`) get no exclusions (`search/access_control.py:12-39`).
+**4. Visibility filters.** Both ANN passes apply `_visibility_predicates` (`search/vector_search.py:49-70`): not `sensitivity_label = 'legal_hold'`, `redaction_status` not in `('pending','pending_redaction')`, and `access_policy_id` not in the caller's excluded set. Admin roles (`platform_super_admin`, `tenant_admin`, `domain_admin`) get no exclusions (`search/access_control.py:12-39`).
+
+**Lexical search now applies the identical gate**, importing the same helper (`search/pg_fts.py:10, 65-78`). It previously filtered access policies only, so a legal-hold or pending-redaction record hidden from semantic search was still reachable by full-text, by ticket number, or by a title substring. If you are comparing the two surfaces and expect an old asymmetry, it is gone.
 
 **5. Knowledge lifecycle.** `evidence_items.knowledge_state` withholds `draft`, `review` and `retired` articles. **NULL serves** — "the source did not say" must be current, or every corpus but ServiceNow's would empty (`services/knowledge_lifecycle.py:133-152`). If a KB article vanished from results after a sync, check whether its source marked it retired.
 
 ### Dimension mismatches
-`generate_embedding` sends `dimensions: 3072` and **hard-fails any model whose vector is not exactly 3,072 floats**, naming the fix in the error (`ai/provider.py:787-793`). Note the trap: the code default `DEFAULT_EMBEDDING_MODEL` is `text-embedding-3-small`, which returns **1,536** and will raise. `.env.example:87-89` pins `text-embedding-3-large` and names `vertex_ai/gemini-embedding-001` as the alternative. Your deployed value comes from the untracked `.env`.
+`generate_embedding` asks for `dimensions: 3072` — skipped when the model name contains `gemini-embedding`, which returns 3,072 natively (`ai/provider.py:777-779`) — and then **hard-fails any model whose vector is not exactly 3,072 floats**, naming the fix in the error (`:786-793`). Note the trap: the code default `DEFAULT_EMBEDDING_MODEL` is `text-embedding-3-small` (`config.py:58`), which returns **1,536** and will raise. `.env.example:87-89` pins `text-embedding-3-large` and names `vertex_ai/gemini-embedding-001` as the alternative. Your deployed value comes from the untracked `.env`.
 
 ### Results are correct but repetitive
 That is what MMR exists to prevent. `search_evidence_semantic` oversamples chunks to `min(max(80, limit*3), 240)`, applies maximal-marginal-relevance at chunk level with `MMR_LAMBDA = 0.7`, then rolls up to **one hit per parent evidence, its closest chunk** (`search/vector_search.py:204-243`; `search/chunk_rollup.py:31, 111-121`). A malformed chunk vector makes MMR degrade to pure distance ordering rather than failing the request — so if diversity looks broken, suspect a corrupt embedding.
@@ -565,7 +572,7 @@ It is: a second **parent-pass** ANN over `evidence_items.embedding` runs in the 
 `search_evidence_semantic_for_playbook` distinguishes two cases and logs the second: "no chunk matched" versus **"this version has no provenance rows at all"** (`search.playbook_scope_has_no_evidence_links`, `vector_search.py:120-145`). The second means `playbook_evidence_links` is empty for that published version.
 
 ### `/runtime/match` returns an empty list
-Not an error. `rank_playbooks` **abstains** below `MIN_RECOMMENDATION_SCORE = 0.35` and logs `ranking.abstained` with the top score (`search/hybrid_ranker.py:168-171, 368-379`). An empty list means "no recommendation", by contract. Check the log line to see whether candidates existed and how close they came.
+Not an error. `rank_playbooks` **abstains** below `MIN_RECOMMENDATION_SCORE = 0.35` (`search/hybrid_ranker.py:171`) and logs `ranking.abstained` with the top score and the threshold that rejected it (`:368-378`). An empty list means "no recommendation", by contract. Check the log line to see whether candidates existed and how close they came. A caller can pass its own `min_score`, which overrides the constant (`:369`).
 
 Other reasons the ranker returns nothing: no approved playbooks for the tenant; every candidate filtered out by `domain_id`, the service token's `allowed_domain_ids`, or the risk cap (admins uncapped, `knowledge_manager` and service accounts capped at `high`, everyone else at `medium`); or a candidate with no **published** version, which is skipped entirely.
 
@@ -587,7 +594,7 @@ Other reasons the ranker returns nothing: no approved playbooks for the tenant; 
 
 Between layers 2 and 3 sits a **candidacy gate** (`services/identity_candidacy.py:65-196`) that rejects mentions before they cost an LLM call: facet types like environment/version/vendor (they belong in `source_facets`), unsupported entity types (only person, device, application, service bear identity), and things that are not name-shaped. Identity work was **78 % of all model spend** before that gate existed.
 
-**Promotion:** a `provisional` identity linked by ≥2 distinct evidence items and ≤5 flips to `resolved` — the moment it first *could* correlate anything, with the upper bound acting as a rarity guard against product-name hubs (`services/identity_promotion.py:56-138`). `needs_review` rows are deliberately never auto-promoted.
+**Promotion:** a `provisional` identity linked by ≥`CORROBORATION_DEGREE_MIN` 2 distinct evidence items and ≤`RARE_DEGREE_MAX` 5 flips to `resolved` (`services/identity_promotion.py:58-69`, applied in `promote_corroborated_identities` at `:72-138`) — the moment it first *could* correlate anything, with the upper bound acting as a rarity guard against product-name hubs. `needs_review` rows are deliberately never auto-promoted.
 
 **Merging** is human-decided. The daily `identity.reconcile_identities` beat task **proposes, never merges** — proposals land in `identity_merge_proposals` above a `MIN_CONFIDENCE` of 0.95, and rejections persist so the schedule never re-raises them.
 
@@ -674,11 +681,12 @@ Reasons a signature may not exist:
 When a signature already exists, `_link_recurrence` adds a **`recurrence` case membership at confidence 0.6** from the new episode's first evidence item to the previous occurrence's case. Again: that link is for precedent retrieval and the cluster resolver never expands through it.
 
 ### Patterns never form
-- **There is no beat schedule for `pattern.cluster_episodes`.** It is dispatched on approval (single and bulk), by the AI-review sweep **once per domain that had approvals**, and manually via `POST /api/v1/patterns/cluster`. Passing `None` for the domain clusters only NULL-domain episodes, and on a live graph every episode is domain-scoped — that bug produced exactly zero patterns while looking like it ran.
+- **There is no beat schedule for `pattern.cluster_episodes`.** It is dispatched on approval (single at `api/v1/episodes.py:275`, bulk at `:335`), by the AI-review sweep **once per domain that had approvals** (`workers/evaluation_tasks.py:340-347`), and manually via `POST /api/v1/patterns/cluster` (`api/v1/patterns.py:412`). Passing `None` for the domain clusters only NULL-domain episodes, and on a live graph every episode is domain-scoped — that bug produced exactly zero patterns while looking like it ran.
 - **Domain scoping is strict:** a domain pass sees only that domain's episodes; the global pass sees only `domain_id IS NULL`. NULL episodes are deliberately not folded into domain passes, because whichever pass ran first would capture them arbitrarily.
-- Candidates must be **approved, embedded and unlinked**; the pass repairs missing episode embeddings first, then takes 100 per run.
-- Thresholds: an existing pattern absorbs an episode at cosine distance **< 0.35** (subject to LLM adjudication); a new cluster forms from neighbours at **< 0.20**; single-episode clusters are allowed.
-- **Adjudication fails open**: if the LLM is down or budget-blocked, `validate_pattern_match` returns `is_match=True` at 0.75, so during an outage the embedding probe alone decides membership.
+- Candidates must be **approved, embedded and unlinked**; the pass repairs missing episode embeddings first, then takes 100 per run (`workers/pattern_tasks.py:214`).
+- **Thresholds are named constants — read them, do not remember them.** An existing pattern becomes a candidate at cosine distance **< `PATTERN_MATCH_MAX_DISTANCE` = 0.30** (`pattern_tasks.py:50`), still subject to LLM adjudication; a new cluster forms from neighbours at **< `CLUSTER_GROUP_MAX_DISTANCE` = 0.27** (`:60`); single-episode clusters are allowed. Both were tuned against the measured pairwise spread on this corpus (min 0.157, p01 0.257, median 0.409, max 0.524 — everything is an AutomationEdge support incident, so the embeddings bunch), and the grouping constant was raised from 0.20, which left 126 of 150 probed episodes able to group with nothing. Re-measure both if the corpus mix changes; the in-file comments carry the full sweep.
+- **The match query orders by distance and takes the NEAREST pattern member** (`pattern_tasks.py:243-256`). The `ORDER BY` used to be missing, so `LIMIT 1` returned an arbitrary qualifying row: at the old 0.35 gate every unlinked episode had *some* member within range, the validator was handed a near-random pattern and correctly rejected it, and 88 % of episodes went off to mint singleton patterns. Asking about the nearest pattern took the validator's accept rate from 12 % to 40 % on the same corpus.
+- **Adjudication fails open**: if the LLM is down or budget-blocked, `validate_pattern_match` returns `is_match=True` at confidence 0.75 (`ai/extractors/pattern_extractor.py:112`), so during an outage the embedding probe alone decides membership.
 - **Known gap:** a full 100-episode pass has run 25 minutes in a **single database transaction** (~156 LLM calls) with nothing committed until the end. A late failure rolls back every row while the spend stays spent, and `patterns` reads 0 for the whole run. If clustering "did nothing" but the cost dashboard shows a spike, this is why.
 
 ---
@@ -688,13 +696,13 @@ When a signature already exists, `_link_recurrence` adds a **`recurrence` case m
 ### Missing nodes or edges
 The Graph Explorer (`/graph-explorer`) renders `graph_edges`. If nodes are missing, the writers have not run yet: identity linking, decision extraction, correlation, episode graph construction, pattern enrichment, or the 6-hourly `evaluation.reconcile_graph_relationships` materializer.
 
-`GraphRelationshipMaterializer.reconcile_tenant` (`graph/agent/materializer.py:54-359`) is **additive-only and idempotent** — it streams relational rows and calls `ensure_edge` for each. There is no event-driven materialization, so a freshly written relational row can be up to six hours from having its edge.
+`GraphRelationshipMaterializer.reconcile_tenant` (`graph/agent/materializer.py:107-359`) is **additive-only and idempotent** — it streams relational rows and calls `ensure_edge` for each. There is no event-driven materialization, so a freshly written relational row can be up to six hours from having its edge.
 
 ### An edge write raised `UnknownEdgeType`
-Intended. All 69 edge types are declared in `graph/edge_types.py:1-33` and `require_registered` is enforced in `add_edge`, `ensure_edge`, `close_edge` and `replace_edge`. Register the type — and in the same change either allowlist it in `MAF_RELATIONSHIP_TYPES` or record why it is excluded in `PROJECTION_EXCLUSIONS`, because `backend/tests/test_edge_type_registry.py` fails if you do neither.
+Intended. All 69 edge types are declared across five group frozensets in `graph/edge_types.py:36-137`, and `require_registered` (`:186`) is called by `add_edge`, `ensure_edge`, `close_edge` and `replace_edge`. Register the type — and in the same change either allowlist it in `MAF_RELATIONSHIP_TYPES` (`graph/agent/profiles.py:89`) or record why it is excluded in `PROJECTION_EXCLUSIONS`, because `backend/tests/test_edge_type_registry.py` fails if you do neither.
 
 ### Duplicate-looking edges
-Check `domain_id`. The partial unique index `uq_graph_edges_active_logical` covers the full logical key `WHERE valid_to IS NULL` with `NULLS NOT DISTINCT` (`models/pattern.py:187-199`), so the **same** logical edge written with **different** domains is two distinct rows. Every writer must follow the one domain-derivation rule (`graph/agent/materializer.py:24-37`).
+Check `domain_id`. The partial unique index `uq_graph_edges_active_logical` covers the full logical key `WHERE valid_to IS NULL` with `NULLS NOT DISTINCT` (`models/pattern.py:187-199`), so the **same** logical edge written with **different** domains is two distinct rows. Every writer must follow the one domain-derivation rule, written out per edge type at `graph/agent/materializer.py:23-37`.
 
 ### `weight` vs `confidence`
 They are different and both are stored: `weight` is traversal importance, `confidence` is belief (`graph/builder.py:63-72`). Conflating them was a real defect. If a traversal ranks something oddly, check which of the two the writer actually set.
@@ -717,7 +725,12 @@ They are different and both are stored: `weight` is traversal importance, `confi
 ### The projection an agent sees
 `AgentGraphBudget` defaults to 24 nodes / 48 relationships / depth 2 / 12,000 characters, hard-capped at 100 / 250 / 3 / 50,000 (`graph/agent/contracts.py:26-30`). If an agent "cannot see" something, check whether it was budget-truncated: the response carries `truncated` and `truncation_reasons`.
 
-Profile `maf.v1` (`graph/agent/profiles.py`) declares 20 node types and 50+ relationship types. **Deliberate exclusions carry their reasons in comments** — `mentions_identity` is excluded because it fans out 40–70 edges per handful of tickets and would spend the entire budget on identity hubs; `related_to` is excluded for unknown semantics plus hub fan-out. An "expected" relationship that never appears is often a deliberate exclusion, not a bug.
+Profile `maf.v1` declares 20 node types (`graph/agent/profiles.py:59`) and 53 relationship types (`:89`), leaving 16 of the 69 registered edge types untraversable. **Every exclusion carries its reason** in `PROJECTION_EXCLUSIONS` (`graph/edge_types.py`) — `mentions_identity` is excluded because it fans out 40–70 edges per handful of tickets and would spend the entire budget on identity hubs; `related_to` is excluded for unknown semantics plus hub fan-out. An "expected" relationship that never appears is often a deliberate exclusion, not a bug.
+
+### An episode the agent should see is missing — or one it should not see is there
+`AGENT_VISIBLE_EPISODE_STATES` is `{"approved", "pending_review"}` (`graph/agent/hydrators.py:108`). So **unapproved drafts do reach the agent**, deliberately, as reference material; `superseded` drafts do not, because they would read as independent corroboration of an episode the agent can already see.
+
+A draft that reaches the agent is marked twice over: its node label is prefixed `[UNAPPROVED DRAFT]` and an `agent_caveat` fact spells out that no reviewer has confirmed it (`hydrators.py:448-463`). Drafts also seed from their own small allocation — `UNAPPROVED_EPISODE_SEED_LIMIT = 2`, separate from the approved slots so a draft can never evict a reviewed precedent — and their seed relevance is multiplied by `UNAPPROVED_SEED_RELEVANCE_FACTOR = 0.8`. That discount is deliberately smaller than the spread of the admitted similarity band (0.6–0.9), so an approved episode outranks a draft of equal similarity while a clearly better draft can still win (`graph/agent/repository.py:106-117`).
 
 ### Tool failures
 Check `operational_events` for `agent_graph.projected` and `tool.shadow_executed`. Tools in shadow mode (`suggest_only`) do not mutate state; they simulate.
@@ -748,7 +761,7 @@ The annotated per-variable reference is [13_Developer_Guide.md §11](13_Develope
 
 `codewiki/KNOWN_GAPS.md` is the authoritative list and should be read before you claim any feature works end to end. The constraints that most often turn into debugging sessions:
 
-- **Worker queue coverage.** A worker that does not consume `correlation` and `embedding` produces a pipeline that looks healthy and silently builds nothing. The RUNBOOK's worker block predates those lanes.
+- **Worker queue coverage.** A worker that does not consume `correlation` and `embedding` produces a pipeline that looks healthy and silently builds nothing. Check the `-Q` list on any fleet you did not start yourself.
 - **Sync overlap.** Concurrent syncs for one source object are handled — the second returns `skipped_locked` via a transaction-scoped advisory lock, which releases automatically so a crashed worker cannot leak it.
 - **Offloaded raw payloads.** Payloads over 32 KB become a MinIO stub, so **SQL filtering on `raw_payload` silently skips the biggest rows**. Any backfill you write over payload fields inherits this.
 - **Raw-blob lifecycle.** There is no TTL or GC for raw blobs belonging to *live* evidence; retention for those relies on external bucket lifecycle rules. What *is* automated: the daily `evaluation.cleanup_hard_deleted_evidence` sweep reaps raw blobs and rows orphaned by a hard-delete purge, plus dangling `graph_edges` (`workers/cleanup_tasks.py:161-223`). **Artifact blobs are a documented stub returning 0** — the rows CASCADE, but once they are gone the blobs cannot be found by a DB scan, so run an S3 lifecycle rule on the `artifacts/` prefix.
@@ -758,7 +771,7 @@ The annotated per-variable reference is [13_Developer_Guide.md §11](13_Develope
 - **Zoho articles have never been ingested** on the live tenant — the module is discovered but both approvals are false, so the Zoho knowledge-state path is code-verified but corpus-dark. Zoho ticket behaviour *is* live-verified.
 - **Graph Explorer is read-only.** All graph mutations happen through backend services.
 - **Role-binding scope is unenforced** — see §8.
-- **Multi-chunk episode synthesis stacks steps.** Clusters over 20 evidence items (2–3 LLM calls) produced episodes with each chunk's steps concatenated and all renumbered from #1. Row-level fields are clean; only steps stack.
+- **Stacked episode timelines — now fenced at the database.** The 2026-08-18 run left 949 live episodes with several narrations' step lists concatenated onto one episode, each renumbered from step 1 (worst case: 319 steps across 24 orders). The writer could not be found by reading the code — every visible path only writes steps to a freshly created row — so migration `0071_episode_step_uniqueness` deduplicated the data (originals kept in `episode_steps_stacked_backup`) and added `uq_episode_step_order` on `(episode_id, step_order)`. The next append now raises `IntegrityError` with a stack trace naming the culprit. Note the working theory that multi-chunk synthesis was responsible is **not** established: clusters over `MAX_ITEMS_PER_CALL = 20` do split into separate calls (`ai/extractors/episode_extractor.py:44`), but that path writes one episode per chunk rather than appending.
 - **Poison messages survive a database rebuild** because they live in the Redis broker (DB 1).
 
 ---

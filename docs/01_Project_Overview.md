@@ -580,7 +580,7 @@ These are the ones to read before changing anything, all in `backend/src/context
 |---|---|---|
 | `DEFAULT_EMBEDDING_MODEL` | `text-embedding-3-small` (a placeholder — see §4.20) | Must return exactly 3,072 dimensions or every embedding call raises |
 | `DEFAULT_CLASSIFICATION_MODEL` / `DEFAULT_EXTRACTION_MODEL` | `vertex_ai/gemini-2.5-flash` | The classification and extraction lanes |
-| `PATTERN_MODEL` / `PLAYBOOK_MODEL` | `gemini-2.5-flash` / `gemini-3.7-flash` | Pattern lane deliberately unpromoted pending its own A/B (config.py:59-66) |
+| `PATTERN_MODEL` / `PLAYBOOK_MODEL` | `vertex_ai/gemini-2.5-flash` / `vertex_ai/gemini-3.7-flash` | Pattern lane deliberately unpromoted pending its own A/B (config.py:59-67) |
 | `LLM_FALLBACK_MODEL` | unset | When set, one failed call retries here; usage records the model that actually served |
 | `LLM_NUM_RETRIES` | 2 | Each retry is a **fully billed** call, so this multiplies worst-case cost (config.py:91) |
 | `LLM_MAX_OUTPUT_TOKENS` | 4096 | Global output ceiling. Overridden per task to 16384 for `playbook`, `extraction`, and `pattern` — read the comment at config.py:96-131 before touching it; a 4096 ceiling once shipped a playbook with zero steps while reporting success |
@@ -646,7 +646,8 @@ When a tenant admin configures a new source (say a ServiceNow instance), they pr
    The reason for keeping the raw payload at all is exactly as stated before: if extraction logic changes, we re-process locally instead of re-downloading from the source.
    **The trap this creates**, and it has bitten real backfills: any SQL that filters or sorts on `raw_payload` silently skips the offloaded rows, because they only contain the stub. That means the *longest* tickets and articles — the ones you most want — are exactly the ones a SQL backfill misses. Re-sync rather than backfill by SQL.
 5. **Crash-safe handoff.** The job commits the raw rows, *then* enqueues one `normalize_evidence` task per new row, so a worker can never read an uncommitted row. If the broker fails partway through, the un-enqueued ids are parked on the source object under `metadata_extra["pending_normalize_raw_ids"]`, the run is marked failed with a handoff record, and the next successful run drains the backlog first (backend/src/contextedge/services/sync_worker_service.py:301).
-6. **Cooperative pause and cancel.** An operator can pause or cancel a running sync. The connector polls a control flag between pages and every 25 detail records, and the check runs on its own fresh database connection — because the sync job's transaction started before the operator's write and literally cannot see it (sync_worker_service.py:398-416). A stop **persists everything already fetched, with its checkpoint**; cancel is not a rollback.
+6. **Cooperative pause and cancel.** An operator can pause or cancel a running sync. The sync job installs a control callback on the connector (`set_control_check`, backend/src/contextedge/connectors/base.py:94), and the check runs on its own fresh database connection — because the sync job's transaction started before the operator's write and literally cannot see it (sync_worker_service.py:398-416). A stop **persists everything already fetched, with its checkpoint**; cancel is not a rollback.
+   **Be precise about coverage:** the base-class check is a no-op by default, and today only the Zoho Desk connector actually calls it inside its loops — between pages and every `CONTROL_CHECK_EVERY = 25` detail records (backend/src/contextedge/connectors/zoho_desk/connector.py:128, 818, 946). For every other connector a stop only takes effect between invocations, which on a long backfill can be many minutes.
 7. **Rate limiting — be precise about this.** Every connector declares a `rate_limit_config()` with requests-per-second and burst size, **but nothing consumes it today** (declared at backend/src/contextedge/connectors/base.py:140 and on each connector; no caller anywhere). There is no Redis token bucket. What actually protects you from being throttled is per-connector retry logic: bounded attempts with backoff that honours the `Retry-After` header on 429 and 5xx responses, and immediate failure on other 4xx.
 8. **Error handling.** A connector exception marks the run failed, leaves the checkpoint un-advanced, and lets Celery retry — backfill 3 times at 120s, incremental sync 5 times at 30s (backend/src/contextedge/workers/sync_tasks.py:39, 68).
 
@@ -660,14 +661,14 @@ Once the data is ingested, it is still a chaotic mess of comments. A ticket migh
 
 **What is assembled before any model sees anything.** Reconstruction does *not* run on a single ticket. `resolve_episode_cluster` first materializes the connected component over case links and correlation edges — for the Acme VPN incident, that pulls the ServiceNow ticket, the Teams thread, and the quoting email into one set. The cluster is bounded at 50 members, 3 hops, and a 30-day window from the nearest seed, and legal-hold and pending-redaction rows are excluded **in the SQL query itself**, so a withheld record can never reach a model even accidentally.
 
-**The gates that run before spending a call** (`_reconstruct`, backend/src/contextedge/workers/extraction_tasks.py:995), in order:
+**The gates that run before spending a call** (`_reconstruct`, backend/src/contextedge/workers/extraction_tasks.py:1008), in the order the code applies them:
 
-1. **Debounce, 180 seconds**, re-checked at run time — a thread still filling up is left alone. A starvation guard forces synthesis within 30 minutes anyway, so a never-quiet channel still gets narrated.
-2. **Minimum cluster size 3.** Honest caveat: a two-item cluster that never grows is skipped *terminally*, not deferred.
-3. **An optional resolution gate**, off by default, that defers clusters showing no sign of a fix anywhere in them. It reads the source system's own `resolved` status first, and only then falls back to matching prose.
-4. **A per-cluster advisory lock.** Eight concurrent workers once minted eight identical episodes in 46 seconds.
-5. **Draft idempotency** on a fingerprint of the exact member set.
-6. **A growth gate:** re-narrating requires the cluster to be at least 1.5× the size of an episode that already covers it. Without it, ten new messages on a ten-item cluster paid for ten full syntheses of which a dedup sweep retired nine.
+1. **Minimum cluster size 3** (`MIN_AUTO_SYNTHESIS_CLUSTER`, extraction_tasks.py:769, checked at 1029). Honest caveat: a two-item cluster that never grows is skipped *terminally*, not deferred.
+2. **An optional resolution gate**, off by default, that defers clusters showing no sign of a fix anywhere in them (extraction_tasks.py:1046). It reads the source system's own `case_state` first, and only then falls back to matching prose.
+3. **A per-cluster advisory lock** (extraction_tasks.py:1072-1083). Eight concurrent workers once minted eight identical episodes in 46 seconds.
+4. **A settlement re-check against the 180-second debounce** (`RECONSTRUCT_DEBOUNCE_SECONDS`, extraction_tasks.py:759, re-checked at 1119) — a thread still filling up is left alone. A starvation guard (`MAX_SYNTHESIS_DELAY_SECONDS = 1_800`, extraction_tasks.py:847) forces synthesis within 30 minutes anyway, so a never-quiet channel still gets narrated.
+5. **Draft idempotency** on a fingerprint of the exact member set (extraction_tasks.py:1139).
+6. **A growth gate:** re-narrating requires the cluster to be at least 1.5× the size of an episode that already covers it (`MIN_RESYNTHESIS_GROWTH = 0.5`, extraction_tasks.py:787, applied at 1172). Without it, ten new messages on a ten-item cluster paid for ten full syntheses of which a dedup sweep retired nine.
 
 **The call itself.** Each item is labelled `[ev-1]`, `[ev-2]`, … with its source role, and the whole block is wrapped in untrusted-content markers before being sent. Up to 20 items go in one call; bigger clusters are chunked.
 
@@ -689,7 +690,7 @@ One of the most interesting parts of ContextEdge is the graph. We don't just sto
 
 - **Nodes:** an `episode`, a `pattern`, a `playbook`, an `evidence` item, an `entity` (a CI, a service, a team), a `decision`, an `issue_signature`, and more.
 - **Edges:** the connections. `playbook -derived_from-> pattern`, `episode -belongs_to-> pattern`, `pattern -supported_by-> evidence`, `evidence -affects_ci-> entity`.
-- Everything lives in one table, `graph_edges` (backend/src/contextedge/models/pattern.py:174-273).
+- Everything lives in one table, `graph_edges` (backend/src/contextedge/models/pattern.py:174-281).
 
 **Three design choices worth understanding:**
 
@@ -770,11 +771,11 @@ The design is dominated by one theme: **spend the cheap deterministic check firs
 | Gate | Where | What it saves |
 |---|---|---|
 | Hydrated-message noise gate | `services/message_filter.py` | 47% of 18,907 live messages never reach a model at all |
-| Quoted-text stripping | `services/thread_text_service.py` | ~92% of raw conversational characters were repetition |
-| Relevance skip gate (≥0.75 confidence) | extraction_tasks.py:475-479 | No embedding, identity, decision, or chunking for confidently-irrelevant items |
+| Quoted-text stripping | `services/thread_text_service.py:1-7` | 89% of the substantive text in a thread was already present earlier in the same thread (worst threads 93-94%) |
+| Relevance skip gate (≥0.75 confidence) | extraction_tasks.py:488-492 | No embedding, identity, decision, or chunking for confidently-irrelevant items |
 | Identity candidacy gate | `services/identity_candidacy.py` | Identity work was 78% of all model spend before it |
-| Facet-stated applicability | extraction_tasks.py:704-719 | Skips a ~7,200-token call whenever the source already states environment and version |
-| Episode debounce / min-cluster / growth gates | extraction_tasks.py:746-834 | Episode synthesis was 29% of tokens with 71% of output later superseded |
+| Facet-stated applicability | extraction_tasks.py:720-731 | Skips a ~7,200-token call whenever the source already states environment and version |
+| Episode debounce / min-cluster / growth gates | extraction_tasks.py:750-847 | Episode synthesis was 29% of tokens with 71% of output later superseded |
 | Sweep deferral during bulk ingest | `workers/pattern_tasks.py:736-748` | Stops dedup and AI review churning drafts the next burst regrows |
 
 ### Following the Acme VPN incident through
@@ -797,7 +798,7 @@ The design is dominated by one theme: **spend the cheap deterministic check firs
 |---|---|
 | Evidence lands but no episodes ever appear | No worker is consuming the `correlation` queue |
 | Search returns nothing for records you know exist | No worker is consuming the `embedding` queue, so chunks are written but never embedded |
-| Chunks stuck with a NULL embedding | Tenant hit its daily LLM budget with action `block`; check for usage events with `outcome = budget_exceeded` |
+| Chunks stuck with a NULL embedding | Tenant hit its daily LLM budget with action `block`. Look for `chunk_embedding_failed` log lines whose `error` reads `tenant budget exceeded: …`, and confirm with `GET /api/v1/admin/tenant-budget/status` |
 | Workers start and immediately exit | Database revision is behind the code's Alembic head; run `alembic upgrade head` |
 | A sync reports success but stored nothing | Source-side throttling that answers with empty results rather than errors — the Zoho token-quota failure mode |
 | A backfilled column is empty for the largest records only | A SQL backfill over `raw_payload`, which cannot see offloaded rows |
@@ -1038,7 +1039,7 @@ When freshers first join the project and try to run `make dev`, they occasionall
 ### Symptom: "Chunks exist but their embeddings are NULL"
 **What it means:** Chunking succeeded and embedding did not.
 **Why it happens:** Either the `embedding` queue has no consumer (see above), or the tenant hit its daily LLM budget with action `block`.
-**How to fix it:** Check for `llm.usage` events with `outcome = budget_exceeded` and look at `GET /api/v1/admin/tenant-budget/status`. Provision a budget row for the tenant, or switch the action to `warn` for the duration of a bulk ingest. Embedding is idempotent — the rows are picked up on the next replay once the block clears.
+**How to fix it:** Look at `GET /api/v1/admin/tenant-budget/status`. Be precise about the trail you are following: on action `block` the budget gate raises `TenantBudgetExceeded` *before* the call, so **no `llm.usage` event is written for the blocked call at all** (backend/src/contextedge/ai/provider.py:245, and `start`/`record_llm_usage` only begin at provider.py:323). What you actually see is a `chunk_embedding_failed` log line carrying `tenant budget exceeded: …` in its `error` field (backend/src/contextedge/workers/chunk_tasks.py:172-181). On action `warn` there *is* a trail — an `llm.budget_warning` operational event. Provision a budget row for the tenant, or switch the action to `warn` for the duration of a bulk ingest. Embedding is idempotent — the rows are picked up on the next replay once the block clears.
 
 ### Symptom: "Workers start and immediately exit"
 **What it means:** The database schema is behind the code.
@@ -1055,6 +1056,7 @@ When freshers first join the project and try to run `make dev`, they occasionall
 | Version | Date | Notes |
 |---|---|---|
 | 1.0.0 | — | Initial comprehensive release: a foundational deep dive for new engineering and operational staff. |
+| 1.1.1 | 2026-08-19 | Grounding pass: every `file:line` re-opened and checked. Corrected the drifted `extraction_tasks.py` citations (the relevance-gate, message-function, identity, decision, embedding and chunk-dispatch blocks had all moved ~13 lines; `_reconstruct` is at 1008, not 995), the episode-gate ordering (the code checks minimum cluster size first and re-checks the debounce after taking the lock), the quoted-text measurement (89% of substantive text, not ~92% of characters), cooperative pause/cancel coverage (only the Zoho Desk connector polls the control flag inside its loops; the base-class check is a no-op), and the budget-block diagnosis — there is no `outcome = budget_exceeded` anywhere in the code, because a blocked call raises before any usage event is written. |
 | 1.1.0 | 2026-08-19 | Accuracy pass against the working tree, with `file:line` citations. Corrected: the raw-payload storage rule (inline JSONB, MinIO only above 32 KB), the middleware chain order and what it does *not* enforce, connector rate limiting (declared but unconsumed), episode-output validation (a deterministic schema gate, not a second model), graph traversal (iterative BFS, not recursive CTEs), the hybrid ranker (weighted sum with abstention, not Reciprocal Rank Fusion), the runtime Redis cache (an explain payload written after the match, not a request short-circuit), the configured model lineup (Vertex Gemini), the RBAC role names and the unenforced role scope, and the ANN index story (`halfvec` expression HNSW because 3,072 dimensions exceed pgvector's 2,000-dimension `vector` HNSW cap). Added: the Acme VPN running example, the pipeline stage map (§12b), the settings that change behaviour, and the worker-lane deployment trap. |
 
 ---

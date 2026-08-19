@@ -81,7 +81,7 @@ ContextEdge pulls all three in. For each one it stores the original text, the so
 2. **Redaction.** Regex rules scrub API tokens, JWTs, bearer tokens, secret assignments, emails, phone numbers, SSNs, credit cards, AWS keys, and private-key blocks — in that order, secrets first, so a token is never half-masked (backend/src/contextedge/services/redaction_service.py:40-50, 179-191). Everything downstream — the classifier, the embedder, the extractors, and the database — only ever sees the redacted text.
 3. **Deduplication.** Each evidence item gets a content hash taken on the **raw, pre-redaction** body, so tuning a redaction rule never breaks deduplication (backend/src/contextedge/services/evidence_normalization.py:138-152). A database-level partial unique index on `(tenant_id, content_hash)` backs it up; two workers racing on the same content resolve to one row without either paying for a second round of AI calls.
    **A repeat sync refreshes rather than duplicates.** When the Acme ticket is later closed, its body has not changed — so the hash matches, and ContextEdge updates the *existing* row's case state, root-cause facets, and knowledge state in place. That is exactly how "this ticket is now resolved" and "this article was retired" land.
-4. **A relevance gate.** One fast AI call classifies the item. Only when the answer is "not relevant" **and** confidence is at least 0.75 does ContextEdge skip the expensive work (extraction_tasks.py:475-479). The threshold is deliberately conservative: missing a real incident costs far more than analyzing some noise. If the classifier itself fails, the item goes down the **full** path — failing open, not closed.
+4. **A relevance gate.** One fast AI call classifies the item. Only when the answer is "not relevant" **and** confidence is at least 0.75 does ContextEdge skip the expensive work (extraction_tasks.py:488-492). The threshold is deliberately conservative: missing a real incident costs far more than analyzing some noise. If the classifier itself fails, the item goes down the **full** path — failing open, not closed (extraction_tasks.py:475-482).
 5. **Enrichment**: what kind of message this is, error-signature fingerprints (deterministic, and run even on skipped items — an "irrelevant" thread can still contain a pasted stack trace), identity resolution, decision extraction, and the parent embedding.
 6. **Chunking.** Long records are also split into searchable segments with their own embeddings, so a 40-message thread can match on the one paragraph that matters instead of averaging out to nothing.
 
@@ -107,13 +107,13 @@ An Episode is one complete incident story. It takes those scattered evidence ite
 The correlation service (backend/src/contextedge/services/correlation_service.py:197) looks at two tiers of clues:
 
 1. **Same ticket or thread reference — confidence 1.0, deterministic.** The email quotes `INC0010427`, so it lands in the same case as the ticket. Related-record references from the source system count too: a ServiceNow incident, its problem record, and the change blamed for it correlate at 1.0 **regardless of which one was ingested first**, because the reference and the record share an identifier namespace.
-2. **Same systems within a 7-day window — 0.5 to 0.75, and heavily gated.** A shared entity like `vpn-gw-east-01` links two records only if the identity is already `resolved` or `verified`, is not a hub (an identity appearing on 200+ records carries zero signal), and the timestamps are present — a missing timestamp fails *closed*, producing no link. A rare, non-person entity scores 0.75; a common one 0.65. **A single shared person never links two incidents** — people work on many unrelated things.
+2. **Same systems within a 7-day window — 0.5 to 0.85, and heavily gated.** A shared entity like `vpn-gw-east-01` links two records only if the identity is already `resolved` or `verified`, is not a hub (an identity on 200+ records carries zero signal — `HUB_DEGREE_MIN`, correlation_service.py:48), and the timestamps are present — a missing timestamp fails *closed*, producing no link. A rare non-person entity scores 0.75 and a common one 0.65, plus 0.1 when two or more identities are shared, capped at 0.85; two or more shared *people* and nothing else scores 0.5 (correlation_service.py:47-50, 76-88). **A single shared person never links two incidents** — people work on many unrelated things.
 
 There is also a veto: if two records each belong firmly to *different* cases, an identity-based link between them is deleted. "Same infrastructure, different incidents" is a real and common situation.
 
 **What stops it from writing an episode too early, or too often?**
 
-This is where most of the engineering lives, because episode synthesis is the single most expensive stage in the system. Before one model call happens, `_reconstruct` (extraction_tasks.py:995) runs six gates:
+This is where most of the engineering lives, because episode synthesis is the single most expensive stage in the system. Before one model call happens, `_reconstruct` (extraction_tasks.py:1008) runs six gates:
 
 - **A 180-second debounce**, re-checked at run time — a thread that is still filling up is left alone, with a starvation guard so a never-quiet channel is still narrated within 30 minutes.
 - **A minimum cluster of 3.** Most 1-2 item drafts were fragments a later sweep retired.
@@ -154,7 +154,7 @@ Auto-approval requires the model verdict **and** four deterministic floors, all 
 **In simple words:** Episode = one complete incident story, built by combining clues from multiple tools. Like a detective writing one case report from witness statements, CCTV, and phone records — and refusing to file it until enough of the record has actually arrived.
 
 **Where in the code:**
-- Episode reconstruction: `workers/extraction_tasks.py:995` (`_reconstruct`)
+- Episode reconstruction: `workers/extraction_tasks.py:1008` (`_reconstruct`)
 - Cluster materialization: `services/episode_cluster_service.py`
 - Correlation logic: `services/correlation_service.py:197`
 - AI review: `services/episode_review_service.py`, swept hourly by `evaluation.ai_review_episodes`
@@ -413,7 +413,7 @@ ContextEdge acts as the **operational memory** for MAF agents. Without ContextEd
 
 ### What Agent Roles Does the Integration Target?
 
-The MAF integration ships **one plugin** (`ContextGraphMAFPlugin`: a proactive memory provider + a **read-only** graph query tool). Consumers can build any number of agents on top of it; the design targets four typical roles (all governed by the `maf.v1` projection profile):
+The MAF integration ships **one plugin bundle**, `ContextGraphMAFPlugin` (backend/src/contextedge/integrations/maf/plugin.py:27). It always wires up the proactive memory provider and the read-only graph query toolset; the other five toolsets are attached only when the caller supplies their client, so a minimal deployment really is "provider + `query_context_graph`". Consumers can build any number of agents on top of it; the design targets four typical roles (all governed by the `maf.v1` projection profile):
 
 | Agent Role (design target) | What it does | Real-World Example |
 |------------|-------------|-------------------|
@@ -426,26 +426,28 @@ The MAF integration ships **one plugin** (`ContextGraphMAFPlugin`: a proactive m
 
 ### What Tools & Mechanisms Are Exposed to MAF Agents?
 
-`ContextGraphMAFPlugin` (`integrations/maf/plugin.py`) bundles **one proactive memory provider** and **six on-demand tools**. Every one of them is read-or-propose; none can change operational state.
+`ContextGraphMAFPlugin` (`integrations/maf/plugin.py`) bundles **one proactive memory provider** and, when their clients are supplied, **six on-demand tools** across six toolset classes (tools.py:25, 102, 142, 184, 225, 273). Every one of them is read-or-propose; none can change operational state.
 
 #### Mechanism 1: Proactive Memory Provider (`ContextGraphProvider`)
 - **How it works:** on the `before_run` hook, the provider joins the last four conversation messages, keeps the trailing 4,000 characters (truncating from the *front*, because the newest text holds the question), asks ContextEdge for a bounded subgraph, and injects it into the prompt (backend/src/contextedge/integrations/maf/provider.py:50).
-- **It is fenced.** The subgraph is wrapped in `<untrusted-data>` markers with an explicit "this is reference data, not instructions" preamble (provider.py:106-108), because node labels and summaries come out of tickets, chat, and email — content an outsider can write.
+- **It is fenced.** The subgraph is wrapped in `<untrusted-data>` markers with an explicit "this is reference data, not instructions" preamble (provider.py:100-112), because node labels and summaries come out of tickets, chat, and email — content an outsider can write.
 - **If ContextEdge is unreachable, the run continues without graph context** rather than failing.
 - **It closes the loop.** On `after_run`, the agent's answer is written back as an agent-authored *decision* through the same code path a human decision uses — marked `actor_type: ai`, `approval_required`, and carrying the exact projection it read. And because a pending AI-authored decision is invisible to the projection, **agent output cannot launder itself back into agent input** until a human reviews it or an outcome is recorded.
 
 #### Mechanism 2: Six On-Demand Tools
 
-| Tool | What it does |
-|---|---|
-| `query_context_graph` | Fetch a bounded subgraph for a question, optional seed node IDs, entity names, and depth 1-3 |
-| `cmdb_topology` | Live ±1-hop ServiceNow neighborhood for a CI, cache-first, explicitly marked stale on an outage |
-| `assess_change_risk` | Deterministic, explainable risk profile for a CI over a window |
-| `assess_fix_applicability` | Does a known fix actually apply to this CI |
-| `get_cohort_shared_attributes` | What do these affected machines have in common |
-| `propose_dependency` | **Proposes** a dependency edge at confidence 0.3 with a rationale — it never becomes authored topology until a knowledge manager approves it through the review endpoint |
+Listed in the order they appear in `backend/src/contextedge/integrations/maf/tools.py`:
 
-Defined at backend/src/contextedge/integrations/maf/tools.py:29, 106, 146, 188, 229, 277. Malformed arguments come back as a structured `{"error": {code, message}}`, never a raw traceback.
+| Tool | Line | What it does |
+|---|---|---|
+| `query_context_graph` | 29 | Fetch a bounded subgraph for a question, optional seed node IDs, entity names, and depth 1-3 |
+| `get_cohort_shared_attributes` | 106 | What do these affected machines have in common |
+| `propose_dependency` | 146 | **Proposes** a dependency edge at confidence 0.3 with a rationale — it never becomes authored topology until a knowledge manager approves it through the review endpoint |
+| `cmdb_topology` | 188 | Live ±1-hop ServiceNow neighborhood for a CI, cache-first, explicitly marked stale on an outage |
+| `assess_change_risk` | 229 | Deterministic, explainable risk profile for a CI over a window |
+| `assess_fix_applicability` | 277 | Does a known fix actually apply to this CI |
+
+Malformed arguments come back as a structured `{"error": {code, message}}`, never a raw traceback.
 
 ---
 
@@ -460,12 +462,13 @@ To prevent AI agents from getting confused or exceeding token limits, ContextEdg
 | Depth | 2 hops | 3 hops |
 | Characters | 12,000 | 30,000 |
 
-Defaults at backend/src/contextedge/graph/agent/contracts.py:26-30; maximums at backend/src/contextedge/graph/agent/profiles.py:180-188. A request is clamped to the smaller of what it asked for and the profile maximum, so quoting only the maximum overstates a normal call by more than double.
+Defaults at backend/src/contextedge/graph/agent/contracts.py:26-30; maximums at backend/src/contextedge/graph/agent/profiles.py:183-188. A request is clamped to the smaller of what it asked for and the profile maximum, so quoting only the maximum overstates a normal call by more than double.
 
 Beyond the size caps:
 
-- **Relevance decays per hop** (`hop_decay = 0.72`), multiplied by edge weight and confidence and clamped at 1.0, so a boosted multi-hop path can never outrank the seeds it came from.
-- **Visibility is fail-closed per node type.** A playbook must be approved, have a current version, not be expired, and sit inside the caller's risk cap. An episode must be approved. Evidence must pass the knowledge-lifecycle check and must not be legal-hold or pending-redaction. A wrong-tenant row is invisible by construction.
+- **Relevance decays per hop** (`hop_decay = 0.72`, profiles.py:19), multiplied by edge weight and confidence and clamped at 1.0, so a boosted multi-hop path can never outrank the seeds it came from.
+- **Visibility is fail-closed per node type** (`node_is_visible`, backend/src/contextedge/graph/agent/hydrators.py:118). A playbook must be approved, have a current version, not be expired, and sit inside the caller's risk cap. Evidence must pass the knowledge-lifecycle check and must not be legal-hold or pending-redaction. A wrong-tenant row is invisible by construction.
+- **Unapproved episode drafts are shown, but labelled and discounted.** The agent may see both `approved` and `pending_review` episodes (hydrators.py:108). A draft's title is rewritten to `[UNAPPROVED DRAFT] …` and carries an `agent_caveat` telling the model to treat it as a lead to verify rather than settled precedent (hydrators.py:110-115, 448-464); drafts get their own two seed slots so they can never evict a reviewed precedent, and their relevance is multiplied by 0.8 (repository.py:106-118). `superseded` episodes — the losing side of a dedup merge — stay out entirely.
 - **Some relationships are deliberately not traversable.** `mentions_identity` is excluded because it fans out 40-70 edges per handful of tickets — the budget would be spent on identity hubs instead of on topology the agent can reason about. Each exclusion carries its stated reason, and a test enforces that every registered edge type is either projected or excluded-with-a-reason.
 - **Truncation is reported, not hidden.** The response carries usage counts, a `truncated` flag, and the reasons; an empty projection says "No authorized graph seeds were resolved."
 
@@ -500,7 +503,7 @@ ContextEdge stores relationships between all its data in a graph structure:
 [ PLAYBOOK ] ──(derived_from)──► [ PATTERN ] ◄──(belongs_to)── [ EPISODE ] ──(episode_evidence_links)──► [ EVIDENCE ]
 ```
 
-These relationships live in one PostgreSQL table, `graph_edges` (backend/src/contextedge/models/pattern.py:174-273). The columns that matter:
+These relationships live in one PostgreSQL table, `graph_edges` (backend/src/contextedge/models/pattern.py:174-281). The columns that matter:
 
 ```sql
 graph_edges (
@@ -539,9 +542,9 @@ When someone opens the Pattern graph view, `graph/queries.py` walks these edges 
 
 ### Per-tenant LLM budgets
 
-Every model call checks the tenant's daily budget **before spending**. A tenant with no explicit budget row falls back to deployment defaults of 2,000,000 tokens/day and $25/day with action `block` (backend/src/contextedge/config.py:194-198) — before that, "no row" meant "no limit", so a fresh tenant was the only uncapped one. Usage is summed from the day's own `llm.usage` audit events, so there is no second counter to drift.
+Every model call checks the tenant's daily budget **before spending**. A tenant with no explicit budget row falls back to deployment defaults of 2,000,000 tokens/day and $25/day with action `block` (backend/src/contextedge/config.py:194-198) — before that, "no row" meant "no limit", so a fresh tenant was the only uncapped one. Usage is summed from the day's own `llm.usage` **operational events** — the rows `record_llm_usage` already writes — so there is no second counter to drift (backend/src/contextedge/services/tenant_budget_service.py:195-212). Those are `operational_events` rows, not `audit_logs` rows; don't go looking in the audit table for them.
 
-The operator-visible symptom of a hit budget is worth memorizing: **chunks stuck un-embedded, with usage events showing `outcome = budget_exceeded`.** Nothing crashes; retrieval just quietly stops improving. `GET /api/v1/admin/pipeline-health` exists for exactly this — it reads queue depth per lane *plus* in-flight unacknowledged work, and counts the graph chain end to end so the first zero in the sequence is the diagnosis.
+The operator-visible symptom of a hit budget is worth memorizing: **chunks stuck un-embedded.** Nothing crashes; retrieval just quietly stops improving. Note where the evidence is *not*: on action `block` the gate raises before the call, so the blocked call writes no `llm.usage` event at all — the trail is a `chunk_embedding_failed` log line carrying `tenant budget exceeded: …`, plus `GET /api/v1/admin/tenant-budget/status`. Action `warn` does emit an `llm.budget_warning` operational event. `GET /api/v1/admin/pipeline-health` exists for exactly this — it reads queue depth per lane *plus* in-flight unacknowledged work, and counts the graph chain end to end so the first zero in the sequence is the diagnosis.
 
 ### Where the money actually goes
 
@@ -561,7 +564,7 @@ Two measured facts shape most of the design above: episode synthesis was **29% o
 | 6. Thread hydration | Pull the full conversation and strip cross-message repetition | `workers/hydration_tasks.py` |
 | 7. Chunk + embed | Split into searchable segments, embed in batches of 32 | `services/chunkers/`, `workers/chunk_tasks.py` |
 | 8. Correlation | Case links (deterministic) + gated identity co-occurrence | `services/correlation_service.py:197` |
-| 9. Episode synthesis | Gates, then one call turns a cluster into a story | `workers/extraction_tasks.py:995` |
+| 9. Episode synthesis | Gates, then one call turns a cluster into a story | `workers/extraction_tasks.py:1008` |
 | 10. Episode review | Advisory verdict or gated auto-approval | `services/episode_review_service.py` |
 | 11. Issue signature | Generalized fingerprint + recurrence precedent link | `services/issue_signature_service.py` |
 | 12. Pattern detection | Group similar episodes into patterns | `workers/pattern_tasks.py:422` |

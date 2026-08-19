@@ -74,19 +74,19 @@ Routing rules are matched in order at `backend/src/contextedge/workers/celery_ap
 | `sync.run_backfill` | `backend/src/contextedge/workers/sync_tasks.py:39` | sync | Sync Operations, Evidence |
 | `sync.run_incremental_sync` | `backend/src/contextedge/workers/sync_tasks.py:68` | sync | Sync Operations, Evidence |
 | `hydration.hydrate_thread` | `backend/src/contextedge/workers/hydration_tasks.py:189` | hydration | Evidence detail (thread messages) |
-| `extraction.normalize_evidence` | `backend/src/contextedge/workers/extraction_tasks.py:1304` | extraction | Evidence |
-| `extraction.classify_relevance` | `backend/src/contextedge/workers/extraction_tasks.py:1361` | default | Evidence relevance badge |
+| `extraction.normalize_evidence` | `backend/src/contextedge/workers/extraction_tasks.py:1313` | extraction | Evidence |
+| `extraction.classify_relevance` | `backend/src/contextedge/workers/extraction_tasks.py:1370` | default | Evidence relevance badge |
 | `extraction.chunk_evidence` | `backend/src/contextedge/workers/chunk_tasks.py:210` | embedding | Evidence search quality |
 | `extraction.embed_chunks_batch` | `backend/src/contextedge/workers/chunk_tasks.py:238` | embedding | Evidence search quality, Runtime |
 | `artifact.extract_attachment` | `backend/src/contextedge/workers/artifact_tasks.py:15` | extraction | Evidence attachments |
 | `extraction.correlate_evidence` | `backend/src/contextedge/workers/correlation_tasks.py:16` | correlation | Correlations, Graph Explorer |
 | `extraction.compute_evidence_baseline` | `backend/src/contextedge/workers/evidence_baseline_tasks.py:26` | correlation | Correlations |
-| `extraction.reconstruct_episode` | `backend/src/contextedge/workers/extraction_tasks.py:1391` | correlation | Episodes |
+| `extraction.reconstruct_episode` | `backend/src/contextedge/workers/extraction_tasks.py:1400` | correlation | Episodes |
 | `evaluation.ai_review_episodes` | `backend/src/contextedge/workers/evaluation_tasks.py:129` | evaluation | Episodes (`ai_review` verdict badge) |
 | `evaluation.extract_issue_signature` | `backend/src/contextedge/workers/signature_tasks.py:24` | evaluation | recurrence links behind Episodes / Graph Explorer |
-| `pattern.cluster_episodes` | `backend/src/contextedge/workers/pattern_tasks.py:379` | pattern | Patterns |
-| `pattern.generate_playbook_candidate` | `backend/src/contextedge/workers/pattern_tasks.py:403` | pattern | Playbooks (candidates) |
-| `pattern.deduplicate_knowledge` | `backend/src/contextedge/workers/pattern_tasks.py:791` | pattern | Episodes / Patterns / Playbooks (hourly tidy-up) |
+| `pattern.cluster_episodes` | `backend/src/contextedge/workers/pattern_tasks.py:418` | pattern | Patterns |
+| `pattern.generate_playbook_candidate` | `backend/src/contextedge/workers/pattern_tasks.py:442` | pattern | Playbooks (candidates) |
+| `pattern.deduplicate_knowledge` | `backend/src/contextedge/workers/pattern_tasks.py:830` | pattern | Episodes / Patterns / Playbooks (hourly tidy-up) |
 | `evaluation.detect_drift` | `backend/src/contextedge/workers/evaluation_tasks.py:41` | evaluation | Drift |
 | `evaluation.scan_contradictions_task` | `backend/src/contextedge/workers/evaluation_tasks.py:88` | evaluation | Contradictions |
 | `evaluation.run_evaluation` | `backend/src/contextedge/workers/evaluation_tasks.py:18` | evaluation | Evaluations |
@@ -123,7 +123,7 @@ Eight queues exist: `default, sync, hydration, extraction, correlation, embeddin
 - `backend/src/contextedge/models/playbook.py`
 
 **Simple meaning:**
-Overview combines counts and health from multiple backend areas. It is one `Promise.all` of four plain list endpoints (`overview/page.tsx:110-113`) - there is no dedicated overview API, so every number on this page is "first N rows of that list", not a database-wide count. For true queue and pipeline health use the Pipeline Health tab instead.
+Overview combines counts and health from multiple backend areas. It is one `Promise.all` of four plain list endpoints (`overview/page.tsx:109-112`) - there is no dedicated overview API, and each call asks for at most 200 rows (`overview/page.tsx:25`), so every number on this page is "first 200 rows of that list", not a database-wide count. The page says so itself. For true queue and pipeline health use the Pipeline Health tab instead.
 
 ## 2. Sources
 
@@ -137,7 +137,7 @@ Overview combines counts and health from multiple backend areas. It is one `Prom
 - `backend/src/contextedge/api/v1/policy_assignments.py:66`
 
 **Service files:**
-- `backend/src/contextedge/connectors/registry.py:91` - `get_connector` maps a `source_type` string to a connector class. Seven are live: `teams`, `gmail`, `servicenow`, `jira_sm`, `manageengine`, `sapphireims`, `zoho_desk`. `confluence` / `sharepoint` / `exchange` appear in the picker as `planned` only (`registry.py:63`).
+- `backend/src/contextedge/connectors/registry.py:113` - `get_connector` maps a `source_type` string to a connector class. Seven classes are registered at `connectors/registry.py:100`: `teams`, `gmail`, `servicenow`, `jira_sm`, `manageengine`, `sapphireims`, `zoho_desk`. The picker reads `source_type_catalog` (`connectors/registry.py:69`), which walks the hand-maintained label table `_SOURCE_TYPE_LABELS` (`connectors/registry.py:37`) and marks each entry `available` or `planned` depending on whether a connector is registered for it - so `confluence` / `sharepoint` / `exchange` show up as `planned` (`connectors/registry.py:63`).
 - `backend/src/contextedge/connectors/base.py:78` - the five methods every connector implements (`validate_credentials`, `discover_objects`, `backfill`, `fetch_changes`, `hydrate_thread`).
 - `backend/src/contextedge/services/source_service.py:87` - `discover_source_objects` decrypts credentials, calls the connector, upserts `SourceObject` rows, and sets `auth_status` / `discovery_status`.
 - `backend/src/contextedge/services/sync_control_service.py:64` - writes the pause/cancel signal.
@@ -173,7 +173,7 @@ Sources backend stores where data comes from and how it should be synced. Creden
 - `backend/src/contextedge/models/evidence.py:25` (RawEvidenceObject)
 
 **Simple meaning:**
-Sync backend runs imports from sources and tracks success/failure counts. Two behaviours are worth knowing before debugging a "nothing imported" ticket: an incremental run with no checkpoint completes as `skipped_no_checkpoint` rather than doing a surprise full pull (`sync_worker_service.py:571`), and a failed hand-off parks the un-queued raw ids on `source_objects.metadata_extra["pending_normalize_raw_ids"]` so the next run drains them (`sync_worker_service.py:322`).
+Sync backend runs imports from sources and tracks success/failure counts. Two behaviours are worth knowing before debugging a "nothing imported" ticket: an incremental run with no checkpoint completes as `skipped_no_checkpoint` rather than doing a surprise full pull (`sync_worker_service.py:571`), and a failed hand-off marks the run `failed` and parks the un-queued raw ids on `source_objects.metadata_extra["pending_normalize_raw_ids"]` so the next run drains them (`sync_worker_service.py:325`).
 
 ## 4. Evidence
 
@@ -186,19 +186,19 @@ Sync backend runs imports from sources and tracks success/failure counts. Two be
 - `backend/src/contextedge/api/v1/threads.py` - list `:14`, detail `:33`, thread evidence `:57`, hydrate `:68`
 
 **Service files:**
-- `backend/src/contextedge/search/pg_fts.py:12` - `search_evidence_fts`: `plainto_tsquery` over the generated `search_tsvector` column, OR-ed with a ticket-number lookup into `raw_evidence_objects` and a `title ILIKE` fallback, so `INC0010427` is findable by its number.
+- `backend/src/contextedge/search/pg_fts.py:13` - `search_evidence_fts`: `plainto_tsquery` over the generated `search_tsvector` column, OR-ed with a ticket-number lookup into `raw_evidence_objects` and a `title ILIKE` fallback, so `INC0010427` is findable by its number. It applies the **same** visibility predicates as vector search, from the same helper (`pg_fts.py:10`, `_visibility_predicates`), so legal-hold and pending-redaction rows can no longer come back through the lexical path.
 - `backend/src/contextedge/search/vector_search.py:204` - chunk-aware semantic search (see Runtime below).
-- `backend/src/contextedge/search/access_control.py:12` - `resolve_excluded_access_policy_ids`; admins are exempt, everyone else is filtered by active `access` policies marked `restricted`.
+- `backend/src/contextedge/search/access_control.py:15` - `resolve_excluded_access_policy_ids`; admins are exempt (`ADMIN_ROLES`, `access_control.py:12`), everyone else is filtered by active `access` policies marked `restricted`.
 - `backend/src/contextedge/services/evidence_normalization.py:14` - title/body extraction and the pre-redaction content hash.
 - `backend/src/contextedge/services/redaction_service.py:179` - `redact_evidence_fields`; secrets run before numeric rules on purpose.
-- `backend/src/contextedge/services/message_filter.py:81` - the deterministic noise gate for hydrated thread messages.
+- `backend/src/contextedge/services/message_filter.py:174` - `message_noise_reason`, the deterministic noise gate for hydrated thread messages; its four verdicts are listed at `message_filter.py:81`.
 - `backend/src/contextedge/services/evidence_typing.py:118`, `backend/src/contextedge/services/case_state.py:89`, `backend/src/contextedge/services/knowledge_lifecycle.py:98`, `backend/src/contextedge/services/source_facets.py:63` - the four pure derivations stamped at insert.
 - `backend/src/contextedge/services/evidence_chunk_service.py:43` - `write_chunks`.
 - `backend/src/contextedge/services/chunkers/registry.py:116` - picks ticket / thread / document / attachment / fallback chunker.
 - `backend/src/contextedge/services/artifact_extraction_service.py:349` - attachment registration and text merge.
 
 **Worker files:**
-- `backend/src/contextedge/workers/extraction_tasks.py:1304` (`extraction.normalize_evidence`) - the body is `_normalize` at `extraction_tasks.py:122`.
+- `backend/src/contextedge/workers/extraction_tasks.py:1313` (`extraction.normalize_evidence`) - the body is `_normalize` at `extraction_tasks.py:122`.
 - `backend/src/contextedge/workers/chunk_tasks.py:210` / `:238` - chunk and embed.
 - `backend/src/contextedge/workers/hydration_tasks.py:189` - pulls the rest of a thread.
 
@@ -243,7 +243,7 @@ Sessions backend stores the full case file for one issue.
 - `backend/src/contextedge/search/hybrid_ranker.py:213` - `rank_playbooks`. Weighted signals: keyword 0.25, semantic 0.30, graph 0.15, evidence quality 0.10, identity 0.05, recency 0.10, freshness 0.05, minus a negative-knowledge penalty of 0.05 (`hybrid_ranker.py:22`).
 - `backend/src/contextedge/search/vector_search.py:246` - `search_evidence_semantic_for_playbook`, the per-playbook evidence pass.
 - `backend/src/contextedge/search/chunk_rollup.py:79` - MMR diversification at chunk level (lambda 0.7), then one hit per parent.
-- `backend/src/contextedge/search/vector_ops.py:40` - `halfvec_cosine_distance`, and `tune_ann_recall` at `:26` which sets `hnsw.ef_search = 200` per transaction.
+- `backend/src/contextedge/search/vector_ops.py:40` - `halfvec_cosine_distance`, and `tune_ann_recall` at `:34` which issues `SET LOCAL hnsw.ef_search = 200` for the current transaction (`ANN_EF_SEARCH`, `vector_ops.py:31`).
 - `backend/src/contextedge/search/risk_policy.py:3` - risk-tier cap ordering.
 - `backend/src/contextedge/services/memory_service.py:82` and `backend/src/contextedge/services/decision_trace_service.py:51`.
 - `backend/src/contextedge/services/runtime_service.py:23` - the same ranker behind a service call.
@@ -256,7 +256,7 @@ Sessions backend stores the full case file for one issue.
 - `backend/src/contextedge/models/evaluation.py:42` (RetrievalFeedback)
 
 **Simple meaning:**
-Runtime backend is the recommendation engine. It searches evidence, past cases, patterns, and playbooks. Two operational notes: the explain payload is cached in Redis for one hour (`runtime.py:29`), so `GET /runtime/explain/{id}` 404s after that; and the ranker deliberately returns an empty list rather than a weak guess when every candidate scores below `MIN_RECOMMENDATION_SCORE = 0.35` (`hybrid_ranker.py:168`).
+Runtime backend is the recommendation engine. It searches evidence, past cases, patterns, and playbooks. Two operational notes: the explain payload is cached in Redis for one hour (`MATCH_CACHE_TTL_SEC = 3600`, `api/v1/runtime.py:29`), so `GET /runtime/explain/{id}` 404s after that; and the ranker deliberately returns an empty list rather than a weak guess when every candidate scores below `MIN_RECOMMENDATION_SCORE = 0.35` (`hybrid_ranker.py:171`).
 
 ## 7. Review Queue
 
@@ -339,7 +339,7 @@ Decisions backend stores what was decided, why, confidence, evidence, and outcom
 - `backend/src/contextedge/api/v1/episodes.py` - list `:40`, detail `:91`, patch `:156`, patch step `:189`, approve `:230`, bulk approve `:282`, reconstruct `:342`, add/remove evidence `:414` / `:459`, delete `:510`, AI review `:556`
 
 **Service/worker files:**
-- `backend/src/contextedge/workers/extraction_tasks.py:1391` (`extraction.reconstruct_episode`); the body `_reconstruct` is at `extraction_tasks.py:995` and runs the gates in order: cluster resolve, minimum cluster size, optional resolution gate, per-cluster advisory lock, debounce settle re-check, draft idempotency, growth gate, source-role resolution, supersede-on-growth, then synthesis.
+- `backend/src/contextedge/workers/extraction_tasks.py:1400` (`extraction.reconstruct_episode`); the body `_reconstruct` is at `extraction_tasks.py:1008` and runs the gates in order: cluster resolve, minimum cluster size (`MIN_AUTO_SYNTHESIS_CLUSTER = 3`, `extraction_tasks.py:769`), optional resolution gate, per-cluster advisory lock, debounce settle re-check (`RECONSTRUCT_DEBOUNCE_SECONDS = 180`, `:759`, with the `MAX_SYNTHESIS_DELAY_SECONDS = 1_800` starvation guard at `:847`), draft idempotency, growth gate (`MIN_RESYNTHESIS_GROWTH = 0.5`, `:787`), source-role resolution, supersede-on-growth, then synthesis.
 - `backend/src/contextedge/services/episode_cluster_service.py:108` - `resolve_episode_cluster` materialises the connected component over `case_links` + `correlation_edges` with `MAX_CLUSTER_SIZE = 50`, `MAX_HOPS = 3`, and a 30-day window from the nearest seed (`episode_cluster_service.py:47`).
 - `backend/src/contextedge/ai/extractors/episode_extractor.py:167` - `reconstruct_episode`; 20 evidence items per LLM call, 2,000 chars each (`:44`, `:48`).
 - `backend/src/contextedge/ai/extractors/episode_schema.py:118` - `validate_episode`, strict on structure and lenient on vocabulary.
@@ -366,10 +366,10 @@ Episodes backend reconstructs incident stories from evidence. Review mode is a s
 - `backend/src/contextedge/api/v1/patterns.py` - list `:41`, detail `:95`, approve `:133`, graph `:163`, evidence links `:190`, discover `:304`, cluster `:412`, deduplicate `:31`, domain audit `:22`
 
 **Service/worker files:**
-- `backend/src/contextedge/workers/pattern_tasks.py:379` (`pattern.cluster_episodes`); the body `_cluster` is at `pattern_tasks.py:127`. There is **no beat entry** for clustering - it is dispatched after episode approval (`api/v1/episodes.py:270` and `:330`), after the AI-review sweep's auto-approvals (`workers/evaluation_tasks.py:335`), or manually from `/patterns/cluster`.
-- `backend/src/contextedge/ai/extractors/pattern_extractor.py:81` - `validate_pattern_match` (adjudicates "is this episode the same pattern?", and fails open to `is_match=True` during a provider outage).
-- `backend/src/contextedge/ai/extractors/pattern_extractor.py:26` - `synthesize_pattern`.
-- `backend/src/contextedge/services/pattern_service.py:62` - `create_pattern_from_episodes`, including the domain-safety assertion at `:21` and the auto-enqueue of playbook generation at `:181`.
+- `backend/src/contextedge/workers/pattern_tasks.py:418` (`pattern.cluster_episodes`); the body `_cluster` is at `pattern_tasks.py:153`. There is **no beat entry** for clustering - it is dispatched after episode approval (`api/v1/episodes.py:270` and `:330`), after the AI-review sweep's auto-approvals (`workers/evaluation_tasks.py:335`), or manually from `/patterns/cluster`.
+- `backend/src/contextedge/ai/extractors/pattern_extractor.py:56` - `validate_pattern_match` (adjudicates "is this episode the same pattern?", and fails open to `is_match=True` at confidence 0.75 during a provider outage - `pattern_extractor.py:112`).
+- `backend/src/contextedge/ai/extractors/pattern_extractor.py:18` - `synthesize_pattern`.
+- `backend/src/contextedge/services/pattern_service.py:63` - `create_pattern_from_episodes`, including the domain-safety assertion at `:22`. Playbook generation is enqueued through `dispatch_after_commit` (`pattern_service.py:192`, and again on `add_episode_to_pattern` at `:247`), so the task is only sent once the pattern is durable - dispatching inside the transaction used to send tasks naming rows another connection could not yet see.
 - `backend/src/contextedge/graph/builder.py:477` - `persist_pattern_enrichment_edges` (trigger / entity / error / root-cause concept nodes).
 
 **Main database/model files:**
@@ -377,7 +377,10 @@ Episodes backend reconstructs incident stories from evidence. Review mode is a s
 - `backend/src/contextedge/models/episode.py:213`
 
 **Simple meaning:**
-Patterns backend groups repeated incidents and finds recurring root causes. Two distance thresholds matter: an episode joins an **existing** pattern when its embedding is within cosine distance 0.35 of a member and the adjudicator agrees (`pattern_tasks.py:201`); a **new** cluster is formed from neighbours within 0.20 (`pattern_tasks.py:254`).
+Patterns backend groups repeated incidents and finds recurring root causes. Two named distance thresholds matter, both cosine and both re-calibrated against the live corpus on 2026-08-19 (`pattern_tasks.py:36-60`):
+
+- `PATTERN_MATCH_MAX_DISTANCE = 0.30` (`pattern_tasks.py:50`) is a **prefilter**: the query orders by distance and takes the pattern owning the single **nearest** member, then the adjudicator decides (`pattern_tasks.py:252-257`). The `ORDER BY` is the point - without it the query returned an arbitrary qualifying pattern and the adjudicator rejected almost all of them.
+- `CLUSTER_GROUP_MAX_DISTANCE = 0.27` (`pattern_tasks.py:60`) decides which unlinked episodes group into a **new** pattern (`pattern_tasks.py:309`). An empty group is allowed and becomes a single-episode pattern (`pattern_tasks.py:316`).
 
 ## 12. Playbooks
 
@@ -389,19 +392,19 @@ Patterns backend groups repeated incidents and finds recurring root causes. Two 
 - `backend/src/contextedge/api/v1/playbooks.py` - list `:81`, create `:206`, detail `:239`, references `:250`, patch `:403`, transition `:465`, versions `:505`, create version `:515`, version diff `:544`, rollback `:613`, generate `:654`
 
 **Service/AI files:**
-- `backend/src/contextedge/workers/pattern_tasks.py:403` (`pattern.generate_playbook_candidate`) - the governed generation path.
-- `backend/src/contextedge/ai/generators/playbook_generator.py:40` - prompt assembly; `:147` `validate_source_refs` drops citations the model invented; `:99` `classify_step_grounding` forces any step without a surviving citation to `best_practice`.
-- `backend/src/contextedge/ai/prompts/playbook.py:350` - current default prompt version **v5**.
+- `backend/src/contextedge/workers/pattern_tasks.py:442` (`pattern.generate_playbook_candidate`) - the governed generation path.
+- `backend/src/contextedge/ai/generators/playbook_generator.py:17` - `generate_playbook_candidate`; prompt assembly starts at `:40`. Three deterministic passes run over the model's JSON before anything is persisted (`playbook_generator.py:91-93`): `validate_source_refs` (`:331`) drops citations the model invented, `classify_step_grounding` (`:256`) forces any step without a surviving citation to `best_practice`, and `sanitize_branching_logic` (`:154`) drops decision points that cannot execute - targets naming steps that do not exist, branches whose true and false paths are identical, and steps no path can reach. The last one repairs rather than rejects: the steps are usually fine and only `decision_points` is junk.
+- `backend/src/contextedge/ai/prompts/playbook.py:415` - current default prompt version **v6** (`version="v6"` at `:418`, registered with `default=True`).
 - `backend/src/contextedge/services/knowledge_retrieval_service.py:226` - `retrieve_knowledge_for_pattern`, the RAG step that pulls KB articles and SOPs into the prompt.
 - `backend/src/contextedge/services/playbook_service.py:360` - `create_playbook_version` (step-binding validation, evidence link materialisation, `current_version_id` repoint).
-- `backend/src/contextedge/services/playbook_embedding.py:54` - `embed_playbook`, the semantic fingerprint used by Runtime and the agent seed resolver.
+- `backend/src/contextedge/services/playbook_embedding.py:79` - `embed_playbook`, the semantic fingerprint used by Runtime and the agent seed resolver; the text it embeds is built at `:54`.
 
 **Main database/model files:**
 - `backend/src/contextedge/models/playbook.py:48` (Playbook), `:125` (PlaybookVersion), `:177` (PlaybookEvidenceLink), `:211` (PlaybookApproval)
 - `backend/src/contextedge/models/pattern.py:23`
 
 **Simple meaning:**
-Playbooks backend stores approved recovery steps and generated candidate playbooks. The manual `POST /playbooks/generate` route is deliberately leaner than the worker path: it skips knowledge retrieval, the pattern-confidence floor, the risk floor, the empty-steps guard and playbook embedding (`api/v1/playbooks.py:654-767`). Use the worker path when demonstrating grounded generation.
+Playbooks backend stores approved recovery steps and generated candidate playbooks. The manual `POST /playbooks/generate` route is deliberately leaner than the worker path: it skips knowledge retrieval, the pattern-confidence floor, the deterministic risk floor (it takes the model's `risk_tier` and defaults to `medium`), the empty-steps guard and playbook embedding (`api/v1/playbooks.py:654`). It also builds its episode summaries without ids, so every `[ep-N]` citation is dropped as unresolvable. Use the worker path when demonstrating grounded generation - and note that the Drift tab's "Verify & Regenerate" button posts to this same manual route (`frontend/src/app/(dashboard)/drift/page.tsx:23`).
 
 ## 13. Negative Knowledge
 
@@ -413,7 +416,7 @@ Playbooks backend stores approved recovery steps and generated candidate playboo
 
 **Related files:**
 - `backend/src/contextedge/search/hybrid_ranker.py:140` - `_negative_penalty_for_playbook` subtracts score for `contradicts` edges and for domain negative-knowledge count.
-- `backend/src/contextedge/workers/pattern_tasks.py:494` - up to 20 entries are read into the playbook-generation prompt.
+- `backend/src/contextedge/workers/pattern_tasks.py:537` - up to 20 entries for the pattern's domain are read into the playbook-generation prompt.
 
 **Main database/model files:**
 - `backend/src/contextedge/models/pattern.py:87` (NegativeKnowledgeItem)
@@ -433,10 +436,10 @@ Negative Knowledge backend stores what not to do, and it is consumed in two plac
 **Service/worker files:**
 - `backend/src/contextedge/services/identity_service.py:810` - `link_evidence_identities`, the ingest entry point.
 - `backend/src/contextedge/services/identity_service.py:616` - `resolve_extracted_entities`, the four resolution layers: strong identifier (1.0), typed exact alias (0.95), LLM adjudication (auto-links only at or above `AUTO_LINK_THRESHOLDS`, `identity_service.py:58` - person 0.95, everything else 0.9), then a `provisional` new identity at 0.5.
-- `backend/src/contextedge/services/identity_candidacy.py:65` - the gate that rejects non-names and facet-shaped values before any LLM call.
+- `backend/src/contextedge/services/identity_candidacy.py:179` - `identity_rejection_reason`, the gate that rejects non-names and facet-shaped values before any LLM call.
 - `backend/src/contextedge/services/identity_normalizer.py:81` - normalisation, including the rule that turns a single-token device name like `vpn-gw-east-01` into a `hostname` strong identifier (`identity_normalizer.py:134`).
-- `backend/src/contextedge/services/identity_promotion.py:56` - promotes a provisional identity to `resolved` once at least 2 (and at most 5) distinct evidence items cite it.
-- `backend/src/contextedge/services/identity_reconciliation_service.py:29` - the daily pass; it **proposes** merges only, at confidence >= 0.95.
+- `backend/src/contextedge/services/identity_promotion.py:72` - promotes a provisional identity to `resolved` once at least 2 and at most 5 distinct evidence items cite it (`CORROBORATION_DEGREE_MIN` at `:58`, `RARE_DEGREE_MAX` at `:65`).
+- `backend/src/contextedge/services/identity_reconciliation_service.py:306` - `reconcile_identities`, the daily pass; it **proposes** merges only, at confidence >= 0.95 (`MIN_CONFIDENCE`, `:68`). `decide_proposal` at `:386` is what a human calls.
 - `backend/src/contextedge/workers/identity_tasks.py:147` (daily reconcile), `:72` (rebuild cached refs after a merge).
 
 **Main database/model files:**
@@ -454,7 +457,7 @@ Identities backend connects different names for the same real user, system, mail
 - `backend/src/contextedge/api/v1/correlations.py` - list `:26`, create `:51`, decision (accept/reject/split/merge) `:263`, delete `:330`
 
 **Service/worker files:**
-- `backend/src/contextedge/workers/correlation_tasks.py:16` (`extraction.correlate_evidence`); when it creates edges it schedules `extraction.reconstruct_episode` with a 180-second countdown (`correlation_tasks.py:39`).
+- `backend/src/contextedge/workers/correlation_tasks.py:16` (`extraction.correlate_evidence`); when it creates edges it schedules `extraction.reconstruct_episode` with a 180-second countdown, after the commit (`correlation_tasks.py:48`).
 - `backend/src/contextedge/services/correlation_service.py:197` - `correlate_evidence_item`, two tiers: deterministic case links at confidence 1.0 (`extract_case_link_candidates`, `correlation_service.py:116`) and gated identity co-occurrence (7-day window, hub-degree guard, rare-entity boost - constants at `correlation_service.py:36`).
 - `backend/src/contextedge/services/ticket_bridge_service.py:324` - `_add_membership`, the ticket-number bridge that puts a quoting email into the right case.
 - `backend/src/contextedge/services/servicenow_reference_service.py`, `jira_reference_service.py`, `sapphireims_reference_service.py`, `zoho_desk_reference_service.py` - typed reference enrichment, each in its own SAVEPOINT so a failure loses enrichment and never the correlation.
@@ -489,7 +492,7 @@ Correlations backend links related evidence items.
 - `backend/src/contextedge/models/episode.py:48`
 
 **Simple meaning:**
-This tab is the "machine is not sure" inbox. Nothing here has been applied to the graph yet; accepting a row is what writes the edge or resolves the identity. Requires `knowledge_manager`, `domain_admin` or `tenant_admin`.
+This tab is the "machine is not sure" inbox. Nothing here has been applied to the graph yet; accepting a row is what writes the edge or resolves the identity. Every route on it calls `require_role("knowledge_manager")`, and `has_role` short-circuits to true for `platform_super_admin`, `tenant_admin` and `admin` (`deps.py:37`) - so those three get in as well. `domain_admin` does **not**: it is not one of the short-circuit roles, so a domain admin needs an explicit `knowledge_manager` binding.
 
 ## 17. Graph Explorer
 
@@ -504,10 +507,10 @@ This tab is the "machine is not sure" inbox. Nothing here has been applied to th
 **Graph/service files:**
 - `backend/src/contextedge/graph/queries.py:20` - `get_neighbors`, bounded BFS to `MAX_TRAVERSAL_DEPTH = 3`; subgraph payloads cap at 250 nodes / 500 edges (`queries.py:16`).
 - `backend/src/contextedge/graph/builder.py:50` - `ensure_edge`, the idempotent writer (SELECT, then `INSERT ... ON CONFLICT DO NOTHING` against `uq_graph_edges_active_logical`). `weight` means traversal importance; `confidence` means belief.
-- `backend/src/contextedge/graph/edge_types.py:1` - the registry of 69 valid edge types; `require_registered` refuses anything else.
+- `backend/src/contextedge/graph/edge_types.py:137` - `EDGE_TYPES`, the union of five semantic groups holding 69 valid edge types; `require_registered` (`edge_types.py:186`) refuses anything else.
 - `backend/src/contextedge/graph/temporal.py:29` - `edge_valid_at` for point-in-time reads.
-- `backend/src/contextedge/graph/agent/materializer.py:54` - `reconcile_tenant`, the relational-to-graph projection run every 6 hours.
-- `backend/src/contextedge/graph/agent/service.py:97` (project), `repository.py:156` (seed resolution), `selector.py:28` (traversal and budget), `hydrators.py:98` (`node_is_visible`, fail-closed per node type), `profiles.py` (the `maf.v1` profile).
+- `backend/src/contextedge/graph/agent/materializer.py:107` - `reconcile_tenant`, the relational-to-graph projection run every 6 hours (class at `materializer.py:54`).
+- `backend/src/contextedge/graph/agent/service.py:108` (`project`), `repository.py:169` (`resolve_seeds`), `selector.py:28` (traversal and budget), `hydrators.py:118` (`node_is_visible`, fail-closed per node type), `profiles.py:179` (the `maf.v1` profile).
 
 **Main database/model files:**
 - `backend/src/contextedge/models/pattern.py:174` (GraphEdge)
@@ -515,7 +518,9 @@ This tab is the "machine is not sure" inbox. Nothing here has been applied to th
 - plus every node-type table listed in `backend/src/contextedge/graph/agent/hydrators.py:33`
 
 **Simple meaning:**
-Graph Explorer backend shows relationships between evidence, sessions, decisions, playbooks, identities, and policies. Worth stating in a review: `/graph/agent-subsets` builds a fully scoped, budgeted projection, while `/graph/neighbors`, `/graph/subgraph` and `/graph/stats` filter by tenant only (open item P1-6, `codewiki/KNOWN_GAPS.md:56`).
+Graph Explorer backend shows relationships between evidence, sessions, decisions, playbooks, identities, and policies. Worth stating in a review: `/graph/agent-subsets` builds a fully scoped, budgeted projection, while `/graph/neighbors`, `/graph/subgraph` and `/graph/stats` scope by tenant plus an optional caller-supplied `domain_id` query parameter, and nothing checks that parameter against the caller's own scope (`api/v1/graph.py:190`, `:220`, `:242`). `codewiki/KNOWN_GAPS.md:56` records the same shape as open item P1-6 for the CMDB topology / change-risk / fix-applicability routes.
+
+One nuance in the agent projection that is easy to state backwards: episode visibility is **not** approved-only. `AGENT_VISIBLE_EPISODE_STATES` admits `approved` and `pending_review` (`hydrators.py:108`), an unapproved draft is relabelled `[UNAPPROVED DRAFT]` and carries an `agent_caveat` (`hydrators.py:448`, `:463`), and drafts get their own two seed slots at a 0.8 relevance multiplier so they can never evict an approved precedent (`repository.py:111`, `:117`).
 
 ## 18. Contradictions
 
@@ -637,7 +642,7 @@ Audit backend records who did what and when. Unauthenticated 401 probes never re
 - `backend/src/contextedge/models/tenant.py:116` (TenantLLMBudget)
 
 **Simple meaning:**
-LLM Cost backend tracks AI token usage, cost, and budget limits. A tenant with no budget row still gets the deployment defaults - 2,000,000 tokens/day, $25/day, action `block` (`backend/src/contextedge/config.py:191`). Cost numbers are estimates for dashboard use; the provider's bill is authoritative.
+LLM Cost backend tracks AI token usage, cost, and budget limits. A tenant with no budget row still gets the deployment defaults - 2,000,000 tokens/day, $25/day, action `block` (`backend/src/contextedge/config.py:194-198`). Cost numbers are estimates for dashboard use; the provider's bill is authoritative.
 
 ## 24. Pipeline Health
 

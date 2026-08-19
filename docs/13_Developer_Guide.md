@@ -91,7 +91,7 @@ This starts three containers (`docker-compose.yml`):
 | minio | `minio/minio` | 9000 API, 9001 console | raw payloads over 32 KB and attachment bytes |
 
 > ### Known trap: the Postgres port in `.env.example`
-> `.env.example` ships `DATABASE_URL=...@localhost:5433/contextedge` (`.env.example:12-15`) but `docker-compose.yml` publishes **5432:5432** (`docker-compose.yml:9-10`). If you copy the template verbatim you will get "connection refused" on first boot. Either change your `.env` to `5432`, or map 5433 in a compose override. The credentials come from the same `.env` (`POSTGRES_USER`, `POSTGRES_PASSWORD`), so whatever you set there is what the container is created with — and changing them after the volume exists has no effect until you drop the volume.
+> `.env.example` ships `DATABASE_URL=...@localhost:5433/contextedge` (`.env.example:11-14`) but `docker-compose.yml` publishes **5432:5432** (`docker-compose.yml:9-10`). If you copy the template verbatim you will get "connection refused" on first boot. Either change your `.env` to `5432`, or map 5433 in a compose override. The credentials come from the same `.env` (`POSTGRES_USER`, `POSTGRES_PASSWORD`), so whatever you set there is what the container is created with — and changing them after the volume exists has no effect until you drop the volume.
 
 **Failure behavior per service:**
 - **Postgres down or wrong URL** → the backend crashes on startup with an `asyncpg`/SQLAlchemy connection error, and `/ready` returns 503.
@@ -140,7 +140,7 @@ That list is `DEFAULT_QUEUES` in `backend/dev.py:16`, and it is the authority. T
 
 **Why this matters more than it looks.** The `correlation` and `embedding` lanes were split out on 2026-08-17 after measured starvation: the extraction queue was growing ~70 tasks/min at 8,255 deep, `correlate_evidence` was dispatched but never consumed, and 1,879 chunks existed with only 289 (15 %) embedded. Evidence was being ingested and silently never becoming retrievable, and episodes stayed at zero. `dev.py:12-16` records that a stock deployment ran for a month with those two lanes unconsumed.
 
-If you start a worker with a hand-written `-Q` list, include all eight or you will reproduce that failure locally. **`docs/RUNBOOK.md`'s queue list and its Windows PowerShell block predate these two lanes** — use `dev.py:16` instead until the runbook catches up.
+If you start a worker with a hand-written `-Q` list, include all eight or you will reproduce that failure locally. [RUNBOOK.md §7.1](RUNBOOK.md) now lists the same eight and its Windows worker block includes `correlation` and `embedding`; if you are reading an older copy of that file, trust `dev.py:16`.
 
 ### 3.3 Option B — full Docker development
 
@@ -158,7 +158,7 @@ make dev
 This is the part that surprises people. Two facts, both measured:
 
 1. **Celery's prefork pool does not work on Windows.**
-2. **`-P threads` does not work either for the LLM-bearing lanes.** LiteLLM holds asyncio locks bound to the loop that created them, so a threads pool raises "Lock is bound to a different event loop" on every enrichment call, which trips the provider circuit breaker and fails the run near-silently. Measured on a live backfill, 2026-08-16 (`docs/RUNBOOK.md:257-262`).
+2. **`-P threads` does not work either for the LLM-bearing lanes.** LiteLLM holds asyncio locks bound to the loop that created them, so a threads pool raises "Lock is bound to a different event loop" on every enrichment call, which trips the provider circuit breaker and fails the run near-silently. Measured on a live backfill, 2026-08-16 (`docs/RUNBOOK.md:281-282`). Threads remain fine for lanes that make no LLM call, which is what the launcher's own comment says (`dev.py:113-115`).
 
 So parallelism comes from **separate processes**, each `-P solo` with its own event loop:
 
@@ -183,7 +183,7 @@ python -m celery -A contextedge.workers.celery_app beat -l INFO
 
 `dev.py` defaults to `-P solo` on Windows unless you supply your own pool (`dev.py:113-124`).
 
-**Why the split is safe:** every task runs `asyncio.run` with a fresh `NullPool` engine (`workers/asyncio_runner.py:10-34`) so no loop or connection is shared; syncs take a per-source-object Postgres advisory lock so concurrent workers skip rather than race a checkpoint (`services/sync_worker_service.py:379-395`); and `task_acks_late=True` re-delivers a crashed worker's task (`workers/celery_app.py:196`).
+**Why the split is safe:** every task runs `asyncio.run` with a fresh `NullPool` engine (`workers/asyncio_runner.py:10-34`) so no loop or connection is shared; syncs take a per-source-object Postgres advisory lock so concurrent workers skip rather than race a checkpoint (`services/sync_worker_service.py:379-395`); and `task_acks_late=True` re-delivers a crashed worker's task (`workers/celery_app.py:199`).
 
 **Ceilings to respect:** roughly 8 concurrent Gemini calls ≈ 60–120 requests/min against the Vertex quota, and concurrent hydration can get you rate-limited by the source (move `hydration` to Worker B if Zoho starts returning 429s). NullPool means each running task holds its own DB connections — budget ~2–3 × concurrency.
 
@@ -240,7 +240,7 @@ We use **Alembic**. There are 72 revision files in `backend/alembic/versions/`.
 - **Rationale:** local development should be turnkey. Without it you cannot log in.
 
 ### The destructive scripts are guarded
-`reset_db_and_seed.py` and `demo_maf_seed.py` TRUNCATE tenant-global tables. `seed_guard.require_destructive_reset_allowed` refuses to run either unless `APP_ENV=development` or `CONTEXTEDGE_ALLOW_DB_RESET=1` (`backend/src/contextedge/seed_guard.py:20-60`). `demo_maf_seed.py` additionally seeds context-graph and playbook data for Microsoft Agent Framework demos.
+`reset_db_and_seed.py` and `demo_maf_seed.py` TRUNCATE tenant-global tables. `seed_guard.require_destructive_reset_allowed` refuses to run either unless `APP_ENV=development` or `CONTEXTEDGE_ALLOW_DB_RESET=1` (`backend/src/contextedge/seed_guard.py:35-60`). `demo_maf_seed.py` additionally seeds context-graph and playbook data for Microsoft Agent Framework demos.
 
 ### Default credentials
 - **Admin:** `admin@contextedge.local` / `admin123`
@@ -419,7 +419,9 @@ sequenceDiagram
 
 4. **Choose the queue by naming the task correctly.** Routing is by task-name prefix and is **order-matched** (`celery_app.py:226-279`). `evaluation.*` → `evaluation`, `pattern.*` → `pattern`, `extraction.*` → `extraction` (with three explicit exceptions that go to `correlation` and two that go to `embedding`), `sync.*` → `sync`, `hydration.*` → `hydration`. A short name that matches nothing lands on `default` — which is how `identity.*` and `maintenance.*` end up there. If your task needs its own lane, add an explicit route **above** the wildcards and add the queue to `dev.py:16` and `docker-compose.dev.yml`.
 
-5. **Dispatch after commit, never before.** This is the single most common bug in this codebase's history. A task consumed before its transaction commits reads stale state and no-ops **without retry**. The pattern in every correct call site: commit, then `.delay(...)`, and treat a broker failure as a warning, not a rollback — see `api/v1/episodes.py:255-268` and `workers/evaluation_tasks.py:273-331`, both of which carry the comment explaining it.
+5. **Dispatch after commit, never before.** This is the single most common bug in this codebase's history. A task consumed before its transaction commits reads stale state and no-ops **without retry**; and a task dispatched from a transaction that then rolls back names a row that never existed. The pattern where you own the commit: commit, then `.delay(...)`, and treat a broker failure as a warning, not a rollback — see `api/v1/episodes.py:255-278` and `workers/evaluation_tasks.py:273-331`, both of which carry the comment explaining it.
+
+   **Where you do not own the commit** — a service called inside `run_async` or behind a `get_db` dependency — use `dispatch_after_commit(db, task_name, args)` from `services/deferred_dispatch.py:72-95`. It parks the send on the session and fires it from SQLAlchemy's `after_commit` event, discarding it on `after_rollback`. `pattern_service.create_pattern_from_episodes` uses it for `pattern.generate_playbook_candidate` (`services/pattern_service.py:192-194`) after a rolled-back clustering pass left 65 queued tasks naming patterns that never existed.
 
 6. **Add a beat entry** only if it is genuinely recurring: `workers/celery_app.py:281-384`. Fan-out tasks take the literal `"all"` sentinel and iterate tenants with per-tenant try/except so one bad tenant never stops the sweep. Schedule it unconditionally even if a setting gates it — `ai-review-episodes-hourly` does exactly that so enabling the feature needs no beat restart.
 
@@ -443,11 +445,11 @@ sequenceDiagram
    | `hydrate_thread(thread_ref)` | `HydratedThread` | a no-op is acceptable if the source has no conversation API |
 
 3. **Emit `IngestionEvent`s** — `external_id`, `source_type`, `object_type`, `content` dict, optional `thread_id`, `timestamp`, `metadata` (`connectors/base.py:37-45`). You do **not** write evidence rows; `persist_ingestion_events` does, and `_normalize` derives everything else from your `content` dict.
-4. **Honour the cooperative stop.** Call `await self._check_control()` inside your page and record loops (`base.py:82-107`). A single `backfill()` call can run for a quarter of an hour, so a signal checked only between invocations does nothing for that whole time.
+4. **Honour the cooperative stop.** The sync job installs a callback through `set_control_check` (`base.py:94-97`); call `await self._check_control()` (`base.py:99-107`) inside your page and record loops. A single `backfill()` call can run for a quarter of an hour, so a signal checked only between invocations does nothing for that whole time.
 5. **Register it** in `_register_connectors` (`connectors/registry.py:91-110`) and add its display entry to `_SOURCE_TYPE_LABELS` (`:36-66`). The UI catalog computes `connector_available` from the registry rather than from the label table (`source_type_catalog`, `:69-88`), so a registered connector can never be missing from the picker and a label can never claim a connector that does not exist. `backend/tests/test_source_type_catalog.py` asserts the two agree — that coupling exists because the lists once drifted in both directions, offering Confluence/SharePoint/Exchange (no connector, so creation succeeded and sync died) while hiding SapphireIMS and Zoho Desk (working connectors nobody could select).
 6. **Add a reference service** if the source exposes relationship fields (`services/servicenow_reference_service.py` is the model to copy). It turns vendor reference fields into case-link keys, typed graph edges and entity rows, and it runs inside a SAVEPOINT so a failure loses enrichment, never the correlation.
 7. **Check the chunker resolution** in `services/chunkers/registry.py:116-143`. A new ticket-shaped source belongs in the ticket set; a new conversational one in the thread set.
-8. **Map facets** if the source carries structured fields worth keeping — `source.config["facet_fields"]` feeds `services/source_facets.py:38-85`, and a stated environment or version skips a ~7,200-token applicability LLM call entirely.
+8. **Map facets** if the source carries structured fields worth keeping — `source.config["facet_fields"]` feeds `derive_facets` (`services/source_facets.py:63-85`), and a stated environment or version becomes `applicability` directly through `applicability_from_facets` (`:88`), skipping a ~7,200-token applicability LLM call entirely.
 
 **Design lessons from the connectors we already have, worth reading before you write yours:**
 - Verify against a live instance if you possibly can. The Zoho connector's three most important behaviours (page size caps at 50, no modified-since filter exists, ties arrive id-ascending inside a time-descending walk) were all found live and would have shipped as bugs otherwise.
@@ -471,7 +473,7 @@ sequenceDiagram
    - Pass `tenant_id` and `db` so the budget gate runs and the spend is attributed.
    - **Gate the output with a schema.** Be "strict about structure, lenient about vocabulary" — `IssueSignatureDraft` (`services/issue_signature_service.py:47-73`) is the model: required fields with length bounds, enum-ish fields that silently null on an unknown value, and a confidence that clamps to `[0, 1]`.
 
-3. **Wire it into the pipeline.** `_normalize` (`workers/extraction_tasks.py:122-628`) is the ingest path; each enrichment there is individually try/except'd so a failure degrades rather than losing the evidence row. Follow that pattern.
+3. **Wire it into the pipeline.** `_normalize` (`workers/extraction_tasks.py:122-641`) is the ingest path; each enrichment there is individually try/except'd so a failure degrades rather than losing the evidence row. Follow that pattern.
 
 4. **Measure before you ship.** Any change to prompts, thinking budgets, truncation or slicing ships only with a before/after measurement on real data, and negative results get recorded so decisions do not get re-litigated (`CLAUDE.md`, "Measure-first discipline"). A cap that changes the model's *output structure* on identical input is a quality change, not a cost change.
 
@@ -483,13 +485,13 @@ sequenceDiagram
 
 **What:** the context graph is the `graph_edges` table in Postgres. **Why:** a new type lets the graph express a relationship it currently cannot.
 
-1. **Register the edge type** in `backend/src/contextedge/graph/edge_types.py:1-33`. There are 69 types in five semantic groups, and `require_registered` is enforced in `add_edge`, `ensure_edge`, `close_edge` and `replace_edge` — an unregistered type raises `UnknownEdgeType` at runtime.
-2. **Make the projection decision in the same change.** Either allowlist the type in `MAF_RELATIONSHIP_TYPES` or record why it is excluded in `PROJECTION_EXCLUSIONS`. `backend/tests/test_edge_type_registry.py` fails if you do neither. 18 registered types are deliberately not traversable by `maf.v1`; `mentions_identity` is excluded because it fans out 40–70 edges per handful of tickets.
+1. **Register the edge type** in `backend/src/contextedge/graph/edge_types.py`. There are 69 types across five semantic group frozensets (`:36-137`), and `require_registered` (`:186`) is called by `add_edge`, `ensure_edge`, `close_edge` and `replace_edge` — an unregistered type raises `UnknownEdgeType` at runtime.
+2. **Make the projection decision in the same change.** Either allowlist the type in `MAF_RELATIONSHIP_TYPES` (`graph/agent/profiles.py:89`) or record why it is excluded in `PROJECTION_EXCLUSIONS` (`edge_types.py`). `backend/tests/test_edge_type_registry.py` fails if you do neither. 16 of the 69 registered types are deliberately not traversable by `maf.v1`; `mentions_identity` is excluded because it fans out 40–70 edges per handful of tickets.
 3. **Write edges through `ensure_edge`** (`graph/builder.py:50-135`), not raw INSERTs. It is race-safe via `ON CONFLICT DO NOTHING` against the partial unique index `uq_graph_edges_active_logical`.
 4. **Pass `weight` and `confidence` separately.** `weight` is traversal importance; `confidence` is belief. Conflating them was a real defect found in code written days earlier in this repo.
-5. **Follow the one domain-derivation rule.** Migration `0031` established a single owning row per edge type (`graph/agent/materializer.py:24-37`). Every writer must agree, or the unique index treats the same logical edge with different domains as two distinct edges.
+5. **Follow the one domain-derivation rule.** Migration `0031` established a single owning row per edge type, and the mapping is written out in a comment at `graph/agent/materializer.py:23-37`. Every writer must agree, or the unique index treats the same logical edge with different domains as two distinct edges.
 6. **If a node type is new,** add it to the `maf.v1` profile's node list (`graph/agent/profiles.py:59-87`) and give it a hydrator in `graph/agent/hydrators.py` so an agent sees facts, not a bare id.
-7. **For relational rows that should become edges,** extend `GraphRelationshipMaterializer.reconcile_tenant` (`graph/agent/materializer.py:54-359`). It is additive-only, idempotent, and runs every 6 hours.
+7. **For relational rows that should become edges,** extend `GraphRelationshipMaterializer.reconcile_tenant` (`graph/agent/materializer.py:107-359`). It is additive-only, idempotent, and runs every 6 hours.
 
 ---
 
@@ -512,7 +514,7 @@ sequenceDiagram
 Chunking is what makes long evidence retrievable, so it is worth its own recipe.
 
 1. **Write the chunker** under `services/chunkers/`, implementing the protocol in `chunkers/base.py:65-102`. It must be **pure and deterministic — no I/O**; it receives `title`, `body` and the raw `payload` and returns `ChunkSpec` objects.
-2. **Set a `version`.** All current chunkers are version 1. Bumping a version writes a new generation alongside the old one rather than replacing it (`services/evidence_chunk_service.py:81-86`), which is what lets you compare two chunkings side by side.
+2. **Set a `version`.** All five current chunkers are version 1. `write_chunks` deletes prior rows for that evidence **at the same `chunker_version` only** (`services/evidence_chunk_service.py:77-86`), so bumping a version writes a new generation alongside the old one rather than replacing it — which is what lets you compare two chunkings side by side.
 3. **Register it** in `services/chunkers/registry.py`. Registration is lazy and per-chunker fail-soft: a chunker module that fails to import logs `chunker.register_failed` and is skipped rather than taking down ingest.
 4. **Add a resolution rule** in `get_chunker` (`registry.py:116-143`). Order matters — **record shape beats source type**, which is why a Zoho `kb_article` resolves to the document chunker rather than the ticket chunker.
 5. **Decide the authority** in `_default_authority` (`evidence_chunk_service.py:135-169`). Evidence type is checked before source type, so a KB page carries `knowledge_article` authority and does not compete with an incident record on incident-specific fields.
@@ -523,7 +525,7 @@ Chunking is what makes long evidence retrievable, so it is worth its own recipe.
 ## 7. Testing
 
 ### Backend (pytest)
-- **Where:** `backend/tests/` — about 170 test modules.
+- **Where:** `backend/tests/` — 175 test modules.
 - **Command:** `make test-backend` (`cd backend && python -m pytest -v`), or `python -m pytest -q` from `backend/` for the count.
 - **How it works:** `asyncio_mode = "auto"` and `testpaths = ["tests"]` (`backend/pyproject.toml:108-110`). `tests/conftest.py` puts `backend/src` on `sys.path` and provides a `make_user` helper for principals.
 - **Important correction to older docs:** the suite **does not** spin up a database. Every test uses fakes and mocks for PostgreSQL, Redis, MinIO and the LLM provider, which is why CI needs no service containers (`.github/workflows/ci.yml:3-5`). `testcontainers` appears in the dev extras (`pyproject.toml:69`) but nothing in `tests/` imports it.
@@ -623,7 +625,7 @@ The provider is chosen by the LiteLLM prefix on each model id, not by a separate
 - **`DEFAULT_EXTRACTION_MODEL`** — normalization and extraction.
 - **`PATTERN_MODEL`** — pattern synthesis. Deliberately unmeasured; it stays on its current model until it gets its own A/B.
 - **`PLAYBOOK_MODEL`** — playbook generation. The 2026-08-17 A/B moved this lane: grounded share 0.70 → 0.81, latency halved.
-- **`DEFAULT_EMBEDDING_MODEL`** — **must return exactly 3,072 dimensions.** `text-embedding-3-small` returns 1,536 and will raise (`ai/provider.py:787-793`); `.env.example:87-89` pins `text-embedding-3-large` and names `vertex_ai/gemini-embedding-001` as the alternative.
+- **`DEFAULT_EMBEDDING_MODEL`** — **must return exactly 3,072 dimensions**, or the call raises (`ai/provider.py:786-793`). Watch the trap: the *code* default is `text-embedding-3-small` (`config.py:58`), which returns 1,536 and will raise. `.env.example:87-89` pins `text-embedding-3-large` and names `vertex_ai/gemini-embedding-001` as the alternative, so set the variable rather than relying on the field default.
 - **`*_LOCATION`** — per-task Vertex region, all `global` by default.
 - Credentials: `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `AZURE_OPENAI_*`, `GOOGLE_API_KEY`, `GOOGLE_CLOUD_PROJECT`, `GOOGLE_APPLICATION_CREDENTIALS`.
 - **`LLM_FALLBACK_MODEL`** — retry one failed call on this model. Usage is recorded against whichever model actually served, so `generation_provenance.model_requested` can differ from what answered; `correlation_id` joins to the truth in `llm.usage`.

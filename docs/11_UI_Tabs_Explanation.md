@@ -23,12 +23,15 @@ un-navigated detail page**, 26 entries in total.
 >    same cast or they silently fall back to a sequential scan
 >    (`backend/src/contextedge/search/vector_ops.py:40-45`), and recall is tuned per transaction
 >    with `SET LOCAL hnsw.ef_search = 200` (`vector_ops.py:26-37`).
-> 4. **There is no GPT-4o and no `text-embedding-3-small` in the deployed config.** The default LLM
->    provider is `vertex_ai`; classification and extraction both route to
->    `vertex_ai/gemini-2.5-flash`, playbook generation to `vertex_ai/gemini-3.7-flash`
->    (`backend/src/contextedge/config.py:53-67`). The embedding model must return 3,072 dimensions
->    or the provider raises — `.env.example` pins `text-embedding-3-large`
->    (`backend/src/contextedge/ai/provider.py:787-793`).
+> 4. **There is no GPT-4o anywhere, and the embedding model is not what the code default says.**
+>    The default LLM provider is `vertex_ai`; classification and extraction both route to
+>    `vertex_ai/gemini-2.5-flash`, the pattern lane too, and playbook generation to
+>    `vertex_ai/gemini-3.7-flash` (`backend/src/contextedge/config.py:53-67`). Embeddings are the
+>    trap: the pydantic default is still `default_embedding_model = "text-embedding-3-small"`
+>    (`config.py:58`), which returns 1,536 dimensions and makes the provider **raise**, because
+>    3,072 are required (`backend/src/contextedge/ai/provider.py:787-793`). Every working
+>    deployment overrides it — `.env.example` pins `DEFAULT_EMBEDDING_MODEL=text-embedding-3-large`
+>    (`.env.example:87-89`). If embeddings fail wholesale on a fresh install, this is why.
 > 5. **Almost no tab calls an LLM at read time.** LLM work happens in Celery tasks, ahead of time.
 >    Where a button dispatches such a task, this document says which task.
 > 6. **There is no per-tab "MAF agent" fan-out.** The Microsoft Agent Framework surface is one
@@ -198,20 +201,26 @@ sequenceDiagram
     GET /api/v1/review-queue/3b8e...-91/context HTTP/1.1
     Authorization: Bearer <jwt>
     ```
-    **Response** (composed in one round trip so the reviewer UI does not fan out):
+    **Response** — the seven `ReviewQueueContext` fields, composed in one round trip so the
+    reviewer UI does not fan out (`backend/src/contextedge/schemas/review_queue.py:61-68`):
     ```json
     {
-      "session": { "id": "3b8e...-91", "title": "VPN outage - Acme", "status": "open" },
+      "session": { "id": "3b8e...-91", "status": "open", "symptoms": ["vpn login fails"],
+                   "entities": ["vpn-gw-east-01"] },
       "top_decision": { "id": "d1...", "decision_type": "playbook_selection", "confidence": 0.62 },
       "top_decision_badge": { "level": "amber" },
-      "similar_aggregate": { "count": 4, "approved": 3, "rejected": 1 },
+      "similar": { "count": 4, "approved": 3, "rejected": 1 },
       "decisions": [ "..." ],
       "execution_runs": [ "..." ],
-      "events": [ "..." ]
+      "recent_events": [ "..." ]
     }
     ```
-    `top_decision_badge.level` is derived server-side — green ≥ 0.8, amber 0.5–0.8, red < 0.5 — so
-    the threshold cannot drift between consumers (`codewiki/KNOWN_GAPS.md:246`).
+    Note there is no `title` on a session — `ResolutionSessionResponse` has none
+    (`backend/src/contextedge/schemas/session.py:37-50`); the UI labels a session by its symptoms.
+    `top_decision_badge.level` is derived server-side by `derive_badge_level` — green ≥ 0.8,
+    amber 0.5–0.8, red < 0.5 — so the threshold cannot drift between consumers
+    (`backend/src/contextedge/services/review_queue_service.py:132-140`;
+    `codewiki/KNOWN_GAPS.md:246`).
 16. **Complete Data Flow**:
 ```mermaid
 sequenceDiagram
@@ -281,8 +290,8 @@ sequenceDiagram
      ingests local files directly (`backend/src/contextedge/api/v1/sources.py:456-462`)
    - `GET /api/v1/policies` (to attach retention/classification policies)
 7. **Backend Files Involved**:
-   - `backend/src/contextedge/api/v1/sources.py` (routes at 38, 57, 80, 153, 164, 204, 219, 237,
-     295, 368, 418, 569, 661)
+   - `backend/src/contextedge/api/v1/sources.py` (all fifteen routes: 38, 57, 80, 153, 164, 204,
+     219, 237, 295, 368, 386, 418, 456, 569, 661)
    - `backend/src/contextedge/services/sync_control_service.py`
    - `backend/src/contextedge/services/sync_worker_service.py`
    - `backend/src/contextedge/connectors/` (registry + per-connector modules)
@@ -308,10 +317,19 @@ sequenceDiagram
 
     { "action": "pause", "source_object_id": "b21d...-08" }
     ```
-    **Response:**
+    **Response** — the echoed action plus one row per affected object
+    (`backend/src/contextedge/api/v1/sources.py:347-365`):
     ```json
-    { "status": "paused", "run_id": "51ae...-c2", "signalled": true }
+    {
+      "status": "pause",
+      "objects": [
+        { "object": "incident", "action": "pause",
+          "running_run_id": "51ae...-c2", "signalled": true }
+      ]
+    }
     ```
+    `signalled` is `false` when no run was live — the pause still lands, as a
+    `metadata_extra["sync_paused"]` gate on the *next* run.
 16. **Complete Data Flow**:
 ```mermaid
 sequenceDiagram
@@ -332,9 +350,14 @@ sequenceDiagram
     API->>DB: log_audit_event(action="sync.pause")
 ```
 17. **Common Issues**:
-    - **Pause seems ignored for a while.** It is cooperative. The connector checks between pages and
-      every 25 detail records, so a stop lands at the next boundary. The check reads on a *fresh*
-      connection because the job's own transaction predates the operator's write and cannot see it
+    - **Pause seems ignored.** It is cooperative, and — this is the part that surprises people —
+      only the **Zoho Desk** connector actually honours it today. It checks between pages and every
+      `CONTROL_CHECK_EVERY = 25` detail records
+      (`backend/src/contextedge/connectors/zoho_desk/connector.py:128, 818, 946`). ServiceNow,
+      Gmail, Teams, Jira SM, ManageEngine and SapphireIMS never call the `_check_control` hook
+      (`backend/src/contextedge/connectors/base.py:92-105`), so a running sync on those finishes and
+      only the *next* one is gated. Where the check does run it reads on a *fresh* connection,
+      because the job's own transaction predates the operator's write and cannot see it
       (`backend/src/contextedge/services/sync_control_service.py:97-122`).
     - **Filter key silently ignored.** Each connector has its own key —
       `module_filters` for Zoho, `table_filters` for ServiceNow. The wrong key is accepted and
@@ -469,16 +492,19 @@ sequenceDiagram
      530)
    - `backend/src/contextedge/search/pg_fts.py` (`search_evidence_fts`)
    - `backend/src/contextedge/api/v1/threads.py`
-   - `backend/src/contextedge/workers/extraction_tasks.py` (`_normalize` at 122-628)
+   - `backend/src/contextedge/workers/extraction_tasks.py` (`_normalize` at 122-642)
    - `backend/src/contextedge/services/evidence_chunk_service.py`
 8. **Database Tables**: `evidence_items`, `evidence_chunks`, `raw_evidence_objects`, `threads`,
    `attachment_artifacts`, `correlation_edges`, `evidence_identity_links`,
    `evidence_case_memberships`, `tenant_policies`.
 9. **Vector Operations**: **None on this tab.** The search box is Postgres full-text search over
    the generated `evidence_items.search_tsvector` column
-   (`backend/src/contextedge/api/v1/evidence.py:44-59`). Vector retrieval over
+   (`backend/src/contextedge/api/v1/evidence.py:44-59`). It is not a way around access control
+   either: `search_evidence_fts` imports and applies the same `_visibility_predicates` the vector
+   path uses (`backend/src/contextedge/search/pg_fts.py:10`). Vector retrieval over
    `evidence_chunks` — halfvec HNSW, chunk oversample, maximal-marginal-relevance diversification at
-   λ = 0.7, then a rollup to one best chunk per parent — is used by the **runtime ranker** and
+   `MMR_LAMBDA = 0.7` (`backend/src/contextedge/search/chunk_rollup.py:29-31`), then a rollup to one
+   best chunk per parent merged with a parent-embedding pass — is used by the **runtime ranker** and
    playbook generation, not by this list
    (`backend/src/contextedge/search/vector_search.py:204-243`).
 10. **Context Graph Usage**: Read only, on the detail page's context panel — correlation edges and
@@ -491,7 +517,7 @@ sequenceDiagram
 12. **MAF Agent Usage**: None.
 13. **LLM Usage**: None at read time. Normalize spends the LLM budget: relevance classification,
     message-function classification, identity extraction, and decision extraction all run there
-    (`extraction_tasks.py:122-628`).
+    (`extraction_tasks.py:122-642`).
 14. **Permissions**: Read is any authenticated user, but every query first resolves
     `resolve_excluded_access_policy_ids` and filters out evidence the caller's roles must not see
     (`evidence.py:42`). The three destructive routes — bulk-delete, purge, and single delete —
@@ -505,21 +531,26 @@ sequenceDiagram
     GET /api/v1/evidence?query=VPN%20gateway%20certificate&limit=50 HTTP/1.1
     Authorization: Bearer <jwt>
     ```
-    **Response:**
+    **Response** — exactly the `EvidenceItemResponse` fields
+    (`backend/src/contextedge/schemas/evidence.py:23-45`); `message_function`, `thread_id` and the
+    chunk counters live on the model but are **not** on the list response:
     ```json
     [
       {
         "id": "e1f4...-77",
-        "title": "INC0010427 - VPN users cannot connect",
-        "evidence_type": "ticket",
+        "tenant_id": "t001...-aa",
+        "source_id": "7a0c...-3f",
         "source_type": "servicenow",
-        "relevance_state": "relevant",
+        "evidence_type": "ticket",
+        "title": "INC0010427 - VPN users cannot connect",
+        "body_summary": "Multiple users report VPN login failure...",
+        "relevance_state": "operational",
         "relevance_score": 0.91,
-        "message_function": "problem_report",
-        "chunk_count": 6,
-        "chunked_at": "2026-08-19T09:05:12Z",
-        "thread_id": "t9b2...-40",
-        "created_at_source": "2026-08-19T08:41:00Z"
+        "delta_signal": null,
+        "created_at_source": "2026-08-19T08:41:00Z",
+        "ingested_at": "2026-08-19T08:44:10Z",
+        "source_reference": { "external_id": "sys_id-9f2c", "display_id": "INC0010427",
+                              "url": "https://acme.service-now.com/incident.do?sys_id=9f2c" }
       }
     ]
     ```
@@ -548,12 +579,14 @@ sequenceDiagram
     - **Thread replies are missing from the list.** By design: rows with
       `evidence_type = "thread_message"` are hidden from the default list because they belong under
       their parent ticket's conversation view. Pass `evidence_type=thread_message` explicitly to
-      see them (`backend/src/contextedge/api/v1/evidence.py:74-80`).
+      see them (`backend/src/contextedge/api/v1/evidence.py:75-81`).
     - **Delete returns 404 for a whole batch.** Destructive routes resolve-and-authorize before any
       delete statement, so a single foreign id fails the entire request. Legal-hold items return
       409 (`codewiki/KNOWN_GAPS.md:46`).
-    - **Chunks exist but nothing is retrievable.** Look for chunks with `embedding IS NULL` plus
-      `llm.usage` events showing `outcome = budget_exceeded` — that is the daily LLM budget gate.
+    - **Chunks exist but nothing is retrievable.** Look for chunks with `embedding IS NULL` while the
+      tenant's `llm.usage` events stop arriving — that is the daily LLM budget gate. A block raises
+      before the usage recorder, so there is no event to inspect; check
+      `GET /api/v1/admin/tenant-budget/status` instead.
 18. **Importance Rating**: 9/10.
 
 ---
@@ -584,14 +617,14 @@ sequenceDiagram
 7. **Backend Files Involved**:
    - `backend/src/contextedge/api/v1/episodes.py` (routes at 40, 91, 156, 189, 230, 282, 342, 414,
      459, 510, 556)
-   - `backend/src/contextedge/workers/extraction_tasks.py:1391`
+   - `backend/src/contextedge/workers/extraction_tasks.py:1404`
      (`extraction.reconstruct_episode`)
    - `backend/src/contextedge/workers/evaluation_tasks.py:129`
      (`evaluation.ai_review_episodes`)
    - `backend/src/contextedge/services/episode_review_service.py`
    - `backend/src/contextedge/workers/signature_tasks.py:24`
      (`evaluation.extract_issue_signature`)
-   - `backend/src/contextedge/workers/pattern_tasks.py:379` (`pattern.cluster_episodes`)
+   - `backend/src/contextedge/workers/pattern_tasks.py:422` (`pattern.cluster_episodes`)
 8. **Database Tables**: `episodes`, `episode_steps`, `episode_evidence_links`,
    `episode_issue_signatures`, `issue_signatures`, `evidence_items`, `graph_edges`,
    `operational_events`.
@@ -606,7 +639,9 @@ sequenceDiagram
     maf.v1 projection, visible from Graph Explorer's Agent Context tab.)
 13. **LLM Usage**: Not synchronous, but three of this page's buttons dispatch LLM-bearing tasks:
     - **Reconstruct** → `extraction.reconstruct_episode` (task `extraction`,
-      `vertex_ai/gemini-2.5-flash`, output ceiling 16,384 tokens).
+      `vertex_ai/gemini-2.5-flash`, output ceiling 16,384 tokens —
+      `backend/src/contextedge/config.py:134-136`, applied at
+      `backend/src/contextedge/ai/provider.py:527`).
     - **AI review** → `evaluation.ai_review_episodes` → one `review_episode_llm` call per draft
       (`backend/src/contextedge/ai/classifiers/episode_review.py:53-98`).
     - **Approve** (either kind) → `evaluation.extract_issue_signature`, one LLM call per approved
@@ -666,14 +701,21 @@ sequenceDiagram
       The API can only ever **downgrade** the configured mode, never escalate
       (`backend/src/contextedge/workers/evaluation_tasks.py:171-181`).
     - **The sweep skipped a tenant.** During bulk ingest both the AI-review sweep and the dedup
-      sweep defer, counting `deferred_tenants` rather than churning — active means more than 50 new
-      evidence rows or more than 30 new episodes in the last 10 minutes
-      (`backend/src/contextedge/workers/pattern_tasks.py:693-740`).
+      sweep defer, counting `deferred_tenants` rather than churning — active means more than
+      `DEDUP_ACTIVITY_THRESHOLD = 50` new evidence rows or more than
+      `EPISODE_ACTIVITY_THRESHOLD = 30` new episodes inside
+      `DEDUP_ACTIVITY_WINDOW_MINUTES = 10`
+      (`backend/src/contextedge/workers/pattern_tasks.py:730-745`).
     - **Auto-approved episodes have no reviewer.** By design: `reviewer_user_id` stays NULL so an AI
       approval is permanently distinguishable from a human one.
     - **Approved but no pattern appeared.** Clustering is dispatched once **per domain**; passing
       `None` clustered nothing, because the global pass only sees NULL-domain episodes
       (`evaluation_tasks.py:335-351`). Also confirm a worker is consuming the `pattern` queue.
+    - **The "Construct pattern" toast never names a domain.** A live type drift, not a backend bug:
+      the page declares the response as `{ task_id, domain_id }` (`episodes/page.tsx:266`) but the
+      endpoint returns a `TaskDispatchResponse` where the domain sits under `detail`
+      (`backend/src/contextedge/api/v1/patterns.py:423-427`), so `res.domain_id` is always
+      `undefined`. Harmless today because only `task_id` is rendered.
 18. **Importance Rating**: 10/10.
 
 ---
@@ -693,30 +735,45 @@ sequenceDiagram
    - `frontend/src/components/patterns/pattern-graph.tsx`
 5. **Components Used**: `PageHeader`, `DataTable`, `StatusBadge`, `PatternGraph`.
 6. **Backend APIs Called**:
-   - `GET /api/v1/patterns`, `GET /api/v1/patterns/{id}`, `GET /api/v1/patterns/{id}/graph`
-   - `GET|POST|DELETE /api/v1/patterns/{id}/evidence-links…`
-   - `POST /api/v1/patterns/{id}/approve`
-   - `POST /api/v1/patterns/deduplicate`
-   - `POST /api/v1/patterns/cluster`
-   - `POST /api/v1/playbooks/generate` with `{pattern_id}`
-   - `DELETE /api/v1/patterns/{id}`
+   - `GET /api/v1/patterns` (`patterns/page.tsx:189-190`), `GET /api/v1/patterns/{id}`
+     (`patterns/[id]/page.tsx:110`), `GET /api/v1/patterns/{id}/graph` — issued by the
+     `PatternGraph` component, not the page shell
+     (`frontend/src/components/patterns/pattern-graph.tsx:344`)
+   - `GET|POST|DELETE /api/v1/patterns/{id}/evidence-links…` (`patterns/[id]/page.tsx:40, 116, 121`)
+   - `POST /api/v1/patterns/{id}/approve` (`patterns/[id]/page.tsx:127`)
+   - `POST /api/v1/patterns/deduplicate` (`patterns/page.tsx:194`)
+   - `POST /api/v1/playbooks/generate` with `{pattern_id}` (`patterns/page.tsx:36`)
+   - `DELETE /api/v1/patterns/{id}` (`patterns/page.tsx:49`)
+   - **Not from this page**: `POST /api/v1/patterns/cluster` is dispatched from the *Episodes*
+     page's "Construct pattern" button (`episodes/page.tsx:266`).
 7. **Backend Files Involved**:
    - `backend/src/contextedge/api/v1/patterns.py` (routes at 22, 31, 41, 95, 133, 163, 190, 207,
      240, 265, 304, 412)
    - `backend/src/contextedge/workers/pattern_tasks.py`
-     (`pattern.cluster_episodes:379`, `pattern.generate_playbook_candidate:403`,
-     `pattern.deduplicate_knowledge:791`)
+     (`pattern.cluster_episodes:422`, `pattern.generate_playbook_candidate:446`,
+     `pattern.deduplicate_knowledge:834`)
    - `backend/src/contextedge/services/pattern_service.py`
 8. **Database Tables**: `patterns`, `pattern_evidence_links`, `episodes`, `playbooks`,
    `graph_edges`, `operational_events`.
 9. **Vector Operations**: Clustering matches episodes to existing patterns by embedding proximity
    over the halfvec HNSW index before an LLM adjudicates the match; the page itself reads rows.
+   Two named, measured thresholds do the work. Joining an existing pattern prefilters at
+   `PATTERN_MATCH_MAX_DISTANCE = 0.30` and then orders by distance to take the **nearest** pattern
+   member — the `ORDER BY` is the whole point, because on this corpus nearly every episode has
+   *some* member within 0.35, so an unordered `LIMIT 1` used to hand the validator a near-random
+   pattern (validator accept rate 12% → 40% once nearest was used). Forming a **new** cluster is
+   stricter, `CLUSTER_GROUP_MAX_DISTANCE = 0.27`, picked as the knee of a measured
+   singletons-versus-cluster-size curve (`backend/src/contextedge/workers/pattern_tasks.py:44-60,
+   228-257, 309`).
 10. **Context Graph Usage**: `GET /patterns/{id}/graph` returns the pattern's neighbourhood.
     Promotion writes a `memory.pattern_promoted` operational event.
 11. **Embedding Usage**: Written by clustering, not by this page.
 12. **MAF Agent Usage**: None.
 13. **LLM Usage**: Not synchronous. **Cluster** dispatches `pattern.cluster_episodes`, which makes
-    up to two LLM calls per cluster — pattern-match adjudication and pattern synthesis. **Generate
+    **up to two LLM calls per unlinked episode** — `validate_pattern_match` when a nearest existing
+    pattern falls inside `PATTERN_MATCH_MAX_DISTANCE` (`pattern_tasks.py:273`), then
+    `synthesize_pattern` (`:341`) only if that validator rejected or no pattern matched. An accepted
+    match `continue`s after one call; a rejected match is the only two-call path. **Generate
     playbook** dispatches generation on `vertex_ai/gemini-3.7-flash`
     (`backend/src/contextedge/config.py:53-67`). **Deduplicate** runs the same
     `pattern_service.deduplicate_patterns_and_playbooks` the hourly beat job uses.
@@ -731,9 +788,13 @@ sequenceDiagram
 
     {}
     ```
-    **Response:**
+    **Response** — a `TaskDispatchResponse`, not a bare id
+    (`backend/src/contextedge/schemas/common.py:44-64`;
+    `backend/src/contextedge/api/v1/patterns.py:412-427`). With `?domain_id=` it is one dispatch;
+    without, one pass per tenant domain plus a global NULL-domain pass:
     ```json
-    { "task_id": "8f31...-04", "domain_id": "d0c2...-19" }
+    { "status": "clustering_queued", "task_id": "8f31...-04",
+      "detail": { "domain_id": "d0c2...-19" } }
     ```
 16. **Complete Data Flow**:
 ```mermaid
@@ -761,8 +822,9 @@ sequenceDiagram
       worker (Worker B, `-P solo`). Running two pattern workers reintroduces duplicates
       (`docs/RUNBOOK.md`, "Worker topology").
     - **Dedup retired drafts mid-run.** The hourly sweep defers while ingest is active precisely
-      because a 12:29 sweep once retired 446 drafts during a reconstruction tail
-      (`backend/src/contextedge/workers/pattern_tasks.py:695-702`).
+      because a 12:29 sweep once retired 446 drafts during a reconstruction tail — evidence inflow
+      alone missed that phase, which is why the episode threshold exists
+      (`backend/src/contextedge/workers/pattern_tasks.py:738-745`).
     - **Nothing clusters.** Verify the `pattern` queue has a consumer, and that the dispatch carried
       a real `domain_id`.
 18. **Importance Rating**: 8/10.
@@ -799,7 +861,7 @@ sequenceDiagram
    - `backend/src/contextedge/api/v1/playbooks.py` (routes at 81, 206, 239, 250, 403, 465, 505, 515,
      544, 613, 654)
    - `backend/src/contextedge/services/playbook_service.py`
-   - `backend/src/contextedge/workers/pattern_tasks.py:403`
+   - `backend/src/contextedge/workers/pattern_tasks.py:446`
      (`pattern.generate_playbook_candidate`)
    - `backend/src/contextedge/workers/playbook_tasks.py:74`
      (`evaluation.backfill_playbook_embeddings`)
@@ -812,8 +874,23 @@ sequenceDiagram
 11. **Embedding Usage**: Backfilled by `evaluation.backfill_playbook_embeddings`, not by the UI.
 12. **MAF Agent Usage**: None.
 13. **LLM Usage**: Only via **Generate**, which is the manual path into playbook synthesis. Note
-    that the manual API path is deliberately **not** identical to the worker path — the worker
-    performs additional knowledge retrieval and deterministic gating around the model.
+    that the manual API path is deliberately **not** identical to the worker path. Diffed
+    2026-08-19: both build episode summaries and pull up to 20 `NegativeKnowledgeItem` rows, but
+    only the worker (`pattern_tasks.py:554-580`) calls `retrieve_knowledge_for_pattern` and
+    `persist_knowledge_links` and passes the result as `knowledge_sources=`. The manual route
+    (`api/v1/playbooks.py:708`) omits that argument entirely, so a manually generated playbook is
+    synthesised without approved KB/SOP grounding and writes no knowledge links.
+    Either way the model's `branching_logic` is repaired structurally, not trusted:
+    `playbook_generator.sanitize_branching_logic` drops decision points whose anchor or target
+    names a step that does not exist, that jump back to the step just finished (an infinite loop),
+    or whose true and false paths are identical (deciding nothing) — then a second pass removes
+    points that would strand a step no path can reach. It repairs rather than rejects, because the
+    steps of such a playbook are usually fine and only `decision_points` is junk, and it counts what
+    it dropped so a regressing prompt shows up in the counters rather than in a reviewer's
+    confusion. An audit of 190 generated playbooks found 20 with branching defects — 39% of the 51
+    that branch at all (`backend/src/contextedge/ai/generators/playbook_generator.py:93, 154-255`).
+    The playbook prompt is on **v6** (`backend/src/contextedge/ai/prompts/playbook.py:418`);
+    shipped prompt versions are immutable, so a change means a new version, never an edit.
 14. **Permissions**: `knowledge_manager` on five routes, `playbook_reviewer` on one,
     `tenant_admin` on two (`backend/src/contextedge/api/v1/playbooks.py`). Frontend predicates:
     `canTransitionPlaybook` (playbook_reviewer | knowledge_manager | tenant_admin) and
@@ -837,11 +914,20 @@ sequenceDiagram
       "title": "Renew and deploy VPN gateway certificate",
       "lifecycle_state": "candidate",
       "automation_mode": "suggest_only",
+      "risk_tier": "medium",
       "pattern_id": "p44a...-1c",
       "last_validated_at": null,
-      "expiry_at": null
+      "expiry_at": null,
+      "allowed_transitions": ["under_review"]
     }
     ```
+    `allowed_transitions` is a `@computed_field` served by the API rather than duplicated in the
+    browser (`backend/src/contextedge/schemas/playbook.py:148-166`, reading `VALID_TRANSITIONS` at
+    `backend/src/contextedge/services/playbook_service.py:22-30`). A `candidate` may only go to
+    `under_review` — that single value is not a truncation. The field exists because the UI used to
+    keep its own copy of the map and it had drifted both ways: it offered `candidate → retired`,
+    which the backend rejects, and omitted `approved → restricted`, which left the one lever for
+    narrowing a live playbook unreachable from the UI entirely.
 16. **Complete Data Flow**:
 ```mermaid
 sequenceDiagram
@@ -918,12 +1004,21 @@ sequenceDiagram
     Authorization: Bearer <jwt>
     Content-Type: application/json
 
-    { "title": "Acme VPN outage", "symptoms": ["vpn login fails", "certificate error"],
-      "entities": ["vpn-gw-east-01"] }
+    { "symptoms": ["vpn login fails", "certificate error"],
+      "entities": ["vpn-gw-east-01"],
+      "external_case_ids": ["INC0010427"],
+      "notes": "Reported by the Acme service desk" }
     ```
+    There is **no `title` field** on a session, on create or on read — `ResolutionSessionCreate`
+    takes `domain_id`, `symptoms`, `entities`, `external_case_ids`, `notes` and nothing else
+    (`backend/src/contextedge/schemas/session.py:29-35`), and the page sends exactly those four
+    (`sessions/page.tsx:117-122`). A session is identified by its symptoms and case ids.
     **Response (201):**
     ```json
-    { "id": "3b8e...-91", "title": "Acme VPN outage", "status": "open",
+    { "id": "3b8e...-91", "tenant_id": "t001...-aa", "status": "open",
+      "symptoms": ["vpn login fails", "certificate error"],
+      "entities": ["vpn-gw-east-01"], "external_case_ids": ["INC0010427"],
+      "closed_at": null, "trace_events": [],
       "created_at": "2026-08-19T08:47:10Z" }
     ```
 16. **Complete Data Flow**:
@@ -993,11 +1088,16 @@ sequenceDiagram
     Authorization: Bearer <jwt>
     Content-Type: application/json
 
-    { "dataset_id": "ds10...-6b", "notes": "baseline before decay change" }
+    { "dataset_id": "ds10...-6b", "config": {} }
     ```
-    **Response (201):**
+    `EvalRunCreate` takes only `dataset_id` and `config` — there is no `notes` field
+    (`backend/src/contextedge/api/v1/evaluations.py:31-33`).
+    **Response (201)** — the run is created with `status: "pending"` and dispatched immediately
+    (`evaluations.py:89-100`):
     ```json
-    { "id": "run4...-8d", "dataset_id": "ds10...-6b", "status": "queued",
+    { "id": "run4...-8d", "tenant_id": "t001...-aa", "dataset_id": "ds10...-6b",
+      "config": {}, "status": "pending", "results": null,
+      "started_at": null, "completed_at": null,
       "created_at": "2026-08-19T11:20:00Z" }
     ```
 16. **Complete Data Flow**:
@@ -1064,9 +1164,11 @@ sequenceDiagram
    embedding is generated (attributed and budget-gated), `SET LOCAL hnsw.ef_search = 200` is
    applied, and per candidate playbook the ranker runs an ANN over that version's linked evidence
    chunks using the `embedding::halfvec(3072)` cosine expression. Chunk candidates are oversampled,
-   diversified by maximal marginal relevance at λ = 0.7, rolled up to one best chunk per parent
+   diversified by maximal marginal relevance at `MMR_LAMBDA = 0.7`
+   (`backend/src/contextedge/search/chunk_rollup.py:29-31`), rolled up to one best chunk per parent
    evidence item, and merged with a parent-embedding pass so unchunked evidence still surfaces
-   (`backend/src/contextedge/search/vector_search.py:204-243`).
+   (`backend/src/contextedge/search/vector_search.py:246-297` for the per-playbook variant the
+   ranker actually calls; `:204-243` for the tenant-wide one).
 10. **Context Graph Usage**: Real and weighted. The graph signal counts `graph_edges` touching the
     playbook plus `correlation_edges` between the version's evidence and this query's semantic hits
     (`hybrid_ranker.py:57-112`). The identity signal counts `references_identity` edges to the
@@ -1077,8 +1179,9 @@ sequenceDiagram
 12. **MAF Agent Usage**: None.
 13. **LLM Usage**: Embedding only — no generative call on this path.
 14. **Permissions**: No `require_role` in `runtime.py`. Instead the caller's roles set an
-    **effective risk cap**: admins uncapped, `knowledge_manager` and service accounts capped at
-    `high`, everyone else at `medium` (`backend/src/contextedge/api/v1/runtime.py:42-52`).
+    **effective risk cap**: `platform_super_admin`, `tenant_admin` and `domain_admin` uncapped,
+    `knowledge_manager` and service accounts capped at `high`, everyone else at `medium`
+    (`backend/src/contextedge/api/v1/runtime.py:42-52`).
     Service tokens are additionally restricted by `allowed_domain_ids` (403 on a foreign domain).
 15. **Example Request/Response**:
     **Request:**
@@ -1092,24 +1195,39 @@ sequenceDiagram
       "domain_id": "d0c2...-19",
       "session_id": "3b8e...-91" }
     ```
-    **Response:**
+    **Response** — `RuntimeMatchResponse` / `RuntimeMatchResult`
+    (`backend/src/contextedge/schemas/playbook.py:280-303`). Note the field is `match_score`, not
+    `score`, and the per-signal map is `scoring_breakdown`, whose keys are the ranker's own —
+    `graph` and `quality`, not `graph_distance` and `evidence_quality`
+    (`backend/src/contextedge/search/hybrid_ranker.py:356-365`):
     ```json
     {
       "match_id": "m5c8...-2a",
+      "session_id": "3b8e...-91",
       "results": [
         {
           "playbook_id": "pb77...-e0",
+          "playbook_title": "Renew and deploy VPN gateway certificate",
           "stable_key": "acme.vpn.gateway_certificate_renewal",
-          "score": 0.71,
+          "match_score": 0.71,
+          "confidence": 0.71,
+          "playbook_confidence": 0.82,
           "freshness_status": "fresh",
-          "breakdown": { "keyword": 0.63, "semantic": 0.78, "graph_distance": 0.40,
-                         "evidence_quality": 0.66, "identity": 1.0,
-                         "recency": 0.88, "freshness": 0.88, "negative_penalty": 0.0 }
+          "evidence_count": 6,
+          "risk_tier": "medium",
+          "automation_mode": "suggest_only",
+          "scoring_breakdown": { "keyword": 0.63, "semantic": 0.78, "graph": 0.40,
+                                 "quality": 0.66, "identity": 1.0,
+                                 "recency": 0.88, "freshness": 0.88,
+                                 "negative_penalty": 0.0 }
         }
       ],
-      "fallback_guidance": null
+      "fallback_guidance": null,
+      "filters_applied": { "domain_id": "d0c2...-19", "max_risk_tier": "medium" }
     }
     ```
+    `freshness_status` is derived from the same freshness number the breakdown carries: `fresh`
+    above 0.7, `aging` above 0.3, `stale` otherwise (`hybrid_ranker.py:347`).
 16. **Complete Data Flow**:
 ```mermaid
 sequenceDiagram
@@ -1195,12 +1313,18 @@ sequenceDiagram
     Authorization: Bearer <jwt>
     Content-Type: application/json
 
-    { "decision": "approve", "comment": "Cert renewal verified with the CA team" }
+    { "decision": "approved", "comment": "Cert renewal verified with the CA team" }
     ```
-    **Response:**
+    The value is `approved` or `denied` — not `approve`
+    (`backend/src/contextedge/schemas/execution.py:22-23`; the Review Queue page sends `"approved"`
+    at `review/page.tsx:692`).
+    **Response** (an `ApprovalRequestResponse`,
+    `backend/src/contextedge/schemas/execution.py:146-160`):
     ```json
-    { "id": "a20f...-77", "status": "approved",
-      "decided_by": "u33c...-01", "decided_at": "2026-08-19T12:05:44Z" }
+    { "id": "a20f...-77", "execution_run_id": "r91b...-5e", "status": "approved",
+      "requested_action": "renew_certificate", "safety_class": "medium",
+      "decided_by": "u33c...-01", "decided_at": "2026-08-19T12:05:44Z",
+      "decision_comment": "Cert renewal verified with the CA team" }
     ```
 16. **Complete Data Flow**:
 ```mermaid
@@ -1326,16 +1450,18 @@ sequenceDiagram
 1. **Business Purpose**: Surface conflicts between approved playbooks and knowledge-base evidence,
    so someone decides which one is right instead of both quietly staying in retrieval.
 2. **User Workflow**:
-   - Open `/contradictions`; filter by status.
-   - Read the two conflicting accounts.
-   - Set a status: acknowledged, resolved, or dismissed.
+   - Open `/contradictions`; filter by resolution status (the list defaults to `open`).
+   - Read the two conflicting accounts, `source_a_ref` against `source_b_ref`.
+   - Set a status. The four the UI offers are **open, acknowledged, resolved, suppressed**
+     (`frontend/src/app/(dashboard)/contradictions/page.tsx:26`) — there is no "dismissed".
 3. **Route**: `/contradictions`
 4. **Frontend Files**:
    - `frontend/src/app/(dashboard)/contradictions/page.tsx` (list at 140-144, status patch at 41)
 5. **Components Used**: `PageHeader`, `DataTable`, `StatusBadge`, `PaginationControls`.
 6. **Backend APIs Called**:
-   - `GET /api/v1/contradictions?status=…`
-   - `PATCH /api/v1/contradictions/{id}/status`
+   - `GET /api/v1/contradictions?resolution_status=…` — the query parameter is
+     `resolution_status`, not `status` (`contradictions/page.tsx:143`)
+   - `PATCH /api/v1/contradictions/{id}/status` (`contradictions/page.tsx:41`)
 7. **Backend Files Involved**:
    - `backend/src/contextedge/api/v1/contradictions.py` (routes at 17, 37)
    - `backend/src/contextedge/services/contradiction_service.py` (`scan_contradictions`)
@@ -1362,11 +1488,17 @@ sequenceDiagram
     Authorization: Bearer <jwt>
     Content-Type: application/json
 
-    { "status": "resolved", "resolution_note": "KB article superseded; playbook is correct" }
+    { "resolution_status": "resolved",
+      "description": "KB article superseded; playbook is correct" }
     ```
+    `ContradictionStatusUpdate` has exactly two fields, `resolution_status` and `description`
+    (`backend/src/contextedge/schemas/review.py:22-24`) — there is no `resolution_note`.
     **Response:**
     ```json
-    { "id": "c88a...-12", "status": "resolved",
+    { "id": "c88a...-12", "source_a_ref": "playbook_version:pv44...-1c",
+      "source_b_ref": "evidence:e8b0...-2d", "contradiction_type": "step_conflict",
+      "description": "KB article superseded; playbook is correct",
+      "resolution_status": "resolved", "resolved_by": "u33c...-01",
       "updated_at": "2026-08-19T13:11:02Z" }
     ```
 16. **Complete Data Flow**:
@@ -1385,8 +1517,14 @@ sequenceDiagram
     KM->>DB: PATCH status -> contradiction.status_updated event
 ```
 17. **Common Issues**:
-    - **Nothing new appears.** The scan runs every 12 hours, per tenant, and is skipped for a tenant
-      that errors — one bad tenant never blocks the sweep.
+    - **Nothing new appears.** The scan runs every 12 hours. With `args=("all",)` the task loops
+      every tenant in **one session with no per-tenant `try`** (`evaluation_tasks.py:108-113`), so a
+      single failing tenant aborts the whole loop, rolls the shared transaction back, logs
+      `contradiction.scan_failed` and burns the task's one retry. One bad tenant **does** block the
+      sweep. What limits the damage is `contradiction_scan_state`: `_needs_rescan`
+      (`contradiction_service.py:304-316`) re-scans a pair only when its state row is missing or the
+      evidence's `updated_at` is newer than `last_scanned_at`, so the retry does not re-pay for pairs
+      already scanned — there is no time-based staleness window at all.
     - **This is a cost centre.** The scan is one of the few beat jobs that spends LLM budget on a
       schedule.
 18. **Importance Rating**: 9/10.
@@ -1429,13 +1567,20 @@ sequenceDiagram
     Authorization: Bearer <jwt>
     Content-Type: application/json
 
-    { "title": "Restarting the VPN service does not clear an expired certificate",
+    { "step_text": "Restart the VPN service on vpn-gw-east-01",
+      "failure_reason": "Does not clear an expired gateway certificate; the cert must be reissued",
       "status": "ineffective",
       "domain_id": "d0c2...-19" }
     ```
+    The required field is `step_text` — there is no `title`
+    (`backend/src/contextedge/schemas/review.py:47-52`), and the page sends `step_text` plus
+    `failure_reason` and `status` (`negative-knowledge/page.tsx:49-58`).
     **Response (201):**
     ```json
-    { "id": "nk12...-9a", "status": "ineffective",
+    { "id": "nk12...-9a", "tenant_id": "t001...-aa", "domain_id": "d0c2...-19",
+      "step_text": "Restart the VPN service on vpn-gw-east-01",
+      "failure_reason": "Does not clear an expired gateway certificate; the cert must be reissued",
+      "status": "ineffective", "evidence_refs": null,
       "created_at": "2026-08-19T13:30:00Z" }
     ```
 16. **Complete Data Flow**:
@@ -1475,11 +1620,14 @@ sequenceDiagram
 5. **Components Used**: `PageHeader`, `DataTable`, `StatusBadge`, `SearchableSelect`,
    `PaginationControls`.
 6. **Backend APIs Called**:
-   - `GET /api/v1/identities` with `resolution_state` and search
-   - `PATCH /api/v1/identities/{id}`
-   - `POST /api/v1/identities/merge`
-   - `GET /api/v1/identities/merge-proposals`
-   - `POST /api/v1/identities/merge-proposals/{id}/decide`
+   - `GET /api/v1/identities` — this page sends only `query` plus pagination
+     (`identities/page.tsx:194-200`); the `resolution_state` filter the endpoint also supports is
+     what `/suggestions` uses
+   - `PATCH /api/v1/identities/{id}` (`identities/page.tsx:41`)
+   - `POST /api/v1/identities/merge` (`identities/page.tsx:134`)
+   - `GET /api/v1/identities/merge-proposals` and
+     `POST /api/v1/identities/merge-proposals/{id}/decide` — on the API
+     (`backend/src/contextedge/api/v1/identities.py:186, 250`), not yet wired to this page
 7. **Backend Files Involved**:
    - `backend/src/contextedge/api/v1/identities.py` (routes at 32, 71, 162, 186, 250)
    - `backend/src/contextedge/services/identity_service.py`
@@ -1498,7 +1646,9 @@ sequenceDiagram
 13. **LLM Usage**: None at read time. Identity extraction happens inside
     `extraction.normalize_evidence`, and adjudication confidence is threshold-gated — the person
     auto-link threshold is 0.95, which is why the config deliberately leaves thinking budgets
-    uncapped for identity work (`backend/src/contextedge/config.py:151-189`).
+    uncapped for identity work: a controlled comparison returned the same verdict at every budget
+    while its *confidence* moved 0.95 → 0.80, which would have quietly turned auto-links into
+    review-queue items (`backend/src/contextedge/config.py:151-167`).
 14. **Permissions**: `knowledge_manager` on all five routes
     (`backend/src/contextedge/api/v1/identities.py`); nav visible also to `domain_admin` and
     `tenant_admin`.
@@ -1509,14 +1659,26 @@ sequenceDiagram
     Authorization: Bearer <jwt>
     Content-Type: application/json
 
-    { "primary_id": "id77...-b1", "merge_ids": ["id90...-c4"] }
+    { "primary_identity_id": "id77...-b1", "duplicate_identity_id": "id90...-c4" }
     ```
-    **Response:**
+    `IdentityMergeRequest` is exactly this pair — one duplicate per call, not a list
+    (`backend/src/contextedge/schemas/review.py:118-120`; the page sends it at
+    `identities/page.tsx:134-137`).
+    **Response** (an `IdentityResponse`, `backend/src/contextedge/schemas/review.py:89-102`) — the
+    folded-in aliases come back as the `aliases` array; there is no `alias_count` scalar:
     ```json
-    { "id": "id77...-b1", "canonical_name": "vpn-gw-east-01",
-      "entity_type": "ci", "resolution_state": "resolved",
-      "alias_count": 4 }
+    { "id": "id77...-b1", "tenant_id": "t001...-aa",
+      "canonical_name": "vpn-gw-east-01", "entity_type": "ci",
+      "resolution_state": "resolved", "resolution_confidence": 1.0,
+      "resolution_method": "human_merge", "is_active": true,
+      "aliases": [
+        { "id": "al01...-77", "alias_text": "VPN-GW-EAST-01", "confidence": 1.0 },
+        { "id": "al02...-3d", "alias_text": "vpn-gw-east-01.acme.local", "confidence": 1.0 }
+      ] }
     ```
+    A human merge stamps `resolution_method = "human_merge"` on the survivor
+    (`backend/src/contextedge/services/identity_service.py:1153`), which is how a reviewed identity
+    stays distinguishable from a machine-resolved one.
 16. **Complete Data Flow**:
 ```mermaid
 sequenceDiagram
@@ -1588,13 +1750,20 @@ sequenceDiagram
 
     { "source_evidence_id": "e1f4...-77",
       "target_evidence_id": "e8b0...-2d",
-      "relationship_type": "same_issue",
-      "confidence": 0.9 }
+      "correlation_type": "same_issue",
+      "confidence": 0.9,
+      "explanation": "Same outage window and the same gateway CI" }
     ```
+    The field is `correlation_type` throughout — there is no `relationship_type` anywhere in this
+    API (`backend/src/contextedge/schemas/review.py:123-149`; the page sends it at
+    `correlations/page.tsx:111-115`).
     **Response (201):**
     ```json
-    { "id": "ce55...-3b", "relationship_type": "same_issue",
-      "confidence": 0.9, "created_at": "2026-08-19T14:02:00Z" }
+    { "id": "ce55...-3b", "tenant_id": "t001...-aa",
+      "source_evidence_id": "e1f4...-77", "target_evidence_id": "e8b0...-2d",
+      "correlation_type": "same_issue", "confidence": 0.9,
+      "explanation": "Same outage window and the same gateway CI",
+      "created_by": "u33c...-01", "created_at": "2026-08-19T14:02:00Z" }
     ```
 16. **Complete Data Flow**:
 ```mermaid
@@ -1674,11 +1843,14 @@ sequenceDiagram
     POST /api/v1/correlations/suggestions/cs31...-7f/accept HTTP/1.1
     Authorization: Bearer <jwt>
     ```
-    **Response:**
+    **Response** — accepting mints a `CorrelationEdgeResponse`, the same shape the Correlations tab
+    shows (`backend/src/contextedge/api/v1/correlations.py:212`):
     ```json
-    { "id": "ce90...-11", "relationship_type": "same_issue",
-      "confidence": 0.74, "source_evidence_id": "e1f4...-77",
-      "target_evidence_id": "e8b0...-2d" }
+    { "id": "ce90...-11", "tenant_id": "t001...-aa",
+      "source_evidence_id": "e1f4...-77", "target_evidence_id": "e8b0...-2d",
+      "correlation_type": "same_issue", "confidence": 0.74,
+      "explanation": "Chunk-embedding proximity above the suggestion floor",
+      "created_at": "2026-08-19T14:20:00Z" }
     ```
 16. **Complete Data Flow**:
 ```mermaid
@@ -1750,9 +1922,21 @@ sequenceDiagram
 11. **Embedding Usage**: Only in agent seed resolution.
 12. **MAF Agent Usage**: **The only place in the UI that touches it.**
     `POST /graph/agent-subsets` returns the `maf.v1` projection: seeds are resolved across layers
-    (including issue signatures, ranked by full-text match then `episode_count` desc —
-    `backend/src/contextedge/graph/agent/repository.py:257-293`), traversed under a profile budget,
-    and hydrated per node type.
+    (including issue signatures, whose slug fields are de-slugged before `to_tsvector` so query
+    words can match at all, then ranked by `ts_rank` desc with `episode_count` desc only breaking
+    ties — `backend/src/contextedge/graph/agent/repository.py:262-310`), traversed under a profile
+    budget, and hydrated per node type (`issue_signature` is in both the profile's node set and the
+    hydrator map — `graph/agent/profiles.py:85`, `graph/agent/hydrators.py:53, 634`).
+    **Unapproved episode drafts are now visible to the agent**, which is worth knowing before you
+    read the preview and think something leaked. Visible states are `approved` and `pending_review`
+    (`graph/agent/hydrators.py:108, 152`), but a draft is fenced three ways: it draws on its own
+    `UNAPPROVED_EPISODE_SEED_LIMIT = 2` seed slots so it can never evict a reviewed precedent, its
+    relevance is multiplied by `UNAPPROVED_SEED_RELEVANCE_FACTOR = 0.8` so an approved episode wins
+    any tie (`graph/agent/repository.py:106-117`), and its label is prefixed `[UNAPPROVED DRAFT]`
+    with an `agent_caveat` fact attached — because a bare `reviewer_state` enum sitting among a
+    dozen sibling facts is not a warning the model will act on
+    (`graph/agent/hydrators.py:438-463`). The seed reason is `query_semantic_unapproved`, so a
+    decision trace shows exactly which draft was admitted (`repository.py:498-507`).
 13. **LLM Usage**: None.
 14. **Permissions**: `knowledge_manager` on five routes — edge-proposal list, approve, and reject
     (`graph.py:129, 151, 174`) plus `fix-outcomes` and `fix-applicability` (`graph.py:64, 88`).
@@ -1764,19 +1948,24 @@ sequenceDiagram
     GET /api/v1/graph/subgraph/episode/9c1f...-a4?max_depth=2&domain_id=d0c2...-19 HTTP/1.1
     Authorization: Bearer <jwt>
     ```
-    **Response:**
+    **Response** — nodes carry `title` (not `label`), edge endpoints are the composite
+    `"{type}:{id}"` node keys, and a `truncated` flag reports whether the node/edge budget cut the
+    traversal short (`backend/src/contextedge/graph/queries.py:108-113, 176-181, 368-372`):
     ```json
     {
       "nodes": [
-        { "id": "9c1f...-a4", "type": "episode", "label": "VPN gateway certificate expiry" },
-        { "id": "is22...-05", "type": "issue_signature",
-          "label": "remote_access|tls_certificate|certificate_expired" },
-        { "id": "e1f4...-77", "type": "evidence", "label": "INC0010427" }
+        { "type": "episode", "id": "9c1f...-a4", "title": "VPN gateway certificate expiry" },
+        { "type": "issue_signature", "id": "is22...-05",
+          "title": "remote_access|tls_certificate|certificate_expired" },
+        { "type": "evidence", "id": "e1f4...-77", "title": "INC0010427" }
       ],
       "edges": [
-        { "source": "9c1f...-a4", "target": "is22...-05", "type": "has_signature", "weight": 1.0 },
-        { "source": "9c1f...-a4", "target": "e1f4...-77", "type": "derived_from" }
-      ]
+        { "source": "episode:9c1f...-a4", "target": "issue_signature:is22...-05",
+          "type": "has_signature", "weight": 1.0 },
+        { "source": "episode:9c1f...-a4", "target": "evidence:e1f4...-77",
+          "type": "derived_from", "weight": 1.0 }
+      ],
+      "truncated": false
     }
     ```
 16. **Complete Data Flow**:
@@ -1914,7 +2103,8 @@ sequenceDiagram
 7. **Backend Files Involved**:
    - `backend/src/contextedge/api/v1/policies.py` (routes at 57, 83, 120, 148; version bump logic at
      133-140)
-   - `backend/src/contextedge/models/policy.py` (`TenantPolicy:21-67`, `PolicyCheck:70-128`)
+   - `backend/src/contextedge/models/policy.py` (`POLICY_TYPES:21-23`, `TenantPolicy:31-67`,
+     `PolicyCheck:70-128`)
    - `backend/src/contextedge/services/policy_assignment.py` (`assert_policy_assignment`)
    - `backend/src/contextedge/services/policy_check_service.py:34`
 8. **Database Tables**: `tenant_policies`, `policy_checks`, `action_policies`.
@@ -1923,9 +2113,12 @@ sequenceDiagram
 11. **Embedding Usage**: None.
 12. **MAF Agent Usage**: None.
 13. **LLM Usage**: None.
-14. **Permissions**: Reading is open to `tenant_admin`, `domain_admin`, and `knowledge_manager`;
-    create, update, and delete are `tenant_admin`
-    (three `require_role("tenant_admin")` calls in `policies.py`). Nav gate: `tenant_admin`.
+14. **Permissions**: The API allows reads for `tenant_admin`, `domain_admin`, or
+    `knowledge_manager` (`backend/src/contextedge/api/v1/policies.py:60-62`); create, update, and
+    delete are `tenant_admin` (`policies.py:85, 127, 150`). Nav gate: `tenant_admin`. Note this
+    page is stricter than the API it calls — the list query is `enabled: isTenantAdmin(roles)`
+    (`policies/page.tsx:352-358`), so a `domain_admin` who reaches the URL directly sees an empty
+    page rather than the policies the backend would have served them.
 15. **Example Request/Response**:
     **Request:**
     ```http
@@ -1935,10 +2128,16 @@ sequenceDiagram
 
     { "config": { "retention_days": 730 } }
     ```
-    **Response:**
+    **Response** — `PolicyRecordResponse` is deliberately narrow: id, name, description, config,
+    is_active, timestamps (`backend/src/contextedge/api/v1/policies.py:14-23`). The `version`
+    column and `policy_type` live on the row but are **not** returned here; type is implied by
+    which array of `PoliciesGroupedResponse` the record arrives in, and version is what
+    `policy_checks` rows point at:
     ```json
-    { "id": "pol4...-2e", "policy_type": "retention", "version": 3,
-      "config": { "retention_days": 730 }, "is_active": true }
+    { "id": "pol4...-2e", "name": "Acme long-term retention",
+      "description": "VPN evidence with resolved identities",
+      "config": { "retention_days": 730 }, "is_active": true,
+      "updated_at": "2026-08-19T13:44:00Z" }
     ```
 16. **Complete Data Flow**:
 ```mermaid
@@ -1974,7 +2173,8 @@ sequenceDiagram
 1. **Business Purpose**: The governance log — who changed a rule, who approved an execution, who
    dispatched an AI review.
 2. **User Workflow**:
-   - Open `/audit`; filter by actor, action, or date.
+   - Open `/audit`; filter by action, or by a `since` / `until` date range
+     (`audit/page.tsx:77-86`). There is no actor filter in the UI.
    - Page through the results.
 3. **Route**: `/audit`
 4. **Frontend Files**:
@@ -2009,15 +2209,30 @@ sequenceDiagram
     [
       {
         "id": "al77...-3c",
-        "actor_email": "devs@turnqey.xyz",
-        "action": "http.post.episodes-ai-review",
-        "resource_type": "episode",
+        "actor_email": "ops@acme.example",
+        "action": "http.post.api.v1.episodes.ai-review",
+        "resource_type": "http_request",
         "resource_id": null,
-        "details": { "outcome": "success", "status_code": 202 },
+        "details": { "path": "/api/v1/episodes/ai-review", "status": 202,
+                     "outcome": "success", "request_id": "4f2c9d1a-...-b17e",
+                     "correlation_id": "4f2c9d1a-...-b17e" },
+        "timestamp": "2026-08-19T10:01:58Z"
+      },
+      {
+        "id": "al78...-9b",
+        "actor_email": "ops@acme.example",
+        "action": "episode.ai_review_dispatched",
+        "resource_type": "episode",
+        "resource_id": "batch",
+        "details": { "limit": 50, "mode": "advisory" },
         "timestamp": "2026-08-19T10:01:58Z"
       }
     ]
     ```
+    One click, two rows: the middleware row (always `resource_type = "http_request"`, `resource_id`
+    NULL, path slug including the `api.v1.` prefix —
+    `backend/src/contextedge/middleware/request_audit.py:70-71, 100`) and the semantic row from the
+    endpoint's own `log_audit_event` (`backend/src/contextedge/api/v1/episodes.py:593-602`).
 16. **Complete Data Flow**:
 ```mermaid
 sequenceDiagram
@@ -2038,8 +2253,11 @@ sequenceDiagram
     - **Failed logins are missing.** Unauthenticated 401 probes never resolve a tenant, so they
       exist only in structlog and will never appear here. Alert on `http.mutating_request` with
       status 401 instead (`backend/src/contextedge/middleware/request_audit.py:59-64`).
-    - **Actions look like URLs.** They are: `action = "http.<method>.<path-slug>"`. Semantic actions
-      such as `sync.pause` come from explicit `log_audit_event` calls and sit alongside them.
+    - **Actions look like URLs.** They are: `action = "http.<method>.<path-slug>"`, and the slug is
+      the *whole* path with slashes replaced by dots, `api.v1.` prefix included — so search for
+      `http.post.api.v1.sources`, not `http.post.sources`
+      (`backend/src/contextedge/middleware/request_audit.py:70-71`). Semantic actions such as
+      `sync.pause` come from explicit `log_audit_event` calls and sit alongside them.
     - **403 as a domain_admin.** Expected — the nav gate is broader than the API gate.
 18. **Importance Rating**: 8/10.
 
@@ -2066,7 +2284,8 @@ sequenceDiagram
      sync run is active**, 60 s otherwise
    - `GET /api/v1/sync-runs?limit=20` (the run scope selector)
 7. **Backend Files Involved**:
-   - `backend/src/contextedge/api/v1/admin_cost.py` (routes at 33, 102, 113, 137)
+   - `backend/src/contextedge/api/v1/admin_cost.py` (this tab's four routes at 33, 102, 113, 137;
+     the router's fifth, `pipeline-health` at 166, belongs to the Pipeline Health tab)
    - `backend/src/contextedge/services/tenant_budget_service.py`
      (`check_budget:234-282`, usage sum at 191-231, `upsert_budget:333-372`)
    - `backend/src/contextedge/services/admin_cost_service.py:64` (`_estimate_cost`)
@@ -2081,8 +2300,8 @@ sequenceDiagram
     (`backend/src/contextedge/workers/chunk_tasks.py:169-171`).
 12. **MAF Agent Usage**: None.
 13. **LLM Usage**: None — this page only reports.
-14. **Permissions**: `tenant_admin` on all five routes
-    (`backend/src/contextedge/api/v1/admin_cost.py`).
+14. **Permissions**: `tenant_admin` on every route in the router — five `require_role` calls at
+    `backend/src/contextedge/api/v1/admin_cost.py:60, 106, 118, 142, 175`.
 15. **Example Request/Response**:
     **Request:**
     ```http
@@ -2092,11 +2311,15 @@ sequenceDiagram
 
     { "daily_token_limit": 5000000, "daily_cost_cap_usd": 60.0, "action_on_exceed": "warn" }
     ```
-    **Response:**
+    **Response** (`TenantBudgetResponse`, `backend/src/contextedge/schemas/admin_cost.py:80-91` —
+    `daily_cost_cap_usd` is a JSON number, not the `Numeric(12,4)` string the column stores):
     ```json
     { "tenant_id": "t001...-aa", "daily_token_limit": 5000000,
-      "daily_cost_cap_usd": "60.0000", "action_on_exceed": "warn" }
+      "daily_cost_cap_usd": 60.0, "action_on_exceed": "warn",
+      "updated_at": "2026-08-19T12:30:00Z" }
     ```
+    A `PUT` **replaces** the row rather than patching it — omitting an axis sets it to null, which
+    means "not capped" on that axis (`schemas/admin_cost.py:93-114`).
     `action_on_exceed` accepts exactly two values, and the UI labels them precisely
     (`admin/cost/page.tsx:525-526`): **warn** (allow, log event) and **block** (raise exception).
 16. **Complete Data Flow**:
@@ -2155,39 +2378,63 @@ sequenceDiagram
 6. **Backend APIs Called**:
    - `GET /api/v1/admin/pipeline-health` — `refetchInterval: 5_000`
 7. **Backend Files Involved**:
-   - `backend/src/contextedge/api/v1/admin_cost.py:166`
+   - `backend/src/contextedge/api/v1/admin_cost.py:166` (route), `:175` (the `tenant_admin` gate)
    - `backend/src/contextedge/services/pipeline_health_service.py`
-     (queue list at 43-52, `unacked` at 58-84, `BACKLOG_ALERT_DEPTH = 500` at 55, graph-chain SQL
-     at 87-110, founding-incident docstring at 1-27)
-8. **Database Tables**: Reads counts across `evidence_items`, `evidence_chunks`,
-   `canonical_identities`, `episodes`, `patterns`, `playbooks`. Queue depths come from **Redis**,
-   not Postgres.
+     (queue list at 43-52, `BACKLOG_ALERT_DEPTH = 500` at 55, `unacked` at 58-84, the one big
+     counts query at 89-139, latency/percall/spend queries at 141-205, the graph chain and
+     `stalled_at` at 210-221, alert assembly at 223-308, founding-incident docstring at 1-27)
+8. **Database Tables**: One SQL statement counts `evidence_items`, `raw_evidence_objects`,
+   `evidence_chunks`, `canonical_identities`, `correlation_edges`, `case_links`, `episodes`,
+   `patterns`, `playbooks`; three more read `operational_events` for LLM latency, per-prompt calls,
+   and the last hour's spend. Queue depths come from **Redis**, not Postgres.
 9. **Vector Operations**: None — but it counts embedded chunks, which is how you see the embedding
    lane falling behind.
 10. **Context Graph Usage**: The chain counts include graph-stage outputs.
 11. **Embedding Usage**: Reported only.
 12. **MAF Agent Usage**: None.
 13. **LLM Usage**: None.
-14. **Permissions**: `tenant_admin` (`backend/src/contextedge/api/v1/admin_cost.py:166`); nav gate
-    `tenant_admin` (`frontend/src/components/shell/sidebar-nav.tsx:68`).
+14. **Permissions**: `tenant_admin` — route at `backend/src/contextedge/api/v1/admin_cost.py:166`,
+    gate at `:175`; nav gate `tenant_admin`
+    (`frontend/src/components/shell/sidebar-nav.tsx:68`).
 15. **Example Request/Response**:
     **Request:**
     ```http
     GET /api/v1/admin/pipeline-health HTTP/1.1
     Authorization: Bearer <jwt>
     ```
-    **Response** (queues listed in pipeline order, `pipeline_health_service.py:43-52`):
+    **Response** — the keys are `queues` (in pipeline order), `in_flight`, `counts`, `graph_chain`,
+    `stalled_at`, and `alerts`, plus throughput, latency and spend
+    (`backend/src/contextedge/services/pipeline_health_service.py:43-52, 310-322`):
     ```json
     {
-      "queue_depths": { "extraction": 8255, "correlation": 0, "embedding": 309,
-                        "hydration": 12, "pattern": 0, "evaluation": 3,
-                        "sync": 0, "default": 1 },
-      "unacked": 41,
-      "alert_depth": 500,
-      "chain": { "evidence": 193, "embedded": 289, "identities": 44,
-                 "episodes": 0, "patterns": 0, "playbooks": 0 }
+      "queues": { "extraction": 8255, "correlation": 0, "embedding": 309,
+                  "hydration": 12, "pattern": 0, "evaluation": 3,
+                  "sync": 0, "default": 1 },
+      "in_flight": 41,
+      "counts": { "evidence": 193, "embedded": 289, "embed_gap": 12,
+                  "identities": 44, "correlation_edges": 0,
+                  "episodes": 0, "patterns": 0, "playbooks": 0,
+                  "chunks_total": 1204, "chunks_embedded": 895 },
+      "throughput_per_10min": 27,
+      "episodes_per_10min": 0,
+      "spend_last_hour_usd": 3.41,
+      "latency_10min": { "calls": 118, "p50_ms": 4120, "p95_ms": 9800, "max_ms": 14200 },
+      "by_call_60min": [ { "call": "relevance", "calls": 402, "p50_ms": 900, "tokens": 51200 } ],
+      "graph_chain": [
+        { "stage": "evidence", "count": 193 },
+        { "stage": "correlations", "count": 0 },
+        { "stage": "episodes", "count": 0 },
+        { "stage": "patterns", "count": 0 },
+        { "stage": "playbooks", "count": 0 }
+      ],
+      "stalled_at": "correlations",
+      "alerts": [ { "level": "warning",
+                    "message": "The graph chain stops at 'correlations': ..." } ]
     }
     ```
+    The chain is **evidence → correlations → episodes → patterns → playbooks** — the service names
+    the first zero itself in `stalled_at`, so you do not have to eyeball five numbers
+    (`pipeline_health_service.py:210-221`).
 16. **Complete Data Flow**:
 ```mermaid
 sequenceDiagram
@@ -2208,10 +2455,14 @@ sequenceDiagram
     end
 ```
 17. **Common Issues**:
-    - **Every queue reads zero but nothing finishes.** Look at `unacked`. During the episode
-      reconstruction phase **all** remaining work lives there — 5,800 debounced reconstructs once
-      churned for hours while every queue read zero
-      (`backend/src/contextedge/services/pipeline_health_service.py:58-84`).
+    - **Every queue reads zero but nothing finishes.** Look at `in_flight` (the broker's `unacked`
+      hash). During the episode reconstruction phase **all** remaining work lives there — 5,800
+      debounced reconstructs once churned for hours while every queue read zero and the page said
+      "idle" about a pipeline burning a dollar a minute
+      (`backend/src/contextedge/services/pipeline_health_service.py:58-84`). The service now writes
+      that distinction into `alerts` for you: in-flight work plus recent episodes is an `info`
+      alert; in-flight work with nothing produced in ten minutes is `critical`, meaning the holding
+      workers may be dead (`pipeline_health_service.py:275-299`).
     - **`correlation` and `embedding` depths never move.** Your workers are probably not consuming
       them. The full queue set is
       `default, sync, hydration, extraction, correlation, embedding, pattern, evaluation`
@@ -2244,10 +2495,12 @@ sequenceDiagram
    - `GET|POST /api/v1/domains` (optionally `?workspace_id=`)
    - `GET /api/v1/users`
 7. **Backend Files Involved**:
-   - `backend/src/contextedge/api/v1/tenants.py` (read at 62, update at 74)
+   - `backend/src/contextedge/api/v1/tenants.py` (routes at 14, 28, 56, 67; the own-tenant read
+     check sits at 62 and the update gate at 74)
    - `backend/src/contextedge/api/v1/workspaces.py`
    - `backend/src/contextedge/api/v1/domains.py`
-   - `backend/src/contextedge/api/v1/users.py` (CRUD and role bindings at 29, 42, 83, 111, 115, 153)
+   - `backend/src/contextedge/api/v1/users.py` (routes at 22, 40, 70, 81, 111, 140, 151; the five
+     `require_role("tenant_admin")` gates at 29, 42, 83, 115, 153)
    - `frontend/src/lib/hooks/use-tenants.ts` (exports `useWorkspaces` and `useDomains` — despite the
      filename there is no `useTenants`)
 8. **Database Tables**: `tenants`, `workspaces`, `domains`, `users`, `role_bindings`,
@@ -2299,9 +2552,12 @@ sequenceDiagram
     - **Assigning a role does not scope it.** `RoleBinding.scope_type`/`scope_id` are stored but not
       enforced — the grant is effectively tenant-wide
       (`codewiki/KNOWN_GAPS.md:187-191`).
-    - **Two users share an email.** Legal: email is unique per tenant, not globally
-      (`backend/src/contextedge/models/tenant.py:68-85`). Logging in with credentials valid in two
-      tenants returns 401 "Ambiguous account".
+    - **Two users share an email.** Legal, and more permissively than you might expect:
+      `users.email` carries a plain non-unique index and no unique constraint at all — not global,
+      not per tenant (`backend/src/contextedge/models/tenant.py:78`). Login fetches every match and
+      verifies the password against each; if more than one survives, it refuses with 401
+      "Ambiguous account; contact your administrator" rather than guessing a tenant
+      (`backend/src/contextedge/api/v1/auth.py:39-41, 65-89`).
 18. **Importance Rating**: 8/10.
 
 ---
@@ -2407,13 +2663,30 @@ sequenceDiagram
 
 ## Appendix B — Which tabs actually touch a vector index
 
-Only these four paths run an approximate-nearest-neighbour query against the halfvec HNSW indexes
-from migration `0032`:
+Approximate-nearest-neighbour queries against the halfvec HNSW indexes from migration `0032` are
+issued from exactly these places — every module that imports `halfvec_cosine_distance`:
 
-1. **Runtime** — `POST /runtime/match` → `rank_playbooks` → chunk ANN + parent ANN.
+**On a request you make:**
+
+1. **Runtime** — `POST /runtime/match` → `rank_playbooks` → chunk ANN + parent ANN
+   (`backend/src/contextedge/search/vector_search.py`).
 2. **Review Queue / Decisions** — decision similarity over `decisions.embedding`.
-3. **Patterns** — episode-to-pattern matching inside `pattern.cluster_episodes`.
-4. **Evaluations** — because a run replays the Runtime path.
+3. **Evaluations** — because a run replays the Runtime path.
+4. **Graph Explorer → Agent Context** — seed resolution mixes ANN over episodes, playbooks and
+   chunks with its full-text and structured layers
+   (`backend/src/contextedge/graph/agent/repository.py:326-429`).
+
+**Behind the scenes, feeding tabs that themselves only read rows:**
+
+5. **Patterns** — episode-to-pattern matching inside `pattern.cluster_episodes`
+   (`backend/src/contextedge/workers/pattern_tasks.py`).
+6. **Review Queues (`/suggestions`)** — the correlation-suggestion generator runs chunk ANN
+   (`backend/src/contextedge/services/correlation_suggestion_service.py:165-167`).
+7. **Contradictions** — the 12-hourly scan finds candidate conflicts by ANN
+   (`backend/src/contextedge/services/contradiction_service.py:236-242`).
+8. **Playbooks** — knowledge retrieval during generation
+   (`backend/src/contextedge/services/knowledge_retrieval_service.py`), and decision-trace lookups
+   (`backend/src/contextedge/services/decision_trace_service.py`).
 
 Everything else is relational or full-text. In particular, the **Evidence** search box is Postgres
 full-text search, not semantic search.

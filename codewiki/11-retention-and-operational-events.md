@@ -240,7 +240,7 @@ Two details in that row are worth reading closely. `artifact_blob_count` is `0` 
 | Orphan cleanup | `backend/src/contextedge/workers/cleanup_tasks.py` | `cleanup_hard_deleted_evidence` (165), `_reap_orphan_raw_blobs` (50), `_reap_orphan_graph_edges` (121), `_reap_orphan_artifact_blobs` (100, stub) | evaluation queue, daily |
 | Memory classes | `backend/src/contextedge/services/memory_service.py` | `classify_evidence_memory_class` (73), `memory_retention_windows` (64), `KB_LONG_TERM_TYPES` (28) | Retention + session events |
 | Legal-hold predicate | `backend/src/contextedge/services/evidence_filters.py` | `exclude_legal_hold` (25) | Every content-shipping query |
-| Hold-aware delete routes | `backend/src/contextedge/api/v1/evidence.py` | `bulk_delete_evidence` (316), `purge_evidence` (409), `delete_evidence` (494) | HTTP, `domain_admin` |
+| Hold-aware delete routes | `backend/src/contextedge/api/v1/evidence.py` | `bulk_delete_evidence` (318), `purge_evidence` (409), `delete_evidence` (494) | HTTP, `domain_admin` |
 | Evidence model | `backend/src/contextedge/models/evidence.py` | `EvidenceItem` (`relevance_state`, `sensitivity_label`, `ingested_at`, `raw_object_ref`) | ORM |
 | Raw offload | `backend/src/contextedge/services/ingestion_persistence.py` | `OFFLOAD_THRESHOLD_BYTES = 32_768` (16), offload branch (84-87) | Ingest |
 | Object storage | `backend/src/contextedge/services/object_store.py` | `upload_raw`, `delete_object` | Ingest / cleanup |

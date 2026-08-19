@@ -21,8 +21,8 @@ Use it when you are tracing a symptom back to the code that caused it. Every ent
 - **Who it imports from:** `contextedge.config.settings`, `contextedge.services.object_store.ensure_bucket`, `contextedge.api.v1.router`, `contextedge.middleware.request_audit`, `contextedge.middleware.request_context`, plus `prometheus_fastapi_instrumentator`.
 - **What happens next:** The application starts listening for HTTP requests on the configured port.
 - **Data flow:** Receives raw HTTP requests, processes global exception handling, and forwards them to API routers.
-- **Control flow:** Middleware is added in the order `RequestAuditMiddleware`, `TenantContextMiddleware`, `CORSMiddleware` (`main.py:121-129`). Starlette wraps the last-added outermost, so a request actually travels **CORS → TenantContext → RequestAudit → router → handler**. Getting this order backwards is a classic source of "why can't the browser read my error response".
-- **Design rationale:** Centralized app configuration makes it easier to inject middleware and manage global state. The global exception handler re-adds CORS headers by hand (`main.py:131-166`) because it runs *outside* `CORSMiddleware` — without that, a browser could never read the `request_id` the handler exists to return.
+- **Control flow:** Middleware is added in the order `RequestAuditMiddleware`, `TenantContextMiddleware`, `CORSMiddleware` (`main.py:122-129`). Starlette wraps the last-added outermost, so a request actually travels **CORS → TenantContext → RequestAudit → router → handler**. Getting this order backwards is a classic source of "why can't the browser read my error response".
+- **Design rationale:** Centralized app configuration makes it easier to inject middleware and manage global state. The global exception handler re-adds CORS headers by hand (`main.py:132-166`) because it runs *outside* `CORSMiddleware` — without that, a browser could never read the `request_id` the handler exists to return.
 - **Health contract:** `/health` is pure liveness; `/ready` probes database, Alembic head, and Redis with 5-second timeouts and 503s on failure (`main.py:179-210`); `/metrics` is the Prometheus scrape target (`main.py:168`).
 
 ### `backend/src/contextedge/api/v1/__init__.py`
@@ -31,7 +31,7 @@ Use it when you are tracing a symptom back to the code that caused it. Every ent
 - **Why it exists:** To aggregate every sub-router under the `/api/v1` prefix so `main.py` mounts one object.
 - **Where it is:** `backend/src/contextedge/api/v1/__init__.py`
 - **Who calls it:** `backend/src/contextedge/main.py` imports and mounts it (`main.py:170-171`).
-- **Who it imports from:** All module-level routers inside the `v1` package — 32 of them, including `auth`, `tenants`, `sources`, `sync`, `evidence`, `threads`, `episodes`, `patterns`, `playbooks`, `decisions`, `graph`, `runtime`, `sessions`, `policies`, `action_policies`, `audit_logs`, `admin_cost`, `negative_knowledge`.
+- **Who it imports from:** All module-level routers inside the `v1` package — 33 of them, imported at `__init__.py:5-39` and mounted at `__init__.py:41-83`. They include `auth`, `tenants`, `sources`, `sync`, `evidence`, `threads`, `episodes`, `patterns`, `playbooks`, `decisions`, `graph`, `runtime`, `sessions`, `policies`, `action_policies`, `audit` (mounted at `/audit-logs`, so the module name and the URL differ), `admin_cost`, and `negative_knowledge`.
 - **Data flow:** Routes incoming HTTP requests to the appropriate handler based on the URL path.
 - **Control flow:** Path matching → delegation to a specific router → FastAPI dependency resolution (`get_db`, `get_current_user`) → handler.
 
@@ -58,7 +58,7 @@ Use it when you are tracing a symptom back to the code that caused it. Every ent
 - **What it is:** The Celery application: task registry, queue routing table, beat schedule, and the signals that carry request context into workers.
 - **Why it exists:** To manage asynchronous background tasks, configure queues, and schedule periodic sweeps.
 - **Who calls it:** The Celery worker and beat processes on startup.
-- **Who it imports from:** `contextedge.config.settings`, `contextedge.middleware.request_context`, and 19 task modules via `include=[...]` (`celery_app.py:142-190`).
+- **Who it imports from:** `contextedge.config.settings`, `contextedge.middleware.request_context`, and 21 task modules via `include=[...]` (`celery_app.py:146-189`).
 - **Data flow:** Injects HTTP correlation headers into Celery task messages and extracts them when a task starts running.
 - **Control flow:** Task enqueue → `before_task_publish` (`_inject_correlation_headers`, `celery_app.py:25-42`) → broker → worker → `task_prerun` (`_bind_worker_context`, `celery_app.py:45-68`) → execution → `task_postrun` (`_release_worker_context`, `celery_app.py:71-80`).
 - **Routing:** `task_routes` (`celery_app.py:226-279`) is **matched in order**, so specific keys beat later wildcards. Eight queues total: `default`, `sync`, `hydration`, `extraction`, `correlation`, `embedding`, `pattern`, `evaluation`. The `correlation` and `embedding` lanes exist because both were previously starved behind bulk normalization in the `extraction` FIFO.
@@ -82,11 +82,11 @@ Use it when you are tracing a symptom back to the code that caused it. Every ent
 **Rating: 9/10**
 - **What it is:** Defines the normalization pipeline — the single biggest function in the ingest path — plus manual re-classification and episode reconstruction.
 - **Why it exists:** Ingestion is computationally heavy and LLM-bound. Processing must be offloaded to avoid blocking the API.
-- **Registered tasks:** `extraction.normalize_evidence` (`:1304`, queue `extraction`), `extraction.classify_relevance` (`:1361`, queue `default` — a deliberate fast lane), `extraction.reconstruct_episode` (`:1391`, queue `correlation`).
+- **Registered tasks:** `extraction.normalize_evidence` (`:1317`, queue `extraction`), `extraction.classify_relevance` (`:1374`, queue `default` — a deliberate fast lane), `extraction.reconstruct_episode` (`:1404`, queue `correlation`).
 - **Who calls it:** The sync handoff (`services/sync_ingestion_queue.py`), thread hydration, and the evidence API.
 - **Who it imports from:** `contextedge.ai.classifiers`, `contextedge.ai.embeddings`, `contextedge.models.evidence`, and a long list of `contextedge.services.*` (message filter, redaction, evidence normalization, typing, knowledge lifecycle, case state, source facets, identity, decisions, error signatures, chunk dispatch).
-- **Data flow inside `_normalize` (`:122-628`), in order:** load raw payload → hydrated-message noise gate → title/body extraction and content hash → redaction → dedupe on `(tenant_id, content_hash)` → insert `EvidenceItem` → thread + attachments → relevance classification (LLM) → extraction gate → message-function classification (LLM) → error-signature fingerprints → identity resolution (LLM) → decision extraction (LLM) → parent embedding → chunk dispatch.
-- **Post-commit fan-out (the task wrapper, `:1306-1354`):** attachments → `artifact.extract_attachment` each; otherwise `extraction.correlate_evidence` + `extraction.compute_evidence_baseline`; plus `hydration.hydrate_thread` when the payload carried a thread id and this record is not itself a hydrated message.
+- **Data flow inside `_normalize` (`:122-641`), in order:** load raw payload → hydrated-message noise gate → title/body extraction and content hash → redaction → dedupe on `(tenant_id, content_hash)` → insert `EvidenceItem` → thread + attachments → relevance classification (LLM) → extraction gate → message-function classification (LLM) → error-signature fingerprints → identity resolution (LLM) → decision extraction (LLM) → parent embedding → chunk dispatch.
+- **Post-commit fan-out (the task wrapper, `:1327-1364`):** attachments → `artifact.extract_attachment` each; otherwise `extraction.correlate_evidence` + `extraction.compute_evidence_baseline`; plus `hydration.hydrate_thread` when the payload carried a thread id and this record is not itself a hydrated message.
 - **Design rationale:** Every LLM stage is individually try/except'd so one failing model call degrades a field rather than failing ingestion. The chunking allow-list (`:54,60-62`) balances ingest latency against reliability: known-good sources under 16 KB chunk inline, everything else goes async.
 
 ### `backend/src/contextedge/workers/chunk_tasks.py`
@@ -112,7 +112,8 @@ Use it when you are tracing a symptom back to the code that caused it. Every ent
 ### `backend/src/contextedge/workers/pattern_tasks.py`
 - **What it is:** The `pattern` lane — `pattern.cluster_episodes` (`:422`), `pattern.generate_playbook_candidate` (`:446`), `pattern.deduplicate_knowledge` (`:834`).
 - **Why it is serialized:** clustering and generation operate on the whole graph and take no advisory lock, so the pattern queue is consumed by a single solo worker and the dedup sweep deliberately rides the same queue to serialize behind clustering.
-- **Also exports:** `tenant_pipeline_active` (`:748`) and its thresholds (`:736-745`) — the shared "is this tenant mid-ingest?" gate used by both hourly sweeps.
+- **Also exports:** `tenant_pipeline_active` (`:748-785`) and its thresholds (`:736-745`) — the shared "is this tenant mid-ingest?" gate used by both hourly sweeps.
+- **How the playbook task actually gets sent:** clustering does not call `.delay()` on `generate_playbook_candidate` itself. `services/pattern_service.py:192,247` hands it to `services/deferred_dispatch.dispatch_after_commit`, which holds the send until the SQLAlchemy session commits. Dispatching inside the transaction was wrong in both directions — a rollback left queued tasks naming patterns that never existed, and a success could let a worker read "not found" before the commit landed.
 - **Note:** there is **no beat entry** for clustering. It fires on episode approval and from `POST /api/v1/patterns/cluster`.
 
 ### `backend/src/contextedge/workers/retention_tasks.py` and `cleanup_tasks.py`
@@ -151,7 +152,7 @@ Use it when you are tracing a symptom back to the code that caused it. Every ent
 
 ### `backend/src/contextedge/services/pipeline_health_service.py`
 - **What it is:** The operator's single-screen answer to "where did the pipeline stop?"
-- **Control flow:** Redis `LLEN` per lane over `QUEUES` in pipeline order plus `HLEN unacked` for in-flight work (`:43-55`), then one SQL read counting the graph chain end to end so the first zero in the sequence is the diagnosis (`:87`).
+- **Control flow:** Redis `LLEN` per lane over `QUEUES` in pipeline order plus `HLEN unacked` for in-flight work (`QUEUES` at `:43-52`, the reads in `_queue_depths` at `:58-84`), then one SQL read counting the graph chain end to end so the first zero in the sequence is the diagnosis (`get_pipeline_health`, `:87`).
 - **Design rationale:** it never raises on broker failure — it returns empty depths. It exists because every per-task metric read "healthy" while correlation starved behind 8,000 normalizations.
 
 ### `backend/src/contextedge/search/vector_ops.py`
@@ -254,7 +255,7 @@ Two loops worth noticing: `hydrate_thread` feeds messages back into `normalize_e
 
 ### 4. AI Pipeline Dependency Graph
 
-This is the ordered inside of `_normalize` (`workers/extraction_tasks.py:122-628`). Note that redaction happens **before** any model call, and the relevance gate can skip everything downstream of it.
+This is the ordered inside of `_normalize` (`workers/extraction_tasks.py:122-641`). Note that redaction happens **before** any model call, and the relevance gate can skip everything downstream of it.
 
 ```mermaid
 graph TD

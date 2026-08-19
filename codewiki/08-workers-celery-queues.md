@@ -10,13 +10,13 @@ Background processing keeps the product responsive. When someone connects a sour
 
 Some jobs run on a clock instead of on demand: pulling source updates every 15 minutes, re-checking whether an automated fix actually held, ageing out old data, spotting when a playbook has drifted away from reality. That is why the system stays useful overnight without anyone minding it.
 
-One business detail matters more than it sounds: **queues are separated by consequence, not by convenience.** Bulk work (reading thousands of tickets) is deliberately kept in a different lane from the small follow-up work that turns those tickets into a connected picture. When those shared a lane, a real backfill ingested 8,255 items and produced **zero** episodes, patterns, or playbooks — nothing failed, nothing logged an error, the graph simply never started forming. Separate lanes are the fix, and a lane that no worker is listening to is the failure mode to watch for.
+One business detail matters more than it sounds: **queues are separated by consequence, not by convenience.** Bulk work (reading thousands of tickets) is deliberately kept in a different lane from the small follow-up work that turns those tickets into a connected picture. When those shared a lane, a real backfill left 8,255 tasks queued and still growing, and after 193 evidence items had been read it had produced **zero** episodes, patterns, or playbooks — nothing failed, nothing logged an error, the graph simply never started forming. Separate lanes are the fix, and a lane that no worker is listening to is the failure mode to watch for.
 
 ## Technical walkthrough
 
 ### 1. The Celery application
 
-`celery_app = Celery("contextedge", broker=..., backend=..., include=[...])` (`backend/src/contextedge/workers/celery_app.py:142-190`). Broker is Redis DB 1, result backend Redis DB 2, and the app's own Redis cache is DB 0 (`backend/src/contextedge/config.py:26-28`).
+`celery_app = Celery("contextedge", broker=..., backend=..., include=[...])` (`backend/src/contextedge/workers/celery_app.py:142-190`). Broker is Redis DB 1, result backend Redis DB 2, and the app's own Redis cache is DB 0 (`backend/src/contextedge/config.py:25-27`).
 
 There is **no `autodiscover_tasks`** — **21** task modules are listed explicitly in `include=[...]` (`celery_app.py:146-189`), several carrying an in-file comment saying why they are there. The repo holds 23 modules that define Celery tasks. Of the two that are not listed:
 
@@ -54,7 +54,7 @@ Core configuration (`celery_app.py:192-200`): JSON serialization only, UTC, `tas
 
 Two task families use short names that match no explicit route and no module-path fallback, so they land on **default**: `identity.reconcile_identities` (`backend/src/contextedge/workers/identity_tasks.py:147`) and the two `maintenance.*` sweeps (`backend/src/contextedge/workers/maintenance_tasks.py:46,71`). Any doc claiming identity reconciliation runs on the evaluation queue is wrong.
 
-> **Watch the RUNBOOK's queue list.** `docs/RUNBOOK.md:242-249` and its PowerShell worker block (`docs/RUNBOOK.md:266-274`) predate the `correlation` and `embedding` lanes. A fleet started verbatim from that block never consumes them — which is precisely the silent starvation the lanes were created to fix. Treat `backend/dev.py:16` as the authority until the RUNBOOK catches up.
+> **Check any hand-written `-Q` string against those eight.** The RUNBOOK now lists all eight and its worker commands include `correlation` and `embedding` (`docs/RUNBOOK.md:250-273`, worker block at `docs/RUNBOOK.md:284-305`), but older copies of that PowerShell block — and any fleet started from one — consume `extraction,hydration,default` only, which is precisely the silent starvation the lanes were created to fix. `backend/dev.py:16` is the authority.
 
 ### 3. Registered tasks, by module
 
@@ -66,9 +66,9 @@ Every name below is the string in `@celery_app.task(name=...)`, which is what th
 | `sync.run_backfill` | `workers/sync_tasks.py:39` | sync |
 | `sync.run_incremental_sync` | `workers/sync_tasks.py:68` | sync |
 | `hydration.hydrate_thread` | `workers/hydration_tasks.py:189` | hydration |
-| `extraction.normalize_evidence` | `workers/extraction_tasks.py:1304` | extraction |
-| `extraction.classify_relevance` | `workers/extraction_tasks.py:1361` | default |
-| `extraction.reconstruct_episode` | `workers/extraction_tasks.py:1391` | correlation |
+| `extraction.normalize_evidence` | `workers/extraction_tasks.py:1317` | extraction |
+| `extraction.classify_relevance` | `workers/extraction_tasks.py:1374` | default |
+| `extraction.reconstruct_episode` | `workers/extraction_tasks.py:1404` | correlation |
 | `extraction.correlate_evidence` | `workers/correlation_tasks.py:16` | correlation |
 | `extraction.compute_evidence_baseline` | `workers/evidence_baseline_tasks.py:26` | correlation |
 | `extraction.chunk_evidence` | `workers/chunk_tasks.py:210` | embedding |
@@ -105,13 +105,13 @@ Every name below is the string in `@celery_app.task(name=...)`, which is what th
 This is the sequence that turns one connector payload into retrievable, connected knowledge. Each arrow is a `.delay()` issued **after** the previous task's transaction committed.
 
 1. **Sync** — `sync.run_incremental_sync` / `sync.run_backfill` fetch records and call `persist_ingestion_events`, which writes one `raw_evidence_objects` row per event (`backend/src/contextedge/services/ingestion_persistence.py:19-91`). Payloads over `OFFLOAD_THRESHOLD_BYTES = 32_768` go to MinIO and the inline column keeps only a stub `{"_offloaded": true, "size_bytes": N}` (`ingestion_persistence.py:16, 84-87`). The caller commits, then `queue_normalize_raw_objects` dispatches one normalize task per new raw id — and a broker failure mid-loop raises `NormalizeEnqueueError` carrying the ids it never reached, so the run can reconcile them back onto the source object instead of losing them (`backend/src/contextedge/services/sync_ingestion_queue.py:8, 16-30`).
-2. **Normalize** — `extraction.normalize_evidence` (`workers/extraction_tasks.py:1304`) runs the whole enrichment inside one transaction: noise gate → title/body derivation → content hash → PII redaction → dedup lookup → relevance classification → message-function classification → error-signature fingerprinting → identity linking → decision extraction → parent embedding → chunk dispatch. Full step-by-step in [04-evidence-normalization-and-storage.md](./04-evidence-normalization-and-storage.md).
+2. **Normalize** — `extraction.normalize_evidence` (`workers/extraction_tasks.py:1317`) runs the whole enrichment inside one transaction: noise gate → title/body derivation → content hash → PII redaction → dedup lookup → relevance classification → message-function classification → error-signature fingerprinting → identity linking → decision extraction → parent embedding → chunk dispatch. Full step-by-step in [04-evidence-normalization-and-storage.md](./04-evidence-normalization-and-storage.md).
 3. **Chunking** — `_dispatch_chunking` (`extraction_tasks.py:73-119`) chunks **inline** when the body is under 16 KB and the source is a known ticket/chat/mail type; otherwise it hands off to `extraction.chunk_evidence` on the **embedding** queue so a 40 KB attachment never stalls the normalize transaction.
 4. **Chunk embedding** — `extraction.embed_chunks_batch` (`workers/chunk_tasks.py:238`) embeds in batches of `EMBED_BATCH_SIZE = 32` (`chunk_tasks.py:51`), budget-gated per sub-batch. A batch failure logs and stops without raising, leaving the remaining `embedding IS NULL` rows for the next replay.
-5. **Graph** — after commit, normalize dispatches `extraction.correlate_evidence` and `extraction.compute_evidence_baseline` on the **correlation** queue (`extraction_tasks.py:1333-1334`). This is an `if`/`else`: when the item has attachments, normalize dispatches one `artifact.extract_attachment` per attachment **instead** (`extraction_tasks.py:1315-1322`), and the graph fan-out waits. Each artifact task re-reads the *parent* evidence row, and the last one to finish — the one that finds no artifact still `pending`/`processing`, reported as `follow_up_ready` (`backend/src/contextedge/services/artifact_extraction_service.py:855-865`) — dispatches `extraction.classify_relevance`, `extraction.correlate_evidence` and `extraction.compute_evidence_baseline` for that parent (`backend/src/contextedge/workers/artifact_tasks.py:30-43`). The point is that correlation should read a ticket body that already includes its PDF's extracted text, not the body as it stood before. Correlation, in turn, schedules `extraction.reconstruct_episode` with a settle delay of `RECONSTRUCT_DEBOUNCE_SECONDS = 180` (`extraction_tasks.py:746`; dispatch at `workers/correlation_tasks.py:48-51`).
-6. **Hydration** — when the payload carried a `_thread_id`, this was the **parent** record, and the item was not a dedup hit, normalize dispatches `hydration.hydrate_thread(thread_external_id, source_id, tenant_id)` (`extraction_tasks.py:1341-1351`). "Parent record" is decided inside `_normalize`, which returns `_thread_external_id = None` for a hydrated message using the same `is_hydrated_message` predicate the noise gate at the top of the function uses — one definition, not a local copy (`extraction_tasks.py:613-615`, gate at `extraction_tasks.py:147`). The guard matters: hydration stamps `_thread_id` onto every message it writes, so without it each hydrated message would re-hydrate its own thread — measured at 10× amplification, and 50× on the largest ticket, against an API that answers throttling with empty results rather than an error (`extraction_tasks.py:598-609`).
+5. **Graph** — after commit, normalize dispatches `extraction.correlate_evidence` and `extraction.compute_evidence_baseline` on the **correlation** queue (`extraction_tasks.py:1346-1347`). This is an `if`/`else`: when the item has attachments, normalize dispatches one `artifact.extract_attachment` per attachment **instead** (`extraction_tasks.py:1331-1335`), and the graph fan-out waits. Each artifact task re-reads the *parent* evidence row, and the last one to finish — the one that finds no artifact still `pending`/`processing`, reported as `follow_up_ready` (`backend/src/contextedge/services/artifact_extraction_service.py:855-865`) — dispatches `extraction.classify_relevance`, `extraction.correlate_evidence` and `extraction.compute_evidence_baseline` for that parent (`backend/src/contextedge/workers/artifact_tasks.py:30-43`). The point is that correlation should read a ticket body that already includes its PDF's extracted text, not the body as it stood before. Correlation, in turn, schedules `extraction.reconstruct_episode` with a settle delay of `RECONSTRUCT_DEBOUNCE_SECONDS = 180` (`extraction_tasks.py:759`; dispatch at `workers/correlation_tasks.py:48-52`).
+6. **Hydration** — when the payload carried a `_thread_id`, this was the **parent** record, and the item was not a dedup hit, normalize dispatches `hydration.hydrate_thread(thread_external_id, source_id, tenant_id)` (`extraction_tasks.py:1354-1364`). "Parent record" is decided inside `_normalize`, which returns `_thread_external_id = None` for a hydrated message using the same `is_hydrated_message` predicate the noise gate at the top of the function uses — one definition, not a local copy (`extraction_tasks.py:626-628`, gate at `extraction_tasks.py:147`). The guard matters: hydration stamps `_thread_id` onto every message it writes, so without it each hydrated message would re-hydrate its own thread — measured at 10× amplification, and 50× on the largest ticket, against an API that answers throttling with empty results rather than an error (`extraction_tasks.py:606-622`).
 
-`extraction.classify_relevance` is **no longer part of normalize's fan-out** — normalize classifies inline before the expensive work (`extraction_tasks.py:1328-1332`). The task survives as the re-classification entry point (`extraction_tasks.py:1357-1384`), reached from the admin UI, from `maintenance.reclassify_stale_evidence` (`workers/maintenance_tasks.py:113-114`), and from the attachment path in step 5. When it re-classifies an item a stale verdict had skipped, it fans retrieval work out itself: chunk, correlate and baseline (`extraction_tasks.py:1371-1381`).
+`extraction.classify_relevance` is **no longer part of normalize's fan-out** — normalize classifies inline before the expensive work (`extraction_tasks.py:1341-1345`). The task survives as the re-classification entry point (`extraction_tasks.py:1370-1397`), reached from the admin UI, from `maintenance.reclassify_stale_evidence` (`workers/maintenance_tasks.py:113-114`), and from the attachment path in step 5. When it re-classifies an item a stale verdict had skipped, it fans retrieval work out itself: chunk, correlate and baseline (`extraction_tasks.py:1387-1394`).
 
 ### 5. How a task talks to the database
 
@@ -119,7 +119,7 @@ Every task body is an `async def work(db)` handed to `run_async` (`backend/src/c
 
 Why per-task: on Windows/Celery a shared pooled engine hits "Event loop is closed" during connection check-in. The cost is that each running task holds its own connections — budget roughly 2–3 × concurrency. The API side uses a pooled engine instead (`backend/src/contextedge/database.py:19-21`).
 
-The normal pattern is that `run_async` owns the commit, so services called from tasks **flush and leave committing to the wrapper**, and the `.delay()` fan-out sits in the task wrapper *after* `run_async` returns — which is what guarantees a dispatched task can never observe an uncommitted row. Sweeps that loop over many items are the deliberate exception: the AI-review sweep commits per episode inside `work()` and only then dispatches (`workers/evaluation_tasks.py:278-283, 319-326`). The rule that actually holds everywhere is **commit before dispatch**, not "only the wrapper commits".
+The normal pattern is that `run_async` owns the commit, so services called from tasks **flush and leave committing to the wrapper**, and the `.delay()` fan-out sits in the task wrapper *after* `run_async` returns — which is what guarantees a dispatched task can never observe an uncommitted row. Sweeps that loop over many items are the deliberate exception: the AI-review sweep commits per episode inside `work()` and only then dispatches (`workers/evaluation_tasks.py:277-282, 319-326`). The rule that actually holds everywhere is **commit before dispatch**, not "only the wrapper commits".
 
 A service that does not own its transaction — anything running inside `run_async` or a FastAPI `get_db` dependency — gets the rule for free from `dispatch_after_commit` (`backend/src/contextedge/services/deferred_dispatch.py:72-95`). It parks `(task_name, args)` on the session and registers `after_commit` / `after_rollback` listeners once, so the message is sent when the transaction lands and thrown away when it does not. `send_task` applies the same `task_routes` `.delay()` would, so queues are unaffected (`deferred_dispatch.py:27-28, 52-54`). Both failure directions had been seen live: a rolled-back clustering pass left 65 queued `generate_playbook_candidate` tasks naming patterns that never existed, and on the success path a worker reading a fraction of a second too early got "pattern_not_found", returned `skipped`, and nothing retried — a real pattern silently never got its playbook (`deferred_dispatch.py:1-15`). A broker outage at send time only logs: the row is already durable, and re-sending is not worth undoing a commit (`deferred_dispatch.py:55-64`). This is the path clustering uses to reach playbook generation — `_cluster` calls `create_pattern_from_episodes` (`workers/pattern_tasks.py:364, 384`), which queues the candidate task for after the commit (`backend/src/contextedge/services/pattern_service.py:192-194`).
 
@@ -129,7 +129,7 @@ A `worker_ready` signal handler resolves the bundled Alembic head, reads `alembi
 
 ### 7. Beat schedule — 14 entries
 
-One beat process only; a second double-dispatches everything (`docs/RUNBOOK.md:276-277`). Every tenant-scanning entry passes the literal sentinel `"all"` and iterates tenants internally with per-tenant try/except so one bad tenant never stops the sweep.
+One beat process only; a second double-dispatches everything (`docs/RUNBOOK.md:303`). Every tenant-scanning entry passes the literal sentinel `"all"` and iterates tenants internally with per-tenant try/except so one bad tenant never stops the sweep.
 
 | Beat entry | Task | Every | Args |
 | --- | --- | --- | --- |
@@ -155,7 +155,7 @@ All fourteen live in `celery_app.py:281-384`. Two notes an operator needs:
 
 ### 8. The shared "don't churn during ingest" gate
 
-Two hourly sweeps — knowledge dedup and AI episode review — call the same guard before touching a tenant: `tenant_pipeline_active(db, tenant_id, window_start)` (`workers/pattern_tasks.py:748-783`). A tenant is *active* when either more than `DEDUP_ACTIVITY_THRESHOLD = 50` evidence rows landed in the last `DEDUP_ACTIVITY_WINDOW_MINUTES = 10`, or more than `EPISODE_ACTIVITY_THRESHOLD = 30` episodes were minted in that window (`pattern_tasks.py:736-745`). Active tenants are counted as deferred and skipped — `deferred` in the dedup sweep's result (`pattern_tasks.py:812-821, 827`), `deferred_tenants` in the AI review sweep's (`workers/evaluation_tasks.py:193, 195-203`).
+Two hourly sweeps — knowledge dedup and AI episode review — call the same guard before touching a tenant: `tenant_pipeline_active(db, tenant_id, window_start)` (`workers/pattern_tasks.py:748-783`). A tenant is *active* when either more than `DEDUP_ACTIVITY_THRESHOLD = 50` evidence rows landed in the last `DEDUP_ACTIVITY_WINDOW_MINUTES = 10`, or more than `EPISODE_ACTIVITY_THRESHOLD = 30` episodes were minted in that window (`pattern_tasks.py:736-745`). Active tenants are counted as deferred and skipped — `deferred` in the dedup sweep's result (`pattern_tasks.py:810-820, 827`), `deferred_tenants` in the AI review sweep's (`workers/evaluation_tasks.py:193, 195-203`).
 
 The episode half of the threshold was added after a 12:29 sweep retired 446 drafts mid-reconstruction-tail: the guard was watching evidence inflow only, and reconstruction keeps minting episodes for hours after the last evidence row lands (`pattern_tasks.py:738-745`).
 
@@ -166,7 +166,7 @@ Mode comes from `settings.episode_ai_review`, one of `off | advisory | auto_appr
 Mechanics worth knowing (`workers/evaluation_tasks.py:125-358`):
 
 - Drafts are read in the same review-priority order the human queue shows, and drafts that already carry an assessment are skipped — the sweep never pays twice (`evaluation_tasks.py:241-250`).
-- **Commit per episode, before any dispatch** (`evaluation_tasks.py:278-283`). A batch-end commit made every verdict hostage to the last one: one deadlock re-paid 50 LLM calls.
+- **Commit per episode, before any dispatch** (`evaluation_tasks.py:277-282`). A batch-end commit made every verdict hostage to the last one: one deadlock re-paid 50 LLM calls.
 - After 5 consecutive transient failures (provider down, budget block) the tenant's batch aborts rather than burning 100 drafts (`evaluation_tasks.py:297-309`).
 - Auto-approved episodes dispatch `evaluation.extract_issue_signature`; a bounded crash-recovery pass (20 per sweep) re-dispatches for auto-approved episodes that have no signature row (`evaluation_tasks.py:205-239, 316-331`).
 - Clustering is dispatched **once per domain that had approvals** — passing `None` clustered nothing, because the global pass deliberately sees only NULL-domain episodes (`evaluation_tasks.py:335-351`).
@@ -185,21 +185,21 @@ Malformed header values are skipped rather than raised on (`celery_app.py:61-64`
 
 ### 11. Windows worker topology
 
-Prefork is unusable on Windows. **`-P threads` is also unusable for the LLM-bearing lanes**: litellm holds asyncio locks bound to the loop that created them, so a threads pool raises "Lock is bound to a different event loop" on every enrichment call, trips the provider circuit breaker, and fails the run while the workers still look healthy (measured on a live backfill 2026-08-16; `docs/RUNBOOK.md:256-262`).
+Prefork is unusable on Windows. **`-P threads` is also unusable for the LLM-bearing lanes**: litellm holds asyncio locks bound to the loop that created them, so a threads pool raises "Lock is bound to a different event loop" on every enrichment call, trips the provider circuit breaker, and fails the run while the workers still look healthy (measured on a live backfill 2026-08-16; `docs/RUNBOOK.md:282`).
 
-Two places still say otherwise and should not be followed: the launcher's own comment claims "threads works fine on Windows for I/O-bound queues" (`backend/dev.py:113-115`), and the RUNBOOK's launcher example passes `-P threads -c 8` for Worker A (`docs/RUNBOOK.md:304`) — both predate the 2026-08-16 measurement recorded twelve lines above that example.
+One place still says otherwise and should not be followed: the launcher's own comment claims "threads works fine on Windows for I/O-bound queues" (`backend/dev.py:113-115`), which predates the 2026-08-16 measurement. The code around it is fine — it only decides the *default* pool — but the sentence is not.
 
 Parallelism therefore comes from **processes**:
 
 - **Worker A (parallel)** — N separate processes, each `-P solo` with a distinct node name, consuming the high-volume lanes. Ticket processing is ~95% waiting on the LLM, so process parallelism is near-linear.
-- **Worker B (serialized)** — one `-P solo` worker for `sync,pattern,evaluation`. Clustering and playbook generation operate on the whole graph and hold **no advisory lock** (unlike sync), so two concurrent runs could mint duplicate patterns. The hourly dedup sweep deliberately rides `pattern.*` so it serializes behind clustering on this same worker (`workers/pattern_tasks.py:836-839`).
+- **Worker B (serialized)** — one `-P solo` worker for `sync,pattern,evaluation`. Clustering and playbook generation operate on the whole graph and hold **no advisory lock** (unlike sync), so two concurrent runs could mint duplicate patterns. The hourly dedup sweep deliberately rides `pattern.*` so it serializes behind clustering on this same worker (`workers/pattern_tasks.py:836-838`).
 - **Beat** — exactly one instance.
 
-Add `correlation` and `embedding` to whichever worker you run; the RUNBOOK's `-Q` strings predate them. The simplest correct start is `python dev.py worker`, which consumes all eight lanes and defaults to `-P solo` on Windows unless you pass a pool (`backend/dev.py:16, 102-126`).
+Whatever split you run, `correlation` and `embedding` have to be on one of the workers. The simplest correct start is `python dev.py worker`, which consumes all eight lanes and defaults to `-P solo` on Windows unless you pass a pool (`backend/dev.py:16, 102-126`).
 
 Why the split is safe: a fresh NullPool engine per task (§5), a per-source Postgres advisory lock for sync so a second worker returns `skipped_locked` instead of racing a checkpoint (`backend/src/contextedge/services/sync_worker_service.py:379-395`), and `task_acks_late=True` re-delivering a crashed task.
 
-Ceilings to respect before scaling up: 8 concurrent Gemini calls is roughly 60–120 requests/min against the Vertex quota, and concurrent hydration can get you rate-limited by the source (`docs/RUNBOOK.md:311`). Worker count is bounded by RAM, not CPU: each solo worker is a full process at ~325 MB, and on the 15.3 GB dev box also hosting Postgres/Redis/MinIO the practical ceiling was 5–7 workers against 8 cores (`codewiki/KNOWN_GAPS.md:571-576`).
+Ceilings to respect before scaling up: 8 concurrent Gemini calls is roughly 60–120 requests/min against the Vertex quota, and concurrent hydration can get you rate-limited by the source — if that starts happening, move `hydration` onto Worker B (`docs/RUNBOOK.md:322`). Worker count is bounded by RAM, not CPU: each solo worker is a full process at ~325 MB, and on the 15.3 GB dev box also hosting Postgres/Redis/MinIO the practical ceiling was 5–7 workers against 8 cores (`codewiki/KNOWN_GAPS.md:571-576`).
 
 ### 12. Seeing the queues
 
@@ -248,7 +248,7 @@ Acme's ServiceNow incident `INC0010427` on CI `vpn-gw-east-01` arrives, along wi
 
 The result shapes below are the keys the task functions actually return; only the values are illustrative.
 
-**Task 1 — normalize (extraction queue)** — result keys at `extraction_tasks.py:617-628`.
+**Task 1 — normalize (extraction queue)** — result keys at `extraction_tasks.py:630-641`.
 
 ```json
 {
@@ -306,7 +306,7 @@ The result shapes below are the keys the task functions actually return; only th
 }
 ```
 
-Because `correlations_created` is above zero, the task wrapper then schedules `extraction.reconstruct_episode` with `countdown=180` (`workers/correlation_tasks.py:38-51`).
+Because `correlations_created` is above zero, the task wrapper then schedules `extraction.reconstruct_episode` with `countdown=180` (`workers/correlation_tasks.py:39-52`).
 
 **Task 4 — thread hydration (hydration queue, parent record only)** — three positional arguments, not two: thread id, source id, tenant id (`hydration_tasks.py:191`). Result keys at `hydration_tasks.py:174-182`.
 
@@ -353,7 +353,7 @@ Every task retries on its own, so an AI provider outage during classification do
 
 ## Design decisions
 
-- **A lane per consequence, because a shared FIFO starves the work that matters** (`correlation`, `embedding`) — *Why:* `extraction` carries the bulk normalization of a backfill, and normalization *feeds itself* — thread hydration turns one Zoho ticket into ~41 message rows, each another `normalize_evidence` task. Measured on the live backfill (2026-08-17): the extraction queue was **growing by ~70 tasks/minute at 8,255 deep**, with ~55,000 message tasks still to come. Every follow-up task routed to that same lane, so each queued behind the very work that produced it. Two things were dying invisibly. `correlate_evidence` — a **0.25s** task — had been dispatched and *never once received*, so no correlation edge, no `reconstruct_episode`, no episodes, patterns or playbooks after 193 evidence items. And `embed_chunks_batch` was equally stuck: **1,879 chunks existed with 289 embedded (15%)**, meaning most ingested evidence was silently invisible to vector search. No task failed and no error was logged in either case. *Tradeoff:* two more lanes to run; a lane with no consumer is a silent backlog, which is why `docs/RUNBOOK.md` drifting behind the routing table is an operational hazard, not a documentation nit.
+- **A lane per consequence, because a shared FIFO starves the work that matters** (`correlation`, `embedding`) — *Why:* `extraction` carries the bulk normalization of a backfill, and normalization *feeds itself* — thread hydration turns one Zoho ticket into ~41 message rows, each another `normalize_evidence` task. Measured on the live backfill (2026-08-17): the extraction queue was **growing by ~70 tasks/minute at 8,255 deep**, with ~55,000 message tasks still to come. Every follow-up task routed to that same lane, so each queued behind the very work that produced it. Two things were dying invisibly. `correlate_evidence` — a **0.25s** task — had been dispatched and *never once received*, so no correlation edge, no `reconstruct_episode`, no episodes, patterns or playbooks after 193 evidence items. And `embed_chunks_batch` was equally stuck: **1,879 chunks existed with 289 embedded (15%)**, meaning most ingested evidence was silently invisible to vector search. No task failed and no error was logged in either case. *Tradeoff:* two more lanes to run; a lane with no consumer is a silent backlog, which is why any operating doc drifting behind the routing table is an operational hazard, not a documentation nit — check a hand-written `-Q` string against the eight before starting a fleet.
 
 - **Specific routes before the `extraction.*` wildcard** — *Why:* `task_routes` is matched in declaration order, so a wildcard silently swallows any specific route declared after it, and the symptom is invisible: tasks run, nothing errors, the graph simply never forms. *Tradeoff:* a correctness property that lives in dict ordering, which is why `backend/tests/test_celery_queue_routing.py` asserts the ordering explicitly rather than trusting review.
 
@@ -379,11 +379,11 @@ Every task retries on its own, so an AI provider outage during classification do
 | Migration guard | `backend/src/contextedge/workers/celery_app.py` | `_require_migrations_at_head` (83-139) | `worker_ready` signal |
 | Correlation-ID signals | `backend/src/contextedge/workers/celery_app.py` | `_inject_correlation_headers` (25), `_bind_worker_context` (45), `_release_worker_context` (71) | Publish / prerun / postrun |
 | Async DB bridge | `backend/src/contextedge/workers/asyncio_runner.py` | `run_async` (31), `_with_session` (10) | Every task |
-| Launcher + consumed queues | `backend/dev.py` | `DEFAULT_QUEUES` (16), `worker` / `beat` commands (102-137) | Dev start |
+| Launcher + consumed queues | `backend/dev.py` | `DEFAULT_QUEUES` (16), `worker` / `beat` commands (102-138) | Dev start |
 | Sync | `backend/src/contextedge/workers/sync_tasks.py` | `trigger_scheduled_syncs` (14), `run_backfill` (39), `run_incremental_sync` (68) | sync queue |
 | Enqueue helper | `backend/src/contextedge/services/sync_ingestion_queue.py` | `queue_normalize_raw_objects` (16), `NormalizeEnqueueError` (8) | After ingest commit |
 | Commit-before-dispatch helper | `backend/src/contextedge/services/deferred_dispatch.py` | `dispatch_after_commit` (72), `_send_pending` (45), `_drop_pending` (67) | Services that don't own their transaction |
-| Normalize / classify / episode | `backend/src/contextedge/workers/extraction_tasks.py` | `normalize_evidence` (1304), `_dispatch_chunking` (73), `classify_relevance` (1361), `reconstruct_episode` (1391) | extraction / default / correlation |
+| Normalize / classify / episode | `backend/src/contextedge/workers/extraction_tasks.py` | `normalize_evidence` (1319), `_dispatch_chunking` (73), `classify_relevance_task` (1376), `reconstruct_episode_task` (1406) | extraction / default / correlation |
 | Chunk + chunk embed | `backend/src/contextedge/workers/chunk_tasks.py` | `chunk_evidence_task` (210), `embed_chunks_batch_task` (238), `EMBED_BATCH_SIZE = 32` (51) | embedding queue |
 | Correlation | `backend/src/contextedge/workers/correlation_tasks.py` | `correlate_evidence` (16) | correlation queue |
 | Evidence baseline | `backend/src/contextedge/workers/evidence_baseline_tasks.py` | `compute_evidence_baseline` (26) | correlation queue |
@@ -406,7 +406,7 @@ After Acme's ServiceNow raws commit, **extraction** workers normalize `INC001042
 
 ## Further reading
 
-- [`docs/RUNBOOK.md`](../docs/RUNBOOK.md) — worker commands and bulk-backfill onboarding (apply the eight-queue correction in §2 above)
+- [`docs/RUNBOOK.md`](../docs/RUNBOOK.md) — worker commands (§7.1–7.2), the beat table, and bulk-backfill onboarding (§7.12)
 - [03-ingestion-connectors-and-sync.md](./03-ingestion-connectors-and-sync.md) — what enqueues normalize, and the sync advisory lock
 - [04-evidence-normalization-and-storage.md](./04-evidence-normalization-and-storage.md) — every step inside `normalize_evidence`
 - [07-episodes-patterns-playbooks.md](./07-episodes-patterns-playbooks.md) — episode review modes and what clustering does with an approval

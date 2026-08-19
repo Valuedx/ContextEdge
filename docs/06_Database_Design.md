@@ -6,7 +6,7 @@ The ContextEdge database is built on **PostgreSQL 16**. It makes heavy use of ad
 
 - **Connection Setup:** SQLAlchemy 2 with the asyncpg driver, fully asynchronous. Two very different engine configurations exist, and the difference matters when you are debugging:
   - **API process:** one pooled engine — `pool_size=20, max_overflow=10, pool_timeout=30` (`backend/src/contextedge/database.py:19-21`). Each HTTP request gets one `AsyncSession` from `get_db`, which commits only if the session is still active and rolls back on any exception (`backend/src/contextedge/database.py:29-42`). Endpoints therefore `flush()` and let the dependency commit.
-  - **Celery workers:** every task body is an `async def work(db)` handed to `run_async`, which creates a **fresh `NullPool` engine per task**, opens one session, commits on success or rolls back on exception, then closes and disposes the engine (`backend/src/contextedge/workers/asyncio_runner.py:10-34`). This is not optional and not Windows-only in effect: it is what stops the "Event loop is closed" failures that appear when a connection is checked back in on a different loop. The cost is that each running task holds its own connections — budget roughly 2-3 × worker concurrency.
+  - **Celery workers:** every task body is an `async def work(db)` handed to `run_async`, which creates a **fresh `NullPool` engine per task**, opens one session, commits on success or rolls back on exception, then closes and disposes the engine (`backend/src/contextedge/workers/asyncio_runner.py:10-34`). This is what stops the "Event loop is closed" failures that appear when a connection is checked back in on a different loop; no loop and no connection is ever shared across tasks. The cost is that total database connections scale with the number of *concurrently running tasks* rather than with a pool size — see [RUNBOOK — Worker topology](RUNBOOK.md) before adding worker processes.
 - **Configuration:** `settings.database_url` (asyncpg) for the app, `settings.database_url_sync` for Alembic and for the audit-log writer (`backend/src/contextedge/config.py:18-23`).
 - **ORM & Migrations:** SQLAlchemy models inherit from a shared `DeclarativeBase`; almost every operational table also picks up `TenantScopedMixin`, which carries `TimestampMixin` — indexed `tenant_id`, plus `created_at`/`updated_at` server defaults (`backend/src/contextedge/models/base.py:13-27`). Alembic owns schema change; see [MIGRATIONS.md](MIGRATIONS.md).
 - **Schema/code drift is guarded at runtime:** workers refuse to start when `alembic_version` is behind the bundled head (`backend/src/contextedge/workers/celery_app.py:83-139`) and `GET /ready` returns 503 on the same mismatch (`backend/src/contextedge/main.py:89-106, 180-209`).
@@ -154,7 +154,7 @@ erDiagram
 - **Primary Key**: `tenant_id`
 - **Foreign Keys**: `tenant_id` -> `tenants.id` (CASCADE)
 - **A missing row does not mean unlimited.** A tenant with no row is evaluated against deployment defaults — 2,000,000 tokens/day, $25/day, action `block` (`backend/src/contextedge/config.py:191-198`) — through a stand-in that takes the identical code path and is deliberately not persisted. This is the single most common surprise during a bulk backfill: a thread-heavy ticket can cost ~100k tokens, so a large onboarding run needs a real row (or action `warn`) provisioned first.
-- **Usage is derived, not stored**: the check sums today's `llm.usage` operational events rather than reading a counter column, with a 60-second per-tenant cache (`backend/src/contextedge/services/tenant_budget_service.py:191-231`). At most one over-cap call slips through per minute per worker, and cross-worker races are documented as unbounded pending a shared counter.
+- **Usage is derived, not stored**: the check sums today's `llm.usage` operational events rather than reading a counter column, with a 60-second per-tenant cache — `USAGE_CACHE_TTL_SECONDS = 60.0` (`backend/src/contextedge/services/tenant_budget_service.py:46-50`, read in `get_current_day_usage`, lines 191-231). A per-tenant `asyncio.Lock` serialises the check so two concurrent callers cannot both read the same stale total and both proceed, and the cache lag means at most one over-cap call slips through per minute. The lock is keyed **per event loop** — Celery's threaded pool gives every task its own loop — so across worker threads and across processes the overshoot is bounded only by concurrency, pending a Redis-backed counter (`tenant_budget_service.py:52-76`).
 - **Importance**: 8
 
 ### `sources`
@@ -246,14 +246,14 @@ erDiagram
 - **Importance**: 7
 
 ### `issue_signatures` / `episode_issue_signatures`
-- **Purpose**: The structured problem fingerprint (migration `0045`) — `affected_capability`, `failing_component`, `failure_mode`, optional `trigger_change`, plus `episode_count` (`backend/src/contextedge/models/issue_signature.py:30-95`). Broader than an `error_signatures` exact error shape, narrower than embedding similarity.
+- **Purpose**: The structured problem fingerprint (migration `0045`) — `affected_capability`, `failing_component`, `failure_mode`, optional `trigger_change`, `environment`, `scope`, a nullable `error_signature_id`, plus `episode_count` (`IssueSignature`, `backend/src/contextedge/models/issue_signature.py:30-63`; the join table `EpisodeIssueSignature` is lines 66-95, unique on `(episode_id, issue_signature_id)`). Broader than an `error_signatures` exact error shape, narrower than embedding similarity.
 - **Identity**: deduped per tenant on a normalized `signature_key` = `slug(capability)|slug(component or "-")|slug(failure_mode)`, capped at 240 chars, `UniqueConstraint("tenant_id", "signature_key")` (line 33). Trigger, environment and scope are descriptive, not identity — the same failure triggered differently still recurs under one key.
-- **Who writes it**: Celery task `evaluation.extract_issue_signature` (`backend/src/contextedge/workers/signature_tasks.py:18-24` → `backend/src/contextedge/services/issue_signature_service.py:89`), dispatched **only for approved episodes** — human approve, bulk approve, the AI-review sweep's auto-approvals, and a bounded crash-recovery re-dispatch in the same sweep.
-- **Recurrence**: when the signature already existed, `_link_recurrence` adds a low-confidence (`0.6`) `recurrence` row in `evidence_case_memberships` pointing at the previous occurrence's case. It is a precedent pointer, never a merge — merging recurrences would destroy the very signal that makes recurrence visible.
+- **Who writes it**: Celery task `evaluation.extract_issue_signature` (`backend/src/contextedge/workers/signature_tasks.py:20-26` → `backend/src/contextedge/services/issue_signature_service.py:89`), dispatched **only for approved episodes** — human approve, bulk approve, the AI-review sweep's auto-approvals, and a bounded crash-recovery re-dispatch in the same sweep.
+- **Recurrence**: when the signature already existed, `_link_recurrence` adds a low-confidence `recurrence` row in `evidence_case_memberships` pointing at the previous occurrence's case (`RECURRENCE_CONFIDENCE = 0.6`, `issue_signature_service.py:36`). It is a precedent pointer, never a merge — merging recurrences would destroy the very signal that makes recurrence visible.
 - **Importance**: 8
 
 ### `evidence_case_memberships` / `case_identifiers` / `pending_identifier_mentions`
-- **Purpose**: The ticket-number bridge (migration `0038`). Ticket sources register their quotable number in `case_identifiers`; conversational sources (Teams, email) that quote a number get an `evidence_case_memberships` row tying that message to the case, with a confidence that reflects where the number appeared (subject ≈ 0.98, body ≈ 0.9) and an `extraction_location`. Mentions that cannot be resolved yet park in `pending_identifier_mentions`.
+- **Purpose**: The ticket-number bridge (migration `0038`). Ticket sources register their quotable number in `case_identifiers`; conversational sources (Teams, email) that quote a number get an `evidence_case_memberships` row tying that message to the case, with a confidence that reflects where the number appeared (subject ≈ 0.98, body ≈ 0.9) and an `extraction_location`. Mentions that cannot be resolved yet park in `pending_identifier_mentions`, reconciled the moment the ticket registers, so ingestion order does not matter. All three models live in `backend/src/contextedge/models/case_bridge.py`; the confidences are `SUBJECT_CONFIDENCE = 0.98` and its body counterpart in `backend/src/contextedge/services/ticket_bridge_service.py:121`.
 - **Importance**: 8
 
 ### `case_links`
@@ -262,13 +262,13 @@ erDiagram
 
 ### `patterns`
 - **Purpose**: Recurring issues identified across multiple episodes.
-- **Columns**: `id`, `tenant_id`, `title`, `description`, `pattern_type` (default `recurring_issue`), `confidence`, `active_flag`, `trigger_conditions`, `root_causes`, `resolution_steps` (`backend/src/contextedge/models/pattern.py:23-44`).
+- **Columns**: `id`, `tenant_id`, `title`, `description`, `pattern_type` (default `recurring_issue`), `confidence`, `episode_count`, `active_flag`, `contradiction_score`, `freshness_score`, `trigger_conditions`, `core_entities`, `observed_errors`, `root_causes`, `resolution_steps`, `evidence_summary`, `generation_provenance` (`backend/src/contextedge/models/pattern.py:23-57`).
 - **No embedding column.** Patterns are reached by full-text search (the agent's seed resolver builds a `tsvector` over title + description on the fly) and by graph traversal from episodes — not by vector search. Any doc claiming a `patterns.embedding` is wrong.
-- **Who writes it**: the Celery task `pattern.cluster_episodes` on the `pattern` queue, which is consumed by a single solo worker so clustering, playbook generation and the hourly dedup sweep serialize instead of racing (two concurrent clustering runs could mint duplicate patterns — there is no advisory lock here, unlike sync).
+- **Who writes it**: the Celery task `pattern.cluster_episodes`, routed to the `pattern` queue by the `pattern.*` rule (`backend/src/contextedge/workers/celery_app.py:271`). The documented worker topology gives that queue one `-P solo` process ([RUNBOOK — Worker topology](RUNBOOK.md)), so clustering, playbook generation and the hourly dedup sweep serialize instead of racing. That is a deployment convention, not a code guarantee: there is no advisory lock here, unlike sync, so two concurrent clustering runs could mint duplicate patterns.
 - **Importance**: 8
 
 ### `negative_knowledge_items`
-- **Purpose**: What is known *not* to work, per domain. Read by the ranker as a penalty signal and injected into playbook generation so a candidate does not re-propose a known dead end.
+- **Purpose**: What is known *not* to work, per domain. Injected into playbook generation so a candidate does not re-propose a known dead end (`workers/pattern_tasks.py:538-540, 589`), and read by the ranker as a penalty signal. Be precise about that second use: `_negative_penalty_for_playbook` counts every negative-knowledge row in the playbook's **domain**, not rows tied to that playbook, and folds it in as `contradictions × 0.3 + negatives × 0.1` capped at 1.0 (`search/hybrid_ranker.py:140-163`). Two playbooks in the same domain therefore carry the same negative-knowledge component; only the `contradicts` edge count separates them.
 - **Importance**: 7
 
 ### `contradictions` / `contradiction_scan_state`
@@ -345,7 +345,7 @@ erDiagram
 - **Importance**: 8
 
 ### `tenant_policies`
-- **Purpose**: Config bucket for retention, classification, access, and approval policies — `policy_type` in `{retention, classification, access, approval}` (`backend/src/contextedge/models/policy.py:31-67`).
+- **Purpose**: Config bucket for retention, classification, access, and approval policies. `policy_type` is a plain `VARCHAR(30)` with no CHECK behind it; the vocabulary the application actually reads is the four keys of `TenantPolicy.TYPE_TO_RESPONSE_KEY` — `retention`, `classification`, `access`, `approval` (`backend/src/contextedge/models/policy.py:31-67`).
 - **Versioning (`0056`)**: `version`, `effective_from`, `effective_to`. `version` is bumped **only when `config` changes** — renaming or deactivating a policy does not bump it, because the version tracks the rules, not the labels (`backend/src/contextedge/api/v1/policies.py:133-140`).
 - **Importance**: 8
 
@@ -391,12 +391,12 @@ erDiagram
 - **Importance**: 9
 
 ### `notifications`
-- **Purpose**: In-app messages. `user_id` is nullable — NULL means a tenant-wide broadcast (`backend/src/contextedge/models/events.py:64-89`). Email and webhook delivery are best-effort and log an explicit `*_skipped_unconfigured` line when SMTP or the webhook URL is not set, rather than failing the flow that triggered them.
+- **Purpose**: In-app messages. `user_id` is nullable — NULL means a tenant-wide broadcast (`backend/src/contextedge/models/events.py:64-88`). Email and webhook delivery are best-effort and log an explicit `*_skipped_unconfigured` line when SMTP or the webhook URL is not set, rather than failing the flow that triggered them.
 - **Importance**: 6
 
 ### Tables not individually documented above
 
-The chain currently defines 86 tables. The ones below are real and queried, but their design story lives with the subsystem that owns them:
+The ORM defines 84 tables (count the distinct `__tablename__` declarations under `backend/src/contextedge/models/`). The ones below are real and queried, but their design story lives with the subsystem that owns them:
 
 | Table | One-line purpose | Model |
 | --- | --- | --- |
@@ -417,7 +417,7 @@ For a developer tracing a row back to the code that made it:
 | Table | Written by | When |
 | --- | --- | --- |
 | `raw_evidence_objects` | `persist_ingestion_events` (`services/ingestion_persistence.py`) | during `sync.run_backfill` / `sync.run_incremental_sync` |
-| `evidence_items` | `_normalize` (`workers/extraction_tasks.py:1300-1306`, task `extraction.normalize_evidence`, queue `extraction`) | once per new raw object; the dedup path refreshes an existing row instead |
+| `evidence_items` | `_normalize` (`workers/extraction_tasks.py:122`, wrapped by task `extraction.normalize_evidence` at lines 1313-1319, queue `extraction`) | once per new raw object; the dedup path refreshes an existing row instead |
 | `evidence_items.embedding` | `_ensure_embedding` → `embed_evidence` (`workers/extraction_tasks.py:65-70`) | inline inside `_normalize`, before chunk dispatch |
 | `evidence_chunks` | `write_chunks` (`services/evidence_chunk_service.py:43-132`) via inline dispatch or task `extraction.chunk_evidence` (queue `embedding`) | after the parent embedding lands |
 | `evidence_chunks.embedding` | task `extraction.embed_chunks_batch` (queue `embedding`), 32 chunks per LLM call | after chunks are written |
@@ -460,7 +460,7 @@ Why the cast: pgvector's HNSW supports at most 2,000 dimensions on the `vector` 
 **Two consequences a developer must internalise:**
 
 1. **Every cosine ordering must use the same expression the index was built on.** Route it through `halfvec_cosine_distance` (`backend/src/contextedge/search/vector_ops.py:40-45`). A plain `Model.embedding.cosine_distance(...)` compiles fine, returns correct results, and is a guaranteed sequential scan.
-2. **Raise recall before a tenant-filtered ANN query.** The indexes are global across tenants while every query post-filters by `tenant_id`; at pgvector's default `ef_search = 40`, a small tenant's rows can be absent from the candidate set entirely and the query silently returns fewer rows than asked for. Callers run `await tune_ann_recall(db)` first, which issues `SET LOCAL hnsw.ef_search = 200` for the transaction (`backend/src/contextedge/search/vector_ops.py:26-37`).
+2. **Raise recall before a tenant-filtered ANN query.** The indexes are global across tenants while every query post-filters by `tenant_id`; at pgvector's default `ef_search = 40`, a small tenant's rows can be absent from the candidate set entirely and the query silently returns fewer rows than asked for. Callers run `await tune_ann_recall(db)` first, which issues `SET LOCAL hnsw.ef_search = 200` for the transaction (`backend/src/contextedge/search/vector_ops.py:31-37`).
 
 **Deployment caveat:** `0032` raises a `RuntimeError` on pgvector < 0.7 rather than degrading, because the query side casts to halfvec unconditionally. But an environment already stamped at an *earlier* revision of that file never re-executes it and stays on sequential scans — check for the index names, not the stamp (`codewiki/KNOWN_GAPS.md:40`).
 
@@ -472,7 +472,7 @@ Why the cast: pgvector's HNSW supports at most 2,000 dimensions on the `vector` 
 | `evidence_chunks.embedding` | the chunk text verbatim | `ix_evidence_chunks_embedding_halfvec_hnsw` (`0032`) |
 | `episodes.embedding` | the episode narrative | `ix_episodes_embedding_halfvec_hnsw` (`0032`) |
 | `decisions.embedding` | `decision_type` + `compact_trace[:2000]` + `rationale_summary[:6000]` (`backend/src/contextedge/ai/embeddings.py:38-64`) | `ix_decisions_embedding_halfvec_hnsw` (`0032`) |
-| `playbooks.embedding` | title + description + the published version's triggers and step titles (`services/playbook_embedding.py`) | `ix_playbooks_embedding_halfvec_hnsw` (`0035`) |
+| `playbooks.embedding` | title + description + the **current** version's triggers and step titles, capped at 4,000 characters (`services/playbook_embedding.py:25, 54-76`) — "current" means the latest-created version, which `create_playbook_version` repoints to immediately, before review | `ix_playbooks_embedding_halfvec_hnsw` (`0035`) |
 
 `patterns` has **no** embedding column. Rows written before their column existed stay NULL: pre-`0035` playbooks until the one-off `evaluation.backfill_playbook_embeddings` task is run, and pre-existing decisions indefinitely — no backfill task exists for those, and they fall back to `created_at DESC` ordering in similar-decision search.
 
@@ -480,18 +480,19 @@ Why the cast: pgvector's HNSW supports at most 2,000 dimensions on the `vector` 
 
 PostgreSQL's built-in full-text search is used for keyword matching.
 
-- **Columns:** `evidence_items.search_tsvector` (`backend/src/contextedge/models/evidence.py:108-115`) and `playbooks.search_tsvector` (`backend/src/contextedge/models/playbook.py:78`). Both are **generated, persisted, deferred** columns — `to_tsvector('english', coalesce(title,'') || ' ' || coalesce(body_text,''))` — so nothing in application code has to remember to refresh them, and they are not loaded unless a query asks for them.
-- **Indexes:** GIN indexes on the `tsvector` columns (migration `0007_fts_gin_indexes`).
-- **How queries use it:** `search_evidence_fts` matches `plainto_tsquery('english', query)` and ranks by `ts_rank` descending (`backend/src/contextedge/search/pg_fts.py:12-81`). `search_playbooks_fts` does the same over approved playbooks only, limit 20 (lines 84-105).
-- **Two fallbacks OR-ed into the same statement**, which is why searching a ticket number works: the raw payload's `ticket_number` / `ticketNumber` / `number` fields and the source `external_id` are matched with `ILIKE`, and so is `evidence_items.title` (`backend/src/contextedge/search/pg_fts.py:50-62`). Remember the 32 KB offload caveat from `raw_evidence_objects` — that first fallback cannot see an offloaded payload.
+- **Columns:** `evidence_items.search_tsvector` (`backend/src/contextedge/models/evidence.py:108-115`) and `playbooks.search_tsvector` (`backend/src/contextedge/models/playbook.py:78-85`). Both are **generated, persisted, deferred** columns, so nothing in application code has to remember to refresh them and they are not loaded unless a query asks for them. The two expressions are **not** the same: evidence indexes `to_tsvector('english', coalesce(title,'') || ' ' || coalesce(body_text,''))`, playbooks index `coalesce(title,'') || ' ' || coalesce(description,'')` — a playbook's steps live in `playbook_versions.steps` and are not in the lexical index at all.
+- **Indexes:** GIN indexes `ix_evidence_items_fts` and `ix_playbooks_fts` on those columns (migration `0007_fts_gin_indexes`).
+- **How queries use it:** `search_evidence_fts` matches `plainto_tsquery('english', query)` and ranks by `ts_rank` descending (`backend/src/contextedge/search/pg_fts.py:13-84`). `search_playbooks_fts` does the same over approved playbooks only, default limit 20 (lines 87-108).
+- **Two fallbacks OR-ed into the same statement**, which is why searching a ticket number works: the raw payload's `ticket_number` / `ticketNumber` / `number` fields and the source `external_id` are matched with `ILIKE`, and so is `evidence_items.title` (`backend/src/contextedge/search/pg_fts.py:50-63`). Remember the 32 KB offload caveat from `raw_evidence_objects` — that first fallback cannot see an offloaded payload.
+- **Lexical search answers to the same visibility rules as vector search.** `search_evidence_fts` calls the very same `_visibility_predicates` helper the semantic path uses, from `search/vector_search.py`, so legal hold, pending redaction and role-excluded access policies are filtered in the `WHERE` clause (`pg_fts.py:78`). This matters more here than it looks: the ILIKE fallbacks reach a withheld record by substring, not just by embedding neighbourhood.
 - **Default filter:** `evidence_type != 'thread_message'` unless a specific type is requested, because hydrated thread replies belong under their parent's thread view rather than as standalone results.
-- **Patterns get a `tsvector` computed on the fly** in the agent's seed resolver rather than a stored column, and the query is OR-composed from identifier tokens plus up to 16 words — AND-ing a whole conversation's lexemes matches nothing.
+- **Patterns get a `tsvector` computed on the fly** in the agent's seed resolver rather than a stored column. The query there is OR-composed with `websearch_to_tsquery` from identifier tokens plus up to the last 16 four-letter-or-longer words of the recent conversation, capped at 24 terms in total (`backend/src/contextedge/graph/agent/repository.py:196-206`) — AND-ing a whole conversation's lexemes matches nothing.
 
 ## 6. Migration History
 
 Migrations are managed via Alembic (`backend/alembic.ini`). Every schema change after the first revision is an explicit, chronologically ordered revision file. As of 2026-08-19 the chain holds **72 revisions** and the head is `0071_episode_step_uniqueness` — but do not trust that number from a document: run `alembic heads`. One revision id in the chain is not numbered (`a4ccd43dcf94_enrich_pattern_data`, between `0006` and `0007`), so tooling that assumes a `NNNN_` prefix will trip.
 
-The per-revision narrative lives in [MIGRATIONS.md](MIGRATIONS.md); operational procedure (including the pre-migration dedupe steps `0026` and `0027` require) lives in [RUNBOOK.md](RUNBOOK.md#database-migrations).
+The per-revision narrative lives in [MIGRATIONS.md](MIGRATIONS.md); operational procedure (including the pre-migration dedupe steps `0026` and `0027` require) lives in [RUNBOOK.md](RUNBOOK.md#5-database-migrations).
 
 **Notable Migrations:**
 1. `0001_initial_schema.py` - Bootstraps the baseline tables **from the models**, using `Base.metadata.create_all()`. This is why a fresh install never reproduces an upgrade bug: it skips the historical path entirely.
@@ -502,7 +503,7 @@ The per-revision narrative lives in [MIGRATIONS.md](MIGRATIONS.md); operational 
 6. `0025_jsonb_gin_indexes.py` - Adds GIN indexes using `jsonb_path_ops` for fast JSON containment queries on `graph_edges` and `evidence_items`.
 7. `0029_ae_ops_concept_alignment.py` - A massive schema update bringing in Context Graph design concepts: `entities`, `claims`, `action_policies`, `error_signatures`, `fix_patterns`, and `case_outcomes`.
 8. `0030_evidence_chunks.py` - Introduces `evidence_chunks` to overcome the ~8,000-character cliff on single evidence embeddings.
-9. `0031_maf_context_graph_hardening.py` - Hardens the Context Graph with idempotency keys, tenant safety, and complex unique constraints.
+9. `0031_maf_context_graph_hardening.py` - Makes the entity, case-number and playbook natural keys tenant-safe, adds missing domain scope, and hardens temporal graph-edge ownership and constraints — including `uq_graph_edges_active_logical`, the partial unique index that lets `ensure_edge` use `ON CONFLICT DO NOTHING`. It refuses to run if a preflight finds duplicate entity keys or duplicate case numbers within a tenant. (Idempotency keys are `0029`'s column and `0060`'s writer, not this one.)
 10. `0032_halfvec_hnsw_indexes.py` - The first migration that actually produced a working vector index (halfvec expression HNSW; see §4). Requires pgvector ≥ 0.7 and fails loud below it.
 11. `0035_playbook_embeddings.py` - Adds `playbooks.embedding` plus its own halfvec HNSW index, so playbooks can be reached semantically rather than only by keyword.
 12. `0045_issue_signatures.py` - Adds `issue_signatures` / `episode_issue_signatures`, the recurrence spine.
@@ -535,3 +536,18 @@ The per-revision narrative lives in [MIGRATIONS.md](MIGRATIONS.md); operational 
   - `soft_purge` NULLs `embedding`, `body_text`, `body_summary`, `canonical_entity_refs` and `raw_object_ref`, sets `title = "[purged]"`, and then **explicitly deletes the row's `evidence_chunks`** — the chunks carry the same content and embeddings, and the FK cascade does not fire while the parent row survives (`backend/src/contextedge/services/retention_service.py:226-242`).
   - `hard_delete` deletes the row; FKs cascade to `attachment_artifacts`, `correlation_edges`, `evidence_chunks` and `contradiction_scan_state`, while `playbook_evidence_links.evidence_id` is `ON DELETE SET NULL` so the link survives as an audit record ("this playbook version was built with support from evidence since removed").
 - **Orphan sweep:** `evaluation.cleanup_hard_deleted_evidence` (daily) reaps what hard delete deliberately leaves — unreferenced `raw_evidence_objects` rows and their MinIO blobs, and `graph_edges` whose evidence endpoint no longer exists (edge node ids are plain UUIDs with no FK). Artifact blobs are a documented stub returning 0; use an S3 lifecycle rule on the `artifacts/` prefix. Offloaded raw payloads belonging to *live* evidence have no TTL in code either — that is bucket-lifecycle territory (`codewiki/KNOWN_GAPS.md:222`).
+
+---
+
+## Where to go next
+
+| If you want to… | Read |
+| --- | --- |
+| The revision-by-revision history and how to run the chain | [MIGRATIONS.md](MIGRATIONS.md) |
+| How the vector columns are actually queried | [07_Vector_Search_and_Embeddings.md](07_Vector_Search_and_Embeddings.md) |
+| Why the `0029` governance columns exist, and which are still unwritten | [../codewiki/17-ae-ops-context-graph-alignment.md](../codewiki/17-ae-ops-context-graph-alignment.md) |
+| Retention and purge as an operator runs them | [RUNBOOK.md](RUNBOOK.md) §7.10 |
+| What is *not* finished before you claim a table is live | [../codewiki/KNOWN_GAPS.md](../codewiki/KNOWN_GAPS.md) |
+
+---
+*Verified against the working tree on 2026-08-19. Where a line number and a symbol name disagree, trust the symbol name.*

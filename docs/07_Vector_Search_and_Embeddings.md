@@ -106,10 +106,10 @@ Whatever `DEFAULT_EMBEDDING_MODEL` names, as long as it returns 3,072 dimensions
 
 ### When embeddings are generated — the exact order
 
-1. A connector writes `raw_evidence_objects`; the sync task fans out `extraction.normalize_evidence` (queue `extraction`, `backend/src/contextedge/workers/extraction_tasks.py:1300-1306`).
+1. A connector writes `raw_evidence_objects`; the sync task fans out `extraction.normalize_evidence` (queue `extraction`; the task wrapper is `backend/src/contextedge/workers/extraction_tasks.py:1313-1319`, the body `_normalize` starts at line 122).
 2. `_normalize` loads the raw payload (downloading it from MinIO if it was offloaded above 32 KB), redacts PII, and classifies relevance **inline** with a small LLM call. (The standalone re-classification task, `extraction.classify_relevance`, is routed to the `default` queue instead, so a ~2.5-second gate call never waits behind 20-60 second episode work.)
 3. If the item is kept, `_ensure_embedding` → `embed_evidence` writes the **parent** embedding inline, inside the same transaction (`backend/src/contextedge/workers/extraction_tasks.py:65-70`).
-4. `_dispatch_chunking` runs **after** the parent embedding, so a chunker bug can never regress parent retrieval; the whole block is wrapped in `try/except` and a failure only logs `chunking_failed` (`backend/src/contextedge/workers/extraction_tasks.py:73-119`, call site at 573-585). Bodies under `INLINE_CHUNK_BUDGET_BYTES = 16 * 1024` from a known source are chunked inline; everything else is handed to `extraction.chunk_evidence`.
+4. `_dispatch_chunking` runs **after** the parent embedding, so a chunker bug can never regress parent retrieval; the whole block is wrapped in `try/except` and a failure only logs `chunking_failed` (`backend/src/contextedge/workers/extraction_tasks.py:73-119`, call site at 591-598). Inline chunking needs two things at once: a body under `INLINE_CHUNK_BUDGET_BYTES = 16 * 1024` (line 54) **and** a source in `INLINE_CHUNK_SOURCE_ALLOWLIST` — `jira_sm`, `servicenow`, `gmail`, `teams`, `sapphireims`, `zoho_desk` (lines 60-62). Everything else is handed to `extraction.chunk_evidence`.
 5. Chunk rows land with `embedding = NULL`. `extraction.embed_chunks_batch` fills them in batches, skipping rows that already have a vector so a replay is safe, and **breaking without raising** on a batch failure so the leftovers are retried next time (`backend/src/contextedge/workers/chunk_tasks.py:148-184`).
 6. Both chunk tasks run on the dedicated **`embedding` queue**. That lane exists because they used to queue behind bulk normalization: one measured backfill had 1,879 chunks written and only 289 embedded, i.e. evidence that was ingested and silently unretrievable.
 
@@ -118,13 +118,15 @@ Until a chunk's embedding lands it is invisible to chunk search (the query filte
 ### Files involved
 
 - `backend/src/contextedge/ai/embeddings.py` — the three wrapper functions (9/10)
-- `backend/src/contextedge/ai/provider.py` — routing, budget gate, dimension check, usage recording (8/10)
+- `backend/src/contextedge/ai/provider.py` — routing, budget gate, dimension check, usage recording (9/10)
 - `backend/src/contextedge/workers/chunk_tasks.py` — `extraction.chunk_evidence` and `extraction.embed_chunks_batch` (8/10)
 - `backend/src/contextedge/services/evidence_chunk_service.py` — `write_chunks`, `stamp_chunk_embeddings` (7/10)
 
 ### Cost control sits in front of every call
 
-`generate_embedding` and `generate_embeddings_batch` call `check_budget` **before** spending when a `tenant_id` and `db` are supplied: a `block` verdict raises `TenantBudgetExceeded`, a `warn` verdict proceeds and writes an `llm.budget_warning` event (`backend/src/contextedge/ai/provider.py:755-772`). Usage is recorded in a `finally` block, so even a failed call is accounted for. Not every call site passes tenant context — the parent-evidence embedding and the ad-hoc search-query embedding do not, so they are uninstrumented spend. The operator symptom of a blocked tenant is distinctive and worth memorising: **chunks stuck at `embedding IS NULL`, with `llm.usage` events showing `outcome = budget_exceeded`.**
+`generate_embedding` and `generate_embeddings_batch` call `check_budget` **before** spending, but only when a `tenant_id` **and** a `db` are supplied: a `block` verdict raises `TenantBudgetExceeded`, a `warn` verdict logs `llm.budget_warning` and proceeds (`backend/src/contextedge/ai/provider.py:755-772` and `838-857`). Note the asymmetry with the text path: `llm_complete` also *appends an operational event* named `llm.budget_warning` (`provider.py:246-280`), while the two embedding paths only write the structured log line. Usage is recorded in a `finally` block, so even a failed call is accounted for — but a *blocked* call raises before that block is entered, so it produces no `llm.usage` row at all.
+
+Not every call site passes tenant context — the parent-evidence embedding (`_ensure_embedding` calls `embed_evidence(title, body)` with neither) and the ad-hoc search-query embedding do not, so they are uninstrumented spend. The operator symptom of a blocked tenant is worth memorising: **chunks stuck at `embedding IS NULL`, with `chunk_embedding_failed` warnings naming `TenantBudgetExceeded`** — `_embed_chunks_batch` catches the exception, logs, and breaks without raising, so the Celery task still reports success.
 
 ---
 
@@ -162,9 +164,9 @@ Without an index, finding the most similar vector requires scanning every single
 
 ### HNSW explained
 
-**Hierarchical Navigable Small World (HNSW)** is the absolute state-of-the-art vector index.
+**Hierarchical Navigable Small World (HNSW)** is the index pgvector recommends for this kind of workload, and the one ContextEdge uses.
 - **What it is**: It is a multi-layered, graph-based index.
-- **Why it is used**: It provides incredibly fast search speeds (single-digit milliseconds) with very high accuracy (>95% recall).
+- **Why it is used**: It is fast — millisecond-scale rather than a full scan — and accurate, *given enough search effort*. Recall is a dial, not a constant: it depends on `ef_search`, which is why the query-side rules below insist on raising it before a tenant-filtered query.
 - **How it works**: Imagine a global highway system. HNSW builds multiple layers of graphs. The top layer has very few nodes and long edges (like interstate highways). The bottom layers have all nodes and short edges (like local neighborhood roads). A search starts at the top layer, takes big jumps to get close to the target quickly, then drops down to lower layers for fine-tuning the exact nearest neighbors.
 
 ### IVFFlat explained
@@ -255,7 +257,7 @@ Five chunkers live in `backend/src/contextedge/services/chunkers/`, all pure fun
 - **document** (`evidence_type = "kb_article"`): consumes structured elements produced by the document parsers. A heading starts a new chunk; a figure or warning stays with its step; a table over 400 characters stands alone. Step detection requires a numbered line **inside a procedural section**, because "1. RFC 4271" under "References" is a citation, not a step. Chunk kinds, most specific first: `procedure_step` → `warning` → `table` → `figure` → `code_block` → `heading_section`.
 - **fallback**: the workhorse for everything else — paragraph → line → heuristic sentence → hard split.
 
-Resolution order in `get_chunker` (`backend/src/contextedge/services/chunkers/registry.py:116-143`): knowledge article → document; ticket source → ticket; chat/email source → thread; `evidence_type == "attachment"` → attachment; otherwise fallback. A chunker module that fails to import is logged and skipped rather than taking the pipeline down.
+Resolution order in `get_chunker` (`backend/src/contextedge/services/chunkers/registry.py:116-143`): `evidence_type == "kb_article"` → document (or attachment, if the document chunker failed to register); ticket source → ticket; chat/email source → thread; `evidence_type == "attachment"` → attachment; otherwise fallback. The record's own shape is checked **before** the source type, because one source emits more than one shape — a Zoho Desk source produces both tickets and KB articles. A chunker module that fails to import is logged and skipped rather than taking the pipeline down, and `get_chunker` never returns `None`: fallback is the floor.
 
 ### Chunk size configuration and overlap
 
@@ -295,7 +297,9 @@ Hybrid search combines the best of both worlds:
 
 ### Full-text search (tsvector, GIN indexes)
 
-PostgreSQL handles this natively via generated `tsvector` columns indexed with GIN. `search_evidence_fts` matches `plainto_tsquery('english', query)` and ranks by `ts_rank`, with two OR-ed fallbacks so a raw ticket number or a partial title still finds the row (`backend/src/contextedge/search/pg_fts.py:12-81`). `search_playbooks_fts` does the same over approved playbooks, limit 20 (lines 84-105).
+PostgreSQL handles this natively via generated `tsvector` columns indexed with GIN. `search_evidence_fts` matches `plainto_tsquery('english', query)` and ranks by `ts_rank`, with two OR-ed fallbacks so a raw ticket number or a partial title still finds the row (`backend/src/contextedge/search/pg_fts.py:13-84`). `search_playbooks_fts` does the same over approved playbooks, default limit 20 (lines 87-108).
+
+The lexical path applies **the same visibility gate as vector search** — it imports `_visibility_predicates` from `vector_search.py` rather than keeping its own copy, so legal hold, pending redaction and role-excluded access policies are filtered in the `WHERE` clause on both surfaces (`pg_fts.py:10, 78`). The two used to differ, which mattered: the ILIKE fallbacks reach a withheld record by substring, not just by embedding neighbourhood.
 
 ### Vector search
 
@@ -314,9 +318,9 @@ Reciprocal Rank Fusion is the textbook answer to "these two scores are on differ
 | semantic | 0.30 | best cosine match among the playbook's linked evidence |
 | keyword | 0.25 | `ts_rank`, normalized against the best hit in this query |
 | graph_distance | 0.15 | how connected the playbook is to the query's evidence and entities |
-| evidence_quality | 0.10 | the published version's reviewed confidence plus query-specific support |
+| evidence_quality | 0.10 | `0.6 × playbook_confidence + 0.4 × min(evidence_hits / 5, 1)` — the published version's reviewed confidence plus query-specific support |
 | recency | 0.10 | (currently set equal to freshness) |
-| freshness | 0.05 | decay from `last_validated_at`, zero past `expiry_at` |
+| freshness | 0.05 | linear decay over 180 days from `last_validated_at`; **0.0** past `expiry_at`; **0.5** for a playbook that was never validated (`_compute_freshness`, lines 382-389) |
 | identity | 0.05 | `references_identity` edges to the entities named in the query |
 | negative_penalty | −0.05 | contradictions and recorded negative knowledge, subtracted |
 
@@ -423,7 +427,7 @@ Every failure in that chain degrades instead of raising: a total retrieval failu
 Because context windows are finite and every token is billed, the system truncates at defined, findable places:
 
 - Evidence body for the parent embedding: `[:8000]` characters.
-- Episode synthesis: clusters over 20 items are split into multiple calls, with per-item bodies truncated.
+- Episode synthesis: the cluster handed to one call is bounded before the model sees it — `MAX_HOPS = 3` expansion rounds and `MAX_CLUSTER_SIZE = 50` members, and the truncation is recorded on the cluster and logged as `episode_cluster.truncated` rather than dropped silently (`backend/src/contextedge/services/episode_cluster_service.py:47-48, 276-281`).
 - Runtime memory: 5 recent decisions, 3 trace-event fragments, 3 execution runs.
 - Agent graph projections carry an explicit character budget and record *why* they truncated (`max_nodes` or `max_characters`), reserving about 10% of the budget so relationships are never fully starved by node text.
 - Output tokens are capped per task rather than globally: `llm_max_output_tokens = 4096` by default, with `{playbook: 16384, extraction: 16384, pattern: 16384}` overrides (`backend/src/contextedge/config.py:95, 132-138`). The overrides exist because the 4,096 ceiling silently truncated a playbook's JSON mid-array and the repair path then persisted a playbook with **zero steps while reporting success**.
@@ -435,7 +439,7 @@ Because context windows are finite and every token is billed, the system truncat
 Let's do a deep dive into the core files powering this system.
 
 ### `contextedge/search/vector_ops.py` (Rating: 10/10 — read this first)
-Twelve lines of code and the most consequential file in the subsystem.
+Forty-five lines, most of them comment, and the most consequential file in the subsystem.
 - `halfvec_cosine_distance(column, embedding)` (line 40): casts both sides to `halfvec(3072)` so the planner can use the `0032` expression indexes. Anything that orders by cosine distance and does **not** go through here is a sequential scan.
 - `tune_ann_recall(db)` (line 34): `SET LOCAL hnsw.ef_search = 200` (`ANN_EF_SEARCH`, line 31).
 - `EMBEDDING_DIMENSIONS = 3072` (line 22).
@@ -464,8 +468,8 @@ The front door for generating vectors.
 - `_semantic_corpus_score` (line 45), `_compute_freshness` (line 382), and `MIN_RECOMMENDATION_SCORE = 0.35` (line 171).
 
 ### `contextedge/search/pg_fts.py` (Rating: 7/10)
-- `search_evidence_fts(...)` (line 12): `plainto_tsquery('english', …)` + `ts_rank`, plus the ticket-number and title `ILIKE` fallbacks, all OR-ed into one statement.
-- `search_playbooks_fts(...)` (line 84): approved playbooks only.
+- `search_evidence_fts(...)` (line 13): `plainto_tsquery('english', …)` + `ts_rank`, plus the ticket-number and title `ILIKE` fallbacks, all OR-ed into one statement — then `_visibility_predicates(...)` ANDed on top (line 78).
+- `search_playbooks_fts(...)` (line 87): approved playbooks only.
 
 ### `contextedge/search/access_control.py` (Rating: 8/10)
 - `resolve_excluded_access_policy_ids(...)` (line 15): returns `None` for `ADMIN_ROLES` (line 12), otherwise the ids of active `access` policies whose config sets `restricted` (line 37). The result goes into the SQL `WHERE`, not into a post-filter.

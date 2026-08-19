@@ -16,7 +16,7 @@ A catalog of flow diagrams for the critical processes and data pipelines in Cont
 ```mermaid
 graph TD
     User((User)) --> NextJS[Next.js frontend]
-    NextJS --> FastAPI[FastAPI backend<br/>32 routers under /api/v1]
+    NextJS --> FastAPI[FastAPI backend<br/>33 routers under /api/v1]
     FastAPI --> Postgres[(PostgreSQL 16<br/>+ pgvector ≥ 0.7)]
     FastAPI --> Redis0[(Redis db 0<br/>app cache)]
     FastAPI -- .delay --> Redis1[(Redis db 1<br/>Celery broker)]
@@ -121,7 +121,7 @@ flowchart TD
 
 **Notes**
 - `OFFLOAD_THRESHOLD_BYTES = 32_768` (`ingestion_persistence.py:16`). The DB row keeps `{"_offloaded": true, "size_bytes": N}` plus `object_storage_key`.
-- **Any SQL that filters on `raw_payload` silently skips offloaded rows** — the biggest tickets and longest articles. Live examples: ingest-priority ordering (`services/ingest_priority.py:76-95`) and reply-inheritance reconciliation (`workers/extraction_tasks.py:949-967`).
+- **Any SQL that filters on `raw_payload` silently skips offloaded rows** — the biggest tickets and longest articles. Live examples: ingest-priority ordering (`services/ingest_priority.py:76-95`) and reply-inheritance reconciliation (`workers/extraction_tasks.py:959-979`).
 - The MinIO client uses 1-second connect and read timeouts with one attempt (`object_store.py:19-35`) — a slow store fails fast instead of stalling a worker.
 
 ---
@@ -129,7 +129,7 @@ flowchart TD
 ## 5. Evidence normalization (`_normalize`)
 
 **Description:** The ordered pipeline inside one Celery task and one transaction: noise gate, redaction, dedup, derivation, four model calls, embedding, chunk dispatch.
-**Key files:** `backend/src/contextedge/workers/extraction_tasks.py:122-628` (body) and `:1300-1354` (task shell), `backend/src/contextedge/services/message_filter.py:81-206`, `backend/src/contextedge/services/redaction_service.py:36-191`.
+**Key files:** `backend/src/contextedge/workers/extraction_tasks.py:122-641` (body) and `:1313-1367` (task shell), `backend/src/contextedge/services/message_filter.py:81-206`, `backend/src/contextedge/services/redaction_service.py:36-191`.
 
 ```mermaid
 flowchart TD
@@ -151,6 +151,7 @@ flowchart TD
     Id --> Dec[LLM 4: decision v2]
     Dec --> Emb[parent embedding: title + body 8000]
     Emb --> Chunk[chunk dispatch: inline or async]
+    Rel --> App[knowledge types only:<br/>applicability from source facets,<br/>else applicability v1 LLM]
 ```
 
 **Notes**
@@ -158,6 +159,7 @@ flowchart TD
 - The content hash covers the **raw, pre-redaction** body, so tuning a cleaning or redaction rule never breaks dedup.
 - Error-signature fingerprinting runs even for gated-out items — a confidently-irrelevant thread can still carry a pasted stack trace.
 - Every enrichment is individually try/except-wrapped. A classifier failure is **fail-open**: it falls through to the full pipeline.
+- `applicability` is extracted **on this ingest path**, for knowledge types only, right after the relevance call (`extraction_tasks.py:474, 698-758`). It used to run only from the manual re-classify task, which is why 7 of 133 live articles had one. A stated environment and version in `source_facets` short-circuits the ~7,200-token model call entirely.
 
 ---
 
@@ -193,7 +195,7 @@ sequenceDiagram
 ## 7. AI extraction fan-out
 
 **Description:** What runs inline inside `_normalize` versus what is dispatched after the commit.
-**Key files:** `backend/src/contextedge/workers/extraction_tasks.py:1306-1354`, `backend/src/contextedge/workers/artifact_tasks.py:11-46`.
+**Key files:** `backend/src/contextedge/workers/extraction_tasks.py:1325-1367`, `backend/src/contextedge/workers/artifact_tasks.py:11-46`.
 
 ```mermaid
 flowchart TD
@@ -284,7 +286,7 @@ flowchart TD
 ## 10. Episode reconstruction
 
 **Description:** Turning a correlated cluster into one narrated story — and the six gates that stop it from paying for narration that dedup would retire.
-**Key files:** `backend/src/contextedge/workers/extraction_tasks.py:995-1297`, `backend/src/contextedge/services/episode_cluster_service.py:47-105`, `backend/src/contextedge/ai/extractors/episode_extractor.py:97-211`, `backend/src/contextedge/services/episode_service.py:114-333`.
+**Key files:** `backend/src/contextedge/workers/extraction_tasks.py:1008-1309`, `backend/src/contextedge/services/episode_cluster_service.py:47-105, 108-283`, `backend/src/contextedge/ai/extractors/episode_extractor.py:97-211`, `backend/src/contextedge/services/episode_service.py:114-333`.
 
 ```mermaid
 sequenceDiagram
@@ -394,7 +396,7 @@ flowchart TD
 ## 13. Pattern clustering
 
 **Description:** Background mining of recurring issues from approved episodes. Note the trigger — there is no scheduled entry.
-**Key files:** `backend/src/contextedge/workers/pattern_tasks.py:117-372`, `backend/src/contextedge/ai/extractors/pattern_extractor.py:26-112`, `backend/src/contextedge/services/pattern_service.py:62-197`.
+**Key files:** `backend/src/contextedge/workers/pattern_tasks.py:36-60` (thresholds) and `:153-417` (`_cluster`), `backend/src/contextedge/ai/extractors/pattern_extractor.py:26-112`, `backend/src/contextedge/services/pattern_service.py:63-197`, `backend/src/contextedge/services/deferred_dispatch.py:72-95`.
 
 ```mermaid
 flowchart TD
@@ -403,11 +405,11 @@ flowchart TD
     T3[POST /api/v1/patterns/cluster, domain_admin] --> C
     C --> Rep[repair: embed approved episodes with NULL embedding]
     Rep --> Cand[candidates: approved + embedded + unlinked,<br/>THIS domain scope, limit 100]
-    Cand --> Probe{existing pattern with a member<br/>at cosine distance &lt; 0.35?}
+    Cand --> Probe{pattern owning the NEAREST member,<br/>if that member is within<br/>PATTERN_MATCH_MAX_DISTANCE = 0.30?}
     Probe -- yes --> Adj[validate_pattern_match — inline prompt,<br/>task=verification, FAILS OPEN at 0.75]
-    Adj -- is_match --> Add[add_episode_to_pattern → re-enqueue playbook generation]
+    Adj -- is_match --> Add[add_episode_to_pattern → playbook<br/>regeneration queued AFTER commit]
     Adj -- no match --> Sim
-    Probe -- no --> Sim[similar approved unlinked episodes<br/>at cosine distance &lt; 0.20]
+    Probe -- no --> Sim[similar approved unlinked episodes within<br/>CLUSTER_GROUP_MAX_DISTANCE = 0.27]
     Sim --> Cl{cluster empty?}
     Cl -- yes --> Single[single-episode cluster]
     Cl -- no --> Multi[multi-episode cluster]
@@ -418,12 +420,14 @@ flowchart TD
     Title -- no --> P[create_pattern_from_episodes]
     Syn -. any exception .-> FB[fallback pattern "Auto: title", confidence 0.75,<br/>no synthesized fields, NULL provenance]
     P --> Edges[pattern_evidence_links + enrichment edges<br/>+ belongs_to / affects edges + memory promotion]
-    Edges --> Gen[pattern.generate_playbook_candidate]
+    Edges --> Gen[dispatch_after_commit →<br/>pattern.generate_playbook_candidate]
     Gen --> Dd[dedup sweep rides along, fail-soft]
 ```
 
 **Notes**
-- **There is no `beat_schedule` entry for clustering** (verified across `workers/celery_app.py:281-384`). It is approval-event-driven plus manual. The older "patterns never form without an operator" note is now half-stale: approval-time auto-dispatch exists (`services/pattern_service.py:181-188`).
+- **There is no `beat_schedule` entry for clustering** (verified across `workers/celery_app.py:281-384`). It is approval-event-driven plus manual. The older "patterns never form without an operator" note is now half-stale: approval-time auto-dispatch exists (`services/pattern_service.py:181-194`).
+- **Both distance thresholds were re-measured on 2026-08-19 and are corpus-relative** (`pattern_tasks.py:36-60`). Two random approved episodes sit at p01 0.257 / median 0.409 on this corpus, so absolute thresholds tuned elsewhere do not discriminate. The existing-pattern probe also **orders by distance** now: without the `ORDER BY`, `LIMIT 1` returned an arbitrary qualifying pattern and the validator's accept rate was 12%; asking about the nearest one took it to 40%.
+- The playbook dispatch goes through `dispatch_after_commit`, so a rolled-back clustering pass leaves no queued tasks naming patterns that never existed, and no worker reads the pattern before it is durable (`services/deferred_dispatch.py:45-95`).
 - Domain scoping is strict: a domain pass sees only that domain's episodes; the global pass sees only NULL-domain ones.
 - A full 100-episode pass ran **25 minutes in one transaction** with ~156 model calls; a late failure rolls back every row while the spend stays spent (`codewiki/KNOWN_GAPS.md:528-539`).
 
@@ -432,7 +436,7 @@ flowchart TD
 ## 14. Playbook generation
 
 **Description:** Converting a pattern into a versioned, citation-validated candidate — with the retrieval step that pulls the tenant's own KB into the prompt.
-**Key files:** `backend/src/contextedge/workers/pattern_tasks.py:405-684`, `backend/src/contextedge/services/knowledge_retrieval_service.py:226-624`, `backend/src/contextedge/ai/generators/playbook_generator.py:40-241`, `backend/src/contextedge/services/playbook_service.py:360-436`.
+**Key files:** `backend/src/contextedge/workers/pattern_tasks.py:442-747`, `backend/src/contextedge/services/knowledge_retrieval_service.py:226-624`, `backend/src/contextedge/ai/generators/playbook_generator.py:17-104` and `:154-252`, `backend/src/contextedge/services/playbook_service.py:360-436`.
 
 ```mermaid
 flowchart TD
@@ -448,10 +452,11 @@ flowchart TD
     KR3 --> KR4[re-rank ×: support 0.80–1.25,<br/>applicability penalty, supersession 1.6]
     KR4 --> KR5[top 5 docs × 6 sections]
     KR5 --> Links[pattern -supported_by-&gt; evidence<br/>only at similarity ≥ 0.75 and no mismatch]
-    KR5 --> LLM[prompt playbook v5 on gemini-3.7-flash<br/>task lane playbook, ceiling 16384]
+    KR5 --> LLM[prompt playbook v6 on gemini-3.7-flash<br/>task lane playbook, ceiling 16384]
     LLM --> V1[validate_source_refs — minted kb-N / ep-N<br/>citations DROPPED and counted]
     V1 --> V2[classify_step_grounding — a step without surviving<br/>refs is FORCED to non_grounded / best_practice]
-    V2 --> V3[stamp _generation provenance last]
+    V2 --> V2b[sanitize_branching_logic — drop decision points<br/>that cannot execute; then drop jumps until<br/>no step is stranded]
+    V2b --> V3[stamp _generation provenance last]
     V3 --> G3{steps empty?}
     G3 -- yes --> S3([no_steps_generated — nothing persisted])
     G3 -- no --> RT[risk_tier = max of safety-class floor and LLM suggestion<br/>the model may only RAISE it]
@@ -461,6 +466,8 @@ flowchart TD
 
 **Notes**
 - The empty-steps refusal exists because a truncated response's complete-looking prefix once survived JSON repair and persisted a playbook with zero steps.
+- **Prompt `playbook` default is v6** (`ai/prompts/playbook.py:362-423`). v6 adds three rules about the procedure itself — sequence by causality, minimal complete step set, plain friendly language — and won its 2026-08-19 A/B on economy, grounding (0.79 → 0.94) and language. The same run recorded a negative: v6 emitted *more* branching defects, so branch validity is enforced by `sanitize_branching_logic`, not by prompting.
+- `sanitize_branching_logic` repairs rather than rejects: an audit of 190 generated playbooks found 20 with branching defects (39% of the 51 that branch at all), and the steps in those are usually fine — only `decision_points` is junk. Drops are counted onto `branching_validation` and logged as `playbook.invalid_decision_points_dropped` (`playbook_generator.py:154-252`).
 - `knowledge_ids` are recorded **separately** from `evidence_ids` on the version — normative and empirical grounding must not flatten.
 - `POST /api/v1/playbooks/generate` is a **different, leaner path**: no knowledge retrieval, no confidence floor, no risk floor, no empty-steps guard, no embedding, and every `ep-N` citation dropped because the summaries omit ids (`api/v1/playbooks.py:654-767`).
 
@@ -529,14 +536,14 @@ flowchart TD
 **Notes**
 - These are the **actual** weights from `RankingWeights` (`hybrid_ranker.py:22-31`). Because `recency_score = freshness` (`:334`), freshness effectively carries 0.15.
 - An empty result is the contract for "no recommendation", not an error (`hybrid_ranker.py:168-171`).
-- `MATCH_CACHE_TTL_SEC = 3600` (`runtime.py:29`). A cache write failure is swallowed; the explain call later 404s.
+- `MATCH_CACHE_TTL_SEC = 3600` (`api/v1/runtime.py:29`). A cache write failure is swallowed; the explain call later 404s.
 
 ---
 
 ## 17. Semantic search read path
 
 **Description:** How a query actually reaches the vector index — chunk pass, MMR, rollup, parent merge.
-**Key files:** `backend/src/contextedge/search/vector_search.py:40-70, 204-243`, `backend/src/contextedge/search/chunk_rollup.py:31-121`, `backend/src/contextedge/search/vector_ops.py:26-45`.
+**Key files:** `backend/src/contextedge/search/vector_search.py:40-70, 204-243`, `backend/src/contextedge/search/chunk_rollup.py:31-121`, `backend/src/contextedge/search/vector_ops.py:31-45`, `backend/src/contextedge/search/pg_fts.py:10, 65-78`.
 
 ```mermaid
 flowchart LR
@@ -555,13 +562,14 @@ flowchart LR
 - `ef_search` is raised per transaction because the HNSW indexes are **global across tenants** while every query post-filters by `tenant_id`; at the default 40 a small tenant's rows can be absent from the candidate set entirely.
 - The parent pass is what keeps unchunked evidence — pre-chunking rows, chunker failures — findable at all.
 - A corrupt chunk embedding makes MMR degrade to pure distance ordering, never a failed request (`chunk_rollup.py:59-76`).
+- **Lexical search reads through the same gate.** `search_evidence_fts` imports `_visibility_predicates` from `vector_search` instead of restating the rules, so legal hold, pending redaction and excluded access policies hide a row from keyword search exactly as they do from vector search (`pg_fts.py:10, 65-78`). One definition, two surfaces — a copy would eventually disagree, and the surface that disagreed would be the leak.
 
 ---
 
 ## 18. Agent graph projection (MAF)
 
 **Description:** The bounded, access-scoped subgraph an agent receives instead of raw graph access.
-**Key files:** `backend/src/contextedge/graph/agent/service.py:39-167`, `graph/agent/repository.py:156-512` (seeds), `graph/agent/selector.py:28-261` (traversal), `graph/agent/hydrators.py:98-233` (visibility and facts), `graph/agent/contracts.py:26-30`.
+**Key files:** `backend/src/contextedge/graph/agent/service.py:39-167`, `graph/agent/repository.py:169-664` (seeds), `graph/agent/selector.py:28-261` (traversal), `graph/agent/hydrators.py:108-190` (visibility) and `:319-677` (`hydrate_node`), `graph/agent/contracts.py:26-30`.
 
 ```mermaid
 flowchart TD
@@ -571,9 +579,10 @@ flowchart TD
     Seeds --> LA[FTS playbooks + patterns — 0.6–0.9]
     Seeds --> LA2[issue signatures, de-slugged tsvector — 0.6–0.9]
     Seeds --> LB[semantic episodes / playbooks 0.5 floor,<br/>knowledge chunks 0.6 floor]
+    Seeds --> LB2[semantic UNAPPROVED episode drafts<br/>own 2 slots, relevance × 0.8]
     Seeds --> LC[identifier exact 0.95 / alias 0.9<br/>substring fallback 0.9 / 0.85]
     Seeds --> LD[preceding changes on the same CI<br/>within 7 days — 0.8]
-    L0 & LA & LA2 & LB & LC & LD --> Top[dedupe, sort, top 20 seeds]
+    L0 & LA & LA2 & LB & LB2 & LC & LD --> Top[dedupe, sort, top 20 seeds]
     Top --> Trav[traverse to max_depth<br/>hop_factor = 0.72 × weight × confidence × rel factor,<br/>clamped at 1.0]
     Trav --> Adm[admit nodes by score;<br/>each drags its ancestor chain in<br/>so the projection stays connected]
     Adm --> Vis[node_is_visible — FAIL-CLOSED per type]
@@ -582,7 +591,8 @@ flowchart TD
 
 **Notes**
 - Default budget 24 nodes / 48 relationships / depth 2 / 12,000 characters; profile maximum 60 / 120 / 3 / 30,000 (`contracts.py:26-30`; `graph/agent/profiles.py:183-188`).
-- Visibility is fail-closed: a playbook must be approved with a current version inside the risk cap, an episode must be approved, evidence must pass the knowledge-lifecycle check — **and a pending AI-authored decision is invisible**, so agent output cannot launder itself back into agent input (`hydrators.py:152-160`).
+- Visibility is fail-closed: a playbook must be approved, unexpired and inside the risk cap with a current version; a pattern must be active; evidence must pass the knowledge-lifecycle check and carry no legal hold, pending redaction or excluded access policy — **and a pending AI-authored decision is invisible**, so agent output cannot launder itself back into agent input (`hydrators.py:118-190`).
+- **Episodes are the deliberate exception.** `AGENT_VISIBLE_EPISODE_STATES = {"approved", "pending_review"}` (`hydrators.py:108`): drafts are admitted as reference material, because the reviewer queue lags ingestion and hiding them meant the agent could not see this week's outage. Three guards keep a draft from reading as precedent — its own small seed allocation (`UNAPPROVED_EPISODE_SEED_LIMIT = 2`, never taken from the approved slots), a relevance discount (`UNAPPROVED_SEED_RELEVANCE_FACTOR = 0.8`) with its own `query_semantic_unapproved` reason so it is identifiable in a trace, and a `[UNAPPROVED DRAFT]` label plus an `agent_caveat` fact at hydration (`repository.py:111, 117, 372-384, 487-509`; `hydrators.py:110-116, 437-463`). `superseded` stays out: it is the state a merge gives the loser, and the corpus holds ~9x more of them than live episodes.
 - `mentions_identity` is deliberately excluded from traversal: measured fan-out of 40-70 edges per handful of tickets would spend the whole budget on identity hubs.
 - When `as_of` is set, the projection warns that **relationship topology is point-in-time while node facts are current** (`selector.py:236-242`).
 
@@ -606,7 +616,7 @@ flowchart TD
 ```
 
 **Notes**
-- 69 edge types are registered in five semantic groups; 18 are deliberately **not** traversable by `maf.v1`, each with its exclusion reason recorded. A test enforces that every registered type is either projected or excluded-with-a-reason.
+- 69 edge types are registered in five semantic groups (`edge_types.py:36-137`). 53 are projected by `maf.v1`; the other **16** are deliberately not traversable and each carries its exclusion reason in `PROJECTION_EXCLUSIONS`. `tests/test_edge_type_registry.py:98-114` fails if a registered type is neither projected nor excluded-with-a-reason. (`KNOWN_GAPS.md` used to say 18; corrected to 16 on 2026-08-19 — verified by importing the dict.)
 - `replace_edge` (close + re-add for temporal versioning) exists but has **no production callers** (`codewiki/KNOWN_GAPS.md:66`).
 - Materialization from relational rows runs on Beat every 6 hours and is **additive only** — there is no event-driven materialization (`graph/agent/materializer.py:54-359`; `workers/celery_app.py:329-333`).
 
@@ -615,7 +625,7 @@ flowchart TD
 ## 20. Knowledge dedup sweep
 
 **Description:** The hourly sweep that keeps evidence, episodes, patterns and playbooks from re-inflating.
-**Key files:** `backend/src/contextedge/services/pattern_service.py:254-549`, `backend/src/contextedge/services/episode_service.py:336-744`, `backend/src/contextedge/workers/pattern_tasks.py:687-805`.
+**Key files:** `backend/src/contextedge/services/pattern_service.py:254-549`, `backend/src/contextedge/services/episode_service.py:336-744`, `backend/src/contextedge/workers/pattern_tasks.py:736-828`.
 
 ```mermaid
 flowchart TD
@@ -920,7 +930,7 @@ flowchart TD
 - Budget defaults for a tenant with no row: 2,000,000 tokens/day, $25/day, action `block` (`config.py:194-198`). Usage is summed from the day's `llm.usage` events — there is no second aggregation column to drift.
 - Reasoning tokens count against the output ceiling. One live incident recorded completion_tokens 4,082 of 4,096 of which **3,930 were reasoning** — about 150 tokens of actual answer.
 - Thinking is resolved per attempt, not once, because a fallback model may not support reasoning and would 400.
-- Prompt caching markers are sent only to Anthropic/OpenAI/Azure prefixes; Vertex is excluded because above ~3K characters LiteLLM turns the marker into a context-cache resource whose creation 404s (`provider.py:152-174`).
+- Prompt caching markers are sent only to Anthropic/OpenAI/Azure prefixes; Vertex is excluded because above ~3K characters LiteLLM turns the marker into a context-cache resource whose creation 404s (`ai/provider.py:150-174`).
 
 ---
 

@@ -45,14 +45,14 @@ Two vocabularies matter here and they are not the same size. The **storage** voc
 - **Database table:** `evidence_items` (`backend/src/contextedge/models/evidence.py:48`)
 - **Key attributes:** `evidence_type`, `source_type`, `evidence_time`, `relevance_score`, `redaction_status`, `sensitivity_label`, `knowledge_state`, `case_state`, `applicability`, `knowledge_support`, `embedding Vector(3072)`, `chunked_at` / `chunk_count`.
 - **When created:** When a connector's sync emits a record and `extraction.normalize_evidence` normalizes it.
-- **Who creates it:** `extraction.normalize_evidence` (`backend/src/contextedge/workers/extraction_tasks.py:1304`), on the `extraction` queue.
+- **Who creates it:** `extraction.normalize_evidence` (`backend/src/contextedge/workers/extraction_tasks.py:1317`), on the `extraction` queue.
 - **In the projection:** yes. Budgeted by kind — 400 characters of summary for a ticket or chat message, 1,600 for a `kb_article` / `sop` / `documentation` row, which also carries `knowledge: true` (`hydrators.py:273-274`).
 
 ### Evidence chunk
 - **What it represents:** One retrievable slice of an evidence item's text, with its own embedding.
 - **Database table:** `evidence_chunks` (`models/evidence.py:189`)
 - **Key attributes:** `chunk_index`, `chunk_kind`, `text`, `parent_section`, `char_offset_start` / `_end`, `embedding Vector(3072)`, `content_hash`, `chunker_version`.
-- **When created:** Right after the parent embedding. Bodies at or under `INLINE_CHUNK_BUDGET_BYTES = 16 KB` are chunked inline during normalization; larger ones go to `extraction.chunk_evidence` on the `embedding` queue (`workers/chunk_tasks.py:210`), which hands batches to `extraction.embed_chunks_batch` (`chunk_tasks.py:238`).
+- **When created:** Right after the parent embedding. Inline chunking needs **two** conditions, not one: the body must be strictly under `INLINE_CHUNK_BUDGET_BYTES = 16 KB` **and** the source type must be in `INLINE_CHUNK_SOURCE_ALLOWLIST` — `jira_sm`, `servicenow`, `gmail`, `teams`, `sapphireims`, `zoho_desk` (`extraction_tasks.py:59-61`, gate at `:99-103`). A short body from a source outside that set still goes async, so an unfamiliar parser can never stall the normalize transaction. Everything else goes to `extraction.chunk_evidence` on the `embedding` queue (`workers/chunk_tasks.py:210`), which hands batches to `extraction.embed_chunks_batch` (`chunk_tasks.py:238`).
 - **Who creates it:** the chunker the registry picks for `(source_type, evidence_type)` — document, ticket, thread, attachment, or fallback (`backend/src/contextedge/services/chunkers/registry.py`).
 - **In the projection:** **no.** Chunks are a *retrieval* structure, not a graph node. They matter to the graph indirectly: the agent's knowledge seed layer runs its ANN query over chunks and then groups back to one document per best chunk.
 
@@ -60,7 +60,7 @@ Two vocabularies matter here and they are not the same size. The **storage** voc
 - **What it represents:** A reconstructed, ordered story of an incident (Observation → Hypothesis → Action → Verification), stitched together from multiple pieces of evidence.
 - **Database table:** `episodes` (`backend/src/contextedge/models/episode.py:214`), steps in `episode_steps` (`episode.py:270`), membership in `episode_evidence_links` (`episode.py:301`).
 - **Key attributes:** `title`, `status`, `reviewer_state`, `root_cause_summary`, `final_outcome`, `evidence_ids`, `cluster_fingerprint`, `contradictions`, `embedding`, `generation_provenance`, `ai_review`.
-- **When created:** After correlation, on a 180-second debounce — `extraction.reconstruct_episode` (`workers/extraction_tasks.py:1391`, `correlation` queue).
+- **When created:** After correlation, on a 180-second debounce — `extraction.reconstruct_episode` (`workers/extraction_tasks.py:1404`, `correlation` queue).
 - **Who creates it:** the reconstruction task, using the `episode` prompt family (current default **v3**).
 - **Lifecycle:** a new episode is `reviewer_state="pending_review"`. It becomes `approved` either when a human approves it (`POST /api/v1/episodes/{id}/approve` or `/bulk-approve`) or when the hourly AI review sweep is running in `auto_approve` mode and the draft clears both the model's verdict and the deterministic floors. See §3.1 Step 3.
 - **In the projection:** yes — and uniquely, **`pending_review` drafts are projectable too**, in a small separate allocation, labelled `[UNAPPROVED DRAFT]` (`hydrators.py:108-115`).
@@ -84,7 +84,7 @@ Two vocabularies matter here and they are not the same size. The **storage** voc
 - **What it represents:** A recurring operational issue, synthesized from one or more similar episodes.
 - **Database table:** `patterns` (`backend/src/contextedge/models/pattern.py:24`), membership in `pattern_evidence_links` (`pattern.py:61`).
 - **Key attributes:** `title`, `pattern_type`, `confidence`, `episode_count`, and the JSONB enrichment fields `trigger_conditions` / `core_entities` / `observed_errors` / `root_causes` / `resolution_steps` / `evidence_summary`, plus `generation_provenance`.
-- **When created:** `pattern.cluster_episodes` (`backend/src/contextedge/workers/pattern_tasks.py:379`, `pattern` queue), dispatched after episode approvals or run manually. See §3.1 Step 4.
+- **When created:** `pattern.cluster_episodes` (`backend/src/contextedge/workers/pattern_tasks.py:422`, `pattern` queue), dispatched after episode approvals or run manually. See §3.1 Step 5.
 - **Who creates it:** `services/pattern_service.create_pattern_from_episodes`.
 - **In the projection:** yes.
 
@@ -92,7 +92,7 @@ Two vocabularies matter here and they are not the same size. The **storage** voc
 - **What it represents:** Official, ordered steps to resolve a specific issue.
 - **Database table:** `playbooks` (`backend/src/contextedge/models/playbook.py:49`), versions in `playbook_versions` (`playbook.py:126`), evidence provenance in `playbook_evidence_links` (`playbook.py:178`).
 - **Key attributes:** `title`, `stable_key`, `lifecycle_state`, `risk_tier`, `automation_mode`, `embedding`, `current_version_id`.
-- **When created:** Generated from a pattern by `pattern.generate_playbook_candidate` (`workers/pattern_tasks.py:403`), or generated on demand by `POST /api/v1/playbooks/generate`, or authored by a human. A generated candidate lands `lifecycle_state="candidate"`, `automation_mode="suggest_only"`.
+- **When created:** Generated from a pattern by `pattern.generate_playbook_candidate` (`workers/pattern_tasks.py:446`), or generated on demand by `POST /api/v1/playbooks/generate`, or authored by a human. A generated candidate lands `lifecycle_state="candidate"`, `automation_mode="suggest_only"`.
 - **In the projection:** yes, but only when it is `approved`, has a current version, is unexpired, and sits within the caller's risk cap (`hydrators.py:143-149`).
 
 ### Decision
@@ -131,7 +131,7 @@ Two vocabularies matter here and they are not the same size. The **storage** voc
 ### Identity
 - **What it represents:** A person or system actor, resolving aliases ("J. Smith" and "jsmith" are the same person).
 - **Database table:** `canonical_identities` (`backend/src/contextedge/models/episode.py:49`), aliases in `identity_aliases` (`episode.py:92`), evidence links in `evidence_identity_links` (`episode.py:153`).
-- **In the projection:** the identity **node** is projectable, but the edges that reach it (`mentions_identity`, `references_identity`) are deliberately **excluded** from `maf.v1` traversal — measured fan-out of 40-70 edges per handful of tickets would spend the whole budget on identity hubs (`backend/src/contextedge/graph/edge_types.py:143-149`).
+- **In the projection:** the identity **node** is projectable, and so is the `affects` edge an episode writes to it (`builder.build_episode_graph`). The two hub edges are what is deliberately **excluded** from `maf.v1` traversal — `mentions_identity` (evidence → identity) and `references_identity` (pattern/playbook → identity), whose measured fan-out of 40-70 edges per handful of tickets would spend the whole budget on identity hubs (`backend/src/contextedge/graph/edge_types.py:143-149`).
 
 ### Contradiction
 - **What it represents:** A detected conflict between an approved playbook and reality — the playbook says do X, recent evidence shows X failing.
@@ -172,7 +172,7 @@ ContextEdge connects to your company's tools and pulls in raw data automatically
 | MS Teams | A channel discussion | `#network-ops — "anyone else seeing vpn-gw-east-01 refuse auth?"` |
 | Gmail | An engineer's root-cause note | `"cert on vpn-gw-east-01 expired at 06:00 UTC; renewed + restarted radiusd"` |
 
-**What normalization actually does** — `extraction.normalize_evidence` (`backend/src/contextedge/workers/extraction_tasks.py:1304`), on the `extraction` queue:
+**What normalization actually does** — `extraction.normalize_evidence` (`backend/src/contextedge/workers/extraction_tasks.py:1317`), on the `extraction` queue:
 
 1. **The raw payload is stored first**, in `raw_evidence_objects`. If the JSON is larger than `OFFLOAD_THRESHOLD_BYTES = 32,768` it is written to MinIO object storage and the database row keeps a **stub** plus an `object_storage_key` (`backend/src/contextedge/services/ingestion_persistence.py:16, 85`). Downstream readers call `load_raw_payload`, which transparently re-reads from MinIO. **This has a consequence worth remembering:** any SQL query that filters on `raw_payload->>'...'` silently skips the biggest records, so one-off backfill scripts written that way quietly miss the longest articles and the richest tickets (`codewiki/KNOWN_GAPS.md:36`).
 2. **Redaction** runs before anything else reads the text — email addresses, phone numbers, card numbers, AWS keys, private-key blocks.
@@ -215,11 +215,11 @@ Each accepted pair writes a `correlation_edges` row. Edges are created once and 
 **What happens here?**
 Correlation produced a web of related evidence. Reconstruction turns it into one ordered story: an **Episode**.
 
-**The debounce.** When correlation creates at least one edge, it schedules `extraction.reconstruct_episode` with a **180-second countdown** (`RECONSTRUCT_DEBOUNCE_SECONDS`, `workers/extraction_tasks.py:746`). At run time the task re-checks whether the cluster went quiet; if more evidence arrived inside the window it defers **on SQL alone, spending no LLM call**, and the later-scheduled task takes over. A channel that never goes quiet still gets narrated within `MAX_SYNTHESIS_DELAY_SECONDS = 1,800` of its oldest evidence (line 834). Duplicates arriving over 40 minutes therefore cost one synthesis, not four.
+**The debounce.** When correlation creates at least one edge, it schedules `extraction.reconstruct_episode` with a **180-second countdown** (`RECONSTRUCT_DEBOUNCE_SECONDS`, `workers/extraction_tasks.py:759`). At run time the task re-checks whether the cluster went quiet; if more evidence arrived inside the window it defers **on SQL alone, spending no LLM call**, and the later-scheduled task takes over. A channel that never goes quiet still gets narrated within `MAX_SYNTHESIS_DELAY_SECONDS = 1,800` of its oldest evidence (line 847). Duplicates arriving over 40 minutes therefore cost one synthesis, not four.
 
 **Cluster resolution before any model sees anything.** `resolve_episode_cluster` materializes the connected component over case links and correlation edges, with hard fences: `MAX_CLUSTER_SIZE = 50`, `MAX_HOPS = 3`, and a `CLUSTER_TIME_WINDOW` of 30 days from the nearest seed (`backend/src/contextedge/services/episode_cluster_service.py:47-49`). Legal-hold and pending-redaction evidence is excluded in SQL, not filtered afterwards. The member set is hashed into a `cluster_fingerprint`, which powers two things: the same cluster never produces a duplicate draft, and a pending draft whose evidence is a strict subset of a newer cluster is marked `superseded`.
 
-**Automatic synthesis floors.** A cluster under `MIN_AUTO_SYNTHESIS_CLUSTER = 3` members is not narrated automatically (line 756), and re-synthesis needs the cluster to be at least 50% larger than the biggest already-covered episode (`MIN_RESYNTHESIS_GROWTH = 0.5`, line 774). Both exist because episode synthesis is the single largest LLM cost line in the system.
+**Automatic synthesis floors.** A cluster under `MIN_AUTO_SYNTHESIS_CLUSTER = 3` members is not narrated automatically (line 769), and re-synthesis needs the cluster to be at least 50% larger than the biggest already-covered episode (`MIN_RESYNTHESIS_GROWTH = 0.5`, line 787). Both exist because episode synthesis is the single largest LLM cost line in the system.
 
 **What comes out for Acme:**
 
@@ -286,7 +286,7 @@ Dispatch is deliberately **commit-then-dispatch**: the approval is committed bef
 ### Step 5: Pattern Detection
 
 **What happens here?**
-Over weeks and months, similar incidents pile up. `pattern.cluster_episodes` (`backend/src/contextedge/workers/pattern_tasks.py:379`, `pattern` queue) asks, per episode: *have I seen this shape before?*
+Over weeks and months, similar incidents pile up. `pattern.cluster_episodes` (`backend/src/contextedge/workers/pattern_tasks.py:422`, `pattern` queue) asks, per episode: *have I seen this shape before?*
 
 **What triggers it — and what does not.** There is **no Celery Beat entry for pattern clustering**; verified by reading the whole beat schedule. It runs when:
 1. an episode is approved through the API (`/episodes/{id}/approve` or `/bulk-approve`) — one dispatch per affected domain, after commit;
@@ -297,8 +297,8 @@ Over weeks and months, similar incidents pile up. `pattern.cluster_episodes` (`b
 
 **The mechanism, per candidate episode** (`pattern_tasks.py` `_cluster`):
 - **Repair pass first.** Any approved episode with a NULL embedding gets `title + "\n\n" + root_cause_summary` embedded, per-episode fail-soft. Without an embedding, an episode is invisible to everything below.
-- **Existing-pattern probe.** Look for any pattern in the same scope with a member episode whose embedding is within **cosine distance 0.35**. If one is found, a second LLM call (`validate_pattern_match`) adjudicates whether it is really the same pattern. It is **fail-open**: if the model is unreachable or the tenant is over budget, the answer defaults to "match, confidence 0.75" and the 0.35 embedding probe alone decides.
-- **New cluster.** Otherwise, gather the episode's neighbors within the much tighter **cosine distance 0.20** — approved, embedded, unlinked, same scope. An empty neighborhood is fine: a single strong episode can seed a pattern.
+- **Existing-pattern probe.** Take the pattern that owns the **single nearest** member episode within `PATTERN_MATCH_MAX_DISTANCE = 0.30` cosine distance, in the same scope (`pattern_tasks.py:50, 243-257`). The `ORDER BY distance` is the load-bearing part: without it, `LIMIT 1` returned an arbitrary qualifying pattern, and because everything in this corpus is an AutomationEdge support incident the embeddings bunch — 0.35 is roughly the 10th percentile of the distance between two *random* episodes, so the old gate admitted nearly everyone and then handed the validator a near-random pattern. Asking about the nearest one instead took the validator's accept rate from 12% to 40% on the same corpus. If a candidate is found, a second LLM call (`validate_pattern_match`) adjudicates whether it is really the same pattern. It is **fail-open**: if the model is unreachable or the tenant is over budget, the answer defaults to "match, confidence 0.75" and the embedding probe alone decides (`ai/extractors/pattern_extractor.py:108-112`).
+- **New cluster.** Otherwise, gather the episode's neighbors within the tighter `CLUSTER_GROUP_MAX_DISTANCE = 0.27` — approved, embedded, unlinked, same scope (`pattern_tasks.py:60, 299-312`). That number was measured, not assumed: at 0.20 (the old value, below the random-pair 1st percentile) 126 of 150 probed episodes could group with nothing and became single-episode "patterns"; at 0.40 the corpus collapses into one blob. 0.27 is the knee — real groups of about four, no runaway merge. An empty neighborhood is still fine: a single strong episode can seed a pattern.
 - **Synthesis.** One LLM call (`synthesize_pattern`, prompt family `pattern`, current default v2) reads each episode's title, root cause, outcome, and first five steps, and returns the pattern's title, description, triggers, entities, observed errors, root causes, resolution steps, and confidence. If synthesis fails for any reason, a **fallback pattern** is still created — titled `"Auto: <episode title>"` at confidence 0.75, with no synthesized fields and NULL provenance. The pattern forms; the enrichment does not.
 - A returned title containing "no incident" / "no pattern" / "no operational pattern" / "no recurring pattern" is treated as a refusal and nothing is persisted.
 - Each run processes at most 100 candidate episodes.
@@ -319,7 +319,7 @@ resolution_steps:   ["confirm certificate expiry", "renew certificate",
                      "install on gateway", "restart radius", "verify a test login"]
 ```
 
-Persistence writes a lot more than the row: `pattern_evidence_links` membership, `episode -belongs_to-> pattern` edges, `episode -affects-> identity` edges, and virtual enrichment nodes for each trigger / entity / error / root cause, each edged to the pattern at weight 1.5. It then **auto-enqueues playbook generation**.
+Persistence writes a lot more than the row: `pattern_evidence_links` membership, `episode -belongs_to-> pattern` edges, `episode -affects-> identity` edges, and virtual enrichment nodes for each trigger / entity / error / root cause, each edged to the pattern at weight 1.5. It then **auto-enqueues playbook generation — after the commit**, through `services/deferred_dispatch.dispatch_after_commit` (`services/pattern_service.py:192-194`). That indirection is not decoration: `create_pattern_from_episodes` does not own its transaction, so dispatching inline sent the task while the pattern was still invisible to every other connection. Both ends of that went wrong live — a rolled-back clustering pass left 65 queued tasks naming patterns that never existed, and on the success path a worker reading too early got "pattern not found" and returned `skipped`, so a real pattern silently never got its playbook. `add_episode_to_pattern` follows the same rule when a new member arrives (`pattern_service.py:247-249`).
 
 Two known caveats to state plainly. A full 100-episode pass runs as **one long database transaction** — a measured run took 25 minutes and ~156 LLM calls with nothing committed until the end, so a late failure rolls back every row while the model spend stays spent (`codewiki/KNOWN_GAPS.md:528-539`). And upstream, 949 live episodes carry stacked steps from an older chunk-merge bug, with 836 pending drafts held back as `timeline_corrupted_pending_repair` — synthesis quality claims should be read with that in mind (`KNOWN_GAPS.md:462-478`).
 
@@ -328,13 +328,14 @@ Two known caveats to state plainly. A full 100-episode pass runs as **one long d
 ### Step 6: Playbook Creation
 
 **What happens here?**
-`pattern.generate_playbook_candidate` (`workers/pattern_tasks.py:403`, `pattern` queue) turns a pattern into a versioned, citation-validated playbook candidate.
+`pattern.generate_playbook_candidate` (`workers/pattern_tasks.py:446`, `pattern` queue) turns a pattern into a versioned, citation-validated playbook candidate, using the `playbook` prompt family (current default **v6**, `ai/prompts/playbook.py:418-422`).
 
 **Deterministic gates around the model, not inside it:**
 - **Confidence floor.** A pattern below confidence **0.5** is skipped. The number was calibrated by reading 37 generated playbooks: below roughly 0.5 the output was structured but hollow.
 - **Knowledge retrieval, then generation.** Before the prompt runs, the pattern's own vocabulary (title + description + up to five episodes' root cause / title / outcome) is used to retrieve up to **5** knowledge documents — `kb_article`, `sop`, `documentation` only. Articles a human retired in the source system are **withheld, not demoted**; contested ones are demoted (distance × 1.25) and carry a SUPPORT WARNING into the prompt; superseded ones are demoted harder (× 1.6) and labelled. Each surviving document contributes up to six of its **chunks**, chosen by chunk-embedding distance to the query.
 - **Citation validation.** The prompt shows documents as `[kb-N]` and episodes as `[ep-N]`. After generation, every citation the model wrote is translated back to a real id; any label the model **invented** is dropped and counted, and the count is persisted on the version as `citation_validation`.
 - **Grounding classification is structural, not asserted.** A step that still has a surviving `source_ref` is `grounded`; a step without one is *forced* to `non_grounded` / `best_practice`, whatever the model claimed about itself.
+- **Branching is repaired structurally too.** `sanitize_branching_logic` drops decision points that cannot execute — targets naming steps that do not exist, points whose true and false paths are identical, and steps no path can reach — in place, counting and logging what it removed (`ai/generators/playbook_generator.py:93, 154-171`). An audit of 190 generated playbooks found 20 with branching defects, 39% of the 51 that branch at all. It repairs rather than rejects: the steps of such a playbook are usually fine and only `decision_points` is junk, so failing the whole generation would discard good work over a bad appendix.
 - **Risk floor.** The step's `safety_class` sets a minimum risk tier (`read_only` → low, `low_side_effect` → medium, `high_side_effect` / `destructive` → high, unknown → high). The model's suggested `risk_tier` may only **raise** it. Risk assessment is policy, not model output.
 - **Empty steps are a failure, not a candidate.** A result with no steps returns `no_steps_generated` and persists nothing — the documented incident behind that guard is a truncated response whose complete-looking prefix survived JSON repair.
 
@@ -543,7 +544,7 @@ Deployment caveat: `0032` fails loudly below pgvector 0.7, but an environment al
 **What:** Functions to insert, update, and close edges in the Postgres adjacency table.
 **Why:** Provides a clean, typed API so other services don't write raw SQL for graph updates — and one place where the edge-type registry is enforced.
 **Where:** `backend/src/contextedge/graph/builder.py`
-**Who calls it:** 26 modules — pattern workers, decision trace service, episode reconstruction, connector reference-enrichment services, the CMDB topology cache, the relational→graph materializer, and the MAF edge-proposal client.
+**Who calls it:** more than two dozen modules (27 import it today; the registry's own docstring still says 26) — pattern workers, decision trace service, episode reconstruction, connector reference-enrichment services, the CMDB topology cache, the relational→graph materializer, and the MAF edge-proposal client.
 **What happens next:** Edges are **flushed**, not committed. Services flush; the enclosing unit of work commits — `run_async` for Celery tasks, the `get_db` dependency for HTTP requests.
 **Input:** Source node info, target node info, edge type, optional weight, confidence, metadata, domain, and temporal bounds.
 **Output:** A `GraphEdge` SQLAlchemy model instance.
@@ -662,8 +663,6 @@ AgentGraphSubset  (+ agent_graph_projection log, agent_graph.projected event)
 
 **What each node type carries (the parts that shape answer quality):**
 
-**What each node type carries (the parts that shape answer quality):**
-
 - **Episodes** project their **steps** (`steps_taken`, capped `EPISODE_STEPS_CAP = 6` × `EPISODE_STEP_CHARS = 180`, successful-first, failed ones labelled `[did not work]`, `hydrators.py:267-268`) plus `primary_case_ref` — the ticket number an engineer can open to verify a citation — and `extraction_confidence`. Before steps were projected, an agent received the diagnosis and the outcome but not what anyone *did*, and filled the gap with generic troubleshooting shape. The caps are measured, not guessed: at 12 × 220, eight episodes consumed 57% of a 25k-character projection and crowded out everything ranked below them.
 - **Unapproved episode drafts** carry two extra things: the label is prefixed `[UNAPPROVED DRAFT]`, and `facts.agent_caveat` spells out what that means — reconstructed automatically, no reviewer has confirmed it, treat it as a lead to verify, prefer approved episodes where they disagree, and say it is unconfirmed if you cite it (`hydrators.py:110-115, 442-463`).
 - **Evidence** is budgeted by *kind*: ticket / chat / log summaries cap at `EVIDENCE_SUMMARY_CHARS = 400` (they corroborate; they are not the procedure), while knowledge evidence (`kb_article` / `sop` / `documentation`) renders at `KNOWLEDGE_SUMMARY_CHARS = 1,600` and carries `knowledge: true` / `authority: "documented procedure"` (`hydrators.py:273-274`). In a node list an SOP section and a Teams message are both "evidence", and an agent weighing them needs to know one is normative and the other is hearsay. Applicability constraints travel with the node too — product, versions, version floor/ceiling, environments, components — so a fix for a different firmware revision is visibly a fix for a different firmware revision.
@@ -685,7 +684,7 @@ AgentGraphSubset  (+ agent_graph_projection log, agent_graph.projected event)
 ### `profiles.py`
 **File Rating:** 8/10
 **What:** Server-controlled configuration for graph projections — the closed vocabulary and the ranking knobs.
-**What `maf.v1` declares** (`profiles.py:59-224`): 20 node types; 53 traversable relationship types out of the 69 registered; `hop_decay = 0.72`; a maximum budget of 60 nodes / 120 relationships / depth 3 / 30,000 characters; per-relationship boosts (`belongs_to` and `derived_from` at 1.2, `caused_by_change` 1.2, `validated_fix` 1.2, `supported_by` 1.15, `has_signature` 1.15, `chose` 1.1, `partially_validated_fix` 1.05, `contradicted_by` 0.95, `invalidated_fix` 0.9); and a per-relationship metadata allowlist where unlisted types project `{}`.
+**What `maf.v1` declares** (`profiles.py:59-224`): 20 node types; 53 traversable relationship types out of the 69 registered; `hop_decay = 0.72`; a maximum budget of 60 nodes / 120 relationships / depth 3 / 30,000 characters; per-relationship boosts (`belongs_to` and `derived_from` at 1.2, `caused_by_change` 1.2, `validated_fix` 1.2, `supported_by` 1.15, `supported_by_claim` 1.15, `has_signature` 1.15, `chose` 1.1, `partially_validated_fix` 1.05, `contradicted_by` 0.95, `invalidated_fix` 0.9, every other type 1.0); and a per-relationship metadata allowlist where unlisted types project `{}`.
 **Why the numbers are what they are:** the `belongs_to` / `derived_from` pair is the clearest case. A semantic episode seed is only useful if the proven playbook two hops behind it survives the budget, and at plain 0.72 decay that playbook lands at roughly 0.39-0.47 relevance — last in the projection and first truncated. The 1.2 boost lifts the chain to about 0.56-0.67, and because the selector clamps each hop factor at 1.0, relevance still decays monotonically (`profiles.py:199-207`).
 **`clamp_budget` takes the minimum** of requested and maximum on every field (`profiles.py:23-43`), so a request can narrow the budget but never widen it. An unknown profile name raises and becomes a 422.
 
@@ -694,7 +693,7 @@ AgentGraphSubset  (+ agent_graph_projection log, agent_graph.projected event)
 **What:** The data-access layer: resolve seeds, load edges per hop, hydrate nodes.
 **Why:** All the SQL that touches the agent path lives in one place, which is also where the scope predicates are applied.
 
-**Seed layers** — nine of them, each fail-soft and each scope-checked (`repository.py:169-574`):
+**Seed layers** — nine of them, each fail-soft and each scope-checked (`repository.py:169-575`):
 
 | # | Layer | Source | Relevance | Reason tag |
 |---|---|---|---|---|
@@ -702,7 +701,7 @@ AgentGraphSubset  (+ agent_graph_projection log, agent_graph.projected event)
 | A | **Playbooks and patterns** by full-text search | `search_tsvector`, LIMIT 3 each | 0.6-0.9, rank-mapped | `query_fts` |
 | A2 | **Issue signatures** | tsvector over capability + component + failure mode + trigger, LIMIT 3 | 0.6-0.9 | `signature_match` |
 | B | **Approved episodes** by embedding | halfvec HNSW, LIMIT 3, similarity floor **0.5** | `0.6 + 0.3 × sim` | `query_semantic` |
-| B | **Unapproved episode drafts** | separate allocation, LIMIT 2 | `(0.6 + 0.3 × sim) × 0.8` | `query_semantic` |
+| B | **Unapproved episode drafts** | separate allocation, LIMIT 2, same 0.5 floor | `(0.6 + 0.3 × sim) × 0.8` | `query_semantic_unapproved` |
 | B | **Playbooks** by embedding | approved only, LIMIT 3, floor 0.5 | `0.6 + 0.3 × sim` | `query_semantic` |
 | B | **Knowledge documents** by **chunk** embedding | grouped per document on best chunk, LIMIT 3, floor **0.6** | `0.6 + 0.3 × sim` | `query_knowledge` |
 | C | **Operational identifiers** from the query | exact match on entities / identity aliases, then substring fallback | 0.95 / 0.9 exact, 0.9 / 0.85 substring | `query_identifier[_exact]` |
@@ -733,7 +732,7 @@ Mechanics worth knowing:
 **File Rating:** 9/10
 **What:** Orchestrates: build the access scope, resolve the profile, run the selector, log, emit the event.
 **The authorization it does before any data is read** (`service.py:39-94`): the requested domain must exist, be active, and belong to the tenant (404 otherwise); a service account must have it in its allowlist (403); a non-tenant-admin must be able to see its workspace (403). It also fixes `playbook_risk_cap` — `high` for platform/tenant/domain admins, `knowledge_manager`, and service accounts; `medium` for everyone else (`service.py:27-36`).
-**The overwrite:** the request's `domain_id` is replaced with the scope's before selection runs (`service.py:122-125`), so nothing a caller or a model asked for can widen the scope.
+**The overwrite:** the request's `domain_id` is replaced with the scope's before selection runs (`service.py:124-126`), so nothing a caller or a model asked for can widen the scope.
 **Telemetry:** `agent_graph_projection` structlog line (`service.py:134`) plus an `agent_graph.projected` operational event (`service.py:154`) carrying profile, schema version, seed / node / relationship / character counts, truncation, and `invocation_mode` (`api`, `maf`). The projection id in that event is the join key an agent's decision write-back cites.
 
 ---
@@ -750,8 +749,8 @@ Mechanics worth knowing:
 |---|---|---|---|
 | `POST /agent-subsets` | **18** | The ranked, bounded, authorization-filtered agent projection. `as_of` is normalized, the scope is built, `invocation_mode="api"`. | fully scoped |
 | `GET /cmdb-topology` | **34** | Live ±1-hop ServiceNow neighborhood for a CI, write-through cached; falls back to the cached view marked stale when ServiceNow is unreachable. | tenant only |
-| `POST /fix-outcomes` | **53** | Records whether a fix worked, feeding the cohort counters. | tenant only |
-| `GET /fix-applicability` | **79** | Which known fixes clear a CI's preconditions, with the applicability level. | tenant only |
+| `POST /fix-outcomes` | **53** | Records whether a fix worked, feeding the cohort counters. | `knowledge_manager`; tenant-scoped |
+| `GET /fix-applicability` | **79** | Which known fixes clear a CI's preconditions, with the applicability level. | `knowledge_manager`; tenant-scoped |
 | `GET /change-risk` | **100** | Deterministic change-risk profile for a CI, with an explaining `factors` list. | tenant only |
 | `GET /edge-proposals` | **120** | Lists agent-proposed `proposed_depends_on` edges awaiting review. | `knowledge_manager` |
 | `POST /edge-proposals/{edge_id}/approve` | **142** | Promotes a proposal to `depends_on` and **closes** the proposal — supersede, never delete. | `knowledge_manager` |
@@ -762,7 +761,7 @@ Mechanics worth knowing:
 
 **Request/response format:** standard JSON, typed with Pydantic. The `/subgraph` route returns `{nodes: [], edges: []}`, which maps directly onto React Flow.
 
-**Read the "Auth note" column carefully.** Only `/agent-subsets` builds the full `AgentGraphAccessScope`. The rest pass `tenant_id` alone, which is the open P1-6 scope inconsistency (`codewiki/KNOWN_GAPS.md:56`).
+**Read the "Auth note" column carefully.** Only `/agent-subsets` builds the full `AgentGraphAccessScope`. The rest pass `tenant_id` alone, which is the open P1-6 scope inconsistency (`codewiki/KNOWN_GAPS.md:56`). A role check is a different axis and does not close it: `/fix-outcomes` and `/fix-applicability` do demand `knowledge_manager`, but once a principal has the role nothing narrows what they read to its own domain or workspace. The edge-proposal routes are the exception that proves the shape — they pass the caller's `allowed_domain_ids` down to the service (`api/v1/graph.py:137, 160, 183`).
 
 ---
 
@@ -770,7 +769,7 @@ Mechanics worth knowing:
 
 **What:** The operator UI for exploring the graph — `frontend/src/app/(dashboard)/graph-explorer/page.tsx`.
 
-**Five tabs**, all sharing one domain filter and one Current / As-of scope selector (`page.tsx:113-149`):
+**Five tabs**, all sharing one domain filter and one Current / As-of scope selector (`page.tsx:89-149`):
 
 1. **Statistics** — node and edge type counts from `GET /stats`.
 2. **Subgraph** — the visual neighborhood around a chosen node, from `GET /subgraph/{type}/{id}`.
@@ -778,7 +777,7 @@ Mechanics worth knowing:
 4. **Agent context** — sends the **same `maf.v1` request contract the MAF adapter uses**, and renders the effective budgets, actual usage, warnings, truncation reasons, and the safe facts that came back. This is how you see what an agent would have seen, without running an agent.
 5. **Proposals** — the review queue for agent-proposed `proposed_depends_on` edges: approve promotes to `depends_on`, reject closes the proposal.
 
-**Deep links:** `tab`, `node_type`, `node_id`, `domain_id`, and a timezone-aware `as_of` are all reflected in the URL and read back on load (`page.tsx:37-105`), so a specific view is shareable in a ticket.
+**Deep links:** `tab`, `node_type`, `node_id`, `domain_id`, and a timezone-aware `as_of` are all reflected in the URL and read back on load (`page.tsx:33-107`), so a specific view is shareable in a ticket. Both are validated on the way in: an unknown tab name falls back to `subgraph` when a node was named and `stats` otherwise, a `node_id` that is not a UUID is dropped, and a `node_type` outside the picker's option list is ignored.
 
 **Interactions:** click a node to expand its neighbors; click an edge to see its metadata; selecting a node or relationship opens the inspector, which becomes a side sheet on narrow viewports.
 
@@ -789,7 +788,7 @@ Mechanics worth knowing:
 - **Sessions:** backed by `resolution_sessions`. Reaches entities through `involves_user` / `targets_workflow` / `tracks_request` / `runs_on_agent`, execution through `has_execution`, and outcomes through `resulted_in`.
 - **Evidence:** views `evidence_items`. Shows `correlation_edges` to other evidence (a separate table from `graph_edges`), case membership through `case_links` and `evidence_case_memberships`, and `affects_ci` / `assigned_to_group` edges to entities.
 - **Episodes:** views `episodes` and their `episode_steps`. Shows `belongs_to` to a pattern, `has_signature` to an issue signature, and — for anything the AI review sweep has touched — the `ai_review` verdict verbatim.
-- **Patterns:** views `patterns`. Membership is `pattern_evidence_links` (episodes, not evidence — `PatternEvidenceLink.evidence_id` is never populated by the clustering path). Shows the virtual enrichment nodes for triggers, entities, errors and root causes, and `supported_by` edges to the KB articles and SOPs that back the procedure.
+- **Patterns:** views `patterns`. Membership is `pattern_evidence_links` (episodes, not evidence — `PatternEvidenceLink.evidence_id` is never populated by the clustering path: both link constructions in `services/pattern_service.py:132-136` and `:223-227` set `pattern_id`/`episode_id`/`link_type` and nothing else. The **only** writer that sets `evidence_id` is the manual route `POST /patterns/{id}/evidence-links`, `api/v1/patterns.py:227-233`, which requires one of `episode_id` or `evidence_id`). Shows the virtual enrichment nodes for triggers, entities, errors and root causes, and `supported_by` edges to the KB articles and SOPs that back the procedure.
 - **Playbooks:** views `playbooks` and `playbook_versions`. The graph matters here for showing *where* a playbook came from (`derived_from` to its pattern), *who and what it touches* (`references_identity`), and *whether it still holds* (`contradicts` edges to evidence that disagrees with it).
 - **Decisions / Governance:** views `decisions`, `decision_options`, `decision_outcomes`, and `approval_requests`. Shows the full trace — `based_on` to evidence / episodes / patterns, `considered` and `chose` over options, `applied_policy`, `required_approval`, `resulted_in`, and `followed_by` up and down the chain.
 - **Contradictions:** views the `contradictions` table. Note this is a *table view*, not a graph node type — the agent sees the `contradicts` edge, not a contradiction node.
@@ -834,7 +833,7 @@ graph TD
     Policy[Action Policy]
 
     %% Case and execution chain
-    Session -->|involves_user| Identity
+    Session -->|involves_user| Entity
     Session -->|targets_workflow| Entity
     Session -->|has_execution| Execution
     Session -->|resulted_in| CaseOutcome
@@ -842,7 +841,7 @@ graph TD
     Execution -->|requires_approval| Approval
 
     %% Reasoning chain
-    Claim -->|asserted_in| Evidence
+    Claim -->|asserted_in| Session
     Claim -->|supported_by| Evidence
     Claim -->|contradicted_by| Evidence
     Decision -->|supported_by_claim| Claim
@@ -857,6 +856,7 @@ graph TD
     Evidence -->|exhibits| ErrorSig
     Episode -->|belongs_to| Pattern
     Episode -->|has_signature| IssueSig
+    Episode -->|affects| Identity
     Playbook -->|derived_from| Pattern
     Pattern -->|supported_by| Evidence
     ErrorSig -->|aggregated_by| Pattern

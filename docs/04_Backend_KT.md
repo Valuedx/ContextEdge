@@ -61,18 +61,24 @@ API call or Beat tick
        noise gate → redact → dedupe → relevance (LLM) → gate
        → message function (LLM) → error signatures
        → identities (LLM) → decisions (LLM) → parent embedding
-       → chunk dispatch
-       post-commit fan-out:
-         ├─ hydration.hydrate_thread                        [queue: hydration]
-         ├─ artifact.extract_attachment                     [queue: extraction]
-         ├─ extraction.correlate_evidence                   [queue: correlation]
-         │    └─ extraction.reconstruct_episode (+180 s)    [queue: correlation]
-         ├─ extraction.compute_evidence_baseline            [queue: correlation]
-         └─ extraction.chunk_evidence → embed_chunks_batch  [queue: embedding]
+       → chunk dispatch, inside the same transaction:
+           inline write_chunks → embed_chunks_batch         [queue: embedding]
+           or extraction.chunk_evidence                     [queue: embedding]
+       post-commit fan-out, in the task wrapper — attachments OR the
+       graph pair, never both, plus hydration:
+         ├─ if the row produced artifacts:
+         │     artifact.extract_attachment                  [queue: extraction]
+         ├─ otherwise:
+         │     extraction.correlate_evidence                [queue: correlation]
+         │       └─ extraction.reconstruct_episode (+180 s) [queue: correlation]
+         │     extraction.compute_evidence_baseline         [queue: correlation]
+         └─ hydration.hydrate_thread, if the payload carried
+            a parent _thread_id and the row was not deduped [queue: hydration]
   └─ human or AI approves the episode
-       └─ evaluation.extract_issue_signature                [queue: evaluation]
+       ├─ evaluation.extract_issue_signature                [queue: evaluation]
        └─ pattern.cluster_episodes                          [queue: pattern]
             └─ pattern.generate_playbook_candidate          [queue: pattern]
+               (sent by dispatch_after_commit, not .delay)
 ```
 
 Stage-by-stage, with the function that owns it:
@@ -81,17 +87,17 @@ Stage-by-stage, with the function that owns it:
 | --- | --- | --- |
 | Pull records from a source | `run_backfill_job` / `run_incremental_job` | `backend/src/contextedge/services/sync_worker_service.py:419`, `:526` |
 | Store the raw payload | `persist_ingestion_events` | `backend/src/contextedge/services/ingestion_persistence.py:19` |
-| Offload payloads over 32 KB to MinIO | `OFFLOAD_THRESHOLD_BYTES = 32_768` | `backend/src/contextedge/services/ingestion_persistence.py:16`, applied at `:84` |
+| Offload payloads over 32 KB to MinIO | `OFFLOAD_THRESHOLD_BYTES = 32_768` | `backend/src/contextedge/services/ingestion_persistence.py:16`, applied at `:85-87` |
 | Turn a raw payload into evidence | `_normalize` | `backend/src/contextedge/workers/extraction_tasks.py:122` |
 | Pull the rest of a conversation | `_hydrate` | `backend/src/contextedge/workers/hydration_tasks.py:36` |
 | Split evidence into retrievable chunks | `write_chunks` | `backend/src/contextedge/services/evidence_chunk_service.py:43` |
-| Embed chunks in batches of 32 | `embed_chunks_batch` | `backend/src/contextedge/workers/chunk_tasks.py:234` |
+| Embed chunks in batches of 32 | `embed_chunks_batch` | `backend/src/contextedge/workers/chunk_tasks.py:238` |
 | Link related evidence into a case | `correlate_evidence_item` | `backend/src/contextedge/services/correlation_service.py:197` |
-| Narrate a cluster into an episode | `_reconstruct` | `backend/src/contextedge/workers/extraction_tasks.py:995` |
+| Narrate a cluster into an episode | `_reconstruct` | `backend/src/contextedge/workers/extraction_tasks.py:1008` |
 | Machine first-pass review of a draft | `ai_review_episode` | `backend/src/contextedge/services/episode_review_service.py:174` |
 | Fingerprint an approved episode | `extract_issue_signature` | `backend/src/contextedge/services/issue_signature_service.py:89` |
-| Cluster episodes into a pattern | `_cluster` | `backend/src/contextedge/workers/pattern_tasks.py:127` |
-| Draft a playbook from a pattern | `pattern.generate_playbook_candidate` | `backend/src/contextedge/workers/pattern_tasks.py:403` |
+| Cluster episodes into a pattern | `_cluster` | `backend/src/contextedge/workers/pattern_tasks.py:153` |
+| Draft a playbook from a pattern | `pattern.generate_playbook_candidate` | `backend/src/contextedge/workers/pattern_tasks.py:446` |
 | Rank playbooks for a live incident | `rank_playbooks` | `backend/src/contextedge/search/hybrid_ranker.py:213` |
 
 **Acme VPN, one sentence per hop:** the ServiceNow connector fetches `INC0010427`; `persist_ingestion_events` writes the raw JSON; `_normalize` cleans and classifies it, resolves `vpn-gw-east-01` as a device identity, and chunks it; hydration pulls the work-notes thread and each substantive message becomes its own evidence row; correlation ties the duplicate tickets and the Teams thread into one canonical case; reconstruction narrates them into a draft episode; a reviewer approves it; a signature fingerprints it as `remote_access|tls_certificate|certificate_expired`; clustering folds it into a pattern; playbook generation drafts the fix.
@@ -142,7 +148,7 @@ Parses `settings.service_tokens_json` into service-account contexts (`security_t
 Holds `widen_alembic_version_column` (`migration_support.py:58-80`), the idempotent `ALTER COLUMN ... TYPE VARCHAR(255)` that Alembic's `env.py` runs before any migration. Six revision ids in this chain exceed 32 characters, and databases created by Alembic older than 1.10 sized `alembic_version.version_num` at `VARCHAR(32)` — those upgrades died on the *stamp*, which reads like a broken migration.
 
 #### `seed.py`, `seed_guard.py`, `reset_db_and_seed.py`, `demo_maf_seed.py` — importance 5–8
-`seed.py` inserts the local dev tenant, users, workspaces and domains. `seed_guard.require_destructive_reset_allowed` (`seed_guard.py:20-60`) blocks `reset_db_and_seed` and `demo_maf_seed` — both TRUNCATE tenant-global tables — unless `APP_ENV=development` or `CONTEXTEDGE_ALLOW_DB_RESET=1`.
+`seed.py` inserts the local dev tenant, users, workspaces and domains. `seed_guard.require_destructive_reset_allowed` (`seed_guard.py:35-60`) blocks `reset_db_and_seed` and `demo_maf_seed` — both TRUNCATE tenant-global tables — unless `APP_ENV=development` or `CONTEXTEDGE_ALLOW_DB_RESET=1`.
 
 ---
 
@@ -198,7 +204,7 @@ SQLAlchemy 2.0 declarative classes: one Python class per database table. They de
 | --- | --- |
 | `models/tenant.py` | `tenants`, `workspaces`, `domains`, `users`, `role_bindings`, `tenant_llm_budgets` (`tenant.py:12-143`) |
 | `models/source.py` | `sources`, `source_objects`, `source_credentials`, `sync_checkpoints`, `sync_runs` (`source.py:11-164`) |
-| `models/evidence.py` | `raw_evidence_objects` (`:25`), `evidence_items` (`:47`), `evidence_chunks` (`:189`), `threads` (`:223`), `attachment_artifacts` (`:248`) |
+| `models/evidence.py` | `raw_evidence_objects` (`:25`), `evidence_items` (`:47`), `evidence_chunks` (`:173`), `threads` (`:223`), `attachment_artifacts` (`:248`) |
 | `models/episode.py` | `canonical_identities` (`:48`), `identity_aliases` (`:91`), `evidence_identity_links` (`:152`), `correlation_edges` (`:187`), `episodes` (`:213`) |
 | `models/pattern.py` | `patterns` (`:23`), `graph_edges` (`:174`) |
 | `models/playbook.py` | `playbooks`, `playbook_versions`, `playbook_evidence_links` |
@@ -211,7 +217,7 @@ SQLAlchemy 2.0 declarative classes: one Python class per database table. They de
 
 On `evidence_items` (`models/evidence.py:47-170`): `title`, `body_text`, `body_summary`, `content_hash`, `evidence_type`, `source_type`, `relevance_state`, `relevance_score`, `message_function`, `canonical_entity_refs` (a JSONB cache of resolved identities and decisions), `embedding Vector(3072)` (`:91`), `search_tsvector` (`:108`), `chunked_at` / `chunk_count`, `applicability` (`:139`), `knowledge_state` (`:146`), `case_state` (`:153`), `source_facets` (`:159`), `knowledge_support` (`:170`), plus `workspace_id` / `domain_id` scope.
 
-On `graph_edges` (`models/pattern.py:174-273`): `source_node_type`/`id`, `target_node_type`/`id`, `edge_type`, **`weight` (traversal importance) and `confidence` (belief) — these are different things and callers pass both when they mean both**, `metadata_extra`, `valid_from`, `valid_to`. The partial unique index `uq_graph_edges_active_logical` covers the full logical key `WHERE valid_to IS NULL` with `NULLS NOT DISTINCT` (`:187-199`); that index is what makes `ensure_edge` race-safe.
+On `graph_edges` (`models/pattern.py:174-281`): `source_node_type`/`id`, `target_node_type`/`id`, `edge_type`, **`weight` (traversal importance) and `confidence` (belief) — these are different things and callers pass both when they mean both**, `metadata_extra`, `valid_from`, `valid_to`. The partial unique index `uq_graph_edges_active_logical` covers the full logical key `WHERE valid_to IS NULL` with `NULLS NOT DISTINCT` (`:187-199`); that index is what makes `ensure_edge` race-safe.
 
 ```mermaid
 classDiagram
@@ -277,8 +283,8 @@ This is where the actual business logic lives. Routers are thin; workers are thi
 ### The services grouped by what they do
 
 **Ingest and normalization**
-- `ingestion_persistence.py` — `persist_ingestion_events` (`:19`) writes raw rows, dedupes on `(tenant_id, source_id, external_id, content_hash)`, and offloads any payload over `OFFLOAD_THRESHOLD_BYTES = 32_768` (`:16`) to MinIO, leaving the stub `{"_offloaded": true, "size_bytes": N}` in the column (`:84-87`).
-- `message_filter.py` — the deterministic pre-LLM noise gate for hydrated messages. `MIN_DIAGNOSTIC_CHARS = 150` (`:52`) plus 15 technical-signal regexes; a message under the floor with no technical signal is `coordination_only` and **no evidence row is created**. `MESSAGE_FILTER_VERSION = "v1"` (`:108`) is stamped on the skip so a rule change can re-judge exactly which messages were dropped. Measured: 47 % of 18,907 live messages rejected.
+- `ingestion_persistence.py` — `persist_ingestion_events` (`:19`) writes raw rows, dedupes on `(tenant_id, source_id, external_id, content_hash)`, and offloads any payload over `OFFLOAD_THRESHOLD_BYTES = 32_768` (`:16`) to MinIO, leaving the stub `{"_offloaded": true, "size_bytes": N}` in the column (`:85-87`).
+- `message_filter.py` — the deterministic pre-LLM noise gate for hydrated messages. `MIN_DIAGNOSTIC_CHARS = 150` (`:52`) plus the 16 technical-signal regexes in `_TECHNICAL_SIGNALS` (`:56-79`); a message under the floor with no technical signal is `coordination_only` and **no evidence row is created**. `MESSAGE_FILTER_VERSION = "v1"` (`:108`) is stamped on the skip so a rule change can re-judge exactly which messages were dropped. Measured: 47 % of 18,907 live messages rejected.
 - `evidence_normalization.py` — title/body extraction and thread creation (`:14-198`). The body extractor strips quoted history and trailing boilerplate structurally and never returns empty or a dict repr.
 - `redaction_service.py` — ordered regex redaction, secrets before numerics so a token is never half-redacted (`:36-191`). Runs before embedding and before any LLM call.
 - `evidence_typing.py`, `knowledge_lifecycle.py`, `case_state.py`, `source_facets.py` — the four pure derivations `_normalize` applies to a payload. `knowledge_lifecycle.is_current` treats **NULL as current** (`knowledge_lifecycle.py:133-139`): "the source did not say" must serve, or every non-ServiceNow corpus empties.
@@ -303,8 +309,9 @@ This is where the actual business logic lives. Routers are thin; workers are thi
 - `episode_review_service.py` — the machine first-pass reviewer. Modes `off | advisory | auto_approve`; deterministic auto-approve floors `MIN_EVIDENCE = 2`, `MIN_OUTCOME_CHARS = 20`, `MIN_VERDICT_CONFIDENCE = 0.8` (`:42-44`).
 
 **Knowledge**
-- `issue_signature_service.py` — `extract_issue_signature` (`:89`) distills an approved episode into a generalized fingerprint like `remote_access|tls_certificate|certificate_expired`, then `_link_recurrence` (`:249-312`) adds a low-confidence `recurrence` pointer from the new episode's seed evidence to the earlier occurrence's case at `RECURRENCE_CONFIDENCE = 0.6` (`:37`). **Recurrence never merges clusters** — the episode cluster resolver explicitly refuses to expand through it.
-- `pattern_service.py` — `create_pattern_from_episodes` (`:62-197`), with a domain-safety assertion so one domain's episode text can never land inside another domain's pattern.
+- `issue_signature_service.py` — `extract_issue_signature` (`:89`) distills an approved episode into a generalized fingerprint like `remote_access|tls_certificate|certificate_expired`, then `_link_recurrence` (`:249-312`) adds a low-confidence `recurrence` pointer from the new episode's seed evidence to the earlier occurrence's case at `RECURRENCE_CONFIDENCE = 0.6` (`:36`). **Recurrence never merges clusters** — the episode cluster resolver explicitly refuses to expand through it.
+- `pattern_service.py` — `create_pattern_from_episodes` (`:63-197`), with a domain-safety assertion so one domain's episode text can never land inside another domain's pattern. It does not own its transaction, so it hands playbook generation to `deferred_dispatch.dispatch_after_commit` (`:192-194`) instead of calling `.delay(...)` inline — see [Folder 6](#folder-6-workers).
+- `deferred_dispatch.py` — `dispatch_after_commit` (`:72-95`) queues a Celery task on the session and sends it from SQLAlchemy's `after_commit` event, dropping it on `after_rollback`. It exists for services called inside `run_async` or a `get_db` dependency, where the caller decides when the transaction ends.
 - `playbook_service.py`, `playbook_embedding.py`, `knowledge_supersession_service.py`, `knowledge_validation_service.py`.
 
 **Platform**
@@ -333,9 +340,11 @@ This is where the actual business logic lives. Routers are thin; workers are thi
 Background work. LLM calls take seconds to a minute; a 1,000-ticket backfill takes hours. None of that can happen inside an HTTP request.
 
 ### The Celery app
-`celery_app.py:142-190` builds the app: broker Redis DB 1, result backend Redis DB 2 (`config.py:26-28`), 19 task modules in `include`. Two more are pulled in indirectly — `chunk_tasks` via an import in `extraction_tasks.py:43`, and `evidence_typing_tasks` which registers `extraction.backfill_evidence_types`.
+`celery_app.py:142-190` builds the app: broker Redis DB 1, result backend Redis DB 2 (`config.py:26-28`), 21 task modules in `include`. One more, `chunk_tasks`, is pulled in indirectly via an import in `extraction_tasks.py:43`.
 
-Core configuration (`celery_app.py:192-200`): JSON-only serialization, UTC, `task_track_started=True`, `task_acks_late=True` (a crashed worker's task is re-delivered — this is what makes the multi-process Windows topology safe), `worker_prefetch_multiplier=1`.
+> **`evidence_typing_tasks` is registered by nothing.** It is neither in `include` nor imported by any module under `backend/src` — the only importer in the repo is `backend/tests/test_knowledge_provenance.py`. A worker started from `celery_app` therefore does not know the name `extraction.backfill_evidence_types`, and a message for it is rejected rather than run. Read that module as the pattern for a payload-safe backfill, not as a task you can dispatch today.
+
+Core configuration (`celery_app.py:192-200`): JSON-only serialization, UTC, `task_track_started=True`, `task_acks_late=True` (`:199` — a crashed worker's task is re-delivered, which is what makes the multi-process Windows topology safe), `worker_prefetch_multiplier=1`.
 
 Broker resilience (`celery_app.py:216-224`): retry forever with `broker_connection_max_retries=None`, socket keepalive, 30 s health checks. The reason is recorded in the file: on the Windows dev box Redis is reached through WSL's port relay, which drops TCP connections under load — one blip previously killed four of eight workers silently.
 
@@ -371,16 +380,17 @@ The `worker_ready` signal `_require_migrations_at_head` (`celery_app.py:83-139`)
 | --- | --- | --- |
 | `sync.trigger_scheduled_syncs` / `run_backfill` / `run_incremental_sync` | `sync_tasks.py:14, 39, 68` | sync |
 | `hydration.hydrate_thread` | `hydration_tasks.py:189` | hydration |
-| `extraction.normalize_evidence` | `extraction_tasks.py:1304` | extraction |
-| `extraction.classify_relevance` | `extraction_tasks.py:1361` | default |
-| `extraction.reconstruct_episode` | `extraction_tasks.py:1391` | correlation |
+| `extraction.normalize_evidence` | `extraction_tasks.py:1317` | extraction |
+| `extraction.classify_relevance` | `extraction_tasks.py:1374` | default |
+| `extraction.reconstruct_episode` | `extraction_tasks.py:1404` | correlation |
 | `extraction.correlate_evidence` | `correlation_tasks.py:16` | correlation |
 | `extraction.compute_evidence_baseline` | `evidence_baseline_tasks.py:26` | correlation |
 | `extraction.chunk_evidence` / `embed_chunks_batch` | `chunk_tasks.py:210, 238` | embedding |
-| `extraction.backfill_evidence_types` | `evidence_typing_tasks.py:100` | extraction |
+| `extraction.backfill_evidence_types` | `evidence_typing_tasks.py:100` | *would* be extraction — the module is not registered on a `celery_app` worker (see above) |
 | `extraction.rebuild_identity_snapshots` | `identity_tasks.py:72` | extraction |
 | `artifact.extract_attachment` | `artifact_tasks.py:15` | extraction |
-| `pattern.cluster_episodes` / `generate_playbook_candidate` / `deduplicate_knowledge` | `pattern_tasks.py:379, 403, 791` | pattern |
+| `pattern.cluster_episodes` / `generate_playbook_candidate` / `deduplicate_knowledge` | `pattern_tasks.py:422, 446, 834` | pattern |
+| `evaluation.run_evaluation` | `evaluation_tasks.py:18` | evaluation |
 | `evaluation.ai_review_episodes` | `evaluation_tasks.py:129` | evaluation |
 | `evaluation.extract_issue_signature` | `signature_tasks.py:24` | evaluation |
 | `evaluation.generate_correlation_suggestions` | `suggestion_tasks.py:26` | evaluation |
@@ -402,7 +412,7 @@ The `worker_ready` signal `_require_migrations_at_head` (`celery_app.py:83-139`)
 
 Highlights: `trigger-syncs-every-15m` (900 s), `detect-drift-every-6h`, `scan-contradictions-every-12h`, `reconcile-identities-daily`, `reconcile-graph-relationships-every-6h`, `retention-archive-daily`, `retention-purge-weekly`, `cleanup-hard-deleted-daily`, `verify-executions-every-15m`, `detect-fleet-groups` (1800 s), `deduplicate-knowledge-hourly`, `ai-review-episodes-hourly`.
 
-Two of those hourly sweeps share a **defer gate**: `tenant_pipeline_active` (`pattern_tasks.py:705-742`) counts fresh evidence (>50) or fresh episodes (>30) in the last 10 minutes and skips the tenant rather than churning against an active ingest. The episode threshold exists because a 12:29 sweep once retired 446 drafts mid-reconstruction-tail while watching only evidence inflow.
+Two of those hourly sweeps share a **defer gate**: `tenant_pipeline_active` (`pattern_tasks.py:748-783`) counts fresh evidence (>`DEDUP_ACTIVITY_THRESHOLD` 50) or fresh episodes (>`EPISODE_ACTIVITY_THRESHOLD` 30) in the last `DEDUP_ACTIVITY_WINDOW_MINUTES` 10 minutes (`:736-745`) and skips the tenant rather than churning against an active ingest. The episode threshold exists because a 12:29 sweep once retired 446 drafts mid-reconstruction-tail while watching only evidence inflow.
 
 `ai-review-episodes-hourly` is scheduled **unconditionally** even though `EPISODE_AI_REVIEW` defaults to `off` — the task returns `{"status": "disabled"}` instantly, so turning the feature on needs no beat restart (`evaluation_tasks.py:171-173`).
 
@@ -422,15 +432,17 @@ The one funnel. `llm_complete` (`:177`) and `llm_complete_json` (`:504`) wrap Li
 1. **Budget gate** — `check_budget(db, tenant_id)` before spending. `block` raises `TenantBudgetExceeded`; `warn` proceeds and writes an `llm.budget_warning` event (`provider.py:231-279`).
 2. **Output-token clamp** — `ceiling = settings.llm_task_output_tokens.get(task, settings.llm_max_output_tokens)` (`provider.py:290-291`). This matters: the old flat 4096 ceiling silently truncated playbook JSON mid-array, and the repair path then persisted a playbook with **zero steps while reporting success**.
 3. **Circuit breaker and timeout** — 120 s per call, 5 consecutive failures opens the breaker for 60 s (`ai/resilience.py:28-30`), with one optional fallback-model attempt.
-4. **JSON repair ladder** for truncated output (`provider.py:549-597`).
+4. **JSON repair ladder** for truncated output (`provider.py:544-597`).
 5. **Usage recording in a `finally` block**, even on error.
 
-Embeddings: `generate_embedding` (`:739`) and `generate_embeddings_batch` (`:814`). Both **hard-fail any model that does not return exactly 3,072 dimensions** (`:787-793`). The batch path re-checks the budget per sub-batch, so a long ingest stops at the cap instead of finishing past it.
+Embeddings: `generate_embedding` (`:739`) and `generate_embeddings_batch` (`:814`). Both ask for `dimensions: 3072` unless the model name contains `gemini-embedding` (those return 3,072 natively, `:777-779`), and both **hard-fail any model that does not return exactly 3,072 dimensions** (`:786-793`). The batch path re-checks the budget per sub-batch, so a long ingest stops at the cap instead of finishing past it.
 
 #### `prompts/` — importance 10
 Eleven prompt families: `applicability`, `contradiction`, `decision`, `episode`, `episode_review`, `identity`, `issue_signature`, `message_function`, `pattern`, `playbook`, `relevance` (`ai/prompts/__init__.py:189-201`).
 
-**Prompts are immutable once shipped.** New behavior means a new version, never an edit — old versions stay registered so evaluation baselines keep working. `get_prompt(name, tenant_id)` resolves tenant override → registered default; an unknown prompt name raises `KeyError` on purpose (fail loud), while an unregistered *override* falls back with a `prompt_variant_not_registered_falling_back` log (`ai/prompts/__init__.py:124-162`). Current defaults include `relevance` v2 (v3 registered but deliberately not default), `identity` v3, `identity_adjudication` v2, `decision` v2, `episode` v3, `pattern` v2, `message_function` v1, `issue_signature` v1, `episode_review` v1.
+**Prompts are immutable once shipped.** New behavior means a new version, never an edit — old versions stay registered so evaluation baselines keep working. `get_prompt(name, tenant_id)` (`:173-183`) resolves tenant override → registered default through `resolve_version` (`:122-160`); an unknown prompt name raises `KeyError` on purpose (fail loud), while an unregistered *override* falls back with a `prompt_variant_not_registered_falling_back` log.
+
+Current defaults, as registered today: `playbook` v6 (v1–v5 still registered), `relevance` v2 (v3 registered but deliberately not default), `identity` v3 (v4 registered, not default), `identity_adjudication` v2, `decision` v2, `episode` v3, `pattern` v2, `message_function` v1, `issue_signature` v1, `episode_review` v1, `contradiction` v1, `identity_reconciliation` v1, `knowledge_applicability` v1.
 
 #### `extractors/` and `classifiers/`
 `extractors/`: `identity_extractor.py`, `decision_extractor.py`, `episode_extractor.py`, `episode_schema.py`, `pattern_extractor.py`.
@@ -462,12 +474,14 @@ The context graph — which incident touched which CI, which decision was based 
 - `persist_pattern_enrichment_edges` (`:477-518`) creates deterministic virtual nodes (uuid5) for triggers, entities, errors and root causes and links them to a pattern at weight 1.5.
 
 #### `edge_types.py` — importance 8
-Declares **69 edge types** in five semantic groups; `require_registered` is enforced in every writer and raises `UnknownEdgeType` (`:1-33`). Adding a type is two decisions: register it, then either allowlist it in `MAF_RELATIONSHIP_TYPES` or record the reason in `PROJECTION_EXCLUSIONS`. `backend/tests/test_edge_type_registry.py` enforces the pairing, so you cannot register a type and forget the projection decision.
+Declares **69 edge types** across five semantic group frozensets (`:36-137`); `require_registered` (`:186`) is called by `add_edge`, `ensure_edge`, `close_edge` and `replace_edge` and raises `UnknownEdgeType`. Adding a type is two decisions: register it, then either allowlist it in `MAF_RELATIONSHIP_TYPES` or record the reason in `PROJECTION_EXCLUSIONS` (16 entries today). `backend/tests/test_edge_type_registry.py` enforces the pairing, so you cannot register a type and forget the projection decision.
 
 #### `agent/` — the MAF projection
-This is what an agent actually sees. `AgentGraphBudget` defaults to 24 nodes / 48 relationships / depth 2 / 12,000 characters, with hard caps at 100 / 250 / 3 / 50,000 (`agent/contracts.py:26-30`). Profile `maf.v1` (`agent/profiles.py`) declares 20 node types and 50+ relationship types, with **deliberate exclusions carrying their reasons in comments** — `mentions_identity` is excluded because it fans out 40–70 edges per handful of tickets and would spend the whole budget on identity hubs.
+This is what an agent actually sees. `AgentGraphBudget` defaults to 24 nodes / 48 relationships / depth 2 / 12,000 characters, with hard caps at 100 / 250 / 3 / 50,000 (`agent/contracts.py:26-30`). Profile `maf.v1` declares 20 node types (`agent/profiles.py:59`) and 53 relationship types (`:89`), with **deliberate exclusions carrying their reasons** in `PROJECTION_EXCLUSIONS` — `mentions_identity` is excluded because it fans out 40–70 edges per handful of tickets and would spend the whole budget on identity hubs.
 
-`materializer.py` — `GraphRelationshipMaterializer.reconcile_tenant` (`:54-359`) streams relational rows and calls `ensure_edge` for each. It is additive-only and idempotent, scheduled every 6 hours on the `evaluation` queue. There is no event-driven materialization yet.
+**Unapproved episode drafts are visible to the agent, and labelled.** `AGENT_VISIBLE_EPISODE_STATES` is `{"approved", "pending_review"}` (`agent/hydrators.py:108`); anything else — notably `superseded` — stays out. A draft that reaches the agent has `[UNAPPROVED DRAFT]` prefixed onto its node label and an `agent_caveat` fact stating it is reference material only (`hydrators.py:448-463`). Seeding is separated too: drafts get their own `UNAPPROVED_EPISODE_SEED_LIMIT = 2` slots so they can never evict a reviewed precedent, and their seed relevance is multiplied by `UNAPPROVED_SEED_RELEVANCE_FACTOR = 0.8` — a discount smaller than the spread of the admitted similarity band (0.6–0.9), so an approved episode wins a tie while a clearly better draft can still surface (`agent/repository.py:106-117`).
+
+`materializer.py` — `GraphRelationshipMaterializer` (`:54`) and its `reconcile_tenant` method (`:107-359`) stream relational rows and call `ensure_edge` for each. It is additive-only and idempotent, scheduled every 6 hours on the `evaluation` queue. There is no event-driven materialization yet.
 
 ---
 
@@ -498,10 +512,12 @@ Result shape is `(EvidenceItem, distance, best_chunk | None)`, and `best_chunk` 
 Degradation is deliberate: a malformed chunk vector makes MMR fall back to pure distance ordering rather than failing the request.
 
 #### `hybrid_ranker.py` — importance 10
-`rank_playbooks` (`:213-379`) is the scorer behind `/runtime/match`. Weights (`:22-31`): keyword 0.25, semantic 0.30, graph 0.15, evidence quality 0.10, identity 0.05, recency 0.10, freshness 0.05, negative penalty −0.05. It abstains below `MIN_RECOMMENDATION_SCORE = 0.35` (`:168`) and logs `ranking.abstained` — **an empty list means "no recommendation", by contract**, not "search failed".
+`rank_playbooks` (`:213-379`) is the scorer behind `/runtime/match`. `RankingWeights` (`:22-31`): keyword 0.25, semantic 0.30, graph distance 0.15, evidence quality 0.10, identity 0.05, recency 0.10, freshness 0.05 — all added — plus `negative_penalty` 0.05, which is the one term **subtracted** from the total (`:336-345`). It abstains below `MIN_RECOMMENDATION_SCORE = 0.35` (`:171`) and logs `ranking.abstained` (`:368-378`) — **an empty list means "no recommendation", by contract**, not "search failed".
 
 #### `pg_fts.py`
-`search_evidence_fts` (`:12-81`) — `plainto_tsquery` over `evidence_items.search_tsvector`, OR-ed with two fallbacks: a ticket-number lookup into `raw_evidence_objects` (so a reviewer can find `INC0010427` by typing the number) and a `title ILIKE` match. By default it excludes `evidence_type = 'thread_message'` unless a type is requested, because hydrated replies belong under their parent's thread view.
+`search_evidence_fts` (`:13-84`) — `plainto_tsquery` over `evidence_items.search_tsvector`, OR-ed with two fallbacks: a ticket-number lookup into `raw_evidence_objects` (so a reviewer can find `INC0010427` by typing the number) and a `title ILIKE` match. By default it excludes `evidence_type = 'thread_message'` unless a type is requested, because hydrated replies belong under their parent's thread view.
+
+**Lexical search applies the same visibility gate as vector search**, from the same helper so the two cannot drift: `_visibility_predicates` is imported from `vector_search` and added to the WHERE clause (`:65-78`). It used to filter role-blocked access policies and nothing else, so a legal-hold or pending-redaction record that vector search hid was returned here — and because this function also matches raw ticket payload and a title substring, it reached withheld records without needing an embedding neighbourhood.
 
 ---
 
@@ -524,7 +540,7 @@ Integrations with the external systems whose records become evidence.
 
 The unit handed to persistence is `IngestionEvent` — `external_id`, `source_type`, `object_type`, `content` dict, optional `thread_id`, `timestamp`, `metadata` (`connectors/base.py:37-45`).
 
-Connectors also honour a **cooperative stop**: the sync job installs a callback via `set_control_check()`, and connectors call `await self._check_control()` inside their loops (`base.py:82-107`). A backfill can spend fifteen minutes inside one `backfill()` call, so a signal checked only between invocations would do nothing for that whole time.
+Connectors also honour a **cooperative stop**: the sync job installs a callback via `set_control_check()` (`base.py:94-97`), and connectors call `await self._check_control()` inside their loops (`base.py:99-107`). A backfill can spend fifteen minutes inside one `backfill()` call, so a signal checked only between invocations would do nothing for that whole time.
 
 ### The registry
 `get_connector(source_type, source_config, credentials)` (`connectors/registry.py:113-122`) lazily registers seven classes via `_register_connectors` (`:91-110`) — `teams`, `gmail`, `servicenow`, `jira_sm`, `manageengine`, `sapphireims`, `zoho_desk` — and raises `ValueError("Unknown source type: …")` for anything else.
@@ -577,7 +593,7 @@ Scope note baked into the code: unauthenticated 401 probes never resolve a tenan
 `client.py`, `tools.py`, `plugin.py`, `provider.py`, `_compat.py`. Client-only imports work without installing the optional MAF extra; framework-backed objects load lazily on first use (`integrations/maf/__init__.py:1-6`).
 
 - **`client.py`** — transport protocols and implementations. `InProcessContextGraphClient` (`:105`) calls the projection service directly; `HttpContextGraphClient` (`:128`) goes over REST. Same for `InProcessCmdbTopologyClient` (`:30`), `InProcessChangeRiskClient` (`:66`), `InProcessFixApplicabilityClient` (`:81`), `InProcessCohortClient` (`:182`), `InProcessEdgeProposalClient`.
-- **`tools.py`** — six tool classes: `ContextGraphTools.query_context_graph` (`:25-30`), `CohortTools.get_cohort_shared_attributes` (`:102-107`), `EdgeProposalTools.propose_dependency` (`:142-147`), `CmdbTopologyTools.cmdb_topology` (`:184-189`), `ChangeRiskTools.assess_change_risk` (`:225-230`), `FixApplicabilityTools.assess_fix_applicability` (`:273-278`).
+- **`tools.py`** — six tool classes, each wrapping one client method: `ContextGraphTools` (`:25`) → `query_context_graph` (`:36`); `CohortTools` (`:102`) → `get_cohort_shared_attributes` (`:117`); `EdgeProposalTools` (`:142`) → `propose_dependency` (`:157`); `CmdbTopologyTools` (`:184`) → `cmdb_topology` (`:201`); `ChangeRiskTools` (`:225`) → `assess_change_risk` (`:242`); `FixApplicabilityTools` (`:273`) → `assess_fix_applicability` (`:294`).
 - **`plugin.py`** — `ContextGraphMAFPlugin` (`:26`) bundles the tools for an agent.
 - **`provider.py`** — `ContextGraphProvider` (`:28`) is a proactive context provider: `before_run` (`:50`) injects a scoped subgraph into the conversation, `after_run` (`:114`) writes decisions back.
 
@@ -619,26 +635,26 @@ sequenceDiagram
 
 ### Deep dive 2: what `_normalize` actually does, in order
 
-`backend/src/contextedge/workers/extraction_tasks.py:122-628`. This is the single densest function in the backend; knowing its order saves hours.
+`backend/src/contextedge/workers/extraction_tasks.py:122-641`. This is the single densest function in the backend; knowing its order saves hours.
 
 1. Load the raw object and its payload; an offloaded stub with no storage key returns `{"error": "raw_payload_offloaded_without_storage_key"}` (`:122-131`).
 2. **Noise gate** for hydrated messages only — deterministic, pre-LLM. Rejection creates **no evidence row**; the raw object stays so a rule change can re-judge it (`:147-160`).
 3. Title and body extraction, then `content_hash` over the **raw** body — pre-cleaning and pre-redaction, so tuning a regex never breaks dedupe (`:162-168`).
 4. **Redaction** of title and body (`:170-182`). Everything downstream reads post-redaction text.
 5. Build the identity-extractor input (title + body + first 2,000 chars of payload JSON), then re-redact it as one blob (`:184-198`).
-6. **Dedupe** on `(tenant_id, content_hash)` (`:213-220`). A hit *refreshes* the existing row — facets, `case_state`, `knowledge_state`, missing embedding, attachments — and returns `{"deduped": true}`; the wrapper then skips the correlation/baseline/hydration fan-out.
+6. **Dedupe** on `(tenant_id, content_hash)` (`:213-220`). A hit *refreshes* the existing row — facets, `case_state`, `knowledge_state`, missing embedding, identities, decisions, attachments — and returns early with `{"deduped": true}` (`:317-325`). Note what that does **not** skip: the wrapper still dispatches attachment extraction, or correlation and baseline, for a deduped row. Only auto-hydration is suppressed — the deduped result carries no `_thread_external_id`, and the wrapper additionally tests `not res.get("deduped")` (`:1356`).
 7. Insert the new `EvidenceItem` with derived `evidence_type`, `knowledge_state`, `case_state`, `source_facets` and inherited scope (`:327-372`).
 8. Insert race → `IntegrityError` → rollback, adopt the winner, **no repeated LLM spend** (`:374-409`).
 9. Thread row and attachment artifacts (`:410-418`).
-10. **LLM call 1 — relevance** (`:425-461`). Failure is fail-open: log and continue into the full pipeline.
-11. **Extraction gate:** `skip_extraction = label == "not_relevant" AND confidence >= 0.75` (`:475-479`). Skipped items keep their evidence row for audit but get no further enrichment and no embedding — they are invisible to vector search by construction.
-12. **LLM call 2 — message function**, conversational sources only (`:487-505`).
-13. **Error-signature fingerprints** — deterministic, and it runs even for skipped items, because a confidently-irrelevant thread can still carry a pasted stack trace (`:507-526`).
-14. **LLM call 3 — identities** (`:528-549`), fail-soft.
-15. **LLM call 4 — decisions** (`:550-566`), fail-soft. Identities run before decisions; both merge into `canonical_entity_refs` under separate keys.
-16. **Parent embedding** (`:567-571`).
-17. **Chunk dispatch** (`:573-585`): inline when the body is under 16 KB *and* the source is in the inline allowlist; otherwise async.
-18. **Post-commit fan-out** in the task wrapper (`:1306-1354`): attachments, or correlation + baseline; plus auto-hydration when the payload carried a `_thread_id` and the record is not itself a hydrated message.
+10. **LLM call 1 — relevance** (`:420-482`), which also returns the operational summary, any claims, and triggers applicability extraction. Failure is fail-open: log `relevance_classification_failed` and continue into the full pipeline.
+11. **Extraction gate:** `skip_extraction = label == "not_relevant" AND confidence >= 0.75` (`:484-492`). Skipped items keep their evidence row for audit but get no further enrichment and no embedding — they are invisible to vector search by construction.
+12. **LLM call 2 — message function**, conversational sources only (`:494-518`).
+13. **Error-signature fingerprints** — deterministic, and it runs even for skipped items, because a confidently-irrelevant thread can still carry a pasted stack trace (`:520-539`).
+14. **LLM call 3 — identities** (`:544-562`), fail-soft.
+15. **LLM call 4 — decisions** (`:563-579`), fail-soft. Identities run before decisions; both merge into `canonical_entity_refs` under separate keys.
+16. **Parent embedding** (`:580-584`).
+17. **Chunk dispatch** (`:591-598` → `_dispatch_chunking` at `:73-119`): inline when the body is under `INLINE_CHUNK_BUDGET_BYTES` 16 KB *and* the source is in `INLINE_CHUNK_SOURCE_ALLOWLIST`; otherwise `chunk_evidence_task.delay(...)`. Steps 14–17 are all inside the `not skip_extraction` branch.
+18. **Post-commit fan-out** in the task wrapper (`:1325-1364`): attachment extraction if the row produced artifacts, **otherwise** correlation + baseline — they are an if/else, not siblings; plus auto-hydration when the payload carried a `_thread_id` (`:626-628`), the record is not itself a hydrated message, and the row was not deduped.
 
 Each enrichment step is individually try/except'd. A blocked tenant's evidence still lands as a row — un-embedded and un-linked, but present and repairable.
 
@@ -650,7 +666,7 @@ Each enrichment step is individually try/except'd. A blocked tenant's evidence s
 | Second sync for the same source object | returns `skipped_locked` via a transaction-scoped advisory lock | `services/sync_worker_service.py:379-395` |
 | Incremental with no checkpoint | run completes as `skipped_no_checkpoint`, never a surprise full pull | `services/sync_worker_service.py:571-595` |
 | Normalize enqueue fails after commit | un-enqueued raw ids parked on `source_objects.metadata_extra["pending_normalize_raw_ids"]`; the next run re-drains them | `services/sync_worker_service.py:322-376` |
-| Raw payload over 32 KB | offloaded to MinIO, DB keeps a stub — **SQL that reads `raw_payload` silently sees the stub** | `services/ingestion_persistence.py:84-87` |
+| Raw payload over 32 KB | offloaded to MinIO, DB keeps a stub — **SQL that reads `raw_payload` silently sees the stub** | `services/ingestion_persistence.py:85-87` |
 | MinIO slow or down | boto3 timeouts of 1 s each with one attempt, so it fails fast rather than stalling a worker | `services/object_store.py:28-33` |
 | Concurrent normalize of the same content | `IntegrityError` → rollback → adopt the winner | `workers/extraction_tasks.py:374-409` |
 | Chunk-embedding batch fails | log and `break` without raising; `embedding IS NULL` rows retry on the next replay | `workers/chunk_tasks.py:172-181` |

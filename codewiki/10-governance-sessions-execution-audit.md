@@ -61,8 +61,8 @@ Two honest caveats, because they change how you should read this page:
 - `check_decider` enforces the policy's `approver_roles` and `forbid_self_approval` at **decide** time, not just at save time; both the pass and the fail are written to `policy_checks` (`execution_service.py:1341-1373`; `approval_policy_service.py:127-149`).
 - **Denied** aborts the run and marks the step failed — with an explicit `step.tenant_id == tenant_id` guard before mutating (`execution_service.py:1382-1399`). **Approved** returns the run and step to `running` (`execution_service.py:1400-1411`).
 - Trail: an `approval.approved` / `approval.denied` operational event, an `approved_by` / `denied_by` graph edge to the deciding user, and a first-class `Decision` (`execution_service.py:1415-1459`).
-- `modify_approval` is the third verb of the reviewer console's **Approve / Modify / Reject** flow, carrying a `modification_diff` and a structured reason code (`execution_service.py:1464`).
-- Separation of duties is enforced only on the **initiator ↔ approver** axis. There is no recommender ↔ approver check — `recommended_by` and `sod_check_status` are still unwritten columns ([KNOWN_GAPS.md](./KNOWN_GAPS.md), F7 residual).
+- `modify_approval` is the third verb of the reviewer console's **Approve / Modify / Reject** flow, carrying a non-empty `modification_diff` and a `modification_reason_code` from a fixed vocabulary — both validated before anything is written (`execution_service.py:1464, 1489-1494, 1538-1539`).
+- Separation of duties is enforced only on the **initiator ↔ approver** axis. There is no recommender ↔ approver check — `recommended_by` and `sod_check_status` exist as columns and nothing writes them (`backend/src/contextedge/models/execution.py:214-216`; the only reader is the agent hydrator at `backend/src/contextedge/graph/agent/hydrators.py:387`). See [KNOWN_GAPS.md](./KNOWN_GAPS.md), F7 residual.
 - Pending approvals nobody decided expire after `APPROVAL_EXPIRY_HOURS = 72`, swept 200 at a time by the verification beat. **Expiry never approves** — the step stays blocked and the requester re-raises with current context (`backend/src/contextedge/services/approval_expiry_service.py:27-31`; `backend/src/contextedge/workers/verification_tasks.py:85-102`).
 
 ### 4. The step ledger (what an executor drives)
@@ -74,7 +74,7 @@ Two service functions carry the last-moment controls, exposed on HTTP so an exte
 
 Both routes require the run's **initiator or a `domain_admin`** (`api/v1/execution.py:36-47`) and require the step to belong to the run in the URL (`api/v1/execution.py:122-133`). Service refusals surface as **409, not 500** — a duplicate replay and a stale binding are well-formed requests the state declines (`api/v1/execution.py:171-172, 206-207`). The request body deliberately carries **no attempt number and no idempotency key**: both are derived from what is already recorded, and a caller that can hand in the key the duplicate check tests against can defeat the control by asserting the answer.
 
-`complete_execution` refuses `success`/`partial`/`failure` while any step is still `pending`, `running`, or `awaiting_approval` (`execution_service.py:1641-1661`), then writes the `execution.<outcome>` event, a session trace event, an `execution_outcome` edge to the playbook, and a `DecisionOutcome` on the run's own `execute_playbook` decision — matched by `execution_run_id` inside `context_snapshot` so a session with several runs cannot attach an outcome to the wrong decision (`execution_service.py:1670-1729`). `abort_execution` is `complete_execution` with outcome `aborted` (`execution_service.py:1734-1745`).
+`complete_execution` refuses `success`/`partial`/`failure` while any step is still `pending`, `running`, or `awaiting_approval` (`execution_service.py:1641-1661`), then writes the `execution.<outcome>` event, a session trace event, an `execution_outcome` edge to the playbook, and a `DecisionOutcome` on the run's own `execute_playbook` decision — matched by `execution_run_id` inside `context_snapshot` so a session with several runs cannot attach an outcome to the wrong decision (`execution_service.py:1670-1729`). `abort_execution` is `complete_execution` with outcome `aborted` (`execution_service.py:1734-1747`).
 
 ### 5. Post-action verification (does the fix hold?)
 
@@ -87,7 +87,7 @@ The beat task `evaluation.verify_executions` runs every 15 minutes on the evalua
 3. **Evaluate each criterion separately** (`execution_verification_service.py:311-402`). Three criterion types exist today: `incident_absence`, `alert_absence`, and `user_confirmation`. Absence **passes only when the CI has actually reported something in the last `OBSERVABILITY_LOOKBACK_DAYS = 30` days**; otherwise the criterion is `not_observable` with the detail "silence here is not evidence." Alert-only verdicts are re-confirmed against the alert batches' own event times so a closing storm after a good fix cannot produce a false failure (`execution_verification_service.py:343-349`). `user_confirmation` reads the existing `message_function` classification for a `resolution_confirmation` message.
 4. **Aggregate and persist** — a `VerificationAssessment` plus one `VerificationObservation` per criterion, and the legacy `verification_status` (`verified` / `failed` / `unverifiable`) on the run itself (`execution_verification_service.py:405-443, 653-663`).
 5. **Act on the verdict, all fail-soft**: `rollback_recommended` derives a `RollbackPlan` (reverse step order, `infeasible` when there is no way back); `escalation_required` raises an `Escalation` carrying **refs, never copies** — a copy would be a second version of the truth that ages away from the first (`execution_verification_service.py:446-516`). Nothing executes here: running an undo is an `ExecutionRun` with `rolls_back_run_id` set, so it inherits the same approval, attempt, and verification machinery.
-6. **Feed the learning loops**, each wrapped so it can never break the verification that produced it: fix-cohort counters (`execution_verification_service.py:665-697`), trust profiles per (action type × CI class × environment × criticality) (`execution_verification_service.py:519-584, 714-725`), and knowledge support for the playbook version's cited articles (`execution_verification_service.py:727-750`).
+6. **Feed the learning loops**, each wrapped so it can never break the verification that produced it: fix-cohort counters (`execution_verification_service.py:665-697`), trust profiles per (action type × CI class × environment × criticality) (`execution_verification_service.py:519-584, 710-721`), and knowledge support for the playbook version's cited articles (`execution_verification_service.py:727-750`).
 7. **Emit** `execution.verification_completed`, and on a verified run whose policy sets `auto_close_on_success`, `execution.auto_close_recommended` — it **recommends, never closes** a human's session (`execution_verification_service.py:752-774`).
 
 Trust scoring uses a Wilson lower bound rather than a raw success rate, and suspends on a recent-failure streak regardless of history: `WILSON_Z = 1.96`, `AUTONOMOUS_MIN_LOWER_BOUND = 0.90`, `SUPERVISED_MIN_LOWER_BOUND = 0.50`, `SUSPEND_AFTER_CONSECUTIVE_FAILURES = 3`; only `success` counts as a success, while `failed` / `rollback_required` / `partial_success` count against (`backend/src/contextedge/services/trust_service.py:42-51, 150-151`).
@@ -108,7 +108,7 @@ Governance event types this layer writes, verified at their call sites: `session
 
 ### 7. Runtime explain cache
 
-Runtime match responses cache their explain payload in Redis. A playbook lifecycle transition can pass `redis` to `playbook_service.transition_playbook`, which then runs `scan_iter + delete` over `runtime:match:*` for the tenant, so a cached `/runtime/explain` answer cannot outlive the transition it describes.
+Runtime match responses cache their explain payload in Redis under `runtime:match:<match_id>` (`backend/src/contextedge/api/v1/runtime.py:233, 252`). A playbook lifecycle transition can pass `redis` to `playbook_service.transition_playbook`, which then runs `scan_iter` over `runtime:match:*` and deletes the keys whose cached payload names this tenant, so a cached `/runtime/explain` answer cannot outlive the transition it describes (`backend/src/contextedge/services/playbook_service.py:325-326, 331-357`). The key is opaque, which is why it takes a scan rather than a targeted delete; Redis being unavailable only logs — the transition still commits and stale entries simply age out on their TTL.
 
 ## Example: Acme VPN data at this stage
 
@@ -163,14 +163,14 @@ Runtime match responses cache their explain payload in Redis. A playbook lifecyc
   "max_safety_class": "low_side_effect",
   "status": "awaiting_approval",
   "steps": [
-    { "step_index": 0, "step_title": "Confirm AUTH_CERT_EXPIRED on vpn-gw-east-01", "safety_class": "read_only", "status": "completed" },
-    { "step_index": 1, "step_title": "Check certificate expiry date", "safety_class": "read_only", "status": "completed" },
+    { "step_index": 0, "step_title": "Confirm AUTH_CERT_EXPIRED on vpn-gw-east-01", "safety_class": "read_only", "status": "pending", "requires_approval": false },
+    { "step_index": 1, "step_title": "Check certificate expiry date", "safety_class": "read_only", "status": "pending", "requires_approval": false },
     { "step_index": 2, "step_title": "Renew gateway certificate via internal CA", "safety_class": "high_side_effect", "status": "awaiting_approval", "requires_approval": true }
   ]
 }
 ```
 
-Step 2 is `high_side_effect`, which outranks the caller's `low_side_effect` cap, so `start_execution` forced `requires_approval` and created an approval request bound to that exact step.
+Step 2 is `high_side_effect`, which outranks the caller's `low_side_effect` cap, so `start_execution` forced `requires_approval` and created an approval request bound to that exact step — and `request_approval` flipped both that step and the run to `awaiting_approval` (`execution_service.py:1270-1275`). The two read-only steps are left at `pending`: nothing gates them, and nothing runs them either, because the executor that would drive the ledger does not exist on this branch.
 
 **Output — the approval request, bound to the artifact**
 
@@ -274,7 +274,7 @@ Had `vpn-gw-east-01` never produced an incident or alert in the previous 30 days
 
 ## Acme VPN incident (this layer)
 
-An Acme responder opens a **resolution session** with the symptom "VPN authentication failure" and the external case id `INC0010427`; the runtime match writes a `retrieve` trace event naming the certificate-rotation playbook at 0.92 confidence. Starting execution under `supervised` mode with a `low_side_effect` request gives the two read-only diagnostic steps straight through, and forces an approval on step 2 — renewing the gateway certificate is `high_side_effect`, above the caller's cap. The approval request is stamped with the hash of that exact step in version 1.2.0 and expires in four hours. The VPN domain admin approves it; the `approved_by` edge records who, when, and under which safety class, and a `policy_checks` row records that `forbid_self_approval` was evaluated and passed. Thirty minutes after completion the verification sweep re-checks `vpn-gw-east-01`: no new incidents, no new alert batches, and a Teams message classified as `resolution_confirmation` — verdict **verified**, folded into the trust profile for that action on that CI class. Meanwhile `audit_logs` shows every mutating call anyone made during the incident bridge, and `operational_events` shows the whole timeline joined by one correlation id.
+An Acme responder opens a **resolution session** with the symptom "VPN authentication failure" and the external case id `INC0010427`; the runtime match writes a `retrieve` trace event naming the certificate-rotation playbook at 0.92 confidence. Starting execution under `supervised` mode with a `low_side_effect` request leaves the two read-only diagnostic steps ungated, and forces an approval on step 2 — renewing the gateway certificate is `high_side_effect`, above the caller's cap. The approval request is stamped with the hash of that exact step in version 1.2.0 and expires in four hours. The VPN domain admin approves it; the `approved_by` edge records who, when, and under which safety class, and a `policy_checks` row records that `forbid_self_approval` was evaluated and passed. Thirty minutes after completion the verification sweep re-checks `vpn-gw-east-01`: no new incidents, no new alert batches, and a Teams message classified as `resolution_confirmation` — verdict **verified**, folded into the trust profile for that action on that CI class. Meanwhile `audit_logs` shows every mutating call anyone made during the incident bridge, and `operational_events` shows the whole timeline joined by one correlation id.
 
 ## Further reading
 

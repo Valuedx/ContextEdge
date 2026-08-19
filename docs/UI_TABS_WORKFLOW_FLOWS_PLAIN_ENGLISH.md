@@ -36,7 +36,8 @@ Data enters from Sources, becomes Evidence, related Evidence becomes Episodes, r
 ```text
 sync        -> sync.run_backfill / sync.run_incremental_sync
 extraction  -> extraction.normalize_evidence, artifact.extract_attachment
-default     -> extraction.classify_relevance (fast lane), maintenance.*, identity.*
+default     -> extraction.classify_relevance (fast lane), review_queue.*,
+               and anything with no matching rule: maintenance.*, identity.*
 hydration   -> hydration.hydrate_thread
 correlation -> extraction.correlate_evidence, extraction.reconstruct_episode,
                extraction.compute_evidence_baseline
@@ -47,7 +48,7 @@ evaluation  -> evaluation.* (drift, contradictions, verification, AI review,
                retention, graph reconciliation, suggestions)
 ```
 
-Routing rules are matched in order at `backend/src/contextedge/workers/celery_app.py:226`. The eight queues are listed in `backend/dev.py:16`.
+Routing rules are matched in order at `backend/src/contextedge/workers/celery_app.py:226`, with `task_default_queue="default"` catching everything else. The eight queues are listed in `backend/dev.py:16`, and the beat schedule is at `celery_app.py:281`.
 
 Why the split matters: `correlation` and `embedding` were carved out of `extraction` after a measured incident. Correlation tasks were dispatched but never received behind 8,255 queued normalizations, so Episodes, Patterns and Playbooks all sat at zero; and 1,879 chunks existed with only 15% embedded, meaning evidence was ingested and silently unretrievable. **A worker fleet that does not consume all eight queues reproduces exactly that.**
 
@@ -63,7 +64,7 @@ Four plain list calls in parallel (/sources, /evidence, /episodes, /playbooks)
 
 **Used for:** First health check.
 
-**Note:** these are page-limited lists, not database-wide counts (`frontend/src/app/(dashboard)/overview/page.tsx:110`). For real pipeline numbers use Pipeline Health.
+**Note:** these are page-limited lists, not database-wide counts - each call asks for at most 200 rows (`frontend/src/app/(dashboard)/overview/page.tsx:109`). For real pipeline numbers use Pipeline Health.
 
 **Example:** An Acme admin opens Overview and sees evidence count increased, but the ServiceNow source has not synced.
 
@@ -105,9 +106,9 @@ Beat: sync.trigger_scheduled_syncs every 900s (workers/sync_tasks.py:14)
 
 **Backfill** is the same shape with a date window (default 90 days) and the `approved_for_backfill` gate (`sync_worker_service.py:419`).
 
-**If the hand-off fails after the commit**, the un-queued raw ids are parked on `source_objects.metadata_extra["pending_normalize_raw_ids"]`, the run is marked failed, and the next successful run drains them (`sync_worker_service.py:322`). Nothing is lost.
+**If the hand-off fails after the commit**, the un-queued raw ids are parked on `source_objects.metadata_extra["pending_normalize_raw_ids"]`, the run is marked failed, and the next successful run drains them (`sync_worker_service.py:325`). Nothing is lost.
 
-**Pause / cancel** is cooperative: the connector reads the signal between pages and every 25 detail records, on a fresh connection so it can see the operator's write. Everything already fetched is persisted with its checkpoint (`services/sync_control_service.py:97`).
+**Pause / cancel** is cooperative. The signal is read on a fresh connection so the worker can see the operator's write (`services/sync_control_service.py:97`), and everything already fetched is persisted with its checkpoint. A connector only stops mid-run if it consults the signal inside its own loops; the base-class default is a no-op (`connectors/base.py:99`) and **only Zoho Desk has been taught it** - between pages and every 25 detail records (`connectors/zoho_desk/connector.py:128`, `:946`). The other six stop between task invocations.
 
 **Example:** A Jira sync fails because the token expired. Sync Operations shows the failed run; the checkpoint was not advanced, so nothing is skipped when it is fixed.
 
@@ -115,7 +116,7 @@ Beat: sync.trigger_scheduled_syncs every 900s (workers/sync_tasks.py:14)
 
 ```text
 raw_evidence_objects row
-  -> extraction.normalize_evidence (workers/extraction_tasks.py:1304)
+  -> extraction.normalize_evidence (workers/extraction_tasks.py:1313)
      body = _normalize (extraction_tasks.py:122):
        1. load payload (from MinIO if offloaded)
        2. noise gate for hydrated messages (services/message_filter.py:81)
@@ -133,7 +134,9 @@ raw_evidence_objects row
       11. identity resolution  [LLM #3 family]
       12. decision extraction  [LLM #4]
       13. parent embedding
-      14. chunk dispatch (inline if body < 16KB, else async)
+      14. chunk dispatch (inline only if body < 16KB AND the source is
+          allowlisted - jira_sm, servicenow, gmail, teams, sapphireims,
+          zoho_desk; otherwise async)
   -> after commit: correlate_evidence + compute_evidence_baseline,
      or attachment extraction, or thread hydration
 ```
@@ -142,7 +145,7 @@ raw_evidence_objects row
 
 **Important code behavior:** the noise gate is deterministic and runs *before* any model call - it rejects about 47% of hydrated messages on live data, and the raw object is kept so a rule change can re-judge them exactly. The content hash is taken on the raw body before cleaning and redaction, so tuning those rules never breaks deduplication.
 
-**Chunking** then splits the body for search (`services/evidence_chunk_service.py:43`). The chunker is chosen by record shape first, then source: a KB article goes to the document chunker, a ticket to the ticket chunker, chat/email to the thread chunker (`services/chunkers/registry.py:116`). Chunks are embedded in batches of 32 on the `embedding` queue (`workers/chunk_tasks.py:238`); until that lands, the item is findable only through its parent embedding and full-text search.
+**Chunking** then splits the body for search (`services/evidence_chunk_service.py:43`). The chunker is chosen by record shape first, then source: a KB article goes to the document chunker, a ticket to the ticket chunker, chat/email to the thread chunker, and a `fallback` chunker is the floor so a caller never gets nothing (`services/chunkers/registry.py:116`). Chunks are embedded in batches of 32 on the `embedding` queue (`EMBED_BATCH_SIZE`, `workers/chunk_tasks.py:51`; task at `:238`); until that lands, the item is findable only through its parent embedding and full-text search.
 
 **Example:** The Acme ServiceNow ticket, the engineer's email, and four Teams messages become evidence. "Any update on the VPN?" dies at the noise gate. "Restarted IPSec on vpn-gw-east-01, tunnel stable" survives - it is short, but it carries a hostname.
 
@@ -185,7 +188,7 @@ User enters symptoms/entities
 
 **Used for:** Find the best playbook for a current issue.
 
-**Technical rule:** weights are keyword 0.25, semantic 0.30, graph 0.15, evidence quality 0.10, identity 0.05, recency 0.10, freshness 0.05, minus a negative penalty of 0.05 (`search/hybrid_ranker.py:22`). The semantic score is gated by the keyword score, so vector similarity alone cannot carry a playbook whose words never appear in the query.
+**Technical rule:** weights are keyword 0.25, semantic 0.30, graph 0.15, evidence quality 0.10, identity 0.05, recency 0.10, freshness 0.05, minus a negative penalty of 0.05 (`search/hybrid_ranker.py:22`). The semantic score is damped by the keyword score - it is multiplied by `0.6 + 0.4 x keyword_score` (`hybrid_ranker.py:330`) - so a playbook whose words never appear in the query keeps only 60% of its semantic score.
 
 **Example:** Symptoms mention tunnel flapping, IKE re-negotiation and a certificate error on `vpn-gw-east-01`. Runtime returns "Renew VPN gateway certificate and restart the tunnel service".
 
@@ -259,14 +262,14 @@ Runtime, a reviewer, or an agent chooses an action
 
 ```text
 correlate_evidence created edges
-  -> extraction.reconstruct_episode, countdown 180s (correlation_tasks.py:39)
-     body = _reconstruct (workers/extraction_tasks.py:995), gates in order:
+  -> extraction.reconstruct_episode, countdown 180s (correlation_tasks.py:48)
+     body = _reconstruct (workers/extraction_tasks.py:1008), gates in order:
        a. resolve_episode_cluster (services/episode_cluster_service.py:108)
           connected component over case_links + correlation_edges,
           max 50 members, max 3 hops, 30-day window from nearest seed,
           legal-hold and pending-redaction rows fenced out in SQL
        b. cluster < 3 members            -> skipped_below_min_cluster
-       c. optional resolution gate (off by default)
+       c. optional resolution gate (off by default) -> deferred_unresolved
        d. per-cluster advisory lock      -> skipped_locked
        e. debounce settle re-check       -> deferred_unsettled
           (starvation guard: narrate anyway after 1800s)
@@ -296,30 +299,35 @@ correlate_evidence created edges
 
 ```text
 Episode approved (single, bulk, or AI auto-approve)
-  -> pattern.cluster_episodes per domain (workers/pattern_tasks.py:379)
-     body = _cluster (pattern_tasks.py:127):
+  -> pattern.cluster_episodes per domain (workers/pattern_tasks.py:418)
+     body = _cluster (pattern_tasks.py:153):
        0. repair missing episode embeddings
        1. candidates = approved + embedded + not already in a pattern,
           this domain scope only, LIMIT 100
        2. for each candidate:
-          a. existing pattern within cosine distance < 0.35?
+          a. take the pattern owning the NEAREST member, if that member
+             is within PATTERN_MATCH_MAX_DISTANCE = 0.30
              -> validate_pattern_match  [LLM] -> add to that pattern
-          b. else group neighbours within cosine distance < 0.20
+          b. no pattern in range, or the adjudicator said no:
+             group neighbours within CLUSTER_GROUP_MAX_DISTANCE = 0.27
              (an empty group is allowed - a single-episode cluster)
-          c. synthesize_pattern  [LLM]  -> create_pattern_from_episodes
-             - domain-safety assertion on every member
-             - patterns row + pattern_evidence_links + enrichment edges
-             - auto-enqueue pattern.generate_playbook_candidate
+          c. synthesize_pattern  [LLM]
+             - if the model answers "no incident / no pattern",
+               skip persisting entirely
+             - else create_pattern_from_episodes
+               - domain-safety assertion on every member
+               - patterns row + pattern_evidence_links + enrichment edges
+               - dispatch_after_commit(pattern.generate_playbook_candidate)
        3. dedup sweep rides along at the end
 ```
 
 **Used for:** Find repeated problems.
 
-**Technical rule:** two different distances. `< 0.35` decides "does this episode belong to an existing pattern" (then a model call adjudicates); `< 0.20` decides "which episodes group into a new pattern".
+**Technical rule:** two named distances, both cosine, both re-calibrated against the live corpus on 2026-08-19 (`pattern_tasks.py:36-60`). `PATTERN_MATCH_MAX_DISTANCE = 0.30` (`:50`) is only a prefilter for "could this episode belong to an existing pattern" - the query orders by distance and asks the adjudicator about the single **nearest** member (`:252-257`). `CLUSTER_GROUP_MAX_DISTANCE = 0.27` (`:60`) decides which episodes group into a new pattern.
 
 **There is no beat schedule for clustering.** It is dispatched by episode approval or run manually from the Patterns tab. If nobody approves episodes, no patterns form.
 
-**Degradation to know:** the adjudication call fails **open** - during a provider outage it returns `is_match=True` at 0.75, so the 0.35 embedding probe alone decides membership (`ai/extractors/pattern_extractor.py:108`).
+**Degradation to know:** the adjudication call fails **open** - during a provider outage it returns `is_match=True` at 0.75, so the 0.30 embedding probe alone decides membership (`ai/extractors/pattern_extractor.py:112`).
 
 **Example:** Three certificate-expiry episodes across VPN and RADIUS become one "gateway certificate expiry causes tunnel flapping" pattern.
 
@@ -327,18 +335,20 @@ Episode approved (single, bulk, or AI auto-approve)
 
 ```text
 Pattern created or grown
-  -> pattern.generate_playbook_candidate (workers/pattern_tasks.py:403)
+  -> pattern.generate_playbook_candidate (workers/pattern_tasks.py:442)
      - skip if a playbook already exists for this pattern or title
      - skip if pattern.confidence < 0.5
-     - collect up to 12 episode summaries (with real ids so [ep-N] resolves)
-     - collect up to 20 negative-knowledge lines
+     - collect up to 12 episode summaries carrying real ids; the generator
+       prompts on the first 10, so [ep-N] resolves to an episode
+     - collect up to 20 negative-knowledge lines for the pattern's domain
      - retrieve_knowledge_for_pattern  [embedding + search]
        (services/knowledge_retrieval_service.py:226)
      - persist_knowledge_links: pattern -[supported_by]-> evidence
        for documents at similarity >= 0.75
-     - generate_playbook_candidate  [LLM, prompt playbook v5]
-     - validate_source_refs   -> drop invented citations
-     - classify_step_grounding -> uncited steps forced to best_practice
+     - generate_playbook_candidate  [LLM, prompt playbook v6]
+     - validate_source_refs      -> drop invented citations
+     - classify_step_grounding   -> uncited steps forced to best_practice
+     - sanitize_branching_logic  -> drop decision points that cannot run
      - risk floor from step safety classes (LLM may only raise it)
      - no steps -> fail the task, do not create an empty playbook
      - Playbook (candidate, suggest_only) + PlaybookVersion 0.1.0
@@ -350,7 +360,9 @@ Pattern created or grown
 
 **How knowledge is chosen** (`services/knowledge_retrieval_service.py:291`): oversampled semantic search, then keep only `kb_article` / `sop` / `documentation`; **withhold** anything the source system marked draft, in review, or retired - a human retired it, so ranking it last would override that decision; then re-rank (never filter) by empirical support, applicability, and supersession; keep the top 5 documents with up to 6 sections each. Warnings travel into the prompt rather than hiding the article.
 
-**The manual route is different.** `POST /playbooks/generate` skips knowledge retrieval, the confidence floor, the risk floor, the empty-steps guard, and playbook embedding, and it drops every `ep-N` citation because it does not pass episode ids. Use the worker path when demonstrating grounded generation.
+**The three deterministic passes are code, not prompt.** `validate_source_refs` (`ai/generators/playbook_generator.py:331`), `classify_step_grounding` (`:256`) and `sanitize_branching_logic` (`:154`) all run over the model's JSON before anything is persisted (`playbook_generator.py:91-93`). The branching pass repairs rather than rejects: it drops targets naming steps that do not exist, branches whose true and false paths are identical, and steps no path can reach, and counts what it dropped.
+
+**The manual route is different.** `POST /playbooks/generate` (`api/v1/playbooks.py:654`) skips knowledge retrieval, the confidence floor, the deterministic risk floor, the empty-steps guard, and playbook embedding, and it drops every `ep-N` citation because it does not pass episode ids. Use the worker path when demonstrating grounded generation.
 
 **Example:** The pattern creates "Renew VPN gateway certificate and restart the tunnel service", and the retrieved SOP contributes a "back up the current certificate first" step cited as `[kb-1]`.
 
@@ -362,8 +374,8 @@ Bad/risky action is known
   -> consumed in two places:
      - hybrid ranker subtracts score
        (search/hybrid_ranker.py:140, contradicts edges + domain count)
-     - up to 20 entries enter the playbook generation prompt
-       (workers/pattern_tasks.py:494)
+     - up to 20 entries for the pattern's domain enter the playbook
+       generation prompt (workers/pattern_tasks.py:537)
 ```
 
 **Used for:** Remember what not to do.
@@ -389,7 +401,9 @@ Evidence text (title + body + first 2000 chars of payload, re-redacted)
   -> evidence_identity_links + canonical_entity_refs + mentions_identity edges
   -> promote_corroborated_identities: provisional -> resolved once >= 2
      distinct evidence items cite it (and <= 5, the rarity guard)
+     (services/identity_promotion.py:72)
   -> daily identity.reconcile_identities PROPOSES merges >= 0.95 confidence
+     (services/identity_reconciliation_service.py:306)
 ```
 
 **Used for:** Understand that different names can mean the same real thing.
@@ -443,7 +457,7 @@ identity resolution abstained or fell below threshold
 
 **Used for:** Deciding the cases the machine deliberately refused to decide.
 
-**Nothing here has been applied to the graph yet.** Requires `knowledge_manager`, `domain_admin` or `tenant_admin`.
+**Nothing here has been applied to the graph yet.** Every route calls `require_role("knowledge_manager")`; `platform_super_admin`, `tenant_admin` and `admin` also pass because `has_role` short-circuits for those three (`deps.py:37`). `domain_admin` does not - it needs an explicit `knowledge_manager` binding.
 
 **Example:** A suggestion proposes linking a firewall change record to the Acme VPN incident on chunk-embedding proximity. The reviewer accepts, and the episode cluster grows.
 
@@ -454,7 +468,7 @@ Writers (ingest, correlation, patterns, decisions) call ensure_edge
   (graph/builder.py:50 - SELECT, then INSERT ... ON CONFLICT DO NOTHING)
   require_registered refuses any edge type outside the 69-type registry
 evaluation.reconcile_graph_relationships every 6h projects relational rows
-  into edges (graph/agent/materializer.py:54) - idempotent, additive only
+  into edges (graph/agent/materializer.py:107) - idempotent, additive only
 
   -> User selects node type / id / depth / domain
   -> GET /graph/neighbors -> bounded BFS, max depth 3 (graph/queries.py:20)
@@ -463,12 +477,12 @@ evaluation.reconcile_graph_relationships every 6h projects relational rows
 
 Agent-facing variant:
   POST /graph/agent-subsets -> seeds -> traversal -> budget -> hydration
-  (graph/agent/repository.py:156, selector.py:28, hydrators.py:98)
+  (graph/agent/repository.py:169, selector.py:28, hydrators.py:118)
 ```
 
 **Used for:** See relationships between sessions, evidence, episodes, patterns, playbooks, decisions, users, and actions.
 
-**Two things to state accurately:** node visibility is fail-closed per type in the agent projection - an unapproved playbook or a retired KB article silently disappears - but the plain `/graph/neighbors`, `/graph/subgraph` and `/graph/stats` routes filter by tenant only, which is a known open item (`codewiki/KNOWN_GAPS.md:56`). And agent-proposed dependencies land as a non-traversable `proposed_depends_on` edge at confidence 0.3 until a reviewer promotes them.
+**Three things to state accurately.** First, node visibility is fail-closed per type in the agent projection - an unapproved playbook or a retired KB article silently disappears - but episodes are the deliberate exception: `approved` **and** `pending_review` are admitted, and a draft arrives relabelled `[UNAPPROVED DRAFT]` with an `agent_caveat`, in its own two seed slots at a 0.8 relevance multiplier so it can never displace a reviewed precedent (`graph/agent/hydrators.py:108`, `:448`; `repository.py:111`, `:117`). Second, the plain `/graph/neighbors`, `/graph/subgraph` and `/graph/stats` routes scope by tenant plus an optional caller-supplied `domain_id`, with nothing checking that parameter against the caller's own scope (`api/v1/graph.py:190`, `:220`, `:242`); `codewiki/KNOWN_GAPS.md:56` records the same shape as open item P1-6 for the CMDB topology / change-risk / fix-applicability routes. Third, agent-proposed dependencies land as a non-traversable `proposed_depends_on` edge at confidence 0.3, and approving one writes a `depends_on` edge at 0.7 and closes the proposal rather than deleting it (`services/edge_proposal_service.py:125`).
 
 **Example:** Open the Acme VPN session graph and see evidence, episode, pattern, playbook, decision, approval and execution run connected.
 
@@ -598,7 +612,7 @@ Any LLM or embedding call
 
 **One source of truth:** the dashboard and the budget gate both sum `llm.usage` events, so there is no second counter to drift. Costs are estimates for dashboard use; the provider's bill is authoritative.
 
-**A blocked tenant fails softly:** each enrichment in `_normalize` is individually wrapped, so evidence still lands - un-embedded and un-linked. The signature is chunks with NULL embeddings plus `llm.usage` events showing `outcome = budget_exceeded`.
+**A blocked tenant fails softly:** each enrichment in `_normalize` is individually wrapped, so evidence still lands - un-embedded and un-linked. The signature is chunks with NULL embeddings plus a tenant whose `llm.usage` events simply stop - a block raises before anything is recorded, so silence is the signal. Confirm with `GET /api/v1/admin/tenant-budget/status`.
 
 **Example:** An Acme admin sees episode reconstruction dominating today's extraction tokens after a backlog import.
 

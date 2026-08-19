@@ -46,7 +46,7 @@ Practical payoff: an operator clicks "retry sync" for Acme's ServiceNow source, 
 
 ### Which queue a dispatch lands on
 
-Endpoints that return `TaskDispatchResponse` are enqueueing, not doing. Routing is order-matched in `task_routes` (`backend/src/contextedge/workers/celery_app.py:226-279`):
+Most endpoints that return `TaskDispatchResponse` are enqueueing, not doing (the exception is called out below). Routing is order-matched in `task_routes` (`backend/src/contextedge/workers/celery_app.py:226-279`):
 
 | Endpoint | Task | Queue |
 | --- | --- | --- |
@@ -59,7 +59,7 @@ Endpoints that return `TaskDispatchResponse` are enqueueing, not doing. Routing 
 | (ingest fan-out) | `extraction.chunk_evidence`, `extraction.embed_chunks_batch` | `embedding` |
 | (ingest fan-out) | `extraction.correlate_evidence`, `extraction.compute_evidence_baseline` | `correlation` |
 
-Not everything that looks asynchronous is: `POST /patterns/discover` and `POST /patterns/deduplicate` run inline in the request, LLM calls and all.
+Not everything that looks asynchronous is. `POST /patterns/discover` and `POST /patterns/deduplicate` run inline in the request, LLM calls and all; `POST /sources/{id}/discover` runs discovery inline; and `POST /sources/local-ingest` returns the `TaskDispatchResponse` shape but does the work in the request too — see the note under "Shared response shapes".
 
 The full consumed set is **eight** queues — `default, sync, hydration, extraction, correlation, embedding, pattern, evaluation` (`backend/dev.py:16`). `correlation` and `embedding` were split out on 2026-08-17 because the graph and retrieval stages were starving behind bulk normalization in one FIFO lane (`celery_app.py:234-268`). A worker fleet that does not consume all eight will accept your dispatch and silently never run it.
 
@@ -70,7 +70,7 @@ The full consumed set is **eight** queues — `default, sync, hydration, extract
 ### Human users (JWT)
 
 1. `POST /api/v1/auth/login` with `{"email", "password"}`
-2. Receive `{access_token, expires_in}` — expiry is `JWT_ACCESS_TOKEN_EXPIRE_MINUTES`, default 60 (`backend/src/contextedge/api/v1/auth.py:98-101`)
+2. Receive `{access_token, expires_in}` — `expires_in` is in **seconds**, computed as `JWT_ACCESS_TOKEN_EXPIRE_MINUTES x 60`, so the default 60-minute setting comes back as `3600` (`backend/src/contextedge/api/v1/auth.py:98-101`)
 3. Send `Authorization: Bearer <access_token>` on subsequent requests
 
 **Claims the login endpoint mints** (`auth.py:21-32`): `sub`, `tenant_id`, `email`, `roles`, `exp`. Nothing else.
@@ -166,9 +166,9 @@ Everything here is asynchronous: the HTTP call enqueues a Celery task on the `sy
 
 | Endpoint | Role | What it enqueues |
 | --- | --- | --- |
-| `POST /sources/{source_id}/discover` | — | Runs discovery inline (no task) and returns the discovered `SourceObject` rows |
+| `POST /sources/{source_id}/discover` | `domain_admin` | Runs discovery inline (no task) and returns the discovered `SourceObject` rows (`backend/src/contextedge/api/v1/sources.py:204-216`) |
 | `PATCH /sources/{source_id}/objects/{object_id}` | `tenant_admin` | Approval flags. Setting `approved_for_sync: true` immediately dispatches `sync.run_incremental_sync` (`backend/src/contextedge/api/v1/sources.py:280-282`) |
-| `POST /sources/{source_id}/backfill` | — | `sync.run_backfill` (`max_retries=3`, 120s delay) |
+| `POST /sources/{source_id}/backfill` | `domain_admin` | `sync.run_backfill` (`max_retries=3`, 120s delay) (`sources.py:392`) |
 | `POST /sync-runs/{run_id}/retry` | `domain_admin` | `sync.run_backfill` or `sync.run_incremental_sync`, matching the original run type (`backend/src/contextedge/api/v1/sync.py:43-62`) |
 | `POST /sources/{source_id}/sync/control` | `domain_admin` | Nothing — it writes a signal the running job reads (below) |
 
@@ -205,7 +205,7 @@ Escape hatch for a worker wedged past answering the check: `sync_runs.celery_tas
 
 Each fetched record is persisted as a `RawEvidenceObject`, then `extraction.normalize_evidence` runs. **Payloads larger than 32,768 bytes are written to MinIO and the DB row keeps only a stub** — `{"_offloaded": true, "size_bytes": N}` (`backend/src/contextedge/services/ingestion_persistence.py:16, 85-87`). This matters to anyone writing SQL: a filter over `raw_evidence_objects.raw_payload` silently skips the biggest records, which are usually the interesting ones. Readers that need the real payload go through `load_raw_payload`.
 
-After normalization commits, the fan-out is dispatched (`backend/src/contextedge/workers/extraction_tasks.py:1312-1352`):
+After normalization commits, the fan-out is dispatched by the `normalize_evidence` task wrapper — not by `_normalize` itself (`backend/src/contextedge/workers/extraction_tasks.py:1326-1364`):
 
 ```
 extraction.normalize_evidence            (queue: extraction)
@@ -222,7 +222,9 @@ extraction.normalize_evidence            (queue: extraction)
 
 "Small" means two conditions together, not one: the post-redaction body is under `INLINE_CHUNK_BUDGET_BYTES` (16 KB) **and** the source type is in `INLINE_CHUNK_SOURCE_ALLOWLIST` — currently `jira_sm`, `servicenow`, `gmail`, `teams`, `sapphireims`, `zoho_desk` (`extraction_tasks.py:49-62, 99-119`). A source outside the allowlist always chunks asynchronously, however short its bodies, so an unfamiliar parser can never stall ingest.
 
-If the record carried attachments, `artifact.extract_attachment` runs *instead* of the correlate/baseline pair, and re-dispatches `classify_relevance`, `correlate_evidence` and `compute_evidence_baseline` once extraction finishes (`extraction_tasks.py:1318-1322`; `backend/src/contextedge/workers/artifact_tasks.py:41-43`). On the normal path `extraction.classify_relevance` is **not** dispatched — classification already ran inline — but the task stays registered for manual re-classification from the admin UI (`extraction_tasks.py:1328-1332`).
+If the record carried attachments, `artifact.extract_attachment` runs *instead* of the correlate/baseline pair, and re-dispatches `classify_relevance`, `correlate_evidence` and `compute_evidence_baseline` once extraction finishes (`extraction_tasks.py:1331-1335`; `backend/src/contextedge/workers/artifact_tasks.py:41-43`). On the normal path `extraction.classify_relevance` is **not** dispatched — classification already ran inline — but the task stays registered for manual re-classification from the admin UI (`extraction_tasks.py:1341-1345`).
+
+Because the fan-out lives in the task wrapper, the one caller that invokes `_normalize` directly gets a shorter pipeline: `POST /sources/local-ingest` normalizes, chunks and classifies inline, and never dispatches `correlate_evidence`, `compute_evidence_baseline` or `hydrate_thread` (`backend/src/contextedge/api/v1/sources.py:530-545`). Locally ingested files are searchable but do not join the correlation graph on their own.
 
 ---
 
@@ -245,7 +247,7 @@ Implementation: `contextedge.api.v1.runtime`.
 ### What `POST /match` actually does, in order
 
 1. **Domain validation** — a `domain_id` from another tenant is a 400; a domain outside a service token's `allowed_domain_ids` is a 403 (`runtime.py:76-105`).
-2. **Memory assembly** — `build_runtime_memory_context` composes three memory classes and the query text (`backend/src/contextedge/services/memory_service.py:82-288`): *short_term* is the session row, its last 5 decision-trace events and recent tenant evidence; *long_term* is the resolved canonical identities plus approved-playbook and active-pattern counts; *reasoning* is the last 3 execution runs and last 5 decisions. `query_text` is a deduped join of the request's symptoms/entities/context, the session's own symptoms/entities/notes, and the resolved identity names (`memory_service.py:230-240`).
+2. **Memory assembly** — `build_runtime_memory_context` composes three memory classes and the query text (`backend/src/contextedge/services/memory_service.py:82-288`): *short_term* is a summary of the session row plus the most recently ingested tenant evidence (`memory_service.py:242-246`); *long_term* is the resolved canonical identities plus approved-playbook and active-pattern counts (`:247-259`); *reasoning* is the session's last 5 decision-trace events, its last 3 execution runs and its last 5 decisions (`:260-282`). Trace events live in *reasoning*, not *short_term* — an earlier revision of this document put them in the wrong class. `query_text` is a deduped join of the request's symptoms/entities/context, the session's own symptoms/entities/notes, and the resolved identity names (`memory_service.py:230-240`).
 3. **Risk cap** — derived from the caller, see below.
 4. **Ranking** — `rank_playbooks(...)` (`runtime.py:130-140`).
 5. **Abstention** — if every candidate scores below `MIN_RECOMMENDATION_SCORE = 0.35`, the result list is **empty on purpose** and `ranking.abstained` is logged with the top score (`backend/src/contextedge/search/hybrid_ranker.py:168-171, 368-379`). An empty `results` array means "no recommendation", not "nothing matched the filters".
@@ -366,7 +368,7 @@ Fields include:
 ### HTTP surface
 
 - `GET /policies` returns grouped lists by policy type; readable by `tenant_admin`, `domain_admin` **or** `knowledge_manager` (an inline check, not `require_role` — `backend/src/contextedge/api/v1/policies.py:57-67`)
-- `POST` / `PATCH` / `DELETE` are `tenant_admin` only (`policies.py:83-85, 120-127, 148`)
+- `POST` / `PATCH` / `DELETE` are `tenant_admin` only (`policies.py:83-85, 120-127, 148-150`)
 - An unknown `policy_type` on create is a 400 listing the valid set (`policies.py:86-90`)
 - Attaching a policy to another resource goes through `/policy-assignments`, which validates type **and** tenant via `assert_policy_assignment` and 400s on a mismatch (`backend/src/contextedge/services/policy_assignment.py:12-35`)
 
@@ -417,7 +419,7 @@ The Celery drift payload (`evaluation_tasks.py:62-75`):
 - `alert_count`
 - `expired_transition_count`
 
-A companion sweep, `evaluation.scan_contradictions_task`, runs every 12 hours on the same `evaluation` queue. It is LLM-bearing, so it costs money on a schedule — see the cost note in `docs/RUNBOOK.md:464` before widening its cadence.
+A companion sweep, `evaluation.scan_contradictions_task`, runs every 12 hours on the same `evaluation` queue (`celery_app.py:287-291`). It is LLM-bearing, so it costs money on a schedule — see the cost notes in `docs/RUNBOOK.md` §7.4 (beat schedule) and §13 (production notes) before widening its cadence.
 
 ---
 
@@ -559,8 +561,8 @@ Implementation: `contextedge.models.evidence.EvidenceChunk`, `contextedge.servic
 
 | Field | Type | Purpose |
 | --- | --- | --- |
-| `chunked_at` | timestamptz (nullable) | Set by `services/evidence_chunk_service.write_chunks` once chunks for the parent's current `chunker_version` are persisted. `NULL` means not-yet-chunked — used by the future backfill scanner via the partial index `ix_evidence_items_chunked_at_null`. |
-| `chunk_count` | int (default 0) | Observability-only. The reviewer dashboard / `/admin/cost` surfaces use this to flag items still pending chunking and to spot anomalies (e.g. a runbook with 200 chunks vs. expected ~12). |
+| `chunked_at` | timestamptz (nullable) | Set by `services/evidence_chunk_service.write_chunks` once chunks land (`evidence_chunk_service.py:118-119`). `NULL` means not-yet-chunked. Read by `chunk_evidence_task`'s idempotency guard (`workers/chunk_tasks.py:76-94`) and by the re-classification fan-out check (`workers/extraction_tasks.py:691-693`). The partial index `ix_evidence_items_chunked_at_null` exists to drive a legacy-row backfill cheaply, but **no backfill task has landed yet** (migration `0030_evidence_chunks`). |
+| `chunk_count` | int (default 0) | Observability-only, and not read anywhere in the backend or frontend today — it exists for SQL and operator queries (e.g. spotting a runbook with 200 chunks against an expected ~12). |
 
 `EvidenceChunk` (sibling table, FK `evidence_id → evidence_items(id) ON DELETE CASCADE`):
 
@@ -573,7 +575,7 @@ Implementation: `contextedge.models.evidence.EvidenceChunk`, `contextedge.servic
 | `parent_section` | text (nullable) | Heading breadcrumb for hierarchical chunkers, e.g. `"Postmortem > Timeline > 14:32"`. |
 | `embedding` | `vector(3072)` (nullable) | Filled by `embed_chunks_batch_task` after `write_chunks` lands; brief `NULL` window is by design. |
 | `content_hash` | string | SHA-256 of `text`, mirrors the parent's hashing rule. Used for chunk-level dedup. |
-| `metadata` | JSONB | Per-source enrichment: `author`, `ts`, `severity`, `language`, `symbol`, `version`, `env_tags`, `source_authority` (`runbook` > `ticket` > `email` > `chat` > `gist`). |
+| `metadata` | JSONB | Per-source enrichment, keys open-ended but conventionally `author`, `ts`, `severity`, `language`, `symbol`, `version`, `env_tags`, `source_authority` (`services/chunkers/base.py:38-55`). A chunker with no value for a key omits it, so readers must treat a missing key as "unknown", not "false". `source_authority` values are `knowledge_article`, `runbook`, `postmortem`, `ticket`, `email`, `chat`, `gist`; `_default_authority` picks one from the parent's evidence type first and source type second, so a ServiceNow KB article is not stamped `ticket` just because it shares a source with incidents (`services/evidence_chunk_service.py:135-169`). |
 | `chunker_version` | int | Coarse-grained schema marker. Bumps only when boundaries change in a way that makes new rows incomparable to old ones. The unique key `(evidence_id, chunk_index, chunker_version)` lets a re-chunk write the new generation alongside the old. |
 
 ### What's exposed today vs. deferred
@@ -588,11 +590,13 @@ Implementation: `contextedge.models.evidence.EvidenceChunk`, `contextedge.servic
 
 Results are 3-tuples `(EvidenceItem, distance, best_chunk | None)`, so older consumers that index `row[1]` keep working while new ones can render the matching passage. A corrupt or dimension-mismatched chunk embedding makes MMR degrade to pure distance ordering rather than failing the search (`chunk_rollup.py:59-76`).
 
+**Lexical search is no longer the looser surface.** `search_evidence_fts` now applies the same visibility gate as vector search, from the same helper, so the two cannot drift apart again (`backend/src/contextedge/search/pg_fts.py:10, 65-79`, calling `vector_search._visibility_predicates`). It used to exclude role-blocked access policies and nothing else, which meant a record on legal hold or awaiting redaction was hidden from vector search and returned by lexical search — and because that function also matches raw ticket payload and a title `ILIKE`, it reached withheld records by substring, not just by embedding neighbourhood.
+
 **What is still not exposed over HTTP:**
 
 - There is **no** `GET /api/v1/evidence/{id}/chunks` endpoint. Chunk rows have no direct HTTP surface.
 - `GET /api/v1/evidence?query=...` is **full-text only** — it routes into `search_evidence_fts`, never the semantic path (`backend/src/contextedge/api/v1/evidence.py:44-59`; `codewiki/KNOWN_GAPS.md:405-407`). Semantic/chunk search is reached internally by the hybrid ranker, knowledge retrieval and the agent-graph seed resolver, not by an API client.
-- **`chunked_at` and `chunk_count` are not on the response schemas.** `EvidenceItemResponse` and `EvidenceItemDetail` do not declare them (`backend/src/contextedge/schemas/evidence.py:23-62`) — an earlier revision of this document said otherwise, and was wrong. They exist as columns only (`backend/src/contextedge/models/evidence.py:127-131`), read by the backfill scanner and by SQL, not by the UI.
+- **`chunked_at` and `chunk_count` are not on the response schemas.** `EvidenceItemResponse` and `EvidenceItemDetail` do not declare them (`backend/src/contextedge/schemas/evidence.py:23-62`) — an earlier revision of this document said otherwise, and was wrong. They exist as columns only (`backend/src/contextedge/models/evidence.py:127-131`), read by the chunk task and by SQL, not by the UI.
 
 See [codewiki/CHUNKING_DESIGN.md](../codewiki/CHUNKING_DESIGN.md) §6 for the search-integration design.
 
@@ -671,7 +675,7 @@ Base path: `/api/v1/patterns`.
 | `GET`/`POST`/`DELETE` | `/patterns/{id}/evidence-links[/{link_id}]` | read: — / write: `knowledge_manager` | Curate which evidence a pattern is grounded in |
 | `GET` | `/patterns/{id}/graph` | — | The pattern's neighbourhood, with the same `domain_id` / `as_of` parameters as the graph routes |
 
-Everything on the `pattern` queue is deliberately serialized onto a single worker. Clustering and playbook generation operate on the whole graph and hold **no advisory lock** — unlike sync — so two concurrent runs could mint duplicate patterns (`docs/RUNBOOK.md:271-274`). The hourly `pattern.deduplicate_knowledge` sweep rides the same queue on purpose, so it serializes *behind* clustering rather than racing it, and it defers per tenant while ingest is active (`backend/src/contextedge/workers/pattern_tasks.py:769-793`).
+Everything on the `pattern` queue is deliberately serialized onto a single worker. Clustering and playbook generation operate on the whole graph and hold **no advisory lock** — unlike sync — so two concurrent runs could mint duplicate patterns (`docs/RUNBOOK.md` §7.2, "Worker topology"). The hourly `pattern.deduplicate_knowledge` sweep rides the same queue on purpose, so it serializes *behind* clustering rather than racing it (`backend/src/contextedge/workers/pattern_tasks.py:832-841`), and it defers per tenant while ingest is active, counting `deferred` instead of churning (`pattern_tasks.py:808-826`).
 
 ---
 
@@ -686,8 +690,10 @@ Playbook step metadata is validated on write through the `PlaybookStep` Pydantic
 | Field | Type | Default | Purpose |
 | --- | --- | --- | --- |
 | `index` | int | null | Caller-assigned ordinal |
-| `title` | string | null | Short label for the step |
+| `title` | string | null | Short label for the step — the human label, not an identifier |
 | `description` | string | null | Free-text detail |
+| `action_name` | string | null | Controlled action identifier the governance layer keys on. Stays NULL when the author does not declare one — action identity is never inferred from prose, because action policy and the skill registry match on it exactly |
+| `action_type` | string | null | Companion controlled identifier to `action_name` |
 | `safety_class` | string | null | One of `read_only`, `low_side_effect`, `high_side_effect`, `destructive`; per-step override of playbook-level safety |
 | `requires_approval` | bool | false | Mirrors `ExecutionStepRun.requires_approval` |
 | `reversible` | bool | false | Whether Undo is available — reviewer console renders an Undo badge |
@@ -725,7 +731,11 @@ Governed playbook execution exposes three verbs on a pending approval request �
 
 ### `POST /execution/runs/{run_id}/approvals/{approval_id}/decide`
 
-Existing endpoint. Body: `ApprovalDecision { decision: "approved" | "denied", comment? }`. Requires `domain_admin`. Creates a first-class `Decision(decision_type="approve" | "deny")` and an `approved_by` / `denied_by` graph edge. Returns `400` if the request is already decided, `404` if missing.
+Existing endpoint. Body: `ApprovalDecision { decision: "approved" | "denied", comment? }` — any other value is a `400` (`services/execution_service.py:1338-1339`). Requires `domain_admin`. The approval row is read `SELECT ... FOR UPDATE`, so two concurrent decide/modify calls on the same approval serialise instead of both passing the pending check (`:1327-1336`).
+
+It writes an `approved_by` / `denied_by` graph edge (`:1429-1438`) and a first-class `Decision` whose `decision_type` is the **decision string verbatim** — `"approved"` or `"denied"`, not `"approve"`/`"deny"` (`:1444`). Worth knowing before you filter: `INTENT_BY_DECISION_TYPE` is keyed on `approve` / `deny` / `modify`, so a decision minted here does not match it and lands with `decision_intent` NULL. `decision_type` filtering is exact match, so `GET /decisions?decision_type=approve` will not return the rows this endpoint creates — query `decision_type=approved` (or `denied`) instead.
+
+Returns `400` if the request is already decided, `404` if missing.
 
 ### `POST /execution/runs/{run_id}/approvals/{approval_id}/modify`
 
@@ -772,7 +782,7 @@ Three deliberate design choices worth respecting in a client:
 - **An invocation may not declare a higher safety class than its own step.** Without that rule a destructive call could be recorded under a step approved as read-only, with every upstream control still reading as satisfied. It is refused in the service, so any caller inherits it.
 - **A step still awaiting approval cannot be reported complete** — otherwise `complete_execution`'s open-steps check would pass with an undecided approval sitting under it.
 
-**There is still no executor.** These endpoints make the ledger *drivable*; nothing in this repo drives it, and nothing schedules or resumes a run. A caller that stops calling leaves a run open (`codewiki/KNOWN_GAPS.md`).
+**There is still no executor.** These endpoints make the ledger *drivable*; nothing in this repo drives it, and nothing schedules or resumes a run. All six MAF tools are read-or-propose, so `execution_service` is a ledger waiting on external callers — and a caller that stops calling leaves a run open (`codewiki/KNOWN_GAPS.md:34`).
 
 ---
 
@@ -803,7 +813,7 @@ First-class decision traces with typed graph edges to evidence, options, policie
 
 One HTTP call, six side effects, all inside `create_decision` (`backend/src/contextedge/services/decision_trace_service.py:51-243`):
 
-1. **The `decisions` row.** `decision_intent` is derived from `decision_type` via `INTENT_BY_DECISION_TYPE`; an explicit argument wins, and an unknown explicit value raises rather than being stored. `risk_level` comes from the **selected** option only — never the riskiest one considered (`:86-103`). `policy_result` left NULL means "no rule existed", which is deliberately distinct from `allowed_auto`.
+1. **The `decisions` row.** `decision_intent` is derived from `decision_type` via `INTENT_BY_DECISION_TYPE`; an explicit argument wins, and an unknown explicit value raises rather than being stored. `risk_level` comes from the **selected** option only — never the riskiest one considered (`:86-103`). `policy_result` is whatever the caller passes; when the execution service creates the decision it fills it with the *strictest* action-policy verdict across the run's steps, and NULL when no policy produced one at all (`backend/src/contextedge/services/execution_service.py:198-203, 1005`).
 2. **`decision_options` rows**, one per option offered (`:145-159`).
 3. **Graph edges**, all through `ensure_edge` so a retry cannot duplicate them: `based_on` to each typed evidence / episode / pattern ref, `considered` for every option plus `chose` for the selected one, `applied_policy` per policy ref, and `followed_by` when the decision is chained to a parent (`:163-185`).
 4. **A session trail entry** — `append_trace_event(event_type=f"decision.{decision_type}")` writes a `decision_trace_events` row and an operational event (`:187-197`).
@@ -820,8 +830,9 @@ Two caveats to carry: there is **no backfill task for decision embeddings**, so 
 | --- | --- | --- | --- |
 | `session_id` | UUID | no | Scope to a resolution session |
 | `decision_type` | string | no | Exact match on `decision_type` |
-| `agent_step` | string | no | One of `diagnostics`, `remediation`, `evaluation`, `triage` |
-| `status` | string | no | One of `pending`, `completed`, `superseded`, `reverted` |
+| `agent_step` | string | no | One of `diagnostics`, `remediation`, `evaluation`, `triage` (`models/decision.py:27`) |
+| `status` | string | no | One of `pending`, `completed`, `superseded`, `reverted` (`models/decision.py:61`) |
+| `actor_type` | string | no | Route regex accepts `ai`, `human`, `system`; anything else is a 422 (`api/v1/decisions.py:167`). Mind the mismatch with the write side: `Decision.actor_type` is an unvalidated `String(20)` defaulting to `"ai"` (`models/decision.py:102`), and `ACTOR_TYPES = ("ai", "human", "hybrid")` (`:60`) is a naming constant nothing enforces — so a `hybrid` row can exist and **cannot** be selected through this filter |
 | `min_confidence` | float (0–1) | no | Only return decisions with `confidence >= min_confidence` |
 | `max_confidence` | float (0–1) | no | Only return decisions with `confidence <= max_confidence` |
 | `sort` | string | no | One of `created_desc` (default), `confidence_desc`, `confidence_asc`; both confidence sorts use `NULLS LAST` |
@@ -903,11 +914,12 @@ Response shape (`DecisionProvenanceResponse`):
 **Deep-link resolution** (`services.source_deep_link_service.build_source_deep_link`):
 
 1. `source.config.deep_link_template` — admin-configurable, supports `{external_id}` and `{thread_id}` substitution. Wins when present, so admins can point at any URL shape without code changes. If a referenced variable is missing, returns null rather than leaking the literal placeholder.
-2. Built-in defaults for known `source_type` values:
-   - `jira_sm`: `{base_url}/browse/{external_id}` — requires `source.config.base_url`.
-   - `servicenow`: `{instance_url}/nav_to.do?uri=task.do?sysparm_query=number={external_id}` — accepts `instance_url` / `tenant_url` / `base_url` in config.
-   - `gmail`: `https://mail.google.com/mail/u/0/#all/{thread_id or external_id}`.
-   - `teams`: returns null — Teams deep links require tenant + team + channel context not stored on the Source row; admins must supply a `deep_link_template`.
+2. Built-in defaults for four known `source_type` values (`source_deep_link_service.py:46-88`):
+   - `jira_sm`: `{base}/browse/{external_id}`, where `base` is the first of `base_url` / `instance_url` / `tenant_url` present in `source.config`. No base, no link.
+   - `servicenow`: `{base}/nav_to.do?uri=task.do?sysparm_query=number={external_id}`, same base resolution.
+   - `gmail`: `https://mail.google.com/mail/u/0/#all/{thread_id or external_id}` — thread-level preferred, message-level as fallback. Needs no config.
+   - `zoho_desk`: `{base}/support/{org_slug}/ShowHomePage.do#{module}/dv/{external_id}`. Here `base` comes from `portal_url` / `base_url` / `instance_url` and `org_slug` must also be configured — neither is derivable from credentials, so an unconfigured portal returns null rather than a URL that 404s. `module` is `Solutions` when the thread ref starts with `zoho_article:`, otherwise `Cases` (`:91-127`).
+   - `teams` and everything else: returns null — Teams deep links require tenant + team + channel context not stored on the Source row, so admins must supply a `deep_link_template`.
 3. Returns null when neither path resolves — the UI renders a non-clickable card.
 
 Returns `404` when the decision is missing.
@@ -944,8 +956,8 @@ Response shape (`SimilarDecisionsAggregateResponse`):
   "decision_type": "execute_playbook",
   "context_filters": { "workflow": "vpn", "environment": "prod" },
   "total_count": 143,
-  "outcomes": { "success": 120, "failure": 15, "rejected": 8 },
-  "success_rate": 0.839,
+  "outcomes": { "success": 124, "failure": 12, "rejected": 7 },
+  "success_rate": 0.867,
   "decisions": [ /* up to limit DecisionResponse items */ ]
 }
 ```
@@ -994,8 +1006,8 @@ Response shape (`ReviewQueueContext`):
     "decision_type": "execute_playbook",
     "context_filters": { "workflow": "vpn", "environment": "prod" },
     "total_count": 143,
-    "outcomes": { "success": 120, "failure": 15, "rejected": 8 },
-    "success_rate": 0.839
+    "outcomes": { "success": 124, "failure": 12, "rejected": 7 },
+    "success_rate": 0.867
   },
   "decisions": [ /* up to decisions_limit */ ],
   "execution_runs": [ /* up to execution_runs_limit */ ],
@@ -1100,7 +1112,7 @@ GET  /api/v1/admin/pipeline-health             -> queue depths + the graph chain
 
 Provision a `tenant_llm_budgets` row first. Without one the 2M-token deployment default applies and a long backfill stops mid-run with `block`.
 
-**3. Watch the fan-out land.** `INC0010427` becomes a `RawEvidenceObject` (payload over 32 KB goes to MinIO, leaving a stub), then an `EvidenceItem`, then chunks, then correlation edges. `GET /api/v1/evidence?query=INC0010427` finds it even though it is a full-text search — `search_evidence_fts` has an explicit fallback that matches the ticket number inside `raw_evidence_objects.raw_payload` and on `external_id` (`backend/src/contextedge/search/pg_fts.py:50-59`), so a reviewer can search by the number on the ticket.
+**3. Watch the fan-out land.** `INC0010427` becomes a `RawEvidenceObject` (payload over 32 KB goes to MinIO, leaving a stub), then an `EvidenceItem`, then chunks, then correlation edges. `GET /api/v1/evidence?query=INC0010427` finds it even though it is a full-text search — `search_evidence_fts` has an explicit fallback that matches the ticket number inside `raw_evidence_objects.raw_payload` (`ticket_number` / `ticketNumber` / `number`) and on `RawEvidenceObject.external_id` (`backend/src/contextedge/search/pg_fts.py:50-60`), so a reviewer can search by the number on the ticket. Note the payload half of that fallback goes blind on offloaded records: once a payload passes 32 KB the column holds only the `{"_offloaded": true, …}` stub, so the JSON key lookups match nothing and only the `external_id` clause still fires.
 
 **4. Correlation joins the thread.** The engineer's email quoting `INC0010427` links to the ServiceNow incident at confidence **1.0** through the ticket-number bridge; a Teams message naming `vpn-gw-east-01` the same week links at **0.75** as a rare device. `GET /api/v1/correlations?evidence_id=<id>` lists them; `POST /api/v1/correlations/{id}/decision` is how a reviewer accepts, rejects, splits or merges.
 
@@ -1166,7 +1178,7 @@ Two `/ready` details worth knowing:
 - **Object storage is reported but does not gate readiness.** It shows as `ok` or `degraded`, because blob access is lazy and most request paths work without it (`main.py:179-210`; MinIO bucket setup only degrades at startup, `main.py:44-59`).
 - **The migration check compares `alembic_version` to the head of the bundled scripts** and 503s on a mismatch. An installed layout that ships no alembic directory reports the check as explicitly *disabled* rather than quietly passing (`main.py:89-106`). Workers enforce the same rule harder — `_require_migrations_at_head` raises `SystemExit` at worker startup rather than let a stale schema corrupt ingestion mid-transaction (`backend/src/contextedge/workers/celery_app.py:83-139`).
 
-Never quote a migration head number in prose. Trust `alembic heads` (`docs/RUNBOOK.md:425`).
+Never quote a migration head number in prose. Trust `alembic heads` (`docs/RUNBOOK.md` §14, "Maintenance Rules").
 
 Beyond HTTP, three streams carry runtime behaviour:
 
@@ -1229,7 +1241,7 @@ Returns the caller's tenant's `TenantLLMBudget` row — daily token limit, daily
 
 **`null` does not mean uncapped.** A tenant with no row falls through to deployment defaults: `DEFAULT_DAILY_TOKEN_LIMIT` 2,000,000 tokens, `DEFAULT_DAILY_COST_CAP_USD` $25.00, `DEFAULT_BUDGET_ACTION_ON_EXCEED` `block` (`backend/src/contextedge/config.py:191-198`). `check_budget` applies them through a `_DefaultBudget` stand-in that takes the identical evaluation path, deliberately without persisting a row (`backend/src/contextedge/services/tenant_budget_service.py:107-121, 249-279`). Only setting both defaults to `None` in config restores genuinely unlimited spend, reported as `reason="no_budget"`.
 
-This has bitten a real backfill: the 2M-token default froze a live 84-ticket Zoho run mid-way. Provision a real row (thread-heavy tickets run roughly 100k tokens each) or set `action_on_exceed: "warn"` for the window before a bulk ingest (`docs/RUNBOOK.md:280-299`).
+This has bitten a real backfill: the 2M-token default froze a live 84-ticket Zoho run mid-way. Provision a real row (thread-heavy tickets run roughly 100k tokens each) or set `action_on_exceed: "warn"` for the window before a bulk ingest (`docs/RUNBOOK.md` §7.12, "Onboarding a new tenant / bulk backfill").
 
 ### `PUT /admin/tenant-budget`
 
@@ -1266,7 +1278,10 @@ Mechanism:
 
 The module docstring records the incident that created it: every per-task metric reported healthy while `correlate_evidence` starved behind 8,000 normalizations and episodes stayed at zero (`pipeline_health_service.py:1-27`). Rendered at `/admin/pipeline` in the UI.
 
-**Diagnosing "ingest ran but nothing is retrievable":** chunks sitting at `embedding IS NULL` with `llm.usage` events showing `outcome = budget_exceeded` is the budget-block signature. Chunks at `embedding IS NULL` with an `embedding` queue depth that never moves is the missing-consumer signature — check that the worker fleet consumes all eight queues (`docs/RUNBOOK.md:360, 433`).
+**Diagnosing "ingest ran but nothing is retrievable":** two signatures look identical from the evidence table and are told apart here.
+
+- *Budget block.* Chunks sit at `embedding IS NULL` and there is **no `llm.usage` event at all** for the missing work — `check_budget` raises `TenantBudgetExceeded` *before* the call, so a blocked call is never recorded as usage. (`llm.usage` only ever carries `outcome` `ok` or `error`; nothing in the backend writes `budget_exceeded`.) Confirm it with `GET /admin/tenant-budget/status`, which returns `allowed: false` and a `reason` of `token_limit_exceeded` or `cost_cap_exceeded`; on `warn` tenants the day's `llm.budget_warning` operational events are the trail.
+- *Missing consumer.* Chunks sit at `embedding IS NULL` and the `embedding` queue depth never moves — check that the worker fleet consumes all eight queues (`docs/RUNBOOK.md` §7.1).
 
 ---
 
@@ -1274,10 +1289,10 @@ The module docstring records the incident that created it: every per-task metric
 
 Endpoints that used to return bare dicts now declare `response_model=` against three shared Pydantic shapes in `contextedge.schemas.common`. Callers can rely on these for frontend type generation instead of hand-maintaining the shape. The authoritative per-endpoint mapping is the `**Response**` line for each entry in [10_API_Documentation.md](10_API_Documentation.md).
 
-- **`StatusResponse { status: str, detail?: dict }`** — minimal past-tense ack. Used by `PATCH /evidence/{id}/relevance` (`status="updated"`), `POST /correlations/{id}/decision` (`status ∈ accepted|rejected|split|merge`, `detail` carries correlation_id + replacement_ids when relevant) and `POST /identities/merge-proposals/{id}/decide`.
-- **`TaskDispatchResponse { status: str, task_id?: str, detail?: dict }`** — enqueue ack. Used by `POST /sources/{id}/backfill`, `POST /sources/local-ingest`, `POST /threads/{id}/hydrate`, `POST /episodes/reconstruct`, `POST /episodes/ai-review`, `POST /patterns/cluster`. `task_id` is populated whenever the dispatch returned one; `detail` carries task-specific supplemental info (`{"object_count": 12}`, `{"evidence_count": 20, "domain_id": "…"}`, `{"mode": "advisory", "limit": 100}`).
-- **`MutationAckResponse { status: str, id: str }`** — create/update ack with the affected entity's UUID. Used by `POST /runtime/feedback` (`status="feedback_recorded"`, `id` = new `RetrievalFeedback.id`).
+- **`StatusResponse { status: str, detail?: dict }`** — minimal past-tense ack. Declared by `PATCH /evidence/{id}/relevance` (`status="updated"`), `POST /correlations/{id}/decision` (`status ∈ accepted|rejected|split|merge`, `detail` carries correlation_id + replacement_ids when relevant), `POST /correlations/suggestions/{id}/reject`, `POST /correlations/fleet-suggestions/{id}/reject`, and `POST /identities/merge-proposals/{id}/decide`.
+- **`TaskDispatchResponse { status: str, task_id?: str, detail?: dict }`** — enqueue ack. Declared by `POST /sources/{id}/backfill`, `POST /sources/local-ingest`, `POST /threads/{id}/hydrate`, `POST /episodes/reconstruct`, `POST /episodes/ai-review`, `POST /patterns/cluster`. `task_id` is populated whenever the dispatch returned one; `detail` carries task-specific supplemental info (`{"object_count": 12}`, `{"evidence_count": 20, "domain_id": "…"}`, `{"mode": "advisory", "limit": 100}`). **One of these does not enqueue:** `POST /sources/local-ingest` normalizes each file inline and returns `status="ingested"` with no `task_id` — deliberate, to sidestep Celery worker lag on Windows (`backend/src/contextedge/api/v1/sources.py:530-566`). Do not read the shape as a promise of asynchrony.
+- **`MutationAckResponse { status: str, id: str }`** — create/update ack with the affected entity's UUID. Declared by `POST /runtime/feedback` (`status="feedback_recorded"`, `id` = new `RetrievalFeedback.id`).
 
-A handful of endpoints still return bespoke raw dicts on purpose — `GET /patterns/{id}/graph`, `GET /decisions/effectiveness`, the graph reads (`/neighbors`, `/subgraph/...`, `/stats`, `/cmdb-topology`, `/change-risk`, `/fix-applicability`), `GET /sessions/{id}/history`, and `GET /admin/pipeline-health`. They carry rich, observability-shaped payloads that deserve their own schemas rather than being squeezed into one of the three above. Frontend has matching local types in `frontend/src/lib/types/index.ts`.
+A number of endpoints still return bespoke raw dicts on purpose. Among them: `GET /patterns/{id}/graph`, `GET /decisions/effectiveness`, the graph reads (`/neighbors`, `/subgraph/...`, `/stats`, `/cmdb-topology`, `/change-risk`, `/fix-applicability`, `/edge-proposals` and its approve/reject verbs), `GET /sessions/{id}/history`, `GET /playbooks/{id}/references`, the correlation-suggestion reads (`/correlations/fleet-suggestions`, `/correlations/suggestions/stats`), `POST /sources/{id}/probe-config`, `POST /sources/{id}/sync/control`, and `GET /admin/pipeline-health`. They carry rich, observability-shaped payloads that deserve their own schemas rather than being squeezed into one of the three above. Frontend has matching local types in `frontend/src/lib/types/index.ts`.
 
 To confirm which shape any endpoint returns today, read the generated inventory rather than this list — it comes straight from the OpenAPI schema and cannot drift.
