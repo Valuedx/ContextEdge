@@ -71,16 +71,10 @@ EXPECTED_UNWRITTEN: dict[tuple[str, str], tuple[str, str]] = {
             ),
         )
     },
-    **{
-        ("pattern.py", col): ("phase-3", reason)
-        for col, reason in (
-            ("evidence_object_type", "pattern evidence ledger not yet populated"),
-            ("evidence_object_id", "pattern evidence ledger not yet populated"),
-            ("evidence_class", "pattern evidence ledger not yet populated"),
-            ("support_role", "pattern evidence ledger not yet populated"),
-            ("strength", "pattern evidence ledger not yet populated"),
-        )
-    },
+    # pattern_evidence's own columns left this register when
+    # knowledge_case_service began writing the ledger — which is the
+    # register working as intended in the other direction: it must never
+    # claim a gap that has since been closed.
     # --- action_policies: most columns became writable with F3b's CRUD
     # surface. These three did not.
     **{
