@@ -459,6 +459,19 @@ async def _normalize(db: AsyncSession, raw_object_id: str, tenant_id: uuid.UUID)
                     evidence_id=str(ev.id),
                     error=str(claim_exc),
                 )
+        # Applicability, on the INGEST path. This used to run only from the
+        # manual `classify_relevance` task, so an article that arrived
+        # through a normal sync — which is every article — never got one:
+        # 7 of 133 on the live corpus carried applicability, and those 7
+        # were re-classified by hand. The feature that makes knowledge
+        # retrieval version- and environment-aware was effectively dead for
+        # ingested content, and silently, because it degrades to lexical
+        # matching rather than failing.
+        #
+        # Belongs here rather than in the caller: it is per-evidence
+        # follow-up on the same object the classifier just read, it is
+        # skipped for non-knowledge types, and it never raises.
+        await _extract_applicability(db, ev, tenant_id)
     except Exception as cls_exc:
         # Classifier failure shouldn't block ingestion — fall through to the
         # full path as the pre-flip behaviour did.
