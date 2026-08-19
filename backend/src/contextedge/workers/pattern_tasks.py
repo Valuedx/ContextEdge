@@ -33,6 +33,32 @@ RISK_TIERS = ("low", "medium", "high")
 # the gate in generate_playbook_candidate for how this was calibrated.
 PLAYBOOK_GENERATION_MIN_PATTERN_CONFIDENCE = 0.5
 
+# Clustering distance thresholds, calibrated 2026-08-19 against the live
+# corpus rather than carried over from defaults. Both are cosine distances,
+# and both are only meaningful relative to how THIS corpus is distributed:
+# two randomly chosen approved episodes sit at p01 0.257, p10 0.342, median
+# 0.409 (min 0.157, max 0.524). Everything is an AutomationEdge support
+# incident, so the embeddings bunch and absolute thresholds tuned elsewhere
+# do not discriminate here. Re-measure both if the corpus mix changes.
+
+# Prefilter for "could this episode belong to an existing pattern?" — the
+# LLM validator makes the actual call. Kept just below the random-pair p10
+# so it stays a cheap filter, not the decision. The distance to a
+# candidate's NEAREST pattern member has median 0.243 and p75 0.269, so
+# 0.30 admits ~93% of episodes to the validator while skipping the tail
+# that the validator rejects almost every time.
+PATTERN_MATCH_MAX_DISTANCE = 0.30
+
+# How close two unlinked episodes must be to form a NEW cluster. Raised
+# from 0.20, which sat below the random-pair p01 and was so strict that
+# 126 of 150 probed episodes could group with nothing and became
+# single-episode "patterns". Measured singletons / mean cluster size over
+# the same 150: 0.20 -> 126 / 2.3, 0.23 -> 105 / 2.9, 0.25 -> 83 / 3.3,
+# 0.27 -> 50 / 3.8, 0.30 -> 20 / 6.3, 0.40 -> 0 / 66.2. The 0.40 figure is
+# the corpus collapsing into one blob, which is the failure mode on the
+# other side. 0.27 is the knee: real groups of ~4, no runaway merge.
+CLUSTER_GROUP_MAX_DISTANCE = 0.27
+
 # Deterministic risk floor per step safety class. The LLM's suggested tier
 # may only raise risk above this floor, never lower it — risk assessment is
 # a policy decision, not a model output.
@@ -198,8 +224,23 @@ async def _cluster(db, tid: uuid.UUID, did: uuid.UUID | None) -> dict:
             if ep.id in assigned_ids:
                 continue
 
-            # First, check if candidate episode is close (cosine distance < 0.35)
-            # to an EXISTING pattern
+            # Does this episode belong to an EXISTING pattern? Take the
+            # pattern owning the single NEAREST member.
+            #
+            # The ORDER BY is the whole point and used to be missing:
+            # `LIMIT 1` on an unordered set returns an arbitrary qualifying
+            # row. That is not a rare edge case on this corpus — measured
+            # 2026-08-19, EVERY unlinked episode has some pattern member
+            # within 0.35, because 0.35 is roughly the 10th percentile of
+            # the distance between two RANDOM episodes (pairwise spread:
+            # min 0.157, p01 0.257, median 0.409, max 0.524 — everything is
+            # an AutomationEdge support incident, so the embeddings bunch).
+            # So the gate admitted everyone and then handed the validator a
+            # near-random pattern, which it correctly rejected: 8 of 65
+            # episodes joined, and the other 88% went off to mint singleton
+            # patterns. Asking about the nearest pattern instead took the
+            # validator's accept rate from 12% to 40% on the same corpus.
+            member_distance = Episode.embedding.cosine_distance(ep.embedding)
             match_r = await db.execute(
                 select(PatternEvidenceLink.pattern_id)
                 .join(Episode, Episode.id == PatternEvidenceLink.episode_id)
@@ -208,8 +249,9 @@ async def _cluster(db, tid: uuid.UUID, did: uuid.UUID | None) -> dict:
                     Pattern.tenant_id == tid,
                     _domain_predicate(did),
                     Episode.embedding.is_not(None),
-                    Episode.embedding.cosine_distance(ep.embedding) < 0.35,
+                    member_distance < PATTERN_MATCH_MAX_DISTANCE,
                 )
+                .order_by(member_distance.asc())
                 .limit(1)
             )
             matched_pattern_id = match_r.scalar_one_or_none()
@@ -251,9 +293,9 @@ async def _cluster(db, tid: uuid.UUID, did: uuid.UUID | None) -> dict:
                 except Exception as exc:
                     logger.warning("add_episode_to_pattern_failed", error=str(exc))
 
-            # Find similar episodes using vector distance (threshold 0.20)
-            # — same domain scope as the candidates: similarity must never
-            # pull another domain's episode into this cluster.
+            # Find similar episodes to form a NEW cluster with — same domain
+            # scope as the candidates: similarity must never pull another
+            # domain's episode into this cluster.
             similar_r = await db.execute(
                 select(Episode)
                 .where(
@@ -263,7 +305,8 @@ async def _cluster(db, tid: uuid.UUID, did: uuid.UUID | None) -> dict:
                     Episode.embedding.is_not(None),
                     Episode.id.not_in(tuple(linked)) if linked else True,
                     Episode.id.not_in(tuple(assigned_ids)) if assigned_ids else True,
-                    Episode.embedding.cosine_distance(ep.embedding) < 0.20
+                    Episode.embedding.cosine_distance(ep.embedding)
+                    < CLUSTER_GROUP_MAX_DISTANCE,
                 )
             )
             cluster = list(similar_r.scalars().all())

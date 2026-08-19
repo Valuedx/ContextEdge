@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from contextedge.graph.builder import build_episode_graph, persist_pattern_enrichment_edges
 from contextedge.models.episode import Episode
 from contextedge.models.pattern import Pattern, PatternEvidenceLink
+from contextedge.services.deferred_dispatch import dispatch_after_commit
 from contextedge.services.identity_service import identity_ids_from_refs
 from contextedge.services.memory_service import promote_pattern_memory
 
@@ -178,21 +179,19 @@ async def create_pattern_from_episodes(
     # 5. Review F-08: auto-enqueue candidate playbook generation. The
     # only prior entry points were a manual API call (POST
     # /playbooks/generate) and the pattern-tasks Celery beat; patterns
-    # would accrue without candidates unless someone clicked. Local
-    # import avoids a circular dependency (pattern_tasks imports this
-    # module). Wrapped in try/except so a broken pattern-tasks import
-    # doesn't break pattern creation.
-    try:
-        from contextedge.workers.pattern_tasks import generate_playbook_candidate
-
-        generate_playbook_candidate.delay(str(pattern.id), str(tenant_id))
-    except Exception as exc:  # pragma: no cover — belt-and-braces
-        import structlog
-
-        structlog.get_logger().warning(
-            "pattern_service.playbook_enqueue_failed",
-            tenant_id=str(tenant_id), pattern_id=str(pattern.id), error=str(exc),
-        )
+    # would accrue without candidates unless someone clicked.
+    #
+    # Deferred to after the commit. This function does not own its
+    # transaction — the caller (run_async, or the API's get_db) does — so
+    # dispatching here sent the task while the pattern was still invisible
+    # to every other connection. Both ends of that went wrong live: a
+    # rolled-back clustering pass left 65 tasks naming patterns that never
+    # existed, and on the success path a worker that reads too early gets
+    # "pattern_not_found" and returns skipped, so a real pattern silently
+    # never gets its playbook.
+    dispatch_after_commit(
+        db, "pattern.generate_playbook_candidate", [str(pattern.id), str(tenant_id)]
+    )
 
     return pattern
 
@@ -241,12 +240,13 @@ async def add_episode_to_pattern(
                 domain_id=pattern.domain_id,
             )
 
-        try:
-            from contextedge.workers.pattern_tasks import generate_playbook_candidate
-
-            generate_playbook_candidate.delay(str(pattern.id), str(tenant_id))
-        except Exception:
-            pass
+        # Same commit-first rule as create_pattern_from_episodes: the new
+        # membership must be durable before a regeneration reads it, or the
+        # playbook is rebuilt from the pattern as it was WITHOUT this
+        # episode — the one change that triggered the regeneration.
+        dispatch_after_commit(
+            db, "pattern.generate_playbook_candidate", [str(pattern.id), str(tenant_id)]
+        )
 
     return pattern
 
