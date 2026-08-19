@@ -2,14 +2,37 @@
 
 Welcome to the ContextEdge Glossary. This document defines the core concepts, technologies, and terms used throughout the ContextEdge platform.
 
+*Entries were re-checked against the code on 2026-08-19. Where a definition names a file, that file exists at that path today.*
+
 ## A
 
 ### Adjacency List
 - **Term**: Adjacency List
 - **Simple Definition**: A way to store graph data in a database where each row represents a connection between two nodes.
-- **Detailed Explanation**: In ContextEdge, the adjacency list is used in PostgreSQL to represent relationships (edges) between operational entities (like tickets, users, and decisions). It allows for efficient graph traversals (like BFS) using recursive SQL queries, avoiding the need for a dedicated graph database.
-- **Where Used**: `backend/src/contextedge/models/graph.py` and `backend/src/contextedge/graph/`
+- **Detailed Explanation**: In ContextEdge, the adjacency list is used in PostgreSQL to represent relationships (edges) between operational entities (like tickets, users, and decisions). It allows for efficient graph traversals (like BFS) using recursive SQL queries, avoiding the need for a dedicated graph database. The traversal in `graph/queries.py` is an iterative BFS capped at depth 3.
+- **Where Used**: `backend/src/contextedge/models/pattern.py:174` (the `GraphEdge` table) and `backend/src/contextedge/graph/`
 - **Related Terms**: Graph Edge, Node, Graph
+
+### Advisory Lock
+- **Term**: Advisory Lock
+- **Simple Definition**: A lock the application asks Postgres for, to stop two workers doing the same job at once.
+- **Detailed Explanation**: Every sync run takes `pg_try_advisory_xact_lock(hashtext('sync:<object_id>'))` before touching a source object. A second worker that cannot get the lock returns `{"status": "skipped_locked"}` instead of racing the checkpoint. It is transaction-scoped, so it releases on commit or rollback and a crashed worker cannot leak it. Note what does **not** have one: pattern clustering and playbook generation, which is why they run on a single serialized worker instead.
+- **Where Used**: `backend/src/contextedge/services/sync_worker_service.py:379`
+- **Related Terms**: Sync, Worker, Queue
+
+### AI Review (Episode)
+- **Term**: AI Review (Episode)
+- **Simple Definition**: An optional stage where a model reads an episode draft and either advises the human reviewer or approves it outright.
+- **Detailed Explanation**: Controlled by `EPISODE_AI_REVIEW`, whose values are exactly `off` (default), `advisory`, and `auto_approve` (`backend/src/contextedge/config.py:185-187`). Advisory stamps a verdict on `episodes.ai_review` and approves nothing. Auto-approve additionally approves the draft, but only when it clears four deterministic floors on top of the model verdict: at least 2 evidence items, at least 20 characters of `final_outcome`, a verdict of exactly `approve`, and confidence at or above 0.8. An AI approval leaves `reviewer_user_id` NULL, so it stays permanently distinguishable from a human one. The hourly sweep commits per episode before dispatching anything downstream.
+- **Where Used**: `backend/src/contextedge/services/episode_review_service.py:42-44,89-101`, `backend/src/contextedge/workers/evaluation_tasks.py:129`
+- **Related Terms**: Episode, Review Queue, Human-in-the-Loop, Issue Signature
+
+### Applicability
+- **Term**: Applicability
+- **Simple Definition**: The conditions under which a piece of knowledge actually applies — product, version, environment, component.
+- **Detailed Explanation**: Stored on `evidence_items.applicability` and used when retrieving knowledge for playbook generation. Crucially it **re-ranks, never filters**: a mismatched article is demoted and carries a warning into the prompt rather than disappearing, because "no guidance exists" and "the guidance may not fit your version" are different answers. Extraction runs only on the manual re-classification path, and is skipped entirely when the source already stated environment and version.
+- **Where Used**: `backend/src/contextedge/services/knowledge_retrieval_service.py`, `backend/src/contextedge/services/source_facets.py`
+- **Related Terms**: Knowledge State, Source Facets, Grounding
 
 ### Agent
 - **Term**: Agent
@@ -49,22 +72,22 @@ Welcome to the ContextEdge Glossary. This document defines the core concepts, te
 ### Audit Log
 - **Term**: Audit Log
 - **Simple Definition**: A chronological record of security-relevant events and data access.
-- **Detailed Explanation**: ContextEdge logs all admin, reviewer, retrieval, and policy actions to maintain compliance. It tracks who accessed what evidence and why, which is crucial for proving control and retention in enterprise deployments.
-- **Where Used**: `backend/src/contextedge/middleware/`, `backend/src/contextedge/models/audit.py`
-- **Related Terms**: Compliance, Trace Event
+- **Detailed Explanation**: `RequestAuditMiddleware` fires after the response for every POST/PATCH/PUT/DELETE under `/api/v1` (except login): it always writes a structlog `http.mutating_request` line, and additionally inserts an `audit_logs` row when a tenant was resolved, with `action = "http.<method>.<path-slug>"` and an outcome derived from the status code. The insert runs on its own sync engine off-thread and swallows its own failures, because auditing must never turn a successful request into a failed one. Consequence worth knowing: unauthenticated 401 probes never resolve a tenant, so they exist only in the log line, not the table.
+- **Where Used**: `backend/src/contextedge/middleware/request_audit.py:25-124`, `backend/src/contextedge/models/audit.py`
+- **Related Terms**: Compliance, Trace Event, Operational Event
 
 ### Authentication
 - **Term**: Authentication
 - **Simple Definition**: The process of verifying who a user or system is.
-- **Detailed Explanation**: ContextEdge supports enterprise SSO, SAML, and OIDC for human users, translating them into JWTs. For machine access, it uses Service Tokens. Authentication is enforced at the API layer to block unverified requests.
-- **Where Used**: `backend/src/contextedge/deps.py`, `backend/src/contextedge/security_tokens.py`
-- **Related Terms**: Authorization, JWT, Bearer Token
+- **Detailed Explanation**: Today there are exactly two working mechanisms. Human users POST to `/api/v1/auth/login`, which verifies a bcrypt password hash off the event loop and returns a JWT carrying `{sub, tenant_id, email, roles, exp}`. Machines send an `X-Service-Token` header, which is matched against the `SERVICE_TOKENS_JSON` map. **SAML and OIDC are stubs**: `middleware/auth.py` contains per-tenant config helpers and its own docstring says the full implementation is deferred — no login route is wired to them. Do not promise SSO on the strength of that file. Email is unique per tenant, not globally, so the login path handles the same address existing in two tenants by returning 401 "Ambiguous account" rather than guessing.
+- **Where Used**: `backend/src/contextedge/api/v1/auth.py:35-101`, `backend/src/contextedge/deps.py`, `backend/src/contextedge/security_tokens.py`
+- **Related Terms**: Authorization, JWT, Bearer Token, Service Token
 
 ### Authorization
 - **Term**: Authorization
 - **Simple Definition**: The process of checking what a verified user or system is allowed to do.
-- **Detailed Explanation**: ContextEdge uses Role-Based Access Control (RBAC) scoped to tenants, workspaces, and domains. Authorization ensures users can only view evidence, approve playbooks, or configure sources they explicitly have permission for.
-- **Where Used**: `backend/src/contextedge/api/v1/`, `backend/src/contextedge/search/risk_policy.py`
+- **Detailed Explanation**: ContextEdge uses Role-Based Access Control (RBAC) with roles such as `tenant_admin`, `domain_admin`, `knowledge_manager`, and `playbook_reviewer`, enforced by `require_role(...)` on individual routes. **Important caveat:** `RoleBinding` rows carry `scope_type` and `scope_id`, but neither is enforced — login reads only role names and `has_role` is a pure name check, so a role granted for one domain applies tenant-wide on every `require_role` route. Finer scoping exists only where a route consults token claims such as `allowed_domain_ids`. `platform_super_admin`, `tenant_admin`, and `admin` short-circuit every check.
+- **Where Used**: `backend/src/contextedge/deps.py:37-51`, `backend/src/contextedge/api/v1/`, `backend/src/contextedge/search/risk_policy.py`
 - **Related Terms**: Authentication, RBAC, RoleBinding
 
 ## B
@@ -86,9 +109,9 @@ Welcome to the ContextEdge Glossary. This document defines the core concepts, te
 ### Beat Scheduler
 - **Term**: Beat Scheduler
 - **Simple Definition**: A Celery component that runs tasks on a schedule.
-- **Detailed Explanation**: Celery Beat acts as the cron system for ContextEdge. It triggers periodic background tasks, such as cleanup routines (`cleanup_tasks.py`), drift checks, and periodic syncs for connectors that pull data.
-- **Where Used**: `backend/src/contextedge/workers/cleanup_tasks.py`, `make celery-beat-dev`
-- **Related Terms**: Celery, Celery Beat, Worker
+- **Detailed Explanation**: Celery Beat acts as the cron system for ContextEdge. There are 14 scheduled entries — scheduled syncs every 15 minutes, execution verification every 15 minutes, fleet-group detection every 30 minutes, the knowledge dedup sweep and the episode AI-review sweep hourly, drift and graph reconciliation every 6 hours, contradiction scans every 12 hours, five daily sweeps (identity reconciliation, decision calibration, decision pattern mining, orphan cleanup, retention archive) and the weekly retention purge. **Run exactly one beat process** — a second one double-dispatches every entry.
+- **Where Used**: `backend/src/contextedge/workers/celery_app.py:281-384`, `make celery-beat-dev`
+- **Related Terms**: Celery, Celery Beat, Worker, Retention
 
 ### Business Logic
 - **Term**: Business Logic
@@ -116,16 +139,16 @@ Welcome to the ContextEdge Glossary. This document defines the core concepts, te
 ### Chunk
 - **Term**: Chunk
 - **Simple Definition**: A small, meaningful segment of a larger piece of evidence.
-- **Detailed Explanation**: To enable high-recall searches over long documents (like 40KB post-mortems), ContextEdge breaks them into smaller chunks. Each chunk gets its own vector embedding, allowing the system to locate specific details inside massive threads.
-- **Where Used**: `backend/src/contextedge/services/evidence_chunk_service.py`, `backend/src/contextedge/models/evidence.py`
-- **Related Terms**: Chunking, Evidence Chunk
+- **Detailed Explanation**: To enable high-recall searches over long documents (like 40KB post-mortems), ContextEdge breaks them into smaller chunks. Each chunk gets its own vector embedding, allowing the system to locate specific details inside massive threads. Chunks are written by `write_chunks` with a per-chunk `content_hash`, a `chunker_version` for re-chunk safety, and a `source_authority` tag (`runbook` > `ticket` > `email` > `chat` > `gist`).
+- **Where Used**: `backend/src/contextedge/services/evidence_chunk_service.py:43`, `backend/src/contextedge/models/evidence.py`
+- **Related Terms**: Chunking, Evidence Chunk, HalfVec
 
 ### Chunking
 - **Term**: Chunking
 - **Simple Definition**: The process of dividing large texts into smaller pieces (chunks).
-- **Detailed Explanation**: This pipeline runs inline or asynchronously via `chunk_evidence_task`. Source-specific chunkers split text intelligently (e.g., by Jira description, Teams message), and the resulting chunks are embedded in batches of 32 for vector search.
-- **Where Used**: `backend/src/contextedge/services/chunkers/`
-- **Related Terms**: Chunk, Embedding
+- **Detailed Explanation**: Chunking runs **inline** inside `normalize_evidence` when the body is under 16 KB and the source is on the allow-list (`jira_sm`, `servicenow`, `gmail`, `teams`, `sapphireims`, `zoho_desk`); everything larger or unfamiliar dispatches the async `extraction.chunk_evidence` task instead, so a slow parser cannot stall ingest. Both that task and `extraction.embed_chunks_batch` run on the dedicated **`embedding`** queue — not `extraction` — because when they shared the extraction FIFO, chunks were written and left unembedded, making evidence silently unsearchable. Which chunker runs is decided by record shape first (a `kb_article` gets the document chunker even from a ticket source) and source type second. Embeddings go out in batches of 32.
+- **Where Used**: `backend/src/contextedge/services/chunkers/registry.py`, `backend/src/contextedge/workers/chunk_tasks.py:210,238`, `backend/src/contextedge/workers/extraction_tasks.py:54,60-62`
+- **Related Terms**: Chunk, Embedding, Queue
 
 ### Claim
 - **Term**: Claim
@@ -141,12 +164,19 @@ Welcome to the ContextEdge Glossary. This document defines the core concepts, te
 - **Where Used**: `backend/src/contextedge/models/claim.py`
 - **Related Terms**: Claim, Evidence Item
 
+### Case State
+- **Term**: Case State
+- **Simple Definition**: Whether the source system considers this ticket resolved, cancelled, or neither.
+- **Detailed Explanation**: Derived at ingest from the source's own status field — a Zoho ticket `status`, a numeric ServiceNow `state` — and normalized to `resolved`, `cancelled`, or NULL. It matters because `resolved` is what opens the episode-synthesis resolution gate; `cancelled` deliberately does not, since a cancelled ticket teaches nothing about how to fix anything.
+- **Where Used**: `backend/src/contextedge/services/case_state.py:42-135`
+- **Related Terms**: Resolution Gate, Knowledge State, Episode
+
 ### Classifier
 - **Term**: Classifier
 - **Simple Definition**: An AI component that categorizes data into groups.
-- **Detailed Explanation**: ContextEdge uses LLM-powered classifiers during ingestion to perform lightweight first-pass labeling, deciding if an incoming ticket or message is operationally relevant before doing expensive deep extraction.
-- **Where Used**: `backend/src/contextedge/ai/`
-- **Related Terms**: LLM, Relevance
+- **Detailed Explanation**: Two run on the ingest path. The **relevance** classifier is the first LLM call on every record and labels it `operational`, `possibly_relevant`, or `not_relevant`; when the label is `not_relevant` *and* confidence is at least 0.75, the rest of the pipeline is skipped — no identity work, no decisions, no embedding, no chunking. The row is still kept as an audit trail, but it is invisible to vector search by construction. If the classifier itself errors, the pipeline **fails open** into the full path rather than dropping the record. The **message-function** classifier runs second, on conversational sources only.
+- **Where Used**: `backend/src/contextedge/ai/classifiers/relevance.py`, `backend/src/contextedge/ai/classifiers/message_function.py`, gate at `backend/src/contextedge/workers/extraction_tasks.py:471-479`
+- **Related Terms**: LLM, Relevance, Message Function, Noise Gate
 
 ### CORS
 - **Term**: CORS
@@ -158,8 +188,8 @@ Welcome to the ContextEdge Glossary. This document defines the core concepts, te
 ### Connector
 - **Term**: Connector
 - **Simple Definition**: An adapter that links ContextEdge to an external data source.
-- **Detailed Explanation**: Connectors follow a standard contract to fetch data from Jira, Slack, Teams, etc. They handle discovery, backfill, and incremental sync, normalizing the external API responses into a standard internal format.
-- **Where Used**: `backend/src/contextedge/connectors/`
+- **Detailed Explanation**: Every connector implements the same five-method contract: `validate_credentials`, `discover_objects`, `backfill`, `fetch_changes`, and `hydrate_thread`. Seven are registered today — `teams`, `gmail`, `servicenow`, `jira_sm`, `manageengine`, `sapphireims`, `zoho_desk`; `confluence`, `sharepoint`, and `exchange` appear in the source-creation catalog marked `planned`. Connectors also cooperate with pause/cancel by polling a control callback inside their own loops; the default callback is a no-op and the check never raises, so a failing control channel cannot kill a sync.
+- **Where Used**: `backend/src/contextedge/connectors/base.py:78-141`, `backend/src/contextedge/connectors/registry.py:91-122`
 - **Related Terms**: Source, Ingestion, Sync
 
 ### Context Graph
@@ -186,9 +216,9 @@ Welcome to the ContextEdge Glossary. This document defines the core concepts, te
 ### Correlation
 - **Term**: Correlation
 - **Simple Definition**: Identifying that different pieces of evidence relate to the same problem.
-- **Detailed Explanation**: The correlation engine links related artifacts across systems (e.g., a Jira ticket and a Slack thread). These links, marked with confidence scores, form the basis for reconstructing a complete incident "Episode".
-- **Where Used**: `backend/src/contextedge/services/correlation_service.py`
-- **Related Terms**: Episode, Graph Edge
+- **Detailed Explanation**: The correlation engine links related artifacts across systems (e.g., a ServiceNow incident and the Teams thread discussing it) and runs in two tiers. **Tier 1** is deterministic case linking at confidence 1.0: the record's own external id, its thread id, ServiceNow task references, Jira linked-issue keys, Zoho ticket numbers. Shared infrastructure — CIs, assignment groups — is deliberately never a case-link key, because that would mass-merge every incident on the same server. **Tier 2** is identity co-occurrence, gated hard: only `resolved`/`verified` identities count, only inside a 7-day window, hub identities with 200+ links carry zero signal, and a single shared *person* is dropped entirely. Edges are created once and never upgraded, with the case-link tier winning when both matched. Runs as `extraction.correlate_evidence` on the `correlation` queue.
+- **Where Used**: `backend/src/contextedge/services/correlation_service.py:197-791`, `backend/src/contextedge/workers/correlation_tasks.py:16`
+- **Related Terms**: Episode, Graph Edge, Case State, Recurrence
 
 ### Cosine Similarity
 - **Term**: Cosine Similarity
@@ -244,9 +274,9 @@ Welcome to the ContextEdge Glossary. This document defines the core concepts, te
 ### Deduplication
 - **Term**: Deduplication
 - **Simple Definition**: Removing duplicate copies of the same data.
-- **Detailed Explanation**: Implemented via application-layer hash checks and database constraints (partial unique index on `content_hash`). It prevents identical ticket updates or emails from cluttering the context graph, catching `IntegrityError` to handle concurrent inserts safely.
-- **Where Used**: `backend/src/contextedge/services/evidence_normalization.py`, Migration `0026`
-- **Related Terms**: Normalization, Ingestion
+- **Detailed Explanation**: Three layers. At the raw layer, `persist_ingestion_events` skips a payload whose `(tenant_id, source_id, external_id, content_hash)` already exists. At the evidence layer, `_normalize` looks up `(tenant_id, content_hash)` and, on a hit, **refreshes the existing row instead of duplicating it** — merging facets, re-deriving states, repairing a missing embedding — and skips the correlation and hydration fan-out. Behind both sits migration `0026`'s unique index on `(tenant_id, content_hash)`: a concurrent insert raises `IntegrityError`, and the worker rolls back, adopts the winning row, and returns `{"deduped": true, "raced": true}` without re-spending a single LLM call. The content hash is computed on the **raw** body, before cleaning and redaction, so tuning a regex never breaks dedupe. Separately, the hourly `pattern.deduplicate_knowledge` sweep merges duplicate episodes, patterns, and playbooks after the fact.
+- **Where Used**: `backend/src/contextedge/services/ingestion_persistence.py:60-72`, `backend/src/contextedge/workers/extraction_tasks.py:213-220,374-409`, Migration `0026`
+- **Related Terms**: Normalization, Ingestion, Unique Constraint
 
 ### Delta Signal
 - **Term**: Delta Signal
@@ -302,16 +332,16 @@ Welcome to the ContextEdge Glossary. This document defines the core concepts, te
 ### Edge
 - **Term**: Edge
 - **Simple Definition**: A connection between two nodes in a graph.
-- **Detailed Explanation**: In ContextEdge, edges represent relationships (e.g., "based_on", "records_decision") between entities, evidence, and playbooks. They are the backbone of the Context Graph, stored in PostgreSQL.
-- **Where Used**: `backend/src/contextedge/models/graph.py`
+- **Detailed Explanation**: In ContextEdge, edges represent relationships (e.g., "based_on", "records_decision") between entities, evidence, and playbooks. They are the backbone of the Context Graph, stored in PostgreSQL. Every edge type must be declared in a registry — `require_registered` refuses an unknown type at write time, so a typo cannot quietly create an unreachable edge.
+- **Where Used**: `backend/src/contextedge/models/pattern.py:174` (`GraphEdge`), `backend/src/contextedge/graph/edge_types.py`
 - **Related Terms**: Graph Edge, Node, Graph
 
 ### Embedding
 - **Term**: Embedding
 - **Simple Definition**: A list of numbers representing the meaning of a piece of text.
-- **Detailed Explanation**: Text from evidence is converted into 3072-dimensional vector embeddings via LLM APIs. These embeddings are stored in PostgreSQL using `pgvector`, allowing semantic search to find conceptually similar problems even without exact keyword matches.
-- **Where Used**: `backend/src/contextedge/ai/`, `backend/src/contextedge/search/vector_search.py`
-- **Related Terms**: Vector Search, pgvector, Chunking
+- **Detailed Explanation**: Text is converted into vectors by whichever model `DEFAULT_EMBEDDING_MODEL` names, and that model **must return exactly 3072 dimensions** — `generate_embedding` raises a `ValueError` naming the offending model otherwise. The vectors are stored in PostgreSQL `Vector(3072)` columns on `evidence_items`, `evidence_chunks`, `decisions`, and `episodes`, but they are *indexed* as `halfvec` — see HalfVec and HNSW, because 3072 is above the limit for a plain `vector` HNSW index. Embedding calls made with tenant context are budget-gated; the parent-evidence embedding inside `_normalize` currently is not, while chunk embeddings are.
+- **Where Used**: `backend/src/contextedge/ai/provider.py:739,787-793`, `backend/src/contextedge/search/vector_search.py`
+- **Related Terms**: Vector Search, pgvector, Chunking, HalfVec
 
 ### Endpoint
 - **Term**: Endpoint
@@ -330,9 +360,9 @@ Welcome to the ContextEdge Glossary. This document defines the core concepts, te
 ### Episode
 - **Term**: Episode
 - **Simple Definition**: A complete, reconstructed history of a single troubleshooting case.
-- **Detailed Explanation**: The system takes fragmented evidence (tickets, chats) and builds a structured timeline: trigger -> hypothesis -> steps -> outcome. Episodes are the intermediate step between raw evidence and durable patterns.
-- **Where Used**: `backend/src/contextedge/services/episode_service.py`, `backend/src/contextedge/models/episode.py`
-- **Related Terms**: Correlation, Pattern
+- **Detailed Explanation**: The system takes fragmented evidence (tickets, chats) and builds a structured timeline: trigger -> hypothesis -> steps -> outcome. Episodes are the intermediate step between raw evidence and durable patterns. Synthesis is deliberately gated: a cluster must contain at least 3 correlated evidence items, reconstruction is debounced 180 seconds so a still-arriving thread is narrated once rather than per message, and a re-synthesis needs the cluster to be at least 50% bigger than any episode already covering it. Drafts land in `reviewer_state = 'pending_review'` and wait for a human — or, if enabled, for the AI reviewer, whose verdict is stamped on `episodes.ai_review` (NULL there means "never reviewed").
+- **Where Used**: `backend/src/contextedge/services/episode_service.py`, `backend/src/contextedge/models/episode.py`, `backend/src/contextedge/workers/extraction_tasks.py:1391`
+- **Related Terms**: Correlation, Pattern, AI Review (Episode), Resolution Gate
 
 ### Evaluation
 - **Term**: Evaluation
@@ -344,9 +374,9 @@ Welcome to the ContextEdge Glossary. This document defines the core concepts, te
 ### Event
 - **Term**: Event
 - **Simple Definition**: Something that happened in an external system or internally.
-- **Detailed Explanation**: Ingestion events represent raw incoming data, while Trace Events record internal execution steps. Events are immutable, append-only records that drive asynchronous workflows.
-- **Where Used**: `backend/src/contextedge/models/event.py`
-- **Related Terms**: Trace Event, Audit Log
+- **Detailed Explanation**: Three different things wear this name. An `IngestionEvent` is the in-memory unit a connector hands to persistence. A `DecisionTraceEvent` records a step inside a resolution session. An `OperationalEvent` is the append-only ledger row — `llm.usage`, `retention.applied`, `episode.ai_approved`, `correlation.case_linked` and dozens more — that inherits the originating request's correlation and causation ids automatically. Daily LLM spend is measured by summing that day's `llm.usage` events rather than a separate counter column, so there is no second number to drift.
+- **Where Used**: `backend/src/contextedge/models/events.py:13-61`, `backend/src/contextedge/services/event_log_service.py:32-85`
+- **Related Terms**: Trace Event, Audit Log, Operational Event
 
 ### Evidence
 - **Term**: Evidence
@@ -409,8 +439,8 @@ Welcome to the ContextEdge Glossary. This document defines the core concepts, te
 ### FTS (Full-Text Search)
 - **Term**: FTS (Full-Text Search)
 - **Simple Definition**: Searching for exact words or phrases within text.
-- **Detailed Explanation**: ContextEdge stores `tsvector` columns in Postgres with GIN indexes to support fast keyword searches. The Hybrid Ranker combines this FTS score with Vector Search to find the best playbook matches.
-- **Where Used**: `backend/src/contextedge/search/hybrid_ranker.py`
+- **Detailed Explanation**: ContextEdge stores `tsvector` columns in Postgres with GIN indexes (migration `0007`) to support fast keyword searches. Evidence FTS is more than a `plainto_tsquery` match: it ORs in two fallbacks in the same statement — a ticket-number lookup against the raw payload (so a reviewer can find `INC0010427` by typing its number) and a `title ILIKE`. By default it also excludes `thread_message` rows, because hydrated replies belong under their parent's thread view rather than as standalone hits. The Hybrid Ranker combines the FTS score with vector and graph signals for playbook matching.
+- **Where Used**: `backend/src/contextedge/search/pg_fts.py:12-105`, `backend/src/contextedge/search/hybrid_ranker.py`
 - **Related Terms**: Vector Search, Hybrid Search, tsvector
 
 ### Foreign Key
@@ -446,39 +476,39 @@ Welcome to the ContextEdge Glossary. This document defines the core concepts, te
 ### Graph Edge
 - **Term**: Graph Edge
 - **Simple Definition**: A single connection line in the Context Graph.
-- **Detailed Explanation**: The `GraphEdge` table stores relationships with types like `approved_by` or `records_decision`. Migration `0029` adds temporal validity (`valid_from`/`valid_to`), allowing the graph to represent knowledge that changes over time.
-- **Where Used**: `backend/src/contextedge/models/graph.py`
-- **Related Terms**: Edge, Context Graph
+- **Detailed Explanation**: The `GraphEdge` table stores relationships with types like `approved_by` or `records_decision`, carrying temporal validity (`valid_from` / `valid_to`) so the graph can represent knowledge that changed over time. Writes go through `ensure_edge`, which is idempotent: it selects the active edge, then `INSERT ... ON CONFLICT DO NOTHING` against the partial unique index `uq_graph_edges_active_logical` (`WHERE valid_to IS NULL`), then re-selects if it lost the race — so two concurrent workers can never abort each other's transaction.
+- **Where Used**: `backend/src/contextedge/models/pattern.py:174-273`, `backend/src/contextedge/graph/builder.py:50-135`
+- **Related Terms**: Edge, Context Graph, Temporal
 
 ### Graph Edge Meta
 - **Term**: Graph Edge Meta
 - **Simple Definition**: Extra information attached to a graph connection.
-- **Detailed Explanation**: JSON metadata stored on a GraphEdge, carrying specifics like confidence scores, risk levels, or tool references, allowing the graph traversals to be weighted and context-aware.
-- **Where Used**: `backend/src/contextedge/models/graph.py`
+- **Detailed Explanation**: JSON metadata (`metadata_extra`) stored on a GraphEdge, carrying specifics like resolution state, risk level, or tool references. Note that an edge has **two** separate numeric fields that are easy to confuse: `weight` is traversal importance (how much this edge should pull the agent's attention) and `confidence` is belief (how sure we are the relationship is real). Callers pass both when they mean both.
+- **Where Used**: `backend/src/contextedge/models/pattern.py:174-273`, `backend/src/contextedge/graph/builder.py:63-72`
 - **Related Terms**: Graph Edge
 
 ### Grounding
 - **Term**: Grounding
 - **Simple Definition**: Ensuring AI answers are based strictly on real facts.
-- **Detailed Explanation**: ContextEdge enforces grounding by linking every AI-generated claim, playbook step, or pattern directly back to the original source evidence. This prevents LLM hallucinations.
-- **Where Used**: UI tracing, Playbook schema
-- **Related Terms**: Evidence, Claim Evidence
+- **Detailed Explanation**: ContextEdge enforces grounding by linking every AI-generated claim, playbook step, or pattern back to source evidence. Generated playbook steps are split into a two-way taxonomy — grounded (traceable to an episode or a retrieved document) versus best practice — and the split is enforced structurally after citation cleaning, not just requested in the prompt. Steps that are not grounded are surfaced with a `[best practice]` marker rather than being hidden, so a reader can see which half of a playbook is evidence and which half is convention.
+- **Where Used**: `backend/src/contextedge/ai/prompts/playbook.py`, `backend/src/contextedge/graph/agent/hydrators.py:211-220`
+- **Related Terms**: Evidence, Claim Evidence, Applicability
 
 ## H
 
 ### HalfVec
 - **Term**: HalfVec
 - **Simple Definition**: A memory-efficient way to store vector embeddings.
-- **Detailed Explanation**: Used by pgvector, it stores vector coordinates using 16-bit floats instead of 32-bit, saving storage space and improving vector search performance without significant loss of semantic accuracy.
-- **Where Used**: PostgreSQL pgvector configuration
-- **Related Terms**: Vector, Embedding, pgvector
+- **Detailed Explanation**: A pgvector type that stores vector coordinates as 16-bit floats instead of 32-bit. In ContextEdge it is not a nice-to-have optimization — it is **the only way vector indexing works at all**, because pgvector's HNSW caps the plain `vector` type at 2,000 dimensions and this application stores 3,072. Every semantic query therefore orders by `halfvec_cosine_distance`, which casts both sides to `halfvec(3072)` so it matches the expression indexes built in migration `0032`. A query that calls `column.cosine_distance(...)` directly compiles fine, returns correct results, and silently does a sequential scan.
+- **Where Used**: `backend/src/contextedge/search/vector_ops.py:40-45`, migration `0032_halfvec_hnsw_indexes`
+- **Related Terms**: Vector, Embedding, pgvector, HNSW
 
 ### HNSW
 - **Term**: HNSW
 - **Simple Definition**: A fast search algorithm for finding similar vectors.
-- **Detailed Explanation**: Hierarchical Navigable Small World (HNSW) indexes are created in Postgres (via `pgvector`) on embedding columns. This makes finding semantically similar evidence or playbooks incredibly fast at runtime.
-- **Where Used**: Database migrations (e.g., `0021`), Vector search
-- **Related Terms**: pgvector, Vector Search, Similarity Search
+- **Detailed Explanation**: Hierarchical Navigable Small World indexes make similarity search fast. The history here matters: migration `0021` declared HNSW indexes that **could never have been built**, because the embeddings are 3,072-dimensional and pgvector's `vector` HNSW stops at 2,000 — so for a long time every similarity query was a sequential scan while the docs claimed otherwise. Real ANN indexing landed in migration `0032` as HNSW *expression* indexes over `(embedding::halfvec(3072))` on `evidence_items`, `evidence_chunks`, `decisions`, and `episodes`. It needs the pgvector server extension at 0.7 or newer, which is why `docker-compose.yml` pins `pgvector/pgvector:pg16`. One more operational detail: the indexes are global across tenants while every query post-filters by `tenant_id`, so callers run `SET LOCAL hnsw.ef_search = 200` first — at the default 40 a small tenant's rows can be missing from the candidate set entirely and the query quietly returns fewer rows than requested.
+- **Where Used**: Migration `0032_halfvec_hnsw_indexes`, `backend/src/contextedge/search/vector_ops.py:31-45`
+- **Related Terms**: pgvector, Vector Search, Similarity Search, HalfVec
 
 ### Hook
 - **Term**: Hook
@@ -497,16 +527,16 @@ Welcome to the ContextEdge Glossary. This document defines the core concepts, te
 ### Hybrid Search
 - **Term**: Hybrid Search
 - **Simple Definition**: Combining keyword search and meaning search to get the best results.
-- **Detailed Explanation**: ContextEdge's `hybrid_ranker.py` blends Full-Text Search (keyword match), Vector Search (semantic match), and Graph signals (recency, success rate) to rank and return the most accurate playbooks at runtime.
-- **Where Used**: `backend/src/contextedge/search/hybrid_ranker.py`
-- **Related Terms**: FTS, Vector Search
+- **Detailed Explanation**: `hybrid_ranker.rank_playbooks` blends seven weighted signals — keyword 0.25, semantic 0.30, graph distance 0.15, evidence quality 0.10, identity 0.05, recency 0.10, freshness 0.05 — minus a negative-knowledge penalty. The semantic signal is gated by the keyword score, so pure vector drift cannot carry a result on its own. **Abstention is a feature**: anything scoring below `MIN_RECOMMENDATION_SCORE = 0.35` is dropped, and if candidates existed but all fell below, the ranker logs `ranking.abstained` and returns an empty list. An empty result means "no recommendation", not "search failed".
+- **Where Used**: weights at `backend/src/contextedge/search/hybrid_ranker.py:22-31`, abstention floor at `:171`, the scorer at `:213-379`
+- **Related Terms**: FTS, Vector Search, Runtime
 
 ### Hydration
 - **Term**: Hydration
 - **Simple Definition**: Filling in missing details to complete a dataset.
-- **Detailed Explanation**: "Thread hydration" happens when ContextEdge detects an interesting single message and reaches back into the source (e.g., Slack) to pull the surrounding conversation, building complete context without crawling everything.
-- **Where Used**: Connectors, Ingestion pipeline
-- **Related Terms**: Thread, Ingestion
+- **Detailed Explanation**: "Thread hydration" happens when ContextEdge has ingested a record that references a conversation — a Zoho ticket, a Teams thread — and reaches back into the source to pull the surrounding messages, building complete context without crawling everything. It runs as `hydration.hydrate_thread` on its own queue, and each fetched message becomes a raw row that loops back through normalization. **The loop terminates** because a hydrated message never requests hydration itself (one shared predicate prevents 10-50× re-hydration amplification) and re-delivered messages dedupe at the raw layer.
+- **Where Used**: `backend/src/contextedge/workers/hydration_tasks.py:36-205`, `backend/src/contextedge/workers/extraction_tasks.py:611-615`
+- **Related Terms**: Thread, Ingestion, Noise Gate
 
 ### Hydrator
 - **Term**: Hydrator
@@ -520,16 +550,16 @@ Welcome to the ContextEdge Glossary. This document defines the core concepts, te
 ### Identity
 - **Term**: Identity
 - **Simple Definition**: A unique, recognized person, system, or object.
-- **Detailed Explanation**: Canonical identities map disparate text references (e.g., "jsmith", "John S.") to a single record. This allows the graph to track recurring issues accurately across different tools.
-- **Where Used**: `backend/src/contextedge/services/identity_service.py`
+- **Detailed Explanation**: Canonical identities map disparate text references (e.g., "jsmith", "John S.") to a single record. Only four entity types bear identity — `person`, `device`, `application`, `service`; things like environment or version are rejected because they belong in source facets and applicability instead. An identity carries a `resolution_state`: `provisional` (seen once), `needs_review` (the adjudicator was unsure), `resolved` (corroborated), `verified` (a human merged it).
+- **Where Used**: `backend/src/contextedge/services/identity_service.py`, `backend/src/contextedge/models/episode.py:48-88`
 - **Related Terms**: Identity Resolution, Canonical Identity
 
 ### Identity Resolution
 - **Term**: Identity Resolution
 - **Simple Definition**: The process of linking different names to the same identity.
-- **Detailed Explanation**: Runs during evidence normalization. It uses aliases, product synonyms, and mapping dictionaries to map incoming text to canonical entities in the Context Graph.
-- **Where Used**: `backend/src/contextedge/services/identity_service.py`
-- **Related Terms**: Identity
+- **Detailed Explanation**: Runs during evidence normalization, in four ordered layers, cheapest first. **1.** Strong-identifier lookup on an email, hostname, FQDN, IP, serial, or username — confidence 1.0, no model call. `vpn-gw-east-01` resolves here forever after its first sighting. **2.** Typed exact alias match — 0.95. **3.** A candidacy gate that rejects anything not worth spending on (identity work was 78% of all model spend before it existed), then LLM adjudication over up to 5 trigram/substring candidates; an auto-link only happens at or above 0.95 for people and 0.9 for everything else, and anything below that becomes a **new identity in `needs_review`** rather than a silent link or a silent fork. **4.** Otherwise a provisional identity is created. Successful matches learn the alias they matched on, so the next occurrence resolves deterministically at layer 1 or 2. A provisional identity linked by 2 or more distinct evidence items (and not yet common) is promoted to `resolved` at the moment it first *could* correlate something.
+- **Where Used**: `backend/src/contextedge/services/identity_service.py:616-796`, `backend/src/contextedge/services/identity_candidacy.py`, `backend/src/contextedge/services/identity_promotion.py`
+- **Related Terms**: Identity, Correlation
 
 ### Idempotency Key
 - **Term**: Idempotency Key
@@ -537,6 +567,13 @@ Welcome to the ContextEdge Glossary. This document defines the core concepts, te
 - **Detailed Explanation**: Added to `ExecutionStepRun` in migration `0029`, it provides banking-grade duplicate prevention. This guarantees that automated playbook steps (like rebooting a server) are never executed multiple times accidentally by network retries.
 - **Where Used**: `backend/src/contextedge/models/execution.py`
 - **Related Terms**: Execution Step Run
+
+### Ingest Priority
+- **Term**: Ingest Priority
+- **Simple Definition**: An optional per-source-object rule for which raw records get normalized first.
+- **Detailed Explanation**: Set on `source_objects.metadata_extra["ingest_priority"]`; valid values are `none` (arrival order, the default), `resolution_first`, `threads_desc`, and `threads_asc`. Ordering is SQL over the raw payload's thread count and resolution field, and it is fail-soft — an ordering error returns the original list, and ids are never added or dropped. **Known blind spot:** a raw payload over 32 KB lives in MinIO and the database row holds only a stub, so its thread count and resolution read as absent and it sorts to the back regardless of mode. The biggest tickets — the longest conversations — are exactly the ones prioritization cannot see.
+- **Where Used**: `backend/src/contextedge/services/ingest_priority.py:36-95`
+- **Related Terms**: Ingestion, Offload, Sync
 
 ### Index
 - **Term**: Index
@@ -548,9 +585,16 @@ Welcome to the ContextEdge Glossary. This document defines the core concepts, te
 ### Ingestion
 - **Term**: Ingestion
 - **Simple Definition**: The process of bringing external data into the system.
-- **Detailed Explanation**: Managed by Connectors and the Sync Worker Service. Data is pulled from Jira, Slack, etc., saved as raw events, and placed in a queue for normalization. It utilizes a "claim-before-queue" recovery pattern for reliability.
-- **Where Used**: `backend/src/contextedge/connectors/`, `backend/src/contextedge/services/sync_worker_service.py`
-- **Related Terms**: Connector, Sync, Normalization
+- **Detailed Explanation**: Managed by Connectors and the Sync Worker Service. Data is pulled from the source, saved as `raw_evidence_objects` rows, committed, and only then queued for normalization — the ordering matters, because a worker must never be handed an id it cannot yet read. "Claim-before-queue" is the recovery pattern: raw ids that fail to enqueue are parked on `source_objects.metadata_extra["pending_normalize_raw_ids"]`, the run is marked failed with a handoff blob, and the next successful run re-drains the ledger. Registered connectors today: `teams`, `gmail`, `servicenow`, `jira_sm`, `manageengine`, `sapphireims`, `zoho_desk` (`confluence`, `sharepoint`, and `exchange` appear in the picker catalog as `planned`).
+- **Where Used**: `backend/src/contextedge/connectors/registry.py:91-122`, `backend/src/contextedge/services/sync_worker_service.py:301-376`
+- **Related Terms**: Connector, Sync, Normalization, Ingest Priority
+
+### Issue Signature
+- **Term**: Issue Signature
+- **Simple Definition**: A generalized fingerprint of *what kind of problem* an episode was, so the same kind of problem can be recognized again later.
+- **Detailed Explanation**: When an episode is approved, one LLM call distils it into `affected_capability`, `failing_component`, `failure_mode`, and a descriptive `trigger_change` / `environment` / `scope`. The identity key is only the first three, slugged and joined: `remote_access|tls_certificate|certificate_expired`. Trigger, environment, and scope are recorded but excluded from the key on purpose, so the same failure triggered a different way still counts as the same recurring issue. The prompt explicitly forbids hostnames, ticket numbers, and people — a signature that named `vpn-gw-east-01` would match nothing else, ever. Positioned deliberately between two neighbours: broader than an `ErrorSignature`'s exact error string, narrower than raw embedding similarity.
+- **Where Used**: `backend/src/contextedge/services/issue_signature_service.py:76-86,89`, `backend/src/contextedge/models/issue_signature.py`, task `evaluation.extract_issue_signature`
+- **Related Terms**: Recurrence, Episode, Error Signature, Pattern
 
 ### IVFFlat
 - **Term**: IVFFlat
@@ -578,16 +622,23 @@ Welcome to the ContextEdge Glossary. This document defines the core concepts, te
 ### Jira
 - **Term**: Jira
 - **Simple Definition**: A popular issue tracking and ticketing system.
-- **Detailed Explanation**: One of the primary external Sources for ContextEdge. The Jira connector pulls tickets and comments, mapping them into EvidenceItems and correlating them with chat threads to build complete Episodes.
-- **Where Used**: `backend/src/contextedge/connectors/jira/`
+- **Detailed Explanation**: One of the primary external Sources for ContextEdge, registered under the source type `jira_sm`. The connector pulls tickets and comments, maps them into EvidenceItems, and correlates them with chat threads to build complete Episodes. It uses kind-prefixed thread ids (`incident:PROJ-123`) and a JQL minute cursor with a 30-minute overlap rewind, because JQL's minute granularity would otherwise skip records that changed inside the same minute as the cursor.
+- **Where Used**: `backend/src/contextedge/connectors/jira_sm/`
 - **Related Terms**: Source, Connector
 
 ## K
 
+### Knowledge State
+- **Term**: Knowledge State
+- **Simple Definition**: Whether the source system considers a KB article draft, in review, published, or retired.
+- **Detailed Explanation**: Derived at ingest from the source's own lifecycle field — ServiceNow `kb_knowledge.workflow_state`, Zoho `articles.status` — and normalized to `draft` / `review` / `published` / `retired`. Retrieval withholds the first two and the last: only `published` articles reach a playbook prompt. The nuance that catches people out is **NULL**, which means "the source did not say" and therefore always serves. The SQL predicate is written as an explicit `IS NULL OR NOT IN` rather than a bare `NOT IN`, because three-valued logic would otherwise drop every NULL row. Rows ingested before migration `0067` stay NULL until their next sync, and are deliberately not backfilled with SQL, because payloads over 32 KB are offloaded and a SQL backfill would silently skip the longest articles.
+- **Where Used**: `backend/src/contextedge/services/knowledge_lifecycle.py:48-152`
+- **Related Terms**: Case State, Applicability, Offload
+
 ### Knowledge Transfer
 - **Term**: Knowledge Transfer
 - **Simple Definition**: Moving information from one place or person to another.
-- **Detailed Explanation**: The ultimate goal of ContextEdge. It transfers operational tribal knowledge buried in Slack and Jira into durable, versioned, machine-readable playbooks that can teach new analysts or guide automated agents.
+- **Detailed Explanation**: The ultimate goal of ContextEdge. It transfers operational tribal knowledge buried in ticket systems and chat threads into durable, versioned, machine-readable playbooks that can teach new analysts or guide automated agents.
 - **Where Used**: Product Vision
 - **Related Terms**: Playbook, Operational Memory
 
@@ -614,13 +665,6 @@ Welcome to the ContextEdge Glossary. This document defines the core concepts, te
 - **Where Used**: `backend/src/contextedge/ai/`
 - **Related Terms**: LiteLLM, Prompt, Extractor
 
-### LOEUF
-- **Term**: LOEUF
-- **Simple Definition**: A genetic constraint metric.
-- **Detailed Explanation**: (Domain-specific term, normally associated with genetic science, potentially caught in general taxonomy). In the context of software operations, ignore; if referenced, it highlights statistical boundaries.
-- **Where Used**: Science plugins (N/A for core platform)
-- **Related Terms**: None
-
 ## M
 
 ### MAF
@@ -636,6 +680,20 @@ Welcome to the ContextEdge Glossary. This document defines the core concepts, te
 - **Detailed Explanation**: Rather than calculating graph traversals or playbook statistics on every API call, background tasks "materialize" these views in the database to keep runtime retrieval latency extremely low.
 - **Where Used**: Data pipeline, Workers
 - **Related Terms**: Projection
+
+### Message Function
+- **Term**: Message Function
+- **Simple Definition**: What a single chat or email message is *doing* — reporting a symptom, proposing a fix, confirming a resolution, coordinating.
+- **Detailed Explanation**: The second LLM call on the ingest path, and only for conversational sources. The label lands on `evidence_items.message_function` with a confidence, and an out-of-vocabulary label degrades to `unclassified` rather than being stored raw. It is fail-soft: a failed call costs the label, not the record. This is what lets episode synthesis tell "any update on the VPN?" apart from "restarted IPSec on the gateway, tunnel stable".
+- **Where Used**: `backend/src/contextedge/ai/classifiers/message_function.py:38-65`, `backend/src/contextedge/workers/extraction_tasks.py:487-505`
+- **Related Terms**: Classifier, Thread, Noise Gate
+
+### MMR (Maximal Marginal Relevance)
+- **Term**: MMR (Maximal Marginal Relevance)
+- **Simple Definition**: A way of picking search results that are relevant *and* different from each other.
+- **Detailed Explanation**: Chunk-level semantic search oversamples candidates and then applies MMR with λ = 0.7 before rolling up to one hit per parent evidence item. Without it, twenty near-identical chunks from one long thread would crowd out every other thread. If a chunk's embedding is missing or corrupt, MMR degrades to plain distance ordering — one bad chunk never fails the request.
+- **Where Used**: `backend/src/contextedge/search/chunk_rollup.py:31,79-121`, `backend/src/contextedge/search/vector_search.py:204-243`
+- **Related Terms**: Vector Search, Chunk, Similarity Search
 
 ### Memory
 - **Term**: Memory
@@ -654,16 +712,16 @@ Welcome to the ContextEdge Glossary. This document defines the core concepts, te
 ### Migration
 - **Term**: Migration
 - **Simple Definition**: A script that updates the database structure to a new version.
-- **Detailed Explanation**: Managed by Alembic. As new features (like AE Ops alignment in `0029`) are added, migrations safely add tables, columns, and indexes to the PostgreSQL database without destroying existing data.
-- **Where Used**: `backend/alembic/versions/`, `docs/MIGRATIONS.md`
+- **Detailed Explanation**: Managed by Alembic. As new features are added, migrations safely add tables, columns, and indexes without destroying existing data. **The standing rule in this repo: never quote a head revision number in prose — run `alembic heads` and trust that.** Two enforcement points depend on it: `/ready` returns 503 when `alembic_version` does not match the bundled head, and every Celery worker calls `SystemExit` at startup for the same reason. `0001_initial_schema` builds from model metadata rather than being a frozen DDL snapshot, which is why fresh installs never reproduce historical drift bugs (and why those bugs survived so long).
+- **Where Used**: `backend/alembic/versions/`, `docs/MIGRATIONS.md`, `backend/src/contextedge/workers/celery_app.py:83-139`
 - **Related Terms**: Alembic, Database
 
 ### MinIO
 - **Term**: MinIO
 - **Simple Definition**: A storage system for large files, compatible with Amazon S3.
-- **Detailed Explanation**: Used as the Object Store to offload large raw evidence payloads, logs, and attachments so they don't bloat the relational PostgreSQL database, keeping DB queries fast.
-- **Where Used**: `backend/src/contextedge/services/object_store.py`
-- **Related Terms**: Object Store, Evidence
+- **Detailed Explanation**: The object store for raw evidence payloads over 32 KB (at `raw/{tenant}/{raw_id}.json`) and attachment binaries (at `artifacts/{tenant}/{evidence}/{artifact}/...`), so large blobs do not bloat Postgres. The client is deliberately impatient — 1-second connect and read timeouts with a single attempt — so a slow store fails fast rather than stalling a worker. The bucket is auto-created at API startup; a failure there only degrades (`object_store: degraded` on `/ready`), it does not stop the app.
+- **Where Used**: `backend/src/contextedge/services/object_store.py:19-90`
+- **Related Terms**: Object Store, Evidence, Offload
 
 ### Model
 - **Term**: Model
@@ -698,15 +756,22 @@ Welcome to the ContextEdge Glossary. This document defines the core concepts, te
 ### Normalization
 - **Term**: Normalization
 - **Simple Definition**: Cleaning and standardizing messy data into a uniform format.
-- **Detailed Explanation**: The Celery Normalization worker takes raw data from Jira, Slack, or email and converts it into standard `EvidenceItem` records, deduplicating them and applying redaction rules before any LLM processing.
-- **Where Used**: `backend/src/contextedge/services/evidence_normalization.py`
-- **Related Terms**: Evidence, Deduplication, Redaction
+- **Detailed Explanation**: The `extraction.normalize_evidence` task turns a raw payload into a standard `EvidenceItem`. The order inside `_normalize` is fixed and worth memorizing, because almost every ingest question is "which of these stages did it stop at?": load raw payload → hydrated-message noise gate → title/body extraction and content hash → **redaction** → dedupe on `(tenant_id, content_hash)` → insert the row with derived `evidence_type`, `knowledge_state`, `case_state`, `source_facets` → thread and attachments → relevance classification → extraction gate → message-function classification → deterministic error-signature fingerprints → identity resolution → decision extraction → parent embedding → chunk dispatch. Redaction sits before every model call by design, so PII never leaves the tenant boundary. Each LLM stage is individually wrapped: a failure degrades one field, it does not fail the record.
+- **Where Used**: `backend/src/contextedge/workers/extraction_tasks.py:122-628`, `backend/src/contextedge/services/evidence_normalization.py`
+- **Related Terms**: Evidence, Deduplication, Redaction, Noise Gate
+
+### Noise Gate
+- **Term**: Noise Gate
+- **Simple Definition**: A cheap, deterministic filter that throws away chat messages carrying no diagnostic content, before any AI runs.
+- **Detailed Explanation**: Applies only to hydrated thread messages. It rejects four kinds of message — `delivery_failure`, `quote_only`, `empty`, and `coordination_only` — where the last means "under 150 characters *and* containing no technical signal" (no error code, path, version, hostname, URL, IP, stack trace, SQL, or shell fragment; 15 regexes decide). Length is measured after markup and signatures are stripped, so a short message that mentions `vpn-gw-east-01` survives while "any update on the VPN?" does not. A rejection creates **no evidence row at all**, but the raw object is kept and the `filter_version` is logged, so tightening a rule later can re-judge every previously rejected message exactly. Measured impact: 47% of 18,907 live messages rejected before a single model call.
+- **Where Used**: `backend/src/contextedge/services/message_filter.py:52-206`, `backend/src/contextedge/workers/extraction_tasks.py:147-160`
+- **Related Terms**: Normalization, Hydration, Classifier
 
 ### Notification
 - **Term**: Notification
 - **Simple Definition**: An alert sent to a user about an important event.
-- **Detailed Explanation**: Managed by the notification service, users receive alerts in the UI for sync failures, playbook drift, and pending approval queues, ensuring governance bottlenecks are cleared quickly.
-- **Where Used**: `backend/src/contextedge/services/notification_service.py`
+- **Detailed Explanation**: Users receive alerts for sync failures, expiring credentials, playbook candidates, drift, contradictions, evaluation regressions, review assignments, and playbook approvals. Three channels exist: in-app (a `notifications` row, polled by the header bell), email over SMTP, and a Teams/Slack-compatible webhook. Email and webhook are **no-ops until configured** — they log `notification.email_skipped_unconfigured` / `notification.webhook_skipped_unconfigured` rather than failing. All delivery is best-effort: a failure is logged and never raised into the flow that triggered it. A `user_id` of NULL means the notification is a tenant-wide broadcast.
+- **Where Used**: `backend/src/contextedge/services/notification_service.py:24-220`, `backend/src/contextedge/models/events.py:64-89`
 - **Related Terms**: Drift, Review Queue
 
 ## O
@@ -723,7 +788,21 @@ Welcome to the ContextEdge Glossary. This document defines the core concepts, te
 - **Simple Definition**: A system designed to store massive amounts of unstructured files.
 - **Detailed Explanation**: ContextEdge uses S3-compatible storage (like MinIO locally) to store raw evidence payloads and attachments, isolating large blobs from the transactional Postgres database.
 - **Where Used**: `backend/src/contextedge/services/object_store.py`
-- **Related Terms**: MinIO, Evidence
+- **Related Terms**: MinIO, Evidence, Offload
+
+### Offload (Raw Payload Offload)
+- **Term**: Offload (Raw Payload Offload)
+- **Simple Definition**: Moving a raw payload bigger than 32 KB out of the database and into object storage, leaving a placeholder behind.
+- **Detailed Explanation**: When a raw payload's JSON exceeds `OFFLOAD_THRESHOLD_BYTES = 32_768`, it is uploaded to MinIO at `raw/{tenant_id}/{raw_id}.json` and the `raw_payload` column keeps only `{"_offloaded": true, "size_bytes": N}`, with the real key in `object_storage_key`. This keeps the table small, but it has one consequence every developer must internalize: **any SQL that filters or reads `raw_evidence_objects.raw_payload` silently skips the biggest rows** — which are exactly the longest tickets, threads, and articles. It already affects ingest-priority ordering, reply-inheritance reconciliation, and is the stated reason `knowledge_state` and `source_facets` on older rows are refilled on the next sync rather than by a SQL backfill. Reading a payload back goes through `load_raw_payload`; an offload stub with no storage key is treated as legacy corruption and reported rather than guessed at.
+- **Where Used**: `backend/src/contextedge/services/ingestion_persistence.py:16,84-87`, `backend/src/contextedge/services/object_store.py:50-59`
+- **Related Terms**: Object Store, MinIO, Ingest Priority, Knowledge State
+
+### Operational Event
+- **Term**: Operational Event
+- **Simple Definition**: An append-only record of something the system did, with the ids needed to trace it back to whoever triggered it.
+- **Detailed Explanation**: Rows in `operational_events` carrying `entity_type`, `entity_id`, `event_type`, `occurred_at`, `correlation_id`, `causation_id`, `actor_id`, and a JSONB payload. Correlation and causation ids default from the current request context, which is threaded from the HTTP middleware into Celery task headers and rebound on the worker — so one id joins an operator's click to the LLM spend it caused. Event families in use include `llm.usage`, `llm.budget_warning`, `retention.applied`, `session.created`, `runtime.match_completed`, `identity.resolved`, `episode.ai_approved`, `correlation.case_linked`, `decision.created`, and `agent_graph.projected`.
+- **Where Used**: `backend/src/contextedge/models/events.py:13-61`, `backend/src/contextedge/services/event_log_service.py:32-85`
+- **Related Terms**: Event, Audit Log, Request Context
 
 ### OpenAPI
 - **Term**: OpenAPI
@@ -744,23 +823,23 @@ Welcome to the ContextEdge Glossary. This document defines the core concepts, te
 ### Pattern
 - **Term**: Pattern
 - **Simple Definition**: A recurring issue or sequence of events identified by the system.
-- **Detailed Explanation**: The pattern engine clusters repeated Episodes (e.g., "7 instances of VPN failure after Windows update"). These patterns justify the creation of a formalized Playbook candidate for human review.
-- **Where Used**: `backend/src/contextedge/services/pattern_service.py`
-- **Related Terms**: Episode, Playbook
+- **Detailed Explanation**: The pattern engine clusters repeated Episodes (e.g., "7 instances of VPN failure after Windows update"). An approved, embedded episode is first probed against existing patterns by cosine distance below 0.35 and adjudicated by an LLM; failing that, it clusters with unlinked neighbours inside cosine distance 0.20 and one LLM call synthesizes a new pattern. Creating a pattern auto-enqueues a playbook candidate. **There is no beat entry for clustering** — it fires when an episode is approved (by a human or by auto-approve), once per affected domain, or manually via `POST /api/v1/patterns/cluster`. Two behaviours to know: the match adjudication **fails open** during a provider outage, so the embedding probe alone decides membership; and a full pass runs inside a single long transaction, so a late failure rolls back every row while the LLM spend stays spent.
+- **Where Used**: `backend/src/contextedge/workers/pattern_tasks.py:153,422`, `backend/src/contextedge/services/pattern_service.py:62-197`
+- **Related Terms**: Episode, Playbook, Issue Signature
 
 ### PII
 - **Term**: PII
 - **Simple Definition**: Personally Identifiable Information (like names, SSNs).
-- **Detailed Explanation**: ContextEdge runs Regex PII redaction (masking SSNs, credit cards, API keys) at ingest time. This critical security step runs *before* data is sent to external LLMs or embedded, preventing data leaks.
-- **Where Used**: `backend/src/contextedge/services/redaction_service.py`
+- **Detailed Explanation**: ContextEdge runs regex PII redaction at ingest time, *before* anything is sent to an external LLM or embedded. Rule order is deliberate — secrets before numerics, so a token is never half-redacted — covering API tokens (GitHub, Slack, OpenAI, GitLab, Google), JWTs, bearer tokens, secret assignments, emails, phone numbers, SSNs, credit cards, AWS keys, and private-key blocks. Phone matching is word-boundary-guarded so hex ids and serial numbers survive intact: corrupting an external id would fork an identity.
+- **Where Used**: `backend/src/contextedge/services/redaction_service.py:36-191`
 - **Related Terms**: Redaction, Security
 
 ### Playbook
 - **Term**: Playbook
 - **Simple Definition**: An approved, step-by-step guide to solve a specific problem.
-- **Detailed Explanation**: The ultimate output of the system. Playbooks contain trigger conditions, evidence links, and execution steps. They are strictly governed, versioned, and require human approval before becoming available in runtime search.
-- **Where Used**: `backend/src/contextedge/services/playbook_service.py`, `backend/src/contextedge/models/playbook.py`
-- **Related Terms**: Governance, Runtime
+- **Detailed Explanation**: The ultimate output of the system. Playbooks contain trigger conditions, evidence links, and execution steps. They are strictly governed and versioned: only `lifecycle_state = 'approved'` playbooks with a published current version are visible to runtime matching or to the agent projection, and an expired one drops out automatically. Candidates are generated automatically from patterns (`pattern.generate_playbook_candidate`) — creating a pattern enqueues one, and growing a pattern's membership re-enqueues it — but a candidate is a draft, not a playbook. One deployment caveat: playbooks created before the embedding column landed have NULL embeddings until `evaluation.backfill_playbook_embeddings` is run once per environment.
+- **Where Used**: `backend/src/contextedge/services/playbook_service.py`, `backend/src/contextedge/models/playbook.py`, `backend/src/contextedge/workers/pattern_tasks.py:446`
+- **Related Terms**: Governance, Runtime, Pattern, Grounding
 
 ### Playbook Step
 - **Term**: Playbook Step
@@ -797,12 +876,19 @@ Welcome to the ContextEdge Glossary. This document defines the core concepts, te
 - **Where Used**: `docs/MAF_CONTEXT_GRAPH_INTEGRATION.md`
 - **Related Terms**: MAF, Context Graph
 
+### Pipeline Health
+- **Term**: Pipeline Health
+- **Simple Definition**: The one screen that tells an operator where the pipeline stopped.
+- **Detailed Explanation**: `GET /api/v1/admin/pipeline-health` (rendered at `/admin/pipeline`) reports two things together. First, Redis queue depth per lane in pipeline order, plus the count of in-flight unacknowledged tasks — that second number matters because during a reconstruction tail thousands of debounced tasks can churn for hours while every queue length reads zero. Second, one SQL read counting the graph chain end to end (evidence → embedded → identities → …), where **the first zero in the sequence is the diagnosis**. Backlog alert threshold is 500. It never raises on broker failure; it returns empty depths. It exists because during one incident every per-task metric said "healthy" while correlation starved behind 8,000 normalizations and episodes stayed at zero.
+- **Where Used**: `backend/src/contextedge/services/pipeline_health_service.py:43-110`, `backend/src/contextedge/api/v1/admin_cost.py:166`
+- **Related Terms**: Queue, Worker, Prometheus
+
 ### Prometheus
 - **Term**: Prometheus
 - **Simple Definition**: A monitoring system for tracking application metrics.
-- **Detailed Explanation**: ContextEdge exposes Prometheus metrics endpoints to monitor sync success rates, API latencies, LLM token usage, and Celery queue depths, giving platform admins visibility into system health.
-- **Where Used**: `backend/src/contextedge/main.py`
-- **Related Terms**: Monitoring, Metrics
+- **Detailed Explanation**: The API exposes `/metrics` via `prometheus_fastapi_instrumentator`, which covers HTTP-level metrics — request counts, latencies, status codes. It does **not** carry LLM token usage or Celery queue depth: token spend lives in `llm.usage` operational events (surfaced at `GET /api/v1/admin/llm-usage`) and queue depth comes from `GET /api/v1/admin/pipeline-health`. Knowing which of the three to look at saves a lot of time.
+- **Where Used**: `backend/src/contextedge/main.py:168`
+- **Related Terms**: Monitoring, Metrics, Pipeline Health
 
 ### Prompt
 - **Term**: Prompt
@@ -844,9 +930,9 @@ Welcome to the ContextEdge Glossary. This document defines the core concepts, te
 ### Queue
 - **Term**: Queue
 - **Simple Definition**: A waiting line for background tasks to be processed.
-- **Detailed Explanation**: Celery manages multiple queues (default, sync, hydration, extraction, pattern, evaluation) to ensure heavy tasks like LLM generation don't block lightweight tasks like database cleanup.
-- **Where Used**: `backend/src/contextedge/workers/`
-- **Related Terms**: Celery, Worker
+- **Detailed Explanation**: There are **eight** queues: `default`, `sync`, `hydration`, `extraction`, `correlation`, `embedding`, `pattern`, `evaluation`. Separate lanes exist so a slow stage cannot starve a fast one. `correlation` and `embedding` are the two most commonly missed: they were split out of `extraction` after a measured incident where the graph chain and chunk embedding sat behind bulk normalization in FIFO — 193 evidence items ingested, zero episodes, and 1,879 chunks with only 15% embedded, all with no error anywhere. A worker fleet that does not list all eight fails this way silently. The routing table is matched in order, so an earlier specific key wins over a later wildcard.
+- **Where Used**: `backend/src/contextedge/workers/celery_app.py:226-280`, `backend/dev.py:16`
+- **Related Terms**: Celery, Worker, Pipeline Health
 
 ## R
 
@@ -881,9 +967,9 @@ Welcome to the ContextEdge Glossary. This document defines the core concepts, te
 ### Redis
 - **Term**: Redis
 - **Simple Definition**: A fast, in-memory data store.
-- **Detailed Explanation**: Serves two main purposes in ContextEdge: it is the message broker/result backend for Celery queues, and it acts as a short-lived cache for runtime explanation payloads to keep API responses blazing fast.
-- **Where Used**: Cache infrastructure, Celery broker
-- **Related Terms**: Celery, Cache
+- **Detailed Explanation**: Three separate Redis databases, on purpose: db 0 for the application cache, db 1 for the Celery broker, db 2 for the Celery result backend. It also caches runtime explain payloads under `runtime:match:{match_id}` with a one-hour TTL, which is why `GET /runtime/explain/{id}` 404s after an hour. Two practical consequences: a cache write failure is swallowed rather than failing the match, and **Celery task messages survive a Postgres rebuild** because they live in db 1 — clearing a poison message means dropping the Redis volume too.
+- **Where Used**: `backend/src/contextedge/config.py:26-28`, `backend/src/contextedge/api/v1/runtime.py:29`
+- **Related Terms**: Celery, Cache, Queue
 
 ### Repository
 - **Term**: Repository
@@ -916,9 +1002,16 @@ Welcome to the ContextEdge Glossary. This document defines the core concepts, te
 ### Retention
 - **Term**: Retention
 - **Simple Definition**: Rules dictating how long data is kept before being deleted.
-- **Detailed Explanation**: Configurable by Tenant Admins, retention policies ensure stale or legally burdensome evidence (like old Slack chats) is hard-deleted automatically by beat schedulers, except when guarded by "legal-hold" flags.
-- **Where Used**: `backend/src/contextedge/services/evidence_filters.py`, Cleanup workers
-- **Related Terms**: Compliance, Beat Scheduler
+- **Detailed Explanation**: Two scheduled phases, not one. A **daily archive** sweep marks evidence past its window as `relevance_state = "archived"`, where the window depends on the item's memory class: `short_term` gets the base window (365 days by default), `long_term` gets `max(base × 6, 180)`, `reasoning` gets `max(base × 3, 90)`. A **weekly purge** then acts on archived rows older than a 30-day grace period, in `RETENTION_PURGE_MODE`, whose default is **`soft_purge`** — NULLing text, summary, embedding, entity refs and the blob pointer and retitling to `[purged]`, plus explicitly deleting the row's chunks (which carry the same content, and whose cascade does not fire while the parent survives). `hard_delete` is the opt-in mode. Legal hold is excluded in the SQL WHERE clause of both phases, never post-filtered. A third daily sweep reaps orphaned MinIO blobs and graph edges left behind by hard deletes.
+- **Where Used**: `backend/src/contextedge/services/retention_service.py:66-258`, `backend/src/contextedge/services/memory_service.py:64-79`, `backend/src/contextedge/workers/retention_tasks.py:72,104`
+- **Related Terms**: Compliance, Beat Scheduler, Memory
+
+### Recurrence
+- **Term**: Recurrence
+- **Simple Definition**: A pointer saying "this looks like the same *kind* of problem we saw before" — never "this is the same incident".
+- **Detailed Explanation**: When an approved episode's issue signature already exists, the system finds the most recent previous episode under that signature, finds that episode's primary case, and gives the new episode's first evidence item an `evidence_case_memberships` row of type `recurrence` at confidence 0.6. **The load-bearing invariant:** the episode cluster resolver explicitly refuses to expand through `recurrence` memberships. If it did, six months of separate VPN certificate expiries would collapse into one incomprehensible episode. Recurrence exists for precedent retrieval, not for merging. The same principle constrains the dedup sweep: two semantically near-identical episodes with *disjoint* evidence are refused as a merge for exactly this reason.
+- **Where Used**: `backend/src/contextedge/services/issue_signature_service.py:36,249-312`, `backend/src/contextedge/services/episode_cluster_service.py:158-193`
+- **Related Terms**: Issue Signature, Episode, Correlation
 
 ### Review Queue
 - **Term**: Review Queue
@@ -944,9 +1037,9 @@ Welcome to the ContextEdge Glossary. This document defines the core concepts, te
 ### Runtime
 - **Term**: Runtime
 - **Simple Definition**: The live execution environment where agents and responders query data.
-- **Detailed Explanation**: The Runtime APIs (e.g., `/api/v1/runtime`) only serve approved, published playbooks. They are highly optimized for speed, enforcing role/domain security policies dynamically to prevent unsafe automation.
-- **Where Used**: `backend/src/contextedge/api/v1/runtime/`
-- **Related Terms**: Playbook, Agent
+- **Detailed Explanation**: The Runtime APIs (`/api/v1/runtime/...`) only serve approved, published playbooks, and enforce a risk-tier cap derived from the caller's roles: admins are uncapped, `knowledge_manager` and service accounts cap at `high`, everyone else at `medium`. `POST /runtime/match` assembles a memory context, ranks playbooks, records a retrieval trace event when given a session id, writes a `runtime.match_completed` operational event, and caches the full explain payload in Redis for an hour so `GET /runtime/explain/{match_id}` can serve it back.
+- **Where Used**: `backend/src/contextedge/api/v1/runtime.py:42-52,89-267`
+- **Related Terms**: Playbook, Agent, Hybrid Search
 
 ## S
 
@@ -1006,12 +1099,19 @@ Welcome to the ContextEdge Glossary. This document defines the core concepts, te
 - **Where Used**: `backend/src/contextedge/search/vector_search.py`
 - **Related Terms**: Vector Search, Embedding, pgvector
 
+### Source Facets
+- **Term**: Source Facets
+- **Simple Definition**: Structured fields pulled out of a source's own custom fields — root cause, component, environment, version, customer, region, ticket type.
+- **Detailed Explanation**: Derived at ingest by mapping the source's configured `facet_fields` onto a fixed set of keys, reading from `cf` / `custom_fields` / the top level. Placeholder values (`"NA"`, `"None"`, `"-"`) are discarded and values are capped at 120 characters. A source with no facet mapping produces `{}`. Facets matter downstream in two places: they let knowledge applicability be answered for free when the source already stated environment and version, and they are re-merged on a re-ingest, because a root cause is typed at resolve time rather than at creation.
+- **Where Used**: `backend/src/contextedge/services/source_facets.py:38-109`
+- **Related Terms**: Applicability, Knowledge State, Evidence
+
 ### Source
 - **Term**: Source
 - **Simple Definition**: An external system providing data to ContextEdge.
-- **Detailed Explanation**: Sources (Jira, Slack, Teams) are configured in the Source Registry. Tenant admins govern which Source Objects (e.g., specific Slack channels) are approved for backfill and incremental sync.
-- **Where Used**: `backend/src/contextedge/api/v1/sources.py`, Connectors
-- **Related Terms**: Connector, Ingestion
+- **Detailed Explanation**: Sources (ServiceNow, Jira Service Management, Zoho Desk, Teams, Gmail, ManageEngine, SapphireIMS) are configured in the Source Registry, with credentials Fernet-encrypted at rest. Discovery enumerates the readable objects inside a source — a ServiceNow table, a Zoho module, a mailbox — as `SourceObject` rows, and tenant admins govern which of those are `approved_for_backfill` and `approved_for_sync`. Only approved objects are picked up by the 15-minute scheduled sync.
+- **Where Used**: `backend/src/contextedge/api/v1/sources.py`, `backend/src/contextedge/models/source.py:11-125`
+- **Related Terms**: Connector, Ingestion, Sync
 
 ### SQL
 - **Term**: SQL
@@ -1037,9 +1137,9 @@ Welcome to the ContextEdge Glossary. This document defines the core concepts, te
 ### Sync
 - **Term**: Sync
 - **Simple Definition**: The process of copying data from a Source to ContextEdge.
-- **Detailed Explanation**: Managed by Connectors, sync runs can be historical "backfills" or incremental steady-state updates. A "SyncCheckpoint" tracks the last processed item to ensure recovery without duplication.
-- **Where Used**: `backend/src/contextedge/api/v1/sync.py`, `services/sync_worker_service.py`
-- **Related Terms**: Connector, Ingestion
+- **Detailed Explanation**: Sync runs are either historical **backfills** (default window 90 days, requires `approved_for_backfill`) or **incremental** steady-state updates (requires `approved_for_sync`, dispatched by beat every 15 minutes). An append-only `SyncCheckpoint` tracks position; the newest row by `captured_at` wins. Three safety behaviours worth knowing: an incremental run against an object with **no checkpoint** completes as `skipped_no_checkpoint` rather than silently becoming a first full pull; a second worker on the same object returns `skipped_locked` because of the advisory lock; and pause/cancel are **cooperative** — the connector polls a control column on a fresh connection every page and every 25 detail records, and both stops persist everything already fetched along with a checkpoint, so a cancel is not a rollback.
+- **Where Used**: `backend/src/contextedge/services/sync_worker_service.py:419-637`, `backend/src/contextedge/services/sync_control_service.py`, `backend/src/contextedge/api/v1/sync.py`
+- **Related Terms**: Connector, Ingestion, Advisory Lock
 
 ### Swagger
 - **Term**: Swagger
@@ -1067,16 +1167,16 @@ Welcome to the ContextEdge Glossary. This document defines the core concepts, te
 ### Temporal
 - **Term**: Temporal
 - **Simple Definition**: Relating to time.
-- **Detailed Explanation**: With migration `0029`, Context Graph edges became "temporal," gaining `valid_from` and `valid_to` timestamps. This allows the system to understand that a fix was valid last year, but is now expired.
-- **Where Used**: `backend/src/contextedge/models/graph.py`
+- **Detailed Explanation**: Context Graph edges carry `valid_from` and `valid_to` timestamps, so the system can express that a fix was valid last year and is now expired. Queries pass an `as_of`: with none, the predicate is simply `valid_to IS NULL` (current state); with one, it is `valid_from <= as_of AND (valid_to IS NULL OR valid_to > as_of)`. Naive datetimes are rejected (422), as is anything more than five minutes in the future. **The caveat the projection states out loud in a warning:** historical *edges* are combined with *current* node facts, so a point-in-time projection is not a full time machine and callers must not draw historical operational conclusions from it.
+- **Where Used**: `backend/src/contextedge/graph/temporal.py:12-36`, `backend/src/contextedge/models/pattern.py:174-273`
 - **Related Terms**: Graph Edge, History
 
 ### Thread
 - **Term**: Thread
 - **Simple Definition**: A connected series of messages or comments.
-- **Detailed Explanation**: A type of evidence. Rather than treating every Slack message independently, ContextEdge "hydrates" and stores them as complete threads to provide the AI extractors with proper troubleshooting context.
-- **Where Used**: `backend/src/contextedge/models/evidence.py`, Connectors
-- **Related Terms**: Hydration, Evidence
+- **Detailed Explanation**: A `threads` row groups related messages and tracks `hydration_status`, `message_count`, `participant_count`, and first/last message times. Threads are created lazily by normalization, which is why hydrating a thread before its parent has been normalized returns a 404. During hydration, cross-message quote stripping removes text already seen earlier in the same thread — that pass happens here rather than per message because only hydration holds the whole thread in arrival order; measured, 89% of substantive text was repetition.
+- **Where Used**: `backend/src/contextedge/models/evidence.py:223-246`, `backend/src/contextedge/services/thread_text_service.py`
+- **Related Terms**: Hydration, Evidence, Noise Gate
 
 ### Token
 - **Term**: Token
@@ -1127,16 +1227,16 @@ Welcome to the ContextEdge Glossary. This document defines the core concepts, te
 ### Vector
 - **Term**: Vector
 - **Simple Definition**: A list of numbers representing data.
-- **Detailed Explanation**: See Embedding. LLMs turn text into 3072-dimensional vectors. Vectors that point in similar directions represent text with similar meanings.
+- **Detailed Explanation**: See Embedding. The models turn text into 3072-dimensional vectors, stored in `Vector(3072)` columns and indexed as `halfvec(3072)`. Vectors that point in similar directions represent text with similar meanings.
 - **Where Used**: `backend/src/contextedge/search/`
-- **Related Terms**: Embedding, Vector Search
+- **Related Terms**: Embedding, Vector Search, HalfVec
 
 ### Vector Search
 - **Term**: Vector Search
 - **Simple Definition**: Searching a database by meaning rather than exact keywords.
-- **Detailed Explanation**: Powered by `pgvector`, it compares the vector of the user's query against the vectors of chunks, evidence, and playbooks to find the closest conceptual matches.
-- **Where Used**: `backend/src/contextedge/search/vector_search.py`
-- **Related Terms**: Similarity Search, pgvector, Hybrid Search
+- **Detailed Explanation**: Powered by `pgvector`. Evidence search is **chunk-aware in two passes**: an oversampled ANN query over `evidence_chunks` (oversample between 80 and 240), MMR diversification, rollup to the single closest chunk per parent — then a second ANN pass over the parents' own embeddings, merged and re-sorted, so evidence that was never chunked still surfaces. Both passes apply the same visibility gates: no legal hold, no pending redaction, no excluded access policy. Results are `(EvidenceItem, distance, best_chunk_or_None)`, where `best_chunk` carries the section breadcrumb and a 240-character snippet for rendering.
+- **Where Used**: `backend/src/contextedge/search/vector_search.py:40-243`, `backend/src/contextedge/search/chunk_rollup.py`
+- **Related Terms**: Similarity Search, pgvector, Hybrid Search, MMR
 
 ### Versioning
 - **Term**: Versioning
@@ -1155,8 +1255,8 @@ Welcome to the ContextEdge Glossary. This document defines the core concepts, te
 ### Vitest
 - **Term**: Vitest
 - **Simple Definition**: A fast testing framework for frontend JavaScript code.
-- **Detailed Explanation**: Used by ContextEdge to run unit tests on the Next.js React frontend components and data utilities, ensuring the UI remains stable during development.
-- **Where Used**: `frontend/`, `npm test`
+- **Detailed Explanation**: `npm test` runs `vitest run` against the frontend unit tests — currently covering role predicates, the graph API client, graph query controls, and the applicability, playbook-step, and thread-conversation components. Older documentation described this script as a placeholder that only printed a skip message; that is no longer true.
+- **Where Used**: `frontend/package.json`, `npm test`
 - **Related Terms**: UI
 
 ## W
@@ -1164,9 +1264,9 @@ Welcome to the ContextEdge Glossary. This document defines the core concepts, te
 ### Worker
 - **Term**: Worker
 - **Simple Definition**: A background process that does heavy lifting.
-- **Detailed Explanation**: Celery workers run outside the API web server to handle long-running tasks like fetching Jira tickets, generating LLM summaries, and running drift evaluations, keeping the web UI responsive.
-- **Where Used**: `backend/src/contextedge/workers/`
-- **Related Terms**: Celery, Queue
+- **Detailed Explanation**: Celery workers run outside the API web server to handle long-running tasks like fetching tickets, generating LLM summaries, and running drift evaluations, keeping the web UI responsive. Two things shape how they are deployed here. First, every task body runs through `run_async`, which builds a **fresh NullPool engine and session per task** and owns the commit/rollback contract — services called from workers flush, they never commit. Second, on Windows the prefork pool does not work and the threads pool breaks LLM calls (litellm holds asyncio locks bound to their creating loop), so parallelism comes from running several `-P solo` **processes**. Workers also refuse to start when the database is behind the code's Alembic head.
+- **Where Used**: `backend/src/contextedge/workers/asyncio_runner.py:10-34`, `backend/src/contextedge/workers/celery_app.py:83-139`, `docs/RUNBOOK.md` "Worker topology"
+- **Related Terms**: Celery, Queue, Migration
 
 ### Workspace
 - **Term**: Workspace

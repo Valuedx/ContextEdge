@@ -14,6 +14,39 @@
 - **Error format**: `{"detail": "message"}` with a matching HTTP status.
 
 
+## `action-policies`
+
+### `GET /api/v1/action-policies`
+
+List Action Policies
+
+- **Auth**: required
+- **Response**: `list[ActionPolicyResponse]`
+- **Query parameters**: `action_name`
+
+### `POST /api/v1/action-policies`
+
+Create Action Policy
+
+- **Auth**: required
+- **Request body**: `ActionPolicyCreate`
+- **Response**: `ActionPolicyResponse`
+
+### `PATCH /api/v1/action-policies/{policy_id}`
+
+Update Action Policy
+
+- **Auth**: required
+- **Request body**: `ActionPolicyUpdate`
+- **Response**: `ActionPolicyResponse`
+
+### `DELETE /api/v1/action-policies/{policy_id}`
+
+Delete Action Policy
+
+- **Auth**: required
+
+
 ## `admin`
 
 ### `GET /api/v1/admin/llm-usage`
@@ -28,7 +61,20 @@ cached, estimated USD, cache hit rate) plus a top-N breakdown by
 
 - **Auth**: required
 - **Response**: `LlmUsageResponse`
-- **Query parameters**: `window_hours`, `top_n_breakdown`
+- **Query parameters**: `window_hours`, `top_n_breakdown`, `all_time`, `sync_run_id`
+
+### `GET /api/v1/admin/pipeline-health`
+
+Admin Pipeline Health
+
+Queue depths, throughput, latency and the graph chain, in one read.
+
+Separate from `/llm-usage` because the question is different: that one
+asks what the run cost, this one asks whether it is getting anywhere.
+A run can be spending steadily and producing nothing — that is exactly
+the failure this exists to make visible.
+
+- **Auth**: required
 
 ### `GET /api/v1/admin/tenant-budget`
 
@@ -120,6 +166,61 @@ Create Manual Correlation
 - **Request body**: `CorrelationEdgeCreate`
 - **Response**: `CorrelationEdgeResponse`
 
+### `GET /api/v1/correlations/fleet-suggestions`
+
+List Fleet Suggestions
+
+- **Auth**: required
+- **Query parameters**: `status`, `limit`
+
+### `POST /api/v1/correlations/fleet-suggestions/{suggestion_id}/accept`
+
+Accept Fleet Suggestion
+
+Reviewer accept (B6): mints the parent fleet case and attaches
+every member — grouping only ever happens through this gate.
+
+- **Auth**: required
+
+### `POST /api/v1/correlations/fleet-suggestions/{suggestion_id}/reject`
+
+Reject Fleet Suggestion
+
+- **Auth**: required
+- **Response**: `StatusResponse`
+
+### `GET /api/v1/correlations/suggestions`
+
+List Suggestions
+
+- **Auth**: required
+- **Response**: `list[CorrelationSuggestionResponse]`
+- **Query parameters**: `status`, `limit`, `offset`
+
+### `GET /api/v1/correlations/suggestions/stats`
+
+Suggestion Stats
+
+Reviewer-outcome aggregates per source pair and corroborator
+type (C1). The per-pair learned floors derive from these counts —
+visible here so a raised bar is never a mystery.
+
+- **Auth**: required
+
+### `POST /api/v1/correlations/suggestions/{suggestion_id}/accept`
+
+Accept Correlation Suggestion
+
+- **Auth**: required
+- **Response**: `CorrelationEdgeResponse`
+
+### `POST /api/v1/correlations/suggestions/{suggestion_id}/reject`
+
+Reject Correlation Suggestion
+
+- **Auth**: required
+- **Response**: `StatusResponse`
+
 ### `PATCH /api/v1/correlations/{correlation_id}`
 
 Update Correlation
@@ -151,7 +252,7 @@ List Decisions
 
 - **Auth**: required
 - **Response**: `list[DecisionResponse]`
-- **Query parameters**: `session_id`, `decision_type`, `agent_step`, `status`, `min_confidence`, `max_confidence`, `sort`, `limit`, `offset`
+- **Query parameters**: `session_id`, `decision_type`, `agent_step`, `status`, `actor_type`, `min_confidence`, `max_confidence`, `sort`, `limit`, `offset`
 
 ### `POST /api/v1/decisions`
 
@@ -290,9 +391,49 @@ Read-only: does not change playbook lifecycle. Expiry transitions run on the Cel
 
 List Episodes
 
+Episodes for review, newest first.
+
+Superseded episodes are excluded unless asked for. Reconstruction
+replaces its own drafts as more of a thread arrives, and a superseded
+row is by definition the version that was replaced — 138 of 253 on
+the live graph, 54%. Returned alongside current ones with nothing but
+a status badge to tell them apart, they are indistinguishable from
+the answer, and the replaced draft is usually the WORSE one: the
+ActiveMQ example conflated two incidents and recorded two complaints
+and no remediation, where its replacement recorded the broker bounce
+and the seven failed executions.
+
+Asking for them explicitly still works, either through
+``include_superseded`` or by naming the state — a reviewer auditing
+what changed needs to see them.
+
 - **Auth**: required
 - **Response**: `list[EpisodeResponse]`
-- **Query parameters**: `domain_id`, `status`, `reviewer_state`, `limit`, `offset`
+- **Query parameters**: `domain_id`, `status`, `reviewer_state`, `include_superseded`, `sort`, `limit`, `offset`
+
+### `POST /api/v1/episodes/ai-review`
+
+Dispatch Ai Review
+
+Dispatch the AI first-pass review sweep for this tenant.
+
+The sweep reviews pending drafts in review-priority order and stamps
+each with a verdict; in ``auto_approve`` mode it also approves the
+subset clearing the deterministic floors. The configured mode is a
+deployment setting (EPISODE_AI_REVIEW); this endpoint can run a
+weaker mode than configured, never a stronger one — with the setting
+``off`` the dispatch always runs advisory-only.
+
+- **Auth**: required
+- **Response**: `TaskDispatchResponse`
+- **Query parameters**: `limit`, `advisory`
+
+### `POST /api/v1/episodes/bulk-approve`
+
+Bulk Approve Episodes
+
+- **Auth**: required
+- **Request body**: `EpisodeBulkApproveRequest`
 
 ### `POST /api/v1/episodes/reconstruct`
 
@@ -330,6 +471,26 @@ Permanently delete an episode and its steps.
 ### `POST /api/v1/episodes/{episode_id}/approve`
 
 Approve Episode
+
+- **Auth**: required
+- **Response**: `EpisodeResponse`
+
+### `POST /api/v1/episodes/{episode_id}/evidence/{evidence_id}`
+
+Add Episode Evidence
+
+Reviewer action (P0): attach evidence the cluster missed. Updates
+both the JSONB list and the normalized provenance link.
+
+- **Auth**: required
+- **Response**: `EpisodeResponse`
+
+### `DELETE /api/v1/episodes/{episode_id}/evidence/{evidence_id}`
+
+Remove Episode Evidence
+
+Reviewer action (P0): detach evidence that does not belong to
+this episode (mis-correlated or split-off content).
 
 - **Auth**: required
 - **Response**: `EpisodeResponse`
@@ -393,13 +554,21 @@ Search Evidence
 
 - **Auth**: required
 - **Response**: `list[EvidenceItemResponse]`
-- **Query parameters**: `query`, `source_id`, `relevance_state`, `evidence_type`, `domain_id`, `limit`, `offset`
+- **Query parameters**: `query`, `source_id`, `relevance_state`, `evidence_type`, `source_type`, `domain_id`, `limit`, `offset`
 
 ### `POST /api/v1/evidence/bulk-delete`
 
 Bulk Delete Evidence
 
 Permanently delete multiple evidence items.
+
+Authorization happens on the RESOLVED set, not the request: dependency
+deletion used to run against caller-supplied UUIDs before any tenant
+check, so a caller could delete another tenant's correlation edges and
+attachments by guessing (or leaking) evidence ids. Every id must resolve
+inside the caller's tenant before anything is touched, and evidence under
+legal hold refuses deletion outright — a hold that can be cleared by the
+delete button is not a hold.
 
 - **Auth**: required
 - **Request body**: `EvidenceBulkDeleteRequest`
@@ -446,7 +615,8 @@ List Evidence Attachments
 
 Get Evidence Context
 
-Retrieve resolved source name, domain name, and linked Episode/Pattern knowledge graph context.
+Retrieve resolved source name, domain name, and linked Episode/Pattern
+knowledge graph context.
 
 - **Auth**: required
 - **Response**: `EvidenceContextResponse`
@@ -534,6 +704,36 @@ Mark execution as completed with an outcome.
 - **Response**: `ExecutionRunResponse`
 - **Query parameters**: `outcome`, `outcome_summary`
 
+### `POST /api/v1/execution/runs/{run_id}/steps/{step_run_id}/complete`
+
+Complete Step
+
+Close a step run. An `error_message` records it as failed.
+
+A step still awaiting its approval cannot be reported complete — that
+would let `complete_execution`'s open-steps check pass with an undecided
+approval sitting under it.
+
+- **Auth**: required
+- **Request body**: `StepCompletionRequest`
+- **Response**: `ExecutionStepRunResponse`
+
+### `POST /api/v1/execution/runs/{run_id}/steps/{step_run_id}/invocations`
+
+Record Invocation
+
+Record a tool call the executor made for this step.
+
+This is where F7 and F8 actually bite: the approved artifact is
+re-checked at the last moment before the call is accepted, a step already
+recognised as a duplicate is refused, and the attempt is numbered from
+what is already recorded rather than from anything the caller says. Both
+refusals are 409 — the request is well-formed, the state says no.
+
+- **Auth**: required
+- **Request body**: `ToolInvocationRequest`
+- **Response**: `ToolInvocationResponse`
+
 
 ## `graph`
 
@@ -546,6 +746,78 @@ Return a ranked, bounded, authorization-filtered agent graph projection.
 - **Auth**: required
 - **Request body**: `AgentGraphRequest`
 - **Response**: `AgentGraphSubset`
+
+### `GET /api/v1/graph/change-risk`
+
+Change Risk
+
+Deterministic change-risk profile for a CI from operational history:
+change→incident blame rate, incident pressure, alert activity, and
+cached blast radius — every factor explained.
+
+- **Auth**: required
+- **Query parameters**: `ci`, `window_days`
+
+### `GET /api/v1/graph/cmdb-topology`
+
+Cmdb Topology
+
+Live ±1-hop CMDB neighborhood for a CI, write-through cached into
+entities / graph_edges; falls back to the cached view (marked stale)
+when ServiceNow is unreachable.
+
+- **Auth**: required
+- **Query parameters**: `ci`
+
+### `GET /api/v1/graph/edge-proposals`
+
+List Edge Proposals Endpoint
+
+Pending agent-proposed dependencies awaiting review. Proposals
+never enter the maf.v1 projection; this queue is how they become
+authored topology (or audit history).
+
+- **Auth**: required
+- **Query parameters**: `limit`
+
+### `POST /api/v1/graph/edge-proposals/{edge_id}/approve`
+
+Approve Edge Proposal Endpoint
+
+Promote a proposal to an authored depends_on edge with review
+provenance; the proposal edge closes (supersede, never delete).
+
+- **Auth**: required
+- **Query parameters**: `note`
+
+### `POST /api/v1/graph/edge-proposals/{edge_id}/reject`
+
+Reject Edge Proposal Endpoint
+
+- **Auth**: required
+- **Query parameters**: `note`
+
+### `GET /api/v1/graph/fix-applicability`
+
+Fix Applicability
+
+Deterministic fix-applicability assessment for a CI: which known
+fixes validate against its recorded traits, at which level of the
+7-level ladder, and whether review is required (B4).
+
+- **Auth**: required
+- **Query parameters**: `ci`
+
+### `POST /api/v1/graph/fix-outcomes`
+
+Record Fix Outcome Endpoint
+
+Record a fix outcome against a CI (B5): updates per-cohort
+counters and mints review-gated promotion candidates when the
+ladder's thresholds are met. Scope only broadens via review.
+
+- **Auth**: required
+- **Query parameters**: `fix_pattern_id`, `ci`, `success`
 
 ### `GET /api/v1/graph/neighbors`
 
@@ -592,7 +864,7 @@ List Identities
 
 - **Auth**: required
 - **Response**: `list[IdentityResponse]`
-- **Query parameters**: `entity_type`, `active_only`, `query`, `limit`, `offset`
+- **Query parameters**: `entity_type`, `active_only`, `query`, `resolution_state`, `limit`, `offset`
 
 ### `POST /api/v1/identities/merge`
 
@@ -602,6 +874,34 @@ Merge Identities
 - **Request body**: `IdentityMergeRequest`
 - **Response**: `IdentityResponse`
 
+### `GET /api/v1/identities/merge-proposals`
+
+List Merge Proposals
+
+Pairs a reconciliation pass believes are the same thing.
+
+Per-mention resolution cannot find these — it only ever sees
+candidates sharing a substring with the incoming name, so an acronym
+and its expansion are never presented together and fork into two
+identities.
+
+- **Auth**: required
+- **Response**: `list[IdentityMergeProposalResponse]`
+- **Query parameters**: `status`, `limit`
+
+### `POST /api/v1/identities/merge-proposals/{proposal_id}/decide`
+
+Decide Merge Proposal
+
+Accept a proposal (performing the merge) or reject it.
+
+A rejection is as valuable as an acceptance: it is what stops the
+next scheduled run from raising the same pair again.
+
+- **Auth**: required
+- **Request body**: `IdentityMergeProposalDecision`
+- **Response**: `StatusResponse`
+
 ### `PATCH /api/v1/identities/{identity_id}`
 
 Update Identity
@@ -609,6 +909,52 @@ Update Identity
 - **Auth**: required
 - **Request body**: `IdentityUpdate`
 - **Response**: `IdentityResponse`
+
+
+## `inventory`
+
+### `POST /api/v1/inventory/report`
+
+Report Inventory
+
+- **Auth**: required
+- **Request body**: `InventoryReport`
+
+
+## `knowledge-supersessions`
+
+### `GET /api/v1/knowledge-supersessions`
+
+List Supersession Proposals
+
+- **Auth**: required
+- **Response**: `list[SupersessionProposalResponse]`
+- **Query parameters**: `status`, `limit`, `offset`
+
+### `POST /api/v1/knowledge-supersessions/scan`
+
+Scan For Supersessions
+
+Run the filename heuristic over the tenant's knowledge corpus.
+
+Deliberately on demand rather than on a schedule: nothing has reviewed a
+proposal yet, and a queue filling itself before anyone reads it is how a
+review surface becomes noise. Re-running is safe — an already-decided pair
+is never re-proposed, which is what makes a rejection durable.
+
+- **Auth**: required
+- **Response**: `list[SupersessionProposalResponse]`
+- **Query parameters**: `domain_id`
+
+### `POST /api/v1/knowledge-supersessions/{proposal_id}/decide`
+
+Decide Supersession Proposal
+
+Accept (writes the ``superseded_by`` edge) or reject (durably).
+
+- **Auth**: required
+- **Request body**: `SupersessionDecision`
+- **Response**: `SupersessionProposalResponse`
 
 
 ## `metrics`
@@ -684,6 +1030,16 @@ List Patterns
 - **Response**: `list[PatternResponse]`
 - **Query parameters**: `domain_id`, `active_only`, `limit`, `offset`
 
+### `POST /api/v1/patterns/audit-domains`
+
+Audit Pattern Domains Endpoint
+
+C7: flag pre-guard patterns whose members belong to other
+domains. Flags for review via operational events - never deletes;
+reviewers fix membership through the pattern-link APIs.
+
+- **Auth**: required
+
 ### `POST /api/v1/patterns/cluster`
 
 Trigger Episode Clustering
@@ -693,6 +1049,14 @@ Trigger background clustering of approved episodes into patterns.
 - **Auth**: required
 - **Response**: `TaskDispatchResponse`
 - **Query parameters**: `domain_id`
+
+### `POST /api/v1/patterns/deduplicate`
+
+Deduplicate Patterns Endpoint
+
+Scan and merge duplicate patterns and playbooks for the user's tenant.
+
+- **Auth**: required
 
 ### `POST /api/v1/patterns/discover`
 
@@ -718,6 +1082,15 @@ Delete Pattern
 Delete a pattern and its associated evidence links.
 
 - **Auth**: required
+
+### `POST /api/v1/patterns/{pattern_id}/approve`
+
+Approve Pattern
+
+Approve a synthesized knowledge pattern and activate it.
+
+- **Auth**: required
+- **Response**: `PatternResponse`
 
 ### `GET /api/v1/patterns/{pattern_id}/evidence-links`
 
@@ -756,7 +1129,7 @@ List Playbooks
 
 - **Auth**: required
 - **Response**: `list[PlaybookResponse]`
-- **Query parameters**: `lifecycle_state`, `domain_id`, `limit`, `offset`
+- **Query parameters**: `lifecycle_state`, `domain_id`, `q`, `limit`, `offset`
 
 ### `POST /api/v1/playbooks`
 
@@ -790,6 +1163,15 @@ Update Playbook
 - **Auth**: required
 - **Request body**: `PlaybookUpdate`
 - **Response**: `PlaybookResponse`
+
+### `GET /api/v1/playbooks/{playbook_id}/references`
+
+Get Playbook References
+
+Retrieve full lineage references (source Pattern, member Episodes, and
+Evidence items) for a playbook.
+
+- **Auth**: required
 
 ### `POST /api/v1/playbooks/{playbook_id}/rollback`
 
@@ -995,12 +1377,7 @@ Get Session
 
 ### `PATCH /api/v1/sessions/{session_id}/close`
 
-Close Session. Accepts an optional body asserting the outcome
-(`outcome_status`, `resolution_summary`, `confirmed_root_cause`,
-`successful_action`, `failed_actions`, `user_confirmed`,
-`fix_results`) — with it the close records a `CaseOutcome`; without it
-only the state transition is recorded. Re-closing an already-closed
-session is a history no-op.
+Close Session
 
 - **Auth**: required
 - **Response**: `ResolutionSessionResponse`
@@ -1012,6 +1389,79 @@ Create Session Event
 - **Auth**: required
 - **Request body**: `DecisionTraceEventCreate`
 - **Response**: `DecisionTraceEventResponse`
+
+### `GET /api/v1/sessions/{session_id}/history`
+
+Session History
+
+Lifecycle history: state transitions (timeline order) and
+recorded outcomes (latest first) for one resolution session.
+
+- **Auth**: required
+
+
+## `skills`
+
+### `GET /api/v1/skills`
+
+List Skills
+
+- **Auth**: required
+- **Response**: `list[SkillResponse]`
+- **Query parameters**: `skill_key`, `status`, `action_type`, `limit`
+
+### `POST /api/v1/skills`
+
+Create Skill
+
+Register a skill. It lands `draft` and is not invocable until activated.
+
+- **Auth**: required
+- **Request body**: `SkillCreate`
+- **Response**: `SkillResponse`
+
+### `GET /api/v1/skills/execution-contracts`
+
+List Execution Contracts
+
+- **Auth**: required
+- **Response**: `list[ExecutionContractResponse]`
+
+### `POST /api/v1/skills/execution-contracts`
+
+Create Execution Contract
+
+- **Auth**: required
+- **Request body**: `ExecutionContractCreate`
+- **Response**: `ExecutionContractResponse`
+
+### `GET /api/v1/skills/{skill_id}`
+
+Get Skill
+
+- **Auth**: required
+- **Response**: `SkillResponse`
+
+### `PATCH /api/v1/skills/{skill_id}`
+
+Update Skill
+
+Correct a label. Anything that changes what the skill DOES needs a new
+version — a playbook was approved against the old definition.
+
+- **Auth**: required
+- **Request body**: `SkillUpdate`
+- **Response**: `SkillResponse`
+
+### `POST /api/v1/skills/{skill_id}/status`
+
+Change Skill Status
+
+Move a skill through its lifecycle. Retirement is one-way.
+
+- **Auth**: required
+- **Request body**: `SkillStatusChange`
+- **Response**: `SkillResponse`
 
 
 ## `sources`
@@ -1041,6 +1491,20 @@ Directly ingest local files from the frontend folder picker.
 - **Auth**: required
 - **Request body**: `LocalIngestRequest`
 - **Response**: `TaskDispatchResponse`
+
+### `GET /api/v1/sources/types`
+
+List Source Types
+
+Selectable source types and whether each one can actually sync.
+
+The source picker renders from this instead of a hardcoded list. The
+two had drifted apart in both directions — the UI offered three types
+with no connector behind them, and hid two that worked — which is a
+drift that a client-side list makes invisible until a user hits it.
+
+- **Auth**: required
+- **Response**: `list[SourceTypeResponse]`
 
 ### `GET /api/v1/sources/{source_id}`
 
@@ -1104,6 +1568,16 @@ Approve Source Object
 - **Request body**: `SourceObjectApproval`
 - **Response**: `SourceObjectResponse`
 
+### `POST /api/v1/sources/{source_id}/probe-config`
+
+Probe Source Config
+
+D4: verify a config-mapped connector's instance mapping — which
+configured endpoints respond and which mapped field names actually
+appear in sample payloads. Read-only against the upstream API.
+
+- **Auth**: required
+
 ### `GET /api/v1/sources/{source_id}/sync-runs`
 
 List Sync Runs
@@ -1111,6 +1585,20 @@ List Sync Runs
 - **Auth**: required
 - **Response**: `list[SyncRunResponse]`
 - **Query parameters**: `limit`, `offset`
+
+### `POST /api/v1/sources/{source_id}/sync/control`
+
+Control Sync
+
+Signal the running sync. The job acts on it inside its own loops.
+
+Nothing is killed: a backfill holds records in memory for the length of a
+page walk, and terminating the worker would throw away what it has
+already paid Zoho for. The cooperative stop persists them and checkpoints,
+so `resume` continues instead of restarting.
+
+- **Auth**: required
+- **Request body**: `SyncControlRequest`
 
 
 ## `sync-runs`
@@ -1310,4 +1798,4 @@ Update Workspace
 
 ---
 
-*146 endpoints across 32 groups, generated from the OpenAPI schema.*
+*192 endpoints across 36 groups, generated from the OpenAPI schema.*

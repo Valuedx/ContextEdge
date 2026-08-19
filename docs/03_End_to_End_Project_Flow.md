@@ -1,8 +1,8 @@
 # ContextEdge — End-to-End Project Flow
 
-Welcome to the End-to-End Project Flow documentation for ContextEdge! This guide will explain how the entire system works from start to finish. We will explain everything as if you are a complete beginner.
+Welcome to the End-to-End Project Flow documentation for ContextEdge. This guide explains how the whole system works from start to finish, written for someone who has never opened the codebase before.
 
-Each section will answer:
+Each step answers:
 - **What**: What is this step doing?
 - **Why**: Why do we need this step?
 - **Where**: Where does this happen in the code?
@@ -13,36 +13,50 @@ Each section will answer:
 - **Failure behavior**: What happens if this step fails?
 - **Design rationale**: Why was it built this way?
 
-We will also rate important files from 1-10 based on their importance.
+Important files are rated 1-10 for how much of the system's behavior they own.
+
+**How to read the citations.** Every load-bearing claim carries a path and a line number, like `backend/src/contextedge/workers/extraction_tasks.py:122`. Line numbers were checked against the working tree on **2026-08-19**. If a file has moved since, search for the named function instead of trusting the number.
+
+**The running example.** Every doc in this repo uses one story: the **Acme VPN incident**. Acme Corp's `vpn-gw-east-01` gateway starts dropping tunnels. Someone files ServiceNow incident `INC0010427`. Engineers argue about it in a Teams thread, one of them emails a root-cause note quoting the incident number, and there is an older KB article explaining how the VPN works. Five records, four systems, one incident. We follow those records all the way through.
 
 ---
 
 ## 1. Complete Lifecycle Overview
 
-**What**: The complete lifecycle is the journey of data from external systems (like Jira or Teams) all the way to becoming an approved playbook that the system can execute or recommend at runtime.
-**Why**: We need to understand the big picture before diving into the details. If you don't know the destination, the steps won't make sense.
-**Where**: This spans the entire `backend/src/contextedge` codebase.
-**Who calls it**: The lifecycle is initiated by background sync jobs and user actions on the dashboard.
-**What happens next**: The data moves into the ingestion pipeline.
-**Input**: Unstructured tickets, emails, and chat messages.
-**Output**: Structured, actionable playbooks and decision traces.
-**Failure behavior**: If any part of the lifecycle fails, background workers retry automatically, or humans are alerted via the review queue.
-**Design rationale**: The system is designed as a pipeline with human-in-the-loop governance. We don't want AI making changes without human approval.
+**What**: The complete lifecycle is the journey of data from external systems (ServiceNow, Jira Service Management, Teams, Gmail, Zoho Desk, ManageEngine, SapphireIMS) all the way to an approved playbook that the system can recommend at runtime.
+**Why**: You need the big picture before the details. If you don't know the destination, the steps don't make sense.
+**Where**: This spans the whole `backend/src/contextedge` package.
+**Who calls it**: Celery Beat schedules sync; humans click buttons in the dashboard; approvals fire the downstream chain.
+**What happens next**: Everything below.
+**Input**: Unstructured tickets, chat messages, emails, KB articles, attachments.
+**Output**: Structured evidence, episodes, patterns, governed playbooks, decision traces.
+**Failure behavior**: Almost every stage is fail-soft. An enrichment that fails is logged and skipped; the evidence row still lands. Only a handful of things (a bad raw payload, a schema-behind worker) stop the line.
+**Design rationale**: The system is a pipeline with human-in-the-loop governance. AI proposes; humans approve. The one exception — automatic episode approval — is opt-in, off by default, and permanently distinguishable from a human signature (see §6).
 
-### Complete Lifecycle Diagram
+### Complete lifecycle diagram
 
 ```mermaid
 flowchart TD
-    A[Source Connectors] --> B[Raw Data]
-    B --> C[Evidence Normalization]
-    C --> D[AI Extraction & Embeddings]
-    D --> E[Graph Correlation]
-    E --> F[Pattern Mining]
-    F --> G[Playbook Generation]
-    G --> H[Human Review]
-    H --> I[Approved Playbook]
-    I --> J[Runtime Retrieval & Execution]
+    A[Source connectors<br/>7 registered types] --> B[raw_evidence_objects<br/>+ MinIO offload above 32 KB]
+    B --> C[normalize_evidence<br/>noise gate, redact, dedupe]
+    C --> D[Relevance gate<br/>LLM classification]
+    D --> E[Identity + decision extraction<br/>parent embedding]
+    E --> F[Chunking + chunk embedding<br/>embedding queue]
+    C --> G[hydrate_thread<br/>pull the whole conversation]
+    G --> C
+    E --> H[correlate_evidence<br/>case links + identity co-occurrence]
+    H --> I[reconstruct_episode<br/>cluster to one story]
+    I --> J{Episode review}
+    J -->|human approve| K[Approved episode]
+    J -->|episode_ai_review| K
+    K --> L[extract_issue_signature<br/>+ recurrence link]
+    K --> M[cluster_episodes<br/>pattern synthesis]
+    M --> N[generate_playbook_candidate<br/>RAG over KB + episodes]
+    N --> O[Human playbook review<br/>candidate to approved]
+    O --> P[Runtime retrieval<br/>hybrid ranker, agent graph]
 ```
+
+The chain is not one long task. It is a dozen Celery tasks handing off to each other across **eight queues**, described in §12.
 
 ---
 
@@ -52,334 +66,615 @@ The ingestion flow is the front door of ContextEdge. This is where data enters t
 
 ```mermaid
 flowchart TD
-    Start[Source Connector Picks Up Data] --> SyncWorker[Sync Worker Processes Raw Data]
-    SyncWorker --> Hash[Content Hash & Deduplication]
-    Hash --> Offload{Is Payload > 32 KiB?}
-    Offload -- Yes --> S3[Object Store Offload]
-    Offload -- No --> DB[Database Persistence]
-    S3 --> DB
-    DB --> Normalize[Evidence Normalization]
-    Normalize --> Embed[Embedding Generation]
-    Embed --> Chunk[Chunk Creation]
+    Beat[Celery Beat every 900 s<br/>sync.trigger_scheduled_syncs] --> Sync[sync.run_incremental_sync<br/>queue: sync]
+    API[POST /sources/../backfill] --> Backfill[sync.run_backfill<br/>queue: sync]
+    Sync --> Conn[connector.fetch_changes]
+    Backfill --> Conn2[connector.backfill]
+    Conn --> Persist[persist_ingestion_events]
+    Conn2 --> Persist
+    Persist --> Hash[SHA-256 content hash<br/>skip exact duplicates]
+    Hash --> Offload{Serialized payload<br/>&gt; 32768 bytes?}
+    Offload -- Yes --> S3[MinIO raw/tenant/raw_id.json<br/>DB keeps a stub]
+    Offload -- No --> DB[raw_payload stored inline]
+    S3 --> Commit[Commit the transaction]
+    DB --> Commit
+    Commit --> Queue[queue_normalize_raw_objects<br/>one normalize task per raw id]
+    Queue --> Norm[extraction.normalize_evidence<br/>queue: extraction]
 ```
 
 ### Source connector picks up data
-- **What**: Connectors talk to external APIs (Jira, Teams, ServiceNow, Gmail) to fetch new or updated data.
+- **What**: Connectors talk to external APIs and return `IngestionEvent` objects.
 - **Why**: To bring operational data into our system so we can analyze it.
-- **Where**: `backend/src/contextedge/connectors/base.py` and specific connectors in the registry. (Rating: 8/10)
-- **Who calls it**: The Sync Worker service via scheduled Celery tasks.
-- **What happens next**: The data is handed to the sync worker.
-- **Input**: Credentials and sync configuration.
-- **Output**: `IngestionEvent` objects containing the raw payload.
-- **Failure behavior**: If the API is down, the sync job fails and Celery retries it later. Checkpoints ensure we don't skip data.
-- **Design rationale**: We use an adapter pattern so the rest of the system doesn't care if the data came from Jira or Teams.
+- **Where**: `backend/src/contextedge/connectors/base.py:78-141` defines the five-method contract every connector implements — `validate_credentials`, `discover_objects`, `backfill`, `fetch_changes`, `hydrate_thread`. The registry lazily registers **seven** working types — `teams`, `gmail`, `servicenow`, `jira_sm`, `manageengine`, `sapphireims`, `zoho_desk` (`backend/src/contextedge/connectors/registry.py:91-122`). `confluence`, `sharepoint` and `exchange` appear in the source-creation catalog with status `planned` and no implementation (`registry.py:63-65`). (Rating: 8/10)
+- **Who calls it**: `sync.run_backfill` and `sync.run_incremental_sync`, both on the `sync` queue (`backend/src/contextedge/workers/sync_tasks.py:35-81`). Beat fans out incremental syncs for every `SourceObject` with `approved_for_sync=True` every 900 seconds (`sync_tasks.py:13-32`; schedule at `backend/src/contextedge/workers/celery_app.py:292-295`).
+- **What happens next**: `persist_ingestion_events`.
+- **Input**: Decrypted credentials (Fernet, `backend/src/contextedge/services/source_service.py:17-48`) plus the newest `SyncCheckpoint` row.
+- **Output**: `IngestionEvent` objects — `external_id`, `source_type`, `object_type`, `content` dict, optional `thread_id`, `timestamp`, `metadata` (`connectors/base.py:37-45`).
+- **Failure behavior**: The `SyncRun` is marked `failed` with the message in `errors`, the checkpoint is **not** advanced, and Celery retries (backfill 3 times at 120 s, incremental 5 times at 30 s). An incremental run with no checkpoint at all does not silently do a full pull — it ends as `skipped_no_checkpoint` and tells you to run a backfill first (`backend/src/contextedge/services/sync_worker_service.py:571-595`).
+- **Design rationale**: An adapter pattern, so nothing downstream cares whether a record came from Jira or Teams. Two safety rails deserve naming. First, a Postgres advisory lock (`pg_try_advisory_xact_lock` on the source object id) means two workers can never interleave checkpoints for the same object — the loser returns `skipped_locked` (`sync_worker_service.py:379-395`). Second, an operator can pause or cancel a running sync: the job installs a control callback, the connector polls it between pages, and a stop still persists everything already fetched (`backend/src/contextedge/services/sync_control_service.py:97-122`).
 
-### Sync worker processes raw data
-- **What**: The sync worker orchestrates the ingestion event processing.
-- **Why**: To manage the flow of data from connectors into our raw storage tables.
-- **Where**: `backend/src/contextedge/services/sync_worker_service.py` (Rating: 9/10)
-- **Who calls it**: Celery beat triggers sync tasks periodically.
-- **What happens next**: Data is hashed and checked for duplicates.
-- **Input**: A list of `IngestionEvent` objects.
-- **Output**: Calls to persist the data.
-- **Failure behavior**: If the worker crashes, the checkpoint is not updated, so the next run will fetch the same data again.
-- **Design rationale**: Syncs run in the background so the HTTP API remains fast and responsive.
+**Worth knowing about the Zoho Desk connector**, because it is the most-exercised one and its quirks are documented in code. Zoho has no "modified since" filter, so incremental sync walks `sortBy=-modifiedTime` newest-first and stops at the checkpoint; the checkpoint is a timestamp **plus the set of ids already emitted at that timestamp**, because ties arrive id-ascending inside a time-descending sequence and a simple `(time, id)` cursor would permanently skip the rest of a bulk edit (`backend/src/contextedge/connectors/zoho_desk/connector.py:753-917`). Access tokens are cached process-wide, because exceeding Zoho's refresh quota returns **empty results rather than an error** — the measured symptom was 11 of 20 hydrated threads stored as empty while reporting success (`connector.py:194-198, 363-379`).
 
-### Content hash
-- **What**: We compute a SHA-256 hash of the normalized body text of the evidence.
-- **Why**: To quickly compare if we have seen this exact text before.
-- **Where**: `backend/src/contextedge/services/evidence_normalization.py` (Rating: 7/10)
-- **Who calls it**: The normalization worker.
-- **What happens next**: The hash is used for deduplication.
-- **Input**: The cleaned-up body text of the payload.
-- **Output**: A string like `sha256:abcd1234...`
-- **Failure behavior**: Hashing rarely fails unless the input is malformed. If it does, the item is dropped or errors out.
-- **Design rationale**: Hashing the content, rather than relying on external IDs, ensures we catch identical descriptions even if they came from different systems.
+### Sync worker orchestrates the run
+- **What**: The sync worker owns the run lifecycle: lock, load connector, read checkpoint, call the connector, persist, write the checkpoint, hand off.
+- **Why**: To keep connector code focused on one API and put all the transactional bookkeeping in one place.
+- **Where**: `backend/src/contextedge/services/sync_worker_service.py:419-523` (`run_backfill_job`) and `:526-637` (`run_incremental_job`). (Rating: 9/10)
+- **Who calls it**: The two Celery task shells in `workers/sync_tasks.py`.
+- **What happens next**: `_commit_and_queue_normalization`.
+- **Input**: `source_id`, `object_id`, `tenant_id`, and for backfill a window in days (default 90, `sync_tasks.py:46`).
+- **Output**: A `SyncRun` row with `items_processed`, ingestion counts under `errors["ingestion"]`, and a new `SyncCheckpoint` row when the connector returned one.
+- **Failure behavior**: See above. Note that `so.last_successful_sync_at` is stamped only on a `completed` run, so a paused or cancelled run does not look like a success.
+- **Design rationale**: Syncs run in the background so the HTTP API stays fast. Everything the connector fetched is persisted even when the operator cancels — a cancel is a stop, not a rollback.
 
-### Deduplication
-- **What**: We check if an `EvidenceItem` with the same content hash already exists.
-- **Why**: To prevent cluttering the system with identical tickets (e.g., three people report the same VPN outage with the same text).
-- **Where**: `backend/src/contextedge/workers/extraction_tasks.py` (Rating: 10/10)
-- **Who calls it**: The normalization task `_normalize`.
-- **What happens next**: If it's a duplicate, we update existing links but skip creating a new item. If it's new, we proceed.
-- **Input**: The content hash.
-- **Output**: A boolean indicating if it was deduped.
-- **Failure behavior**: A unique index in the database prevents race conditions. If two workers insert at the exact same time, one throws an `IntegrityError` and gracefully rolls back.
-- **Design rationale**: Clean data is essential for good AI outputs. Deduplication ensures analysts see one true signal instead of noise.
+### Content hash and deduplication (two levels)
+- **What**: ContextEdge deduplicates twice: once on the raw object, once on the evidence item.
+- **Why**: Three people file the same VPN outage with the same text. Analysts should see one signal.
+- **Where**:
+  - **Raw level**: `content_hash` = SHA-256 of the canonical JSON of `{external_id, body: payload}`; a matching `(tenant_id, source_id, external_id, content_hash)` row is counted and skipped before insert (`backend/src/contextedge/services/ingestion_persistence.py:53-72`). (Rating: 8/10)
+  - **Evidence level**: `content_hash` = SHA-256 of the **raw, pre-redaction** body (`backend/src/contextedge/services/evidence_normalization.py:138-152`), looked up on `(tenant_id, content_hash)` (`backend/src/contextedge/workers/extraction_tasks.py:213-220`). (Rating: 10/10)
+- **Who calls it**: `persist_ingestion_events` and `_normalize` respectively.
+- **What happens next**: A raw duplicate produces no row at all. An evidence duplicate takes the **refresh path** described below.
+- **Input**: The payload, or the cleaned body text.
+- **Output**: A 64-character hex digest.
+- **Failure behavior**: A concurrent worker inserting the same `(tenant_id, content_hash)` hits the partial unique index from migration `0026`; the loser rolls back, re-fetches the winner, logs `normalize.dedup_race_resolved`, and returns `{"deduped": true, "raced": true}` **without re-spending any LLM calls** (`extraction_tasks.py:374-409`).
+- **Design rationale**: Hashing the **raw** body — before cleaning and before redaction — means you can tune a redaction regex or a quote-stripping rule without breaking dedup for the entire corpus.
 
-### Object store offload
-- **What**: If the raw JSON payload is larger than 32 KiB, we save it to S3/MinIO instead of the Postgres database.
-- **Why**: To keep the Postgres database fast and backups small. Postgres is bad at storing massive JSON blobs.
-- **Where**: `backend/src/contextedge/services/ingestion_persistence.py` (Rating: 8/10)
-- **Who calls it**: `persist_ingestion_events` during sync.
-- **What happens next**: A small placeholder marker `_offloaded: True` is stored in the database row along with the S3 key.
-- **Input**: The raw JSON payload string.
-- **Output**: A storage key (e.g., S3 URL).
-- **Failure behavior**: If S3 is down, the sync fails and will retry.
-- **Design rationale**: This keeps the primary database lean and performant while still preserving the original raw data for auditing.
+**The refresh path is not a no-op.** When Acme's `INC0010427` is re-synced after somebody closes it, the description has not changed, so the hash matches. Rather than skipping, the existing row is refreshed: `source_facets` re-derived and merged, `case_state` refreshed (logged as `evidence.case_state_changed`), `knowledge_state` refreshed, `created_at_source` backfilled, thread linked, a missing embedding repaired, identity and decision extraction re-run only if the cached refs are empty, attachments re-registered (`extraction_tasks.py:221-325`). This is exactly how "ticket resolved" and "article retired" land — those events never rewrite the body. Chunking is deliberately **not** re-run on this path.
 
-### Database persistence
-- **What**: Saving the `RawEvidenceObject` to Postgres.
-- **Why**: To track exactly what we received from the connector before we change it.
-- **Where**: `backend/src/contextedge/services/ingestion_persistence.py`
-- **Who calls it**: The sync worker.
-- **What happens next**: We enqueue a normalization task.
-- **Input**: The `RawEvidenceObject` data.
-- **Output**: A committed database row.
-- **Failure behavior**: Database rollback.
-- **Design rationale**: We save the raw data first so if normalization fails, we can just retry it without calling the external API again.
+### Object store offload (raw payloads over 32 KB)
+- **What**: If the serialized raw JSON payload is larger than 32,768 bytes, it goes to MinIO and the database keeps a stub.
+- **Why**: To keep Postgres rows and backups small. Postgres handles large JSONB, but every scan of the table pays for it.
+- **Where**: `backend/src/contextedge/services/ingestion_persistence.py:16` (`OFFLOAD_THRESHOLD_BYTES = 32_768`) and `:84-87`. The key is `raw/{tenant_id}/{raw_id}.json` (`backend/src/contextedge/services/object_store.py:50-59`); the default bucket is `contextedge-evidence` (`backend/src/contextedge/config.py:31-35`). (Rating: 8/10)
+- **Who calls it**: `persist_ingestion_events`, for both sync and thread hydration.
+- **What happens next**: The DB row's `raw_payload` becomes `{"_offloaded": true, "size_bytes": N}` and `object_storage_key` records the key. Readers call `load_raw_payload` to fetch it back (`backend/src/contextedge/services/artifact_extraction_service.py:341-346`).
+- **Input**: The payload dict.
+- **Output**: A storage key string.
+- **Failure behavior**: The MinIO client uses `connect_timeout=1`, `read_timeout=1`, `max_attempts=1` (`object_store.py:19-35`) — a slow object store fails fast rather than stalling a worker, and the sync run fails and retries. If a legacy row carries the stub but no storage key, `_normalize` returns `{"error": "raw_payload_offloaded_without_storage_key"}` and stops (`extraction_tasks.py:128-131`); the chunk task degrades to chunking body text only (`backend/src/contextedge/workers/chunk_tasks.py:97-107`).
+- **Design rationale**: Keeps the primary database lean while preserving the original payload for audit.
 
-### Evidence normalization
-- **What**: We take the messy raw JSON and extract a clean `title`, `body_text`, and apply PII redaction.
-- **Why**: AI models need clean text. We need a standardized format (`EvidenceItem`) so everything looks the same to the search engine.
-- **Where**: `backend/src/contextedge/workers/extraction_tasks.py` (Rating: 10/10)
-- **Who calls it**: `normalize_evidence` Celery task.
-- **What happens next**: Redacted, normalized text is sent to the embedder.
-- **Input**: The raw payload (from DB or S3).
-- **Output**: An `EvidenceItem` database row.
-- **Failure behavior**: Task retries. If the payload is unreadable, it fails permanently.
-- **Design rationale**: Separation of concerns. The sync worker just dumps data; the extraction worker cleans it up asynchronously.
+> **Read this before writing SQL over `raw_payload`.** An offloaded row's payload column holds the stub, not the data. **Every SQL filter or backfill over `raw_evidence_objects.raw_payload` silently skips the biggest rows** — which are exactly the longest conversations and the longest KB articles. Two live examples: ingest-priority ordering reads `thread_count` / `resolution` out of `raw_payload` and therefore sorts every offloaded ticket to the back (`backend/src/contextedge/services/ingest_priority.py:76-95`), and reply-inheritance reconciliation explicitly skips offloaded rows (`extraction_tasks.py:949-967`). The knowledge-state backfill was left undone for the same reason (`codewiki/KNOWN_GAPS.md:36`).
 
-### Embedding generation
-- **What**: We convert the text of the evidence into a 3072-dimensional vector of numbers using an AI model.
-- **Why**: So we can do semantic search (finding tickets that mean the same thing, even if they use different words).
-- **Where**: `backend/src/contextedge/ai/embeddings.py` (Rating: 9/10)
-- **Who calls it**: `_normalize` and `embed_chunks_batch_task`.
-- **What happens next**: The vector is saved to a `pgvector` column.
-- **Input**: The normalized title and body text.
-- **Output**: A list of 3072 floating-point numbers.
-- **Failure behavior**: If the AI provider (like OpenAI or Vertex) is down, it retries. If it fails completely, the embedding remains NULL and we degrade gracefully to text search.
-- **Design rationale**: Vector embeddings are the magic behind finding related incidents. We generate them as early as possible so search works immediately.
+### Handing off to normalization without losing ids
+- **What**: After the sync transaction commits, one `normalize_evidence` task is dispatched per new raw id.
+- **Why**: Workers must only see committed rows, so the dispatch has to happen after the commit — which means the dispatch itself can fail after the data is already durable.
+- **Where**: `backend/src/contextedge/services/sync_worker_service.py:301-376`, with the queue helper at `backend/src/contextedge/services/sync_ingestion_queue.py:16-30`.
+- **Who calls it**: `run_backfill_job` / `run_incremental_job`, only when the run finished `completed`.
+- **What happens next**: The `extraction` queue.
+- **Input**: The list of new raw ids, ordered by the source object's `ingest_priority` mode (`none`, `resolution_first`, `threads_desc`, `threads_asc` — `backend/src/contextedge/services/ingest_priority.py:36-53`).
+- **Output**: N Celery messages.
+- **Failure behavior**: This is the crash-safe part. Ids that were not yet enqueued are written back onto `source_objects.metadata_extra["pending_normalize_raw_ids"]`, the run flips to `failed` with an `errors["handoff"]` blob, and the exception re-raises so Celery retries. The next successful run's claim step re-drains the ledger, filtering out anything already normalized by `raw_object_ref` **and** by content hash (`sync_worker_service.py:176-233, 273-298, 322-376`).
+- **Design rationale**: "Commit, then enqueue" is correct but not sufficient on its own. The pending-id ledger is what makes it recoverable.
 
-### Chunk creation
-- **What**: We split large evidence items (like a 40KB post-mortem document or a huge Teams thread) into smaller, bite-sized pieces called chunks.
-- **Why**: AI embeddings work best on small pieces of text. If we embed a huge document, the vector gets "diluted" and search becomes inaccurate (the "8 KB cliff").
-- **Where**: `backend/src/contextedge/workers/chunk_tasks.py` and `services/evidence_chunk_service.py` (Rating: 9/10)
-- **Who calls it**: `_dispatch_chunking` in the normalize task. Small items are chunked inline; large items are sent to a separate async task.
-- **What happens next**: Each chunk gets its own embedding via a batch task (`embed_chunks_batch_task`).
-- **Input**: The `EvidenceItem` and its raw payload.
-- **Output**: Multiple `EvidenceChunk` rows.
-- **Failure behavior**: Chunking is wrapped in try/except so it never blocks the main ingest pipeline. If it fails, we still have the parent evidence.
-- **Design rationale**: Chunks act as a high-recall index. A single Jira ticket might have 1 chunk, while a 50-message Teams thread gets 50 chunks, allowing us to pinpoint the exact message that matters.
+### Thread hydration (pulling the whole conversation)
+- **What**: For a ticket or a chat thread, hydration fetches every message in it and turns each one into its own raw object.
+- **Why**: The diagnosis usually lives in the replies, not the ticket description.
+- **Where**: `backend/src/contextedge/workers/hydration_tasks.py:36-182`, task `hydration.hydrate_thread` on the `hydration` queue (`hydration_tasks.py:185-205`). (Rating: 8/10)
+- **Who calls it**: `normalize_evidence`, post-commit, when the payload carried a `_thread_id`, the record is not itself a hydrated message, and it was not a dedup (`extraction_tasks.py:1341-1351`). Also manually via `POST /api/v1/threads/{id}/hydrate`.
+- **What happens next**: `persist_ingestion_events` for the messages, then one `normalize_evidence` per new raw id (`hydration_tasks.py:197-203`) — the pipeline loops back on itself.
+- **Input**: The external thread id.
+- **Output**: N `hydrated_message` raw rows, plus the `Thread` row updated to `hydration_status="complete"` with message and participant counts.
+- **Failure behavior**: The Zoho connector re-raises when **both** thread endpoints fail, so a throttled call is never stored as "hydrated but empty" (`connectors/zoho_desk/connector.py:1344-1349`).
+- **Design rationale**: Two mechanisms make the loop terminate. Hydrated messages carry `_thread_id` but `_normalize` refuses to request hydration for them — one shared predicate, `is_hydrated_message` (`backend/src/contextedge/services/message_filter.py:209-213`), is used by both the noise gate and the hydration guard, so they can never disagree. Without it, each of a thread's 41 messages would re-hydrate its own thread (measured 10x amplification). Re-delivered messages then dedupe at the raw layer, so the cycle converges after one pass.
+
+Hydration is also the only place that holds an entire thread in arrival order, which is why cross-message quote stripping happens here: `clean_thread_bodies` removes text already seen earlier in the same thread (`backend/src/contextedge/services/thread_text_service.py:346+`). Measured: 89% of the substantive text in a thread was repetition.
 
 ---
 
-## 3. AI Extraction Pipeline
+## 3. Evidence Normalization — the exact order inside `_normalize`
 
-Once the data is normalized, we use AI to pull out the hidden meaning.
+This is the single most important function in the ingestion half of the system. It is one Celery task, one database transaction, and every fan-out happens **after** the commit.
 
-### Relevance classification
-- **What**: The AI looks at the text and decides if it's operational (like an incident) or noise (like a lunch menu).
-- **Why**: To avoid spending money embedding and processing junk data.
-- **Where**: `backend/src/contextedge/ai/classifiers/relevance.py` (Rating: 8/10)
-- **Who calls it**: `_normalize` before the expensive extraction fan-out.
-- **What happens next**: If confidence is high and it's "not_relevant", we skip further extraction.
-- **Input**: Evidence title and body.
-- **Output**: A JSON object with a label (e.g., `operational`) and a confidence score.
-- **Failure behavior**: If the AI fails, we assume it might be relevant and proceed anyway (fail open).
-- **Design rationale**: This step cuts LLM costs by ~65% on noisy tenants by dropping irrelevant items early.
-
-### Identity extraction
-- **What**: AI finds specific people, systems, and entities mentioned in the text (e.g., "vpn-gw-east-01" or "jsmith").
-- **Where**: `backend/src/contextedge/services/identity_service.py` (Rating: 8/10)
-- **Why**: To link evidence to known systems in our Context Graph.
-- **Input**: Redacted evidence text.
-- **Output**: Graph edges linking the evidence to Canonical Identity nodes.
-- **Failure behavior**: Logged as a warning, extraction continues.
-- **Design rationale**: Identities act as the glue in our graph, connecting disparate tickets that talk about the same server.
-
-### Decision extraction
-- **What**: AI reads the text to figure out if someone made a choice or took an action (e.g., "Engineer restarted the server").
-- **Why**: To build a history of what actions teams actually take in the real world, rather than just what they say they do.
-- **Where**: `backend/src/contextedge/ai/extractors/decision_extractor.py` (Rating: 9/10)
-- **Who calls it**: `link_evidence_decisions` during normalization.
-- **What happens next**: Edges like `records_decision` are added to the graph.
-- **Input**: Evidence text.
-- **Output**: Extracted actions, actors, and targets.
-- **Failure behavior**: Logged, continues without crashing.
-- **Design rationale**: This is "Tier 1" decision tracking. It's moderate fidelity (since AI is guessing) but invaluable for mining what works.
-
-### Episode extraction
-- **What**: AI takes a cluster of related evidence and writes a chronological story (symptoms -> diagnostics -> remediation -> outcome).
-- **Why**: Humans understand stories better than a pile of 15 raw tickets.
-- **Where**: `backend/src/contextedge/ai/extractors/episode_extractor.py` (Rating: 9/10)
-- **Who calls it**: `reconstruct_episode_task` in Celery.
-- **What happens next**: An `Episode` is saved in `draft` state for human review.
-- **Input**: A list of evidence texts ordered by time.
-- **Output**: A JSON array of episode steps.
-- **Failure behavior**: Task retries. If the payload is too large, it is chunked into multiple LLM calls.
-- **Design rationale**: Draft episodes give the reviewer a massive head start. They just edit the AI's work instead of writing from scratch.
-
-### Pattern extraction
-- **What**: AI looks at multiple approved episodes and finds commonalities (e.g., "Certificates keep expiring after Windows updates").
-- **Why**: To identify recurring problems that need a standardized Playbook.
-- **Where**: `backend/src/contextedge/ai/extractors/pattern_extractor.py` (Rating: 9/10)
-- **Who calls it**: `cluster_episodes` task.
-- **What happens next**: A `Pattern` is created.
-- **Input**: Summaries of multiple episodes.
-- **Output**: Triggers, root causes, and common resolution steps.
-- **Failure behavior**: Falls back to a basic string-matching pattern creation without AI synthesis.
-- **Design rationale**: Patterns bridge the gap between individual incidents and organizational playbooks.
-
-### Contradiction detection
-- **What**: AI compares an approved playbook step against historical KB articles to see if they say opposite things (e.g., "Enable MFA" vs "Disable MFA").
-- **Why**: To keep the knowledge base clean and prevent teams from following outdated, harmful advice.
-- **Where**: `backend/src/contextedge/services/contradiction_service.py` (Rating: 8/10)
-- **Who calls it**: `scan_contradictions_task` via Celery beat schedule.
-- **What happens next**: A `Contradiction` graph edge is made and reviewers are notified.
-- **Input**: A playbook step and a highly similar KB article.
-- **Output**: A boolean (contradicts or not) and a severity explanation.
-- **Failure behavior**: Hard caps exist on LLM calls to prevent runaway spending. If it fails, it tries again next scan.
-- **Design rationale**: This uses a three-gate funnel (Vector search -> Cursor check -> Lexical overlap) to ensure we only spend LLM tokens on highly suspicious pairs.
-
----
-
-## 4. Pattern → Playbook Flow
-
-**What**: How recurring problems become official, executable procedures.
-**Why**: Organizations need governed, versioned steps to resolve incidents safely.
-
-1. **How patterns are detected**: The `cluster_episodes` Celery task runs periodically. It groups approved `Episodes` that are semantically similar (close together in vector space). If it finds a cluster, it asks the AI to synthesize a `Pattern` out of them.
-2. **How playbooks are generated from patterns**: The `generate_playbook_candidate` task takes a pattern and asks the AI to draft a `Playbook`. This playbook is marked as a `candidate`.
-3. **Human review cycle**: A human reviewer looks at the candidate in the dashboard. They edit it, add safety classes, and move it through a state machine: `candidate` -> `under_review` -> `approved`.
-4. **Versioning**: Once approved, the playbook gets a semantic version (like `1.0.0`). Only **published** versions are visible to the runtime engine. Drafts are completely hidden from automated retrieval.
-
-**Where**: `backend/src/contextedge/services/playbook_service.py` (Rating: 10/10)
-**Who calls it**: Celery workers generate candidates; humans click buttons in the UI to approve.
-**What happens next**: Published playbooks sit waiting for a runtime query to match them.
-**Failure behavior**: If playbook generation fails, it retries. State transitions are strictly validated to prevent illegal jumps (e.g., draft directly to retired).
-**Design rationale**: We require human approval because playbooks might automatically execute infrastructure changes. Safety is paramount.
-
----
-
-## 5. Context Graph Building
-
-**What**: We build a massive network (a graph) of everything we know.
-**Why**: Because relationships matter. A playbook is more relevant if it connects to the exact server mentioned in a ticket.
-**Where**: `backend/src/contextedge/graph/builder.py` (Rating: 10/10)
-
-- **How evidence creates graph nodes**: Evidence items aren't just rows; they connect to `Identities` (like servers or users) via `references_identity` edges.
-- **How episodes link to evidence**: When an episode is made, it maintains `evidence_refs` linking back to the raw tickets that informed it.
-- **How patterns link to episodes**: A `PatternEvidenceLink` edge connects a pattern to the episodes it summarizes.
-- **How playbooks link to patterns**: An edge called `derived_from` points from the Playbook to the Pattern.
-- **Edge creation**: `ensure_edge` is used to idempotently create lines between nodes in Postgres. Edges have types, weights, and can be scoped to a specific `domain_id`.
-- **Temporal tracking**: Every edge and node has timestamps. This allows us to see how the graph evolves over time.
-
-**Who calls it**: Services across the app (normalization, extraction, execution) call `graph/builder.py`.
-**What happens next**: The graph is queried during runtime to boost search rankings.
-**Input**: Source Node, Target Node, Edge Type.
-**Output**: A `GraphEdge` database row.
-**Failure behavior**: Idempotency prevents duplicate edges.
-**Design rationale**: We store the graph in Postgres alongside the relational data to maintain transactional consistency, avoiding the overhead of a separate Neo4j database.
-
----
-
-## 6. Runtime Retrieval Flow
-
-**What**: A user or an external system (like a Slack bot) asks "How do I fix this VPN error?", and we return the best playbook.
-**Why**: This is the core value proposition of ContextEdge: instant, accurate operational guidance.
-
-1. **Incoming runtime query**: A request hits `/api/v1/runtime` containing symptoms and environment context.
-2. **Vector search**: We embed the query and use `pgvector` to find playbooks with similar meaning.
-3. **Full-text search**: We use Postgres FTS to find exact keyword matches (like specific error codes).
-4. **Hybrid ranking**: The `HybridRanker` combines vector scores, FTS scores, and **graph signals** (e.g., does this playbook link to the affected identity?) to produce a final confidence score.
-5. **Context assembly**: The top playbook is fetched along with its evidence trace (why we picked it).
-6. **LLM response generation**: Sometimes we ask the LLM to summarize why this playbook is the perfect fit.
-7. **Decision capture**: We record a `DecisionTraceEvent` saying "We recommended this playbook with 92% confidence."
-8. **Trace recording**: A `ResolutionSession` groups these traces so humans can audit the AI's reasoning later.
-
-**Where**: `backend/src/contextedge/services/runtime_service.py` and `search/hybrid_ranker.py` (Rating: 10/10)
-**Failure behavior**: If the LLM fails, we return the raw ranked playbooks without a summary. If the DB fails, the query fails.
-**Design rationale**: Hybrid ranking is crucial because IT ops needs both semantic fuzziness ("login broken") and exact lexical precision ("Error Code 0x80090016").
-
----
-
-## 7. Review Queue Flow
-
-**What**: Humans reviewing what the AI did.
-**Why**: AI is advisory. Humans hold the keys.
-
-- **What triggers review items**: Episodes being extracted, playbooks being drafted, or playbook executions requiring manager approval.
-- **Reviewer actions**: A human looks at the queue and can `approve`, `modify`, or `reject` the item.
-- **Feedback recording**: If they reject it, they provide a structured rejection code (e.g., `wrong_diagnosis`, `policy_violation`). This creates a `DecisionOutcome` row.
-- **Downstream effects**: Rejected items are marked `superseded` and feed back into the analytics engine to improve the system. Approved items become published and go live.
-
-**Where**: `backend/src/contextedge/services/decision_trace_service.py` and `/review-queue` API (Rating: 9/10)
-**Design rationale**: Structured rejection codes (instead of free text) allow us to build dashboards showing exactly why the AI is failing (e.g., "The AI lacks user context 40% of the time").
-
----
-
-## 8. Evaluation & Drift Flow
-
-**What**: Checking if our playbooks are getting stale.
-**Why**: IT environments change constantly. A playbook that worked yesterday might be broken today.
-
-- **How evaluations are triggered**: Celery beat schedules `detect_drift` to run every 6 hours.
-- **Drift detection**: The worker looks at recent evidence and compares it to the playbook. If the evidence shows teams doing something different than what the playbook says, it flags "drift".
-- **Feedback loops**: Alerts are generated. The `calibrate_decision_confidence` task also runs to see if our runtime engine's confidence scores align with reality (e.g., "We predicted 99% success, but the playbook failed 50% of the time. Lower the score!").
-
-**Where**: `backend/src/contextedge/workers/evaluation_tasks.py` (Rating: 8/10)
-**Failure behavior**: Background tasks retry gracefully.
-**Design rationale**: Automated drift detection turns a static wiki into a living, self-healing knowledge base.
-
----
-
-## 9. Worker Task Chain
-
-**What**: How background jobs hand off work to each other.
-**Why**: To prevent HTTP requests from hanging while we do heavy AI processing.
+**Where**: `backend/src/contextedge/workers/extraction_tasks.py:122-628`, wrapped by task `extraction.normalize_evidence` (`extraction_tasks.py:1300-1354`), 3 retries at 60 s, queue `extraction`. (Rating: 10/10)
+**The transaction contract**: `run_async` builds a fresh NullPool engine and one session per task, commits on success and rolls back on exception (`backend/src/contextedge/workers/asyncio_runner.py:10-34`). Services inside it `flush()`, never `commit()`.
 
 ```mermaid
 flowchart TD
-    API[Incoming Data / API] --> Sync[sync queue: run_incremental_sync]
-    Sync --> N[extraction queue: normalize_evidence]
-    
-    N --> InlineEmbed[Inline Parent Embed]
-    N --> InlineClassify[Inline Classify]
-    N --> InlineIdent[Inline Identity/Decision]
-    
-    N --> Chunk[extraction queue: chunk_evidence_task (Large items only)]
-    Chunk --> EmbedBatch[extraction queue: embed_chunks_batch_task]
-    
-    N --> Corr[extraction queue: correlate_evidence]
-    
-    Corr --> Pat[pattern queue: cluster_episodes]
-    Pat --> Play[pattern queue: generate_playbook_candidate]
-    
-    Play --> Eval[evaluation queue: detect_drift / scan_contradictions_task]
+    L[1. Load raw + payload<br/>MinIO fetch if offloaded] --> N[2. Noise gate<br/>hydrated messages only, no LLM]
+    N -->|rejected| Stop([skipped_noise_message<br/>no evidence row])
+    N --> T[3. Title + body + content hash]
+    T --> R[4. Redaction]
+    R --> D{5. Dedup on tenant+hash}
+    D -->|hit| Refresh[Refresh facets, case_state,<br/>knowledge_state, embedding]
+    D -->|miss| Ins[6. Insert EvidenceItem<br/>derive type, states, facets]
+    Ins --> Th[7. Thread + attachments]
+    Th --> C1[8. LLM: relevance classification]
+    C1 --> G{9. skip_extraction?}
+    G -->|not_relevant and conf ≥ 0.75| Sig[Error signatures only]
+    G -->|no| C2[10. LLM: message function<br/>conversational sources]
+    C2 --> Sig2[11. Error signatures]
+    Sig2 --> C3[12. LLM: identity resolution]
+    C3 --> C4[13. LLM: decision extraction]
+    C4 --> E[14. Parent embedding]
+    E --> Ch[15. Chunk dispatch]
 ```
 
-**Where**: `backend/src/contextedge/workers/celery_app.py` (Rating: 10/10)
-**What happens**: The output of one task (like normalization) triggers `.delay()` calls to enqueue the next task (like correlation).
-**Failure behavior**: Celery automatically retries tasks using exponential backoff.
-**Design rationale**: Message queues provide durability. If the API server dies, the jobs sitting in RabbitMQ/Redis are not lost and will resume when the server reboots.
+### Step 2 — the deterministic noise gate
+- **What**: Before any model call, hydrated thread messages are checked for one of four rejection reasons: `delivery_failure`, `quote_only`, `empty`, `coordination_only`.
+- **Why**: On the live corpus, **47% of 18,907 messages** were rejected here. Every one of those would otherwise have cost a classification call, an identity call, an embedding, and a row.
+- **Where**: `backend/src/contextedge/services/message_filter.py:81, 174-206`; called at `extraction_tasks.py:147-160`.
+- **How `coordination_only` is decided**: after stripping source markup (Zoho encodes an @-mention as `zsu[@user:...]zsu`) and cutting signatures, the message must be under `MIN_DIAGNOSTIC_CHARS = 150` (`message_filter.py:52`) **and** show no technical signal — 15 regexes covering error codes, file paths, versions, hostnames, URLs, IPs, emails, CamelCase and SCREAMING_SNAKE identifiers, stack traces, SQL and shell (`message_filter.py:56-79`).
+- **Output on rejection**: `{"status": "skipped_noise_message", "reason": ..., "filter_version": "v1"}`. **No evidence row is created**, but the raw object stays.
+- **Design rationale**: Keeping the raw object and stamping `MESSAGE_FILTER_VERSION` means a rule change can re-judge every previously-rejected message exactly — find raw objects with no evidence row and re-run (`message_filter.py:84-108`).
 
+For Acme: "Any update on the VPN?" dies here as `coordination_only`. "Restarted IPSec on vpn-gw-east-01, tunnel stable" survives at 28 characters, because the hostname is a technical signal.
+
+### Step 4 — redaction
+- **What**: Regex redaction of secrets and PII in the title and body, replacing matches with `[REDACTED:{kind}]`.
+- **Where**: `backend/src/contextedge/services/redaction_service.py:36-191`, called at `extraction_tasks.py:170-182`. Enabled by default (`config.py:236`).
+- **Order matters and is deliberate**: API tokens (GitHub/Slack/OpenAI/GitLab/Google), JWT, bearer tokens, secret assignments, then email, phone, SSN, credit card, AWS keys, private-key blocks. Secrets run before numeric rules so a token is never half-redacted. The phone rule is word-boundary-guarded so hex ids and serial numbers survive intact — corrupting an external id would fork an identity.
+- **Design rationale**: Everything downstream — classifier, embedder, extractors, database — reads post-redaction text. The identity extractor gets a **second** redaction pass over its own input blob (title + body + the first 2,000 characters of the payload JSON), because nested custom fields can carry PII the field extractors missed (`extraction_tasks.py:184-198`).
+
+### Step 6 — deriving the evidence row's structural fields
+All four derivations are pure functions of the payload — no model calls:
+
+| Field | Function | Rule |
+|---|---|---|
+| `evidence_type` | `derive_evidence_type` (`backend/src/contextedge/services/evidence_typing.py:34-146`) | explicit `payload["evidence_type"]` wins (Zoho stamps it) → `(source_type, object_type)` map, e.g. `("servicenow","kb_knowledge") → kb_article`, any `hydrated_message` → `thread_message` → per-source default → `"message"` |
+| `knowledge_state` | `derive_knowledge_state` (`backend/src/contextedge/services/knowledge_lifecycle.py:48-130`) | ServiceNow `kb_knowledge.workflow_state`, Zoho `articles.status` → `draft`/`review`/`published`/`retired`. Unmapped values serve and log **once per value**. NULL means "the source did not say" and always serves |
+| `case_state` | `derive_case_state` (`backend/src/contextedge/services/case_state.py:42-126`) | Zoho ticket `status` / ServiceNow numeric `state` → `resolved` or `cancelled`, else NULL. `cancelled` deliberately does not open the episode resolution gate |
+| `source_facets` | `derive_facets` (`backend/src/contextedge/services/source_facets.py:38-85`) | config-mapped from the source's `facet_fields` into `{root_cause, component, environment, version, customer, region, ticket_type}`; "NA"/"None"/"-" discarded |
+
+Scope is copied from the `Source` at ingest: `workspace_id` always, `domain_id` **only when the source has exactly one configured domain** — a multi-domain source leaves it NULL, which by graph convention means tenant-wide (`extraction_tasks.py:339-352`).
+
+### Steps 8-9 — relevance classification and the skip gate
+- **What**: One LLM call decides whether this evidence is `operational`, `possibly_relevant`, or `not_relevant`, with a confidence.
+- **Why**: To avoid spending identity, decision, embedding and chunking work on a lunch menu.
+- **Where**: `backend/src/contextedge/ai/classifiers/relevance.py:32-81`, called at `extraction_tasks.py:425-469`. Prompt family `relevance`, **default version v2** (`backend/src/contextedge/ai/prompts/relevance.py:76-83`). Task lane `classification` → `vertex_ai/gemini-2.5-flash` (`config.py:56`). Body goes through `salient_slice(body, 2000)` — salience-aware, not head-first. Thinking is pinned to 0 for this prompt (`config.py:188-190`): ~70% fewer output tokens with an unchanged verdict. (Rating: 8/10)
+- **The gate**: `skip_extraction = (label == "not_relevant" AND confidence >= 0.75)` (`extraction_tasks.py:471-479`).
+- **What a skipped item still gets**: its evidence row (audit trail) and its deterministic error-signature fingerprints. What it does **not** get: message-function classification, identity resolution, decision extraction, a parent embedding, or chunks. It is invisible to vector search by construction.
+- **Failure behavior**: A classifier exception logs `relevance_classification_failed` and **falls through to the full pipeline** — fail-open. Missing a real incident costs more than extracting on noise, which is also why the threshold sits at a conservative 0.75.
+- **Note**: prompt `relevance` v3 exists and adds atomic claims, but is deliberately **not** the default — asking the gate call to also emit claims moved half the borderline labels (`relevance.py:121-128`). It reaches a tenant only through `tenant_prompt_variants_json` (`config.py:243`).
+
+### Step 11 — error-signature fingerprints (deterministic)
+- **What**: Regex fingerprinting of error shapes in the title and body, find-or-create per `(tenant_id, signature_key)`, plus an `evidence -[exhibits]-> error_signature` edge at confidence 0.9.
+- **Where**: `backend/src/contextedge/services/error_signature_service.py:176-260`; called at `extraction_tasks.py:507-526`.
+- **Who calls it**: `_normalize`, for **every** item — including ones the relevance gate skipped, because a confidently-irrelevant thread can still carry a pasted stack trace.
+- **Design rationale**: No LLM, so running it on everything is free. This is a different thing from the *issue signature* in §7: an ErrorSignature is the exact log shape, an IssueSignature is the generalized problem shape.
+
+### Step 12 — identity resolution
+- **What**: Find the people, devices, services and applications named in the text, and resolve each mention to a canonical identity.
+- **Where**: `backend/src/contextedge/services/identity_service.py:810-918`. (Rating: 9/10)
+- **How, in four layers** (`identity_service.py:616-796`):
+
+| Layer | Mechanism | Confidence |
+|---|---|---|
+| 1. Strong identifier | SQL lookup on `(tenant, alias_type, normalized_alias)`, mirroring the unique index exactly | 1.0, `strong:<type>` |
+| 2. Typed exact alias | normalized-alias equality scoped to compatible entity types | 0.95, `alias_exact` |
+| — Candidacy gate | rejects facet types (`environment`/`version`/`vendor` live in `source_facets` instead), unsupported types, and things that are not names (`backend/src/contextedge/services/identity_candidacy.py:65-196`) | — |
+| 3. LLM adjudication | up to 5 candidates from substring tokens or pg_trgm similarity > 0.3; prompt `identity_adjudication` v2, schema-validated | auto-link only at `AUTO_LINK_THRESHOLDS` — person 0.95, everything else 0.9 |
+| 4. Provisional creation | unmatched mention becomes a `provisional` identity | 0.5, `unmatched_new` |
+
+- **Why the candidacy gate sits between layers 2 and 3**: recognizing something already known stays free, and the gate blocks everything that would cost a model call or a row. Identity work was **78% of all model spend** before it existed.
+- **What happens below the auto-link threshold**: a new identity in `needs_review` state — never a silent link, never a silent fork.
+- **Promotion**: a `provisional` identity linked by at least 2 distinct evidence items and at most 5 (the rarity guard against product-name hubs) flips to `resolved` at the exact moment it could first correlate anything (`backend/src/contextedge/services/identity_promotion.py:56-138`).
+- **Output**: `evidence_identity_links` rows, a cached `canonical_entity_refs["identities"]` list on the evidence row, `mentions_identity` graph edges weighted by resolution confidence, and an `identity.resolved` operational event.
+- **Failure behavior**: Logged as `identity_resolution_failed`; ingest continues.
+- **Acme**: `vpn-gw-east-01` is a single-token device name matching the hostname regex, so the normalizer promotes it to a `hostname` strong identifier — the literal example in the code's own comment (`backend/src/contextedge/services/identity_normalizer.py:134-136`). After its first sighting it resolves at layer 1 forever. "Priya" appearing later in the Teams thread goes to adjudication and links only at 0.95 or above, because persons carry the stricter threshold.
+
+A daily Beat task, `identity.reconcile_identities`, does a cross-set pass over `provisional` and `needs_review` identities in batches of 60 with an overlap of 10 (boundary pairs are where near-duplicates cluster). It **proposes merges and never performs them** — rows land in `identity_merge_proposals` for a human, and rejections persist so the schedule never re-raises them (`backend/src/contextedge/services/identity_reconciliation_service.py:29-98`).
+
+### Step 13 — decision extraction
+- **What**: Find where someone made a choice or took an action ("restarted IPSec on vpn-gw-east-01").
+- **Where**: `backend/src/contextedge/services/decision_service.py:21-121`, prompt `decision` **v2** (`backend/src/contextedge/ai/prompts/decision.py:61-68`). (Rating: 8/10)
+- **What happens next**: The actor resolves as a `person` and the target as a `service` **through the same identity resolver**, then `records_decision` and `records_action_on` edges are written and refs land under `canonical_entity_refs["decisions"]`.
+- **Design rationale**: Identities run before decisions on purpose, so a decision's actor and target land on canonical identities rather than fresh strings.
+
+### Step 14 — parent embedding
+- **What**: `title + body[:8000]` becomes a 3,072-dimensional vector.
+- **Where**: `extraction_tasks.py:65-71` → `backend/src/contextedge/ai/embeddings.py:19-35`. (Rating: 9/10)
+- **Failure behavior**: Logged as `embedding_failed`. A later re-ingest of the same content repairs a NULL embedding on the dedup path.
+- **Caveat, verified**: this call site passes no `tenant_id`/`db`, so the parent-evidence embedding is **not** budget-gated and **not** cost-attributed. The chunk path is (see §4).
+- **Note on the model**: the code default is `text-embedding-3-small` (`config.py:58`), which returns 1,536 dimensions and would raise — `generate_embedding` hard-fails anything that is not exactly 3,072 dims (`backend/src/contextedge/ai/provider.py:787-793`). Real deployments override `DEFAULT_EMBEDDING_MODEL` in `.env`. Say "the configured 3072-dim embedding model", not the code default.
+
+### Step 15 and post-commit fan-out
+Chunk dispatch is covered in §4. After `run_async` commits, the task wrapper dispatches (`extraction_tasks.py:1306-1354`):
+- one `artifact.extract_attachment` per registered attachment, **or**
+- `extraction.correlate_evidence` + `extraction.compute_evidence_baseline` (both on the `correlation` queue),
+- plus `hydration.hydrate_thread` when the auto-hydration conditions hold.
+
+`extraction.classify_relevance` is a separate, manual/sweep-only task on the `default` fast lane (`celery_app.py:229-233`). It re-runs the relevance prompt and is the **only** path that computes `applicability` for knowledge evidence — and it skips that ~7,200-token call entirely when the source already stated environment and version in its facets (`extraction_tasks.py:685-734`).
+
+---
+
+## 4. Chunking and Chunk Embedding
+
+**What**: Long evidence is split into retrievable pieces, and each piece gets its own embedding.
+**Why**: Embedding a 40 KB post-mortem dilutes the vector. The old behavior — `embed_evidence(title, body[:8000])` — made everything past ~8,000 characters invisible to semantic search. That was the "8 KB cliff".
+**Where**: dispatch at `extraction_tasks.py:73-119`; tasks in `backend/src/contextedge/workers/chunk_tasks.py`; persistence in `backend/src/contextedge/services/evidence_chunk_service.py:43-132`. (Rating: 9/10)
+
+### Inline or async?
+- **Inline** when the body is under `INLINE_CHUNK_BUDGET_BYTES = 16 * 1024` **and** the source is in `INLINE_CHUNK_SOURCE_ALLOWLIST = {jira_sm, servicenow, gmail, teams, sapphireims, zoho_desk}` (`extraction_tasks.py:54, 60-62`). `write_chunks` runs in the same transaction, then `embed_chunks_batch_task` is dispatched.
+- **Async** otherwise: `extraction.chunk_evidence` — so a big attachment or an unfamiliar parser never stalls the normalize transaction.
+- Both are wrapped in try/except at the call site. A chunker failure logs `chunking_failed` and the parent embedding still stands (`extraction_tasks.py:578-585`).
+
+### Which chunker runs
+`get_chunker(source_type, evidence_type)` (`backend/src/contextedge/services/chunkers/registry.py:116-143`) resolves in this order:
+1. `evidence_type == "kb_article"` → **document** chunker. Record shape beats source type: a Zoho article must not go through the ticket chunker.
+2. ticket sources `{jira_sm, servicenow, sapphireims, zoho_desk}` → **ticket** chunker.
+3. `{gmail, teams}` → **thread** chunker.
+4. `evidence_type == "attachment"` → **attachment** chunker.
+5. otherwise → **fallback**.
+
+Registration is lazy and per-chunker fail-soft: a chunker module that cannot import logs `chunker.register_failed` and is skipped rather than taking down the pipeline.
+
+| Chunker | Splits on | Adds | `chunk_kind` |
+|---|---|---|---|
+| Fallback | paragraph → line → heuristic sentence → hard split; `CHUNK_TARGET_CHARS = 1500`, `CHUNK_OVERLAP_CHARS = 150` (`chunkers/fallback.py:40-43`) | title folded into chunk 0; offsets reflect the overlapped span for citation back into the body | `body` |
+| Ticket | delegates to fallback | priority, status, issue_type, project, assignee, reporter, key, sys_id, category | `comment` for hydrated comments, else `body` |
+| Thread | strips the quoted-reply tail (earliest of "On … wrote:", Outlook From/Sent block, forwarded rules, first `>` line) | author, timestamp, 200-char `replies_to_excerpt` | `message` |
+| Attachment | sniffs markdown / JSONL / plain log / prose from mime, filename and the first 4,096 bytes | breadcrumb `parent_section`; log chunks keep stack traces attached to their introducing timestamp | `heading_section`, `log_event`, `body` |
+| Document | structured `DocumentElement` list from the parsers | page / page_range, `section_path`, `extraction_methods`, `needs_vision` | `procedure_step`, `warning`, `table`, `figure`, `code_block`, `heading_section` |
+
+### Persistence and authority
+`write_chunks` deletes existing rows **at the same `chunker_version` only** (other versions are kept for side-by-side experiments), inserts rows with a per-chunk `content_hash`, and stamps the parent's `chunked_at` and `chunk_count` (`evidence_chunk_service.py:43-132`). Each chunk carries a `source_authority` default computed **evidence-type-first**: knowledge types → `knowledge_article`; else ticket sources → `ticket`, gmail → `email`, teams → `chat`, anything else → `gist` (`evidence_chunk_service.py:135-169`). That is why the Acme "how the VPN works" KB page carries knowledge authority instead of competing with `INC0010427` as if it were a ticket.
+
+### Chunk embedding
+`extraction.embed_chunks_batch` filters to `embedding IS NULL` (idempotent replay), embeds in batches of `EMBED_BATCH_SIZE = 32` via `generate_embeddings_batch(texts, tenant_id, db)` — this path **is** budget-gated and cost-attributed — and on a batch failure logs and **breaks without raising**, leaving the NULL rows for the next replay (`chunk_tasks.py:133-191`). Post-commit it dispatches `evaluation.generate_correlation_suggestions` per evidence id.
+
+**Why chunking and embedding have their own queue.** During the 2026-08-17 Zoho backfill, 1,879 chunks existed with only 289 embedded (15%), because 309 embed tasks were queued behind 10,226 normalizations in one FIFO. Nothing reported an error — the evidence was ingested and silently unretrievable. Hence the dedicated `embedding` queue (`celery_app.py:259-268`).
+
+**Known gaps here, stated plainly** (`codewiki/KNOWN_GAPS.md:421-427`): there is no chunk garbage-collection task, so if a chunker version is ever bumped, old generations coexist (search tolerates this — MMR demotes near-duplicates and the rollup keeps one per parent). There is no standalone backfill drainer for pre-chunking evidence; what exists instead is the `needs_fanout` path in the manual re-classify task plus the `maintenance.reclassify_stale_evidence` sweep. And identity and decision extraction still run once on the parent body, not per chunk.
+
+---
+
+## 5. Correlation — turning evidence into a case graph
+
+**What**: Decide which evidence items are about the same incident.
+**Why**: Acme's ServiceNow ticket, the Teams thread and the engineer's email are one incident in three systems. Nothing else in the pipeline can tell.
+**Where**: `backend/src/contextedge/services/correlation_service.py:197-791`, task `extraction.correlate_evidence` on the `correlation` queue, 2 retries at 60 s (`backend/src/contextedge/workers/correlation_tasks.py:12-71`). (Rating: 10/10)
+
+**Tier 1 — deterministic case links, confidence 1.0.** `extract_case_link_candidates` builds `(system, external_id)` keys from: the record's own external id; `{source}:thread` plus the thread id; ServiceNow reference fields (`problem_id`, `rfc`, `caused_by`, `parent_incident` — these join the same namespace as the referenced records' own ids, so incident ↔ problem ↔ change correlate **regardless of ingestion order**); Jira linked-issue keys; SapphireIMS related tickets; Zoho `ticket_number` and related ids (`correlation_service.py:116-194`). CI and assignment-group references are deliberately **never** case-link keys — shared infrastructure would mass-merge unrelated cases.
+
+**Tier 2 — identity co-occurrence, gated and scored.** Only `resolved`/`verified`, active identities count. Degree statistics are computed before the link fetch so hub identities never fan out. Constants (`correlation_service.py:36-51`): a 7-day window (fail-closed when timestamps are missing), `HUB_DEGREE_MIN = 200` (zero signal at or above), `RARE_DEGREE_MAX = 5` → rare non-person entity at 0.75, otherwise 0.65, +0.1 when two or more non-hub identities are shared, capped at 0.85. A **single shared person is dropped entirely**; person-only overlap needs at least two shared identities and scores 0.5.
+
+**The conflicting-ticket veto.** If both items hold anchor case memberships in disjoint case sets, the identity correlation is deleted and `correlation.conflicting_ticket_veto` is logged — "same infrastructure, different incidents" (`correlation_service.py:344-404`).
+
+**Ticket-number bridging.** Ticket sources register their human-readable number in `case_identifiers`; conversational sources extract ticket-shaped tokens from title and body and resolve-then-link into `evidence_case_memberships` (subject 0.98, body 0.9). Unknown tokens park in `pending_identifier_mentions` and reconcile the moment the ticket registers — so ingestion order does not matter. A message quoting three or more distinct cases becomes `mentioned_only` at 0.5, which the episode cluster resolver never expands through. Bare-integer Zoho ticket numbers are deliberately not matched, because widening the regex would also match order numbers and hex colors (`codewiki/KNOWN_GAPS.md:99`).
+
+**Output**: one `correlation_edges` row per related pair, direction-agnostic, **created once and never upgraded**; when both tiers matched, the case-link tier wins (`case_link_match`, 1.0) over `identity_match`. All the enrichment steps — ServiceNow references, ticket bridging, SapphireIMS, Zoho, Jira — run inside their own `begin_nested()` savepoints, so an enrichment failure loses enrichment and never the correlation.
+
+**What happens next**: when `correlations_created > 0`, `extraction.reconstruct_episode` is scheduled with a **180-second countdown** (`correlation_tasks.py:39-52`).
+
+**Acme**: the email quoting `INC0010427` lands next to the ServiceNow incident at 1.0 through the ticket-number bridge. The Teams thread mentioning `vpn-gw-east-01` in the same week correlates at 0.75, because a device with degree 5 or less is rare.
+
+---
+
+## 6. Episodes — synthesis, gates, and review
+
+### 6.1 Reconstruction and its six gates
+
+**What**: A cluster of correlated evidence becomes one chronological story with steps, a root cause and an outcome.
+**Where**: `_reconstruct` at `extraction_tasks.py:995-1297`, task `extraction.reconstruct_episode` on the `correlation` queue (`extraction_tasks.py:1387-1392`). (Rating: 10/10)
+
+Episode synthesis was measured at **29% of all tokens with 71% of its output superseded**, which is why there are six gates before any model call:
+
+| Gate | Rule | Cite |
+|---|---|---|
+| Cluster resolution | connected component over `case_links` + `correlation_edges`, bounded at `MAX_CLUSTER_SIZE = 50`, `MAX_HOPS = 3`, `CLUSTER_TIME_WINDOW = 30 days` from the **nearest** seed; legal-hold and pending-redaction rows are fenced out in SQL | `backend/src/contextedge/services/episode_cluster_service.py:47-105` |
+| Minimum cluster | fewer than `MIN_AUTO_SYNTHESIS_CLUSTER = 3` members → `skipped_below_min_cluster`. Basis: 58% of one day's drafts were 1-2-evidence fragments retired by dedup minutes later | `extraction_tasks.py:756, 1016-1031` |
+| Resolution gate | only when `episode_resolution_gate = "cluster"` (default `off`): defer if no member carries a resolution signal. Deterministic — tier 1 reads `case_state == "resolved"`, then a precision-first regex over the head and tail 4,000 characters | `config.py:175`; `backend/src/contextedge/services/resolution_signal_service.py:105-145` |
+| Advisory lock | `pg_try_advisory_xact_lock` on `episode_reconstruct:{tenant}:{fingerprint}`; losers return `skipped_locked` **without spending an LLM call**. Exists because 8 concurrent tasks once minted 8 identical episodes in 46 seconds | `extraction_tasks.py:1059-1080` |
+| Debounce settlement | if the newest member arrived within `RECONSTRUCT_DEBOUNCE_SECONDS = 180`, defer — unless the oldest member is already `MAX_SYNTHESIS_DELAY_SECONDS = 1800` old (starvation guard: a never-quiet channel still gets narrated within 30 minutes) | `extraction_tasks.py:746, 834, 1082-1117` |
+| Growth gate | the cluster must be at least `1 + MIN_RESYNTHESIS_GROWTH = 1.5x` the largest already-covered pending episode. Without it, ten messages on a ten-evidence cluster paid ten full ~12,700-token syntheses of which dedup retired nine | `extraction_tasks.py:774, 1155-1173` |
+
+Manual reviewer triggers bypass the debounce with `settle=False` via `POST /api/v1/episodes/reconstruct` (`backend/src/contextedge/api/v1/episodes.py:342-351`) — an explicit request is not a duplicate.
+
+**The model call**: `reconstruct_episode` (`backend/src/contextedge/ai/extractors/episode_extractor.py:97-211`), prompt family `episode`, **default v3**. v3 added field-level **source authority** rules: the ticket source is authoritative for state, priority and close code; monitoring for technical observations; working discussion for what was actually tried; email for external commitments; bot output is never authoritative (`backend/src/contextedge/ai/prompts/episode.py:162-260`). Each item is labeled `[ev-N]` and the whole block is wrapped by `fence_untrusted` — evidence text comes from tickets and chat, so it is fenced as untrusted data, not instructions (`backend/src/contextedge/ai/fencing.py:13-28`).
+
+**Grounding is enforced structurally**: `_translate_refs` maps `ev-N` labels back to real UUIDs and **drops unknown labels**, so the model can never mint an evidence reference (`episode_extractor.py:77-89`). `validate_episode` is strict about structure and lenient about vocabulary — a broken episode drops with `episode_draft_invalid`, an unknown `step_type` coerces to `observation` (`backend/src/contextedge/ai/extractors/episode_schema.py:46-130`). Provenance (`_generation` with prompt name, version, task, routed model and correlation id) is stamped **after** the schema gate, so the model cannot supply its own (`episode_extractor.py:159-161`).
+
+**Persistence** (`backend/src/contextedge/services/episode_service.py:114-333`) writes `episodes`, `episode_evidence_links` (one row per grounding evidence, carrying the cluster reason) and `episode_steps`, plus an episode embedding and a `cluster_fingerprint`. Any pending draft whose evidence set is a strict subset of this cluster is marked `superseded` with an `episode.draft_superseded` event naming both fingerprints.
+
+> **Open P1 you must not gloss over.** Clusters larger than 20 evidence items split into multiple LLM calls, and each chunk's steps are concatenated with all of them numbered from #1 — the worst live case shows 319 steps. Row-level fields (title, root cause, outcome) are clean; only steps stack. 949 live episodes are affected and 836 pending drafts were stamped on hold for repair (`codewiki/KNOWN_GAPS.md:464-478`). Do not describe chunked extraction of big clusters as producing correct timelines.
+
+### 6.2 Episode review — human, and optionally AI-assisted
+
+**Human path**: `POST /api/v1/episodes/{id}/approve` and `POST /api/v1/episodes/bulk-approve` (role `knowledge_manager`) set `status` and `reviewer_state` to `approved`, stamp `reviewer_user_id`, **commit**, and only then dispatch signature extraction and per-domain pattern clustering (`backend/src/contextedge/api/v1/episodes.py:230-339`). Commit-before-dispatch is deliberate: a message consumed before the commit would read pending state and no-op **without retry**.
+
+**AI review**: `settings.episode_ai_review` has exactly three values — `off` (default), `advisory`, `auto_approve` (`config.py:185-187`; `backend/src/contextedge/services/episode_review_service.py:40`).
+
+- **off** — the stage does nothing. The hourly sweep returns `{"status": "disabled"}` instantly, which is why it is scheduled unconditionally: turning the setting on needs no Beat restart (`celery_app.py:379-383`).
+- **advisory** — every reviewed draft gets a verdict written to `episodes.ai_review`. Nothing is approved. The reviewer console shows the verdict verbatim.
+- **auto_approve** — a draft is approved only when it clears **both** the model verdict and four deterministic floors. `reviewer_user_id` stays NULL, permanently distinguishing a machine approval from a human one.
+
+The floors are not negotiable by the model (`episode_review_service.py:42-44, 89-101`):
+
+| Floor | Value | Why |
+|---|---|---|
+| `MIN_EVIDENCE` | 2 | grounding a one-message story is vacuous |
+| `MIN_OUTCOME_CHARS` | 20 | a stripped `final_outcome` shorter than this says nothing |
+| verdict | exactly `"approve"` | the review prompt's only other verdict is `hold` |
+| `MIN_VERDICT_CONFIDENCE` | 0.8 | below this the model is guessing |
+
+**The sweep**, `evaluation.ai_review_episodes` (hourly, `evaluation` queue, `backend/src/contextedge/workers/evaluation_tasks.py:125-358`):
+1. A dispatch `mode_override` can only **downgrade** — advisory under auto_approve, never the reverse.
+2. Tenants with active ingest are deferred: more than 50 evidence rows or 30 episodes in the last 10 minutes counts as active (`backend/src/contextedge/workers/pattern_tasks.py:693-740`).
+3. A bounded mop-up re-dispatches signature extraction for up to 20 auto-approved episodes that lost theirs to a crash between commit and broker send.
+4. Drafts are selected as `reviewer_state == "pending_review" AND ai_review IS NULL` — the sweep never pays twice for one draft — ordered by a SQL priority score shared with the human review queue, so machine and human attention agree.
+5. **Commit per episode, before any dispatch.** A batch-end commit made every verdict hostage to the last one; one deadlock cost 50 re-paid LLM calls.
+6. Five consecutive transient failures (provider outage, budget block) abort that tenant's batch. A transient failure persists **nothing**, so the draft stays retryable — stamping an outage once turned a one-hour blip into a permanent "never reviewed".
+
+**The review call itself** (`episode_review_service.py:174-308`) uses citation-driven excerpts: evidence the steps cite first, then the chronologically last item (the fix confirmation lives at the end of a thread), then the first (the complaint), then chronological fill — 10 items at 450 characters. The first version sent a blind head+tail sample and held 100 of 100 drafts with "steps not supported by the provided evidence excerpts", which was structurally true because the cited evidence was never in the window.
+
+**Concurrency**: after the roughly 14-second model call, the row is re-read `SELECT ... FOR UPDATE` with `populate_existing=True` (without which SQLAlchemy's identity map returns stale attributes and the check is vacuous). If a human approved it, dedup superseded it, or a twin sweep stamped it, the sweep skips with `skipped_state_changed`. A concurrent decision always wins, and the lock spans stamp-to-commit in milliseconds, never the model call.
+
+---
+
+## 7. Issue Signatures and Recurrence
+
+**What**: One LLM call distills an approved episode into a generalized problem fingerprint. Identical fingerprints across episodes form a recurrence chain.
+**Why**: "This looks like the thing we fixed in March" is the most useful sentence in incident response, and it needs a key to hang on.
+**Where**: `backend/src/contextedge/services/issue_signature_service.py:89-312`, task `evaluation.extract_issue_signature` on the `evaluation` queue, 2 retries at 30 s (`backend/src/contextedge/workers/signature_tasks.py:20-41`). (Rating: 8/10)
+**Who calls it**: four dispatch sites — single human approve, bulk human approve, the AI review sweep after each auto-approval, and the sweep's crash-recovery mop-up. All of them commit first.
+
+**The call**: prompt `issue_signature` v1 (the only version). The system prompt demands short generic snake_case values and **forbids device names, hostnames, ticket numbers and people** (`backend/src/contextedge/ai/prompts/issue_signature.py:14-42`) — a signature that names `vpn-gw-east-01` would never match the next occurrence.
+
+**The schema gate** (`issue_signature_service.py:47-73`) is strict about structure and lenient about vocabulary: `affected_capability` and `failure_mode` are required; `environment` must be one of `production`/`corporate_managed`/`development` or it silently nulls; `scope` must be one of `single_device`/`multiple_devices`/`site_wide`/`service_wide`; confidence clamps to [0,1]. A validation failure returns normally with `invalid_draft` — **so there is no Celery retry**, and the episode gets no signature unless something re-dispatches.
+
+**The key**: `slug(capability)|slug(component or "-")|slug(failure_mode)`, truncated at 240 characters (`issue_signature_service.py:76-86`). Trigger, environment and scope are descriptive, **not identity** — the same failure triggered differently still recurs under one key.
+
+**Recurrence linking** runs only when the signature already existed (`issue_signature_service.py:249-312`). It finds the most recent other episode on that signature, finds that episode's primary case, and adds an `evidence_case_memberships` row of type `recurrence` at confidence 0.6 from the new episode's first evidence item.
+
+> **The load-bearing invariant**: the episode cluster resolver explicitly refuses to expand through `recurrence` (and `mentioned_only`) memberships (`episode_cluster_service.py:158-193`). Recurrence means "similar problem, **never** the same occurrence". It exists for precedent retrieval, not for merging clusters.
+
+**Acme**: the approved episode "VPN users unable to connect — expired gateway certificate" extracts roughly `affected_capability=remote_access`, `failing_component=tls_certificate`, `failure_mode=certificate_expired`, key `remote_access|tls_certificate|certificate_expired`. Six months later the same failure on the same gateway mints a second episode under the same key, and its seed evidence gains a `recurrence` pointer at `INC0010427`'s case.
+
+**Caveat to record**: `IssueSignature.error_signature_id` exists as a column and the materializer would project an `addresses` edge from it, but **the only constructor never sets it** (`issue_signature_service.py:168-177`). The deterministic regex `error_signatures` (§3 step 11) and the LLM issue signatures are parallel, unjoined systems today.
+
+---
+
+## 8. Pattern Clustering
+
+**What**: Approved, embedded episodes in one domain scope are matched into existing patterns or clustered into new ones, then one LLM call synthesizes the pattern.
+**Where**: `_cluster` at `backend/src/contextedge/workers/pattern_tasks.py:127-372`, task `pattern.cluster_episodes` on the `pattern` queue, 2 retries at 120 s. (Rating: 9/10)
+
+**Who calls it — and what does not.** There is **no Beat entry for clustering**. It is dispatched from three places: after human episode approve / bulk-approve, per affected domain (`api/v1/episodes.py:270-277, 330-337`); by the hourly AI review sweep, once per domain that had auto-approvals (`evaluation_tasks.py:335-351`); and manually via `POST /api/v1/patterns/cluster` (role `domain_admin`, `backend/src/contextedge/api/v1/patterns.py:412-452`). Dispatching with `domain_id=None` clusters **only** NULL-domain episodes, which on a live graph is nothing — hence per-domain dispatch.
+
+**Domain scoping**: a domain pass sees only `Episode.domain_id == did`; the global pass sees only `domain_id IS NULL`. NULL episodes are deliberately not folded into domain passes, because whichever pass ran first would capture them arbitrarily (`pattern_tasks.py:117-124`).
+
+**The loop, per unassigned candidate** (limit 100 per run):
+1. **Embedding repair** first — every approved tenant episode with a NULL embedding gets one, per-episode fail-soft.
+2. **Existing-pattern probe**: any pattern in the same scope with a member episode at cosine distance < **0.35**, then `validate_pattern_match` adjudicates. That call uses an **inline prompt, not the registry**, so `llm.usage` records NULL prompt name and version for it (`backend/src/contextedge/ai/extractors/pattern_extractor.py:81-101`). It **fails open**: any exception returns `{"is_match": True, "confidence": 0.75}`, so during a provider outage the 0.35 embedding probe alone decides membership.
+3. **New cluster**: same-scope approved unlinked episodes at cosine distance < **0.20**; an empty result becomes a single-episode cluster — better a pattern than a silently dropped approved episode.
+4. **Synthesis**: `synthesize_pattern`, prompt `pattern` **v2**, task lane `pattern` → `vertex_ai/gemini-2.5-flash`. There is **no Pydantic gate** on this output; fields are read with `.get()`. A returned title containing "no incident" / "no pattern" / "no operational pattern" / "no recurring pattern" skips persistence.
+5. **Fallback**: on any synthesis exception, a basic pattern titled `"Auto: <episode title>"` at confidence 0.75 with no synthesized fields and NULL provenance.
+
+**Persistence** (`backend/src/contextedge/services/pattern_service.py:62-197`) asserts domain-safe membership (a domain-scoped episode may never enter a NULL-domain pattern; a foreign-tenant id gets the same "does not exist" message so another tenant's data is never confirmed), does a preventive same-title dedup within the domain, writes the `patterns` row with `pattern_type="recurring_issue"` hard-coded, writes `pattern_evidence_links` membership rows, persists enrichment edges (`trigger_of`, `involved_in`, `discovered_in`, `causes` at weight 1.5), builds `episode -[belongs_to]-> pattern` and `episode -[affects]-> identity` edges, and **auto-enqueues playbook generation**.
+
+**Two things a doc must state honestly.** A full 100-episode pass ran **25 minutes inside a single database transaction** with ~156 LLM calls and nothing committed until the end — a late failure rolls back every row while the spend stays spent, and an operator sees `patterns` at zero the whole time (`codewiki/KNOWN_GAPS.md:528-539`). And `PatternEvidenceLink.evidence_id` is never populated by this path; membership is episodes only.
+
+---
+
+## 9. Pattern → Playbook Flow
+
+**What**: A pattern above the confidence floor becomes a versioned, citation-validated playbook candidate.
+**Where**: `generate_playbook_candidate` at `pattern_tasks.py:405-684`, `pattern` queue, 2 retries at 120 s. Persistence in `backend/src/contextedge/services/playbook_service.py:360-436`. (Rating: 10/10)
+
+**The deterministic gates around the model:**
+- **Existing-playbook gate** — any playbook with this `pattern_id` or an equal lowercased title → `playbook_already_exists`.
+- **Confidence floor** — `PLAYBOOK_GENERATION_MIN_PATTERN_CONFIDENCE = 0.5`, calibrated by reading 37 generated playbooks: below ~0.5 the corpus was structured but hollow (`pattern_tasks.py:32-34, 443-456`).
+- **Risk floor** — `_SAFETY_CLASS_RISK_FLOOR` maps each step's `safety_class` to a minimum tier (`read_only` → low, `low_side_effect` → medium, `high_side_effect`/`destructive` → high, unknown → high). The model's `risk_tier` may only **raise** above the floor. Risk assessment is policy, not model output (`pattern_tasks.py:36-65`).
+- **Empty-steps refusal** — a steps-less result fails the task rather than minting an empty candidate. The motivating incident: a truncated response whose complete-looking prefix survived JSON repair, producing a "complete" playbook with zero steps (`pattern_tasks.py:557-576`; the config backstory is at `config.py:96-131`).
+
+**The RAG step.** Before generating, `retrieve_knowledge_for_pattern` searches the tenant's own KB and SOPs using the **pattern's** vocabulary, not the incident title — "Intel AX201 Code 10 driver rollback" retrieves the article that "Laptop Wi-Fi not working" cannot (`backend/src/contextedge/services/knowledge_retrieval_service.py:199-288`). Then:
+- keep only `KNOWLEDGE_EVIDENCE_TYPES = {kb_article, sop, documentation}`;
+- **withhold** anything whose `knowledge_state` is not current — a human retired it in the source system, and serving it ranked-last would override that decision;
+- drop anything past `MAX_DISTANCE = 0.25`;
+- re-rank multiplicatively, never filter: empirical support (`proven` 0.80, `emerging` 0.92, `unproven` 1.0, `contested` 1.25), applicability penalty, and supersession at 1.6 — heavier than contested, because a human reviewed the supersession;
+- truncate to `MAX_KNOWLEDGE_DOCS = 5`, attach up to 6 sections each.
+
+Retained documents at similarity ≥ 0.75 and without an applicability mismatch become durable `pattern -[supported_by]-> evidence` edges with `weight = confidence = similarity`. That 0.75 was measured: genuine pairs sat at 0.75-0.84, vocabulary noise at 0.62-0.69.
+
+**The generation call**: prompt `playbook` **v5** on `vertex_ai/gemini-3.7-flash` — a model choice that came from an A/B on 2026-08-17 (grounded share 0.70 → 0.81, latency halved; `config.py:59-67`). Its own task lane, `playbook`, with a 16,384-token output ceiling. Post-processing runs in a fixed order (`backend/src/contextedge/ai/generators/playbook_generator.py:90-96`):
+1. `validate_source_refs` — only labels actually shown to the model resolve; minted citations are dropped, counted, and recorded on the version as `citation_validation`.
+2. `classify_step_grounding` — structural and not arguable: a step with surviving `source_refs` is `grounded`; a step without is **forced** to `non_grounded` / `best_practice` even if the model claimed otherwise.
+3. Provenance stamped last, so the model can neither supply nor influence it.
+
+**Human review cycle and versioning.** A candidate moves through a validated state machine (`playbook_service.py:22-30`):
+
+```
+candidate → under_review → approved → restricted | deprecated | expired | retired
+```
+
+`approved` can also go back to `under_review`; `retired` is terminal. `create_playbook_version` validates step-to-skill bindings, enforces semantic-version uniqueness with retries, writes normalized `playbook_evidence_links` rows (without which playbook-scoped semantic search silently returns zero rows), repoints `current_version_id`, and emits `playbook.version_created`.
+
+**The manual API path is not the worker path.** `POST /api/v1/playbooks/generate` calls the same generator but skips knowledge retrieval, the confidence floor, the risk floor, the empty-steps guard and `embed_playbook`, and it omits episode ids from the summaries so every `ep-N` citation the model writes is dropped by `validate_source_refs` (`backend/src/contextedge/api/v1/playbooks.py:654-767`). It exists for patterns below the floor and for humans who disagree with it — use it knowingly.
+
+---
+
+## 10. Knowledge Dedup
+
+**What**: One shared entry point merges duplicate evidence, episodes, patterns and playbooks.
+**Where**: `deduplicate_patterns_and_playbooks` (`pattern_service.py:336-549`), reached three ways: hourly Beat `pattern.deduplicate_knowledge`, the tail of every clustering run (fail-soft), and `POST /api/v1/patterns/deduplicate`.
+**Why it is scheduled**: the passes were correct and called by nothing — the graph re-inflated from 643 to 2,869 pending drafts in one bulk-ingest night between manual runs (`celery_app.py:359-366`).
+
+Passes run strictly in this order:
+- **Evidence items** — same `(title, evidence_type)`, canonical is the earliest `ingested_at`; links repointed, the duplicate row deleted, its raw object deleted when nothing else references it.
+- **Episodes by title** — grouped by normalized title, then **split into evidence-overlap connected components** via union-find. Title alone merges different incidents that share a label; only episodes sharing evidence are the same occurrence.
+- **Containment** — any live episode whose evidence set is a strict subset of another's is retired. No threshold to tune. Partial overlap deliberately never merges: on the measured ticket, 148 non-nested overlapping pairs were different problems sharing a ticket.
+- **Semantic siblings** — pairs at cosine ≥ `SIMILAR_EPISODE_MIN_COSINE = 0.85` **that also share evidence**. Disjoint-evidence pairs at 0.85+ are exactly the recurrence case and are refused and counted, because merging them would destroy the signal §7 depends on.
+- **Patterns**, then **playbooks**.
+
+Merges never hard-delete: `_merge_episode_into` repoints links and edges and sets `reviewer_state = "superseded"`. Steps deliberately stay on the duplicate — moving them concatenated whole narrations, which is how one episode reached 319 steps.
+
+---
+
+## 11. Runtime Retrieval Flow
+
+**What**: Someone asks "how do I fix this VPN error?" and gets the best playbook, with a score breakdown.
+**Where**: `POST /api/v1/runtime/match` (`backend/src/contextedge/api/v1/runtime.py:89-246`) → `rank_playbooks` (`backend/src/contextedge/search/hybrid_ranker.py:213-379`). (Rating: 10/10)
+
+**1. Memory context.** `build_runtime_memory_context` assembles short-term memory (the session and its last 5 trace events, plus recent evidence), long-term memory (resolved canonical identities, approved-playbook and active-pattern counts) and reasoning memory (last 3 execution runs, last 5 decisions), and composes the query text from symptoms + entities + context + session notes + resolved identity names (`backend/src/contextedge/services/memory_service.py:82-288`).
+
+**2. Candidate set.** All `approved` playbooks for the tenant, filtered by domain, by the service token's `allowed_domain_ids`, and by a risk cap: admins uncapped, `knowledge_manager` and service accounts capped at `high`, everyone else at `medium` (`runtime.py:42-52`). A playbook with no published version is skipped entirely.
+
+**3. Signals.** One attributed, budget-gated query embedding is computed once and passed down. The real weights (`hybrid_ranker.py:22-31`):
+
+| Signal | Weight | What it measures |
+|---|---|---|
+| keyword | 0.25 | `search_playbooks_fts` rank, normalized to [0,1] |
+| semantic | 0.30 | best distance from playbook-scoped chunk search, mapped to `max(0, 1 − d/2)`, then gated by keyword: `min(1, sem × (0.6 + 0.4 × keyword))` |
+| graph_distance | 0.15 | edges touching the playbook, plus correlation edges between its evidence and this query's semantic hits |
+| evidence_quality | 0.10 | `0.6 × playbook_confidence + 0.4 × min(hits/5, 1)` |
+| identity | 0.05 | distinct `references_identity` edges to the query's resolved identities |
+| recency | 0.10 | equals freshness |
+| freshness | 0.05 | 0 if past expiry; else `max(0, 1 − days_since_validated/180)`; 0.5 if never validated |
+| negative_penalty | −0.05 | contradiction edges and domain negative-knowledge count |
+
+Because `recency_score = freshness` (`hybrid_ranker.py:334`), freshness effectively carries 0.15.
+
+**4. Abstention.** Results below `MIN_RECOMMENDATION_SCORE = 0.35` are dropped. If candidates existed but all fell below, `ranking.abstained` is logged with the top score. **An empty list means "no recommendation" — that is the contract**, not an error (`hybrid_ranker.py:168-171, 368-379`).
+
+**5. Trace and explain.** With a `session_id`, a `decision_trace_events` row and a `decision_trace.retrieve` operational event are written. The full explain payload is cached in Redis under `runtime:match:{match_id}` with `MATCH_CACHE_TTL_SEC = 3600` and served by `GET /api/v1/runtime/explain/{match_id}` — 403 on a tenant mismatch, 404 after expiry (`runtime.py:29, 230-267`).
+
+### How semantic search actually reads the index
+
+This is the piece most people get wrong. `search_evidence_semantic` (`backend/src/contextedge/search/vector_search.py:204-243`):
+
+1. Embed the query (or accept a pre-computed embedding).
+2. `tune_ann_recall(db)` → `SET LOCAL hnsw.ef_search = 200` (`backend/src/contextedge/search/vector_ops.py:26-37`). The HNSW indexes are **global across tenants** while every query post-filters by `tenant_id`; at the default `ef_search = 40`, a small tenant's rows can be entirely absent from the candidate set.
+3. **Chunk pass** — ANN over `evidence_chunks` joined to `evidence_items`, oversampled to `min(max(80, limit × 3), 240)`, with visibility predicates applied on the parent: no legal hold, no pending redaction, no excluded access policy (`vector_search.py:49-70`).
+4. **MMR** at chunk level, `λ = 0.7` — `score = 0.7 × relevance − 0.3 × max-similarity-to-selected` (`backend/src/contextedge/search/chunk_rollup.py:31, 79-108`). MMR decides **which** candidates survive; the rollup's re-sort by distance decides rank.
+5. **Rollup** — one candidate per parent evidence, its closest chunk.
+6. **Parent-pass merge** — a second ANN over `evidence_items.embedding` so unchunked evidence still surfaces. Both passes share one query embedding and one cosine space, so the scores merge directly.
+
+**Why every ordering must use `halfvec_cosine_distance`.** pgvector's HNSW on the plain `vector` type caps at 2,000 dimensions and this system stores 3,072 — so the HNSW indexes declared in migrations `0021` and `0030` **never existed**; `0030` even encodes the check and drops any invalid leftover. Real ANN arrived in migration `0032`, which builds HNSW **expression** indexes over `(embedding::halfvec(3072))` with `m = 16, ef_construction = 64` on `evidence_items`, `evidence_chunks`, `decisions` and `episodes`. A bare `column.cosine_distance(...)` is therefore a guaranteed sequential scan (`vector_ops.py:1-15, 40-45`). `0032` requires the pgvector server extension at 0.7 or above and **fails loud** below it; an environment stamped at an earlier revision of that file never re-executes it and silently stays on sequential scans (`codewiki/KNOWN_GAPS.md:40`).
+
+### The agent's view of the graph
+
+Agents do not run these queries directly. `POST /api/v1/graph/agent-subsets` returns a bounded projection: seeds resolved across nine layers (explicit, session, FTS playbooks/patterns, issue signatures, semantic episodes/playbooks/knowledge chunks, identifier exact and substring, explicit entities, preceding changes), then traversal with `hop_decay = 0.72` under a budget of 24 nodes / 48 relationships / depth 2 by default (`backend/src/contextedge/graph/agent/contracts.py:26-30`; `graph/agent/profiles.py`; `graph/agent/selector.py:28-261`). Node visibility is fail-closed per type: a playbook must be approved with a current version inside the risk cap, an episode must be approved, evidence must pass the knowledge-lifecycle check, and **a pending AI-authored decision is invisible** — agent output must not launder itself back into agent input (`backend/src/contextedge/graph/agent/hydrators.py:98-170`).
+
+---
+
+## 12. Worker Task Chain, Queues and Topology
+
+**What**: How background jobs hand off work.
+**Why**: To keep HTTP requests fast, and — more importantly — to stop one bulk workload from starving another.
+
+```mermaid
+flowchart TD
+    Beat[Celery Beat] --> S[sync queue<br/>run_incremental_sync / run_backfill]
+    S --> N[extraction queue<br/>normalize_evidence]
+    N --> H[hydration queue<br/>hydrate_thread]
+    H --> N
+    N --> CH[embedding queue<br/>chunk_evidence, embed_chunks_batch]
+    N --> CO[correlation queue<br/>correlate_evidence, compute_evidence_baseline]
+    CO --> RE[correlation queue<br/>reconstruct_episode, countdown 180 s]
+    RE --> AR[evaluation queue<br/>ai_review_episodes, hourly]
+    AR --> SG[evaluation queue<br/>extract_issue_signature]
+    AR --> PC[pattern queue<br/>cluster_episodes]
+    PC --> PG[pattern queue<br/>generate_playbook_candidate]
+    PC --> DD[pattern queue<br/>deduplicate_knowledge, hourly]
+    N --> FL[default queue<br/>classify_relevance fast lane]
+```
+
+**Where**: `backend/src/contextedge/workers/celery_app.py:226-280`. (Rating: 10/10)
+
+**There are eight queues**: `default`, `sync`, `hydration`, `extraction`, `correlation`, `embedding`, `pattern`, `evaluation` — exactly `DEFAULT_QUEUES` in the dev launcher (`backend/dev.py:16`). Routes are matched **in order**, so specific keys beat wildcards.
+
+| Route | Queue | Why it exists |
+|---|---|---|
+| `sync.*` | sync | isolation from the extraction backlog |
+| `hydration.*` | hydration | |
+| `extraction.classify_relevance` | default | fast lane: a ~2.5 s gate call must not queue behind 20-60 s tasks; 500 classifications once starved ~40 minutes |
+| `extraction.correlate_evidence`, `.reconstruct_episode`, `.compute_evidence_baseline` | correlation | graph lane: the extraction queue was **growing** at ~70 tasks/min at 8,255 deep while correlation had been dispatched and never once received |
+| `extraction.chunk_evidence`, `.embed_chunks_batch` | embedding | retrieval lane: 1,879 chunks with 289 embedded, evidence "ingested and silently unretrievable" |
+| `extraction.*`, `artifact.*` | extraction | |
+| `pattern.*` | pattern | one solo worker, so clustering / generation / dedup serialize instead of racing |
+| `evaluation.*` | evaluation | |
+| `review_queue.*`, `contextedge.workers.*` | default | |
+
+Note: `identity.*` and `maintenance.*` match no explicit route and use short names, so they land on `default`. Any doc saying identity reconciliation runs on the `evaluation` queue is wrong.
+
+**Session and transaction contract**: every task body is an `async def work(db)` handed to `run_async`, which builds a **fresh NullPool engine per task**, commits on success, rolls back on exception, and disposes the engine (`backend/src/contextedge/workers/asyncio_runner.py:10-34`). Cost: each running task holds its own database connections, roughly 2-3 times concurrency.
+
+**Startup guard**: a worker refuses to start when `alembic_version` does not match the code's bundled head, including the "no `alembic_version` table at all" case (`celery_app.py:83-139`). Without it, workers consume the normalize queue against a stale schema and corrupt ingestion mid-transaction.
+
+**Broker resilience**: `broker_connection_max_retries=None` (retry forever), socket keepalive, 30-second health checks. On the Windows dev box the broker is reached through WSL's port relay, which drops TCP under load — one blip silently killed four of eight workers before this was set (`celery_app.py:201-224`).
+
+### Windows worker topology (current)
+
+Prefork is unusable on Windows. `-P threads` is **also** unusable for the LLM-bearing lanes: LiteLLM holds asyncio locks bound to the loop that created them, so a threads pool raises "Lock is bound to a different event loop" on every enrichment call, trips the circuit breaker, and fails the run near-silently. The current shape (`docs/RUNBOOK.md` "Worker topology"; launcher at `backend/dev.py:102-126`):
+
+- **Worker A (parallel)** — N separate *processes*, each `-P solo` with a distinct node name, consuming the high-volume lanes. Ticket processing is ~95% waiting on the model, so process parallelism is near-linear.
+- **Worker B (serialized)** — one `-P solo` worker for `sync,pattern,evaluation`. Clustering and playbook generation operate on the whole graph and have **no advisory lock** (unlike sync), so two concurrent runs could mint duplicate patterns.
+- **Beat** — exactly one instance. A second beat double-dispatches every entry.
+- `python dev.py worker` consumes all eight queues by default (`backend/dev.py:16`). **If you start workers from an older command line that omits `correlation` and `embedding`, the graph and retrieval lanes silently never run** — that is the exact starvation the lanes were created to fix.
+
+**Failure behavior across the board**: `task_acks_late=True` means a crashed worker's task is re-delivered; `worker_prefetch_multiplier=1` means a worker holds one task at a time.
+
+---
+
+## 13. Review Queue and Governance
+
+**What**: Humans reviewing what the AI did.
+**Why**: AI proposes; humans hold the keys.
+
+- **What triggers review items**: draft episodes (`reviewer_state = "pending_review"`), candidate playbooks (`lifecycle_state = "candidate"`), identity merge proposals, correlation suggestions, knowledge-supersession proposals, and execution approvals.
+- **Reviewer actions**: approve, modify, reject. A rejection carries a structured code from `REJECTION_REASON_CODES`, which un-selects the options, flips the decision to `superseded` with `human_override=True`, and writes an outcome with `execution_result="rejected"` (`backend/src/contextedge/services/decision_trace_service.py:586-664`). (Rating: 9/10)
+- **Policy enforcement**: `tenant_policies` are versioned, and the version bumps **only when `config` changes** — renaming or deactivating does not, because the version tracks rules, not labels. Every evaluation writes an append-only `policy_checks` row keyed to the policy **version**, including on the denial path (`backend/src/contextedge/api/v1/policies.py:133-140`; `backend/src/contextedge/services/policy_check_service.py:34`).
+- **Design rationale**: Structured rejection codes let you build a dashboard showing exactly why the AI is failing, instead of a free-text field nobody aggregates.
+
+> **RBAC caveat that belongs in every governance conversation.** `RoleBinding.scope_type` / `scope_id` are stored but **not enforced**: login selects role names only, and `has_role` is a pure name check (`backend/src/contextedge/deps.py:37-44`). A domain admin bound to one domain holds that role tenant-wide on every `require_role` route. Finer scope comes only from token claims where individual routes consult them. Single-domain tenants are unaffected; multi-domain tenants must treat role grants as tenant-wide (`codewiki/KNOWN_GAPS.md:187-191`).
+
+---
+
+## 14. Evaluation, Drift and Contradictions
+
+**What**: Checking whether playbooks are going stale or contradicting the knowledge base.
+
+- **Drift** (`evaluation.detect_drift`, every 6 hours): **deterministic, no LLM**. `list_drift_alerts` flags a playbook when it is past `expiry_at`, not validated in over 90 days, has 3+ negative retrieval feedback rows in the last 30 days, or its source pattern was updated after the playbook (`backend/src/contextedge/services/drift_service.py:13-81`). Then `apply_expired_playbook_transitions` runs, and the alert snapshot is taken **before** the transition so past-expiry playbooks still appear in the alerts. (Rating: 8/10)
+- **Contradictions** (`evaluation.scan_contradictions_task`, every 12 hours): compares an approved playbook version's steps against similar KB evidence. It is LLM-bearing, so it runs behind a three-gate funnel — top-K vector candidates (`DEFAULT_TOP_K_CANDIDATES = 20`), a scan cursor so pairs are not re-judged, and a lexical token-overlap check (`should_compare_contradiction`) — under a `DEFAULT_SCAN_BUDGET = 1000` (`backend/src/contextedge/services/contradiction_service.py:49-330`).
+- **Decision calibration** (`evaluation.calibrate_decision_confidence`, daily) and **decision pattern mining** (`evaluation.mine_decision_patterns`, daily) look at recorded outcomes. Decision mining deliberately aggregates tenant-wide, because it emits counts into operational events rather than synthesized content.
+- **Verification** (`evaluation.verify_executions`, every 15 minutes) re-checks completed runs after the playbook version's `recheck_after_sec` (default 1800, floor 300). Absence now only passes when the CI has actually produced an incident or alert in the last 30 days — otherwise the verdict is `not_observable`/`inconclusive` rather than a silent pass.
+- **Failure behavior**: Every Beat fan-out isolates per tenant with try/except plus rollback; one bad tenant never blocks the sweep.
+
+---
+
+## 15. Cost Containment — the one funnel
+
+Every model call goes through `llm_complete` / `llm_complete_json` (`backend/src/contextedge/ai/provider.py:177, 504`), so nothing can bypass the controls:
+
+1. **Per-tenant daily budget gate**, before any tokens are spent. A tenant with no `tenant_llm_budgets` row falls back to deployment defaults — 2,000,000 tokens/day, $25/day, action `block` (`config.py:194-198`). `block` raises `TenantBudgetExceeded`; `warn` logs and proceeds. Usage is summed from the day's `llm.usage` operational events — there is no second source of truth (`backend/src/contextedge/services/tenant_budget_service.py:191-282`).
+2. **Output-token clamp**: `llm_max_output_tokens = 4096` globally, overridden per task by `{playbook: 16384, extraction: 16384, pattern: 16384}` (`config.py:95, 132-138`). The history is worth reading in-file: playbook generation requested 16,384, silently got 4,096, and the JSON-repair path salvaged a "complete" playbook with **zero steps**. Episode reconstruction hit the same wall — completion_tokens 4,082 of a 4,096 ceiling, of which **3,930 were reasoning**, leaving ~150 tokens of answer. Reasoning counts against the same budget, which is why the ceiling cannot be trimmed near expected output size.
+3. **Thinking budgets**: only `{"relevance": 0}` is pinned. Everything else keeps the provider's dynamic thinking, because a controlled test showed identity-adjudication confidence dropping 0.95 → 0.80 under caps — which would silently divert auto-links (person threshold 0.95) into the review queue (`config.py:151-190`).
+4. **Circuit breaker, timeout, one fallback attempt**: per-model breaker opens after 5 consecutive failures for 60 seconds; call timeout 120 seconds; one retry on `settings.llm_fallback_model` when configured, with usage recorded against the model that actually served (`backend/src/contextedge/ai/resilience.py:28-30`; `provider.py:365-380`).
+5. **Usage recording in `finally`, always** — including on error, because an errored call still consumed provider-side tokens. Each call emits Prometheus counters, one `llm.usage` structured log line, and an `operational_events` row (`backend/src/contextedge/ai/observability.py:133-249`).
+
+Reasoning tokens are recorded as a **separate metric**, not a token-type label, because they are a subset of completion tokens and a label would double-count sums.
+
+**Prompt versioning**: prompts are immutable frozen dataclasses. A shipped version is never edited; a change ships as a new version and the default moves (`backend/src/contextedge/ai/prompts/__init__.py:39-75`). Per-tenant overrides come from `tenant_prompt_variants_json`; malformed config logs and degrades to defaults rather than crashing ingest. An unknown prompt **name** raises — fail loud.
+
+Current defaults, as of 2026-08-19: `episode` v3, `episode_review` v1, `relevance` v2, `identity` v3, `identity_adjudication` v2, `identity_reconciliation` v1, `decision` v2, `pattern` v2, `playbook` v5, `applicability` v1, `contradiction` v1, `issue_signature` v1, `message_function` v1.
+
+---
+
+## 16. Retention and Data Lifecycle
+
+- **Archive** (daily, `evaluation.apply_retention_archive`): the tenant's active retention policy supplies `retention_days`, else `settings.retention_default_days = 365`. Evidence past its memory class's window flips to `relevance_state = "archived"`. Classes: knowledge types and anything with resolved identities are `long_term` (`max(base × 6, 180)` days); everything else is `short_term` (`base` days) (`backend/src/contextedge/services/memory_service.py:64-79`).
+- **Purge** (weekly, `evaluation.purge_archived`): candidates have sat archived for `DEFAULT_ARCHIVE_GRACE_DAYS = 30`, are not on legal hold, and are processed oldest-first, 1,000 per tick. Mode comes from `settings.retention_purge_mode`, **default `soft_purge`** (`config.py:215`). Soft purge NULLs `embedding`, `body_text`, `body_summary`, `canonical_entity_refs` and `raw_object_ref`, sets `title = "[purged]"`, and explicitly deletes the evidence's chunk rows — chunks carry the same content and the FK cascade does not apply when the parent survives (`backend/src/contextedge/services/retention_service.py:212-242`).
+- **Orphan cleanup** (daily, `evaluation.cleanup_hard_deleted_evidence`): reaps raw objects and their MinIO blobs no longer referenced, plus graph edges pointing at deleted evidence. Attachment blobs are a documented stub returning 0 — run an S3 lifecycle rule on the `artifacts/` prefix.
+- **Legal hold** is excluded from both phases, in the SQL `WHERE`, never post-filtered.
+- **Caveat**: offloaded raw payloads for *live* evidence have no TTL or garbage collection in code; blob retention for those depends on an external bucket lifecycle rule (`codewiki/KNOWN_GAPS.md:222`).
+
+---
 
 ## End of Flow
 
-This concludes the end-to-end journey of a piece of data through ContextEdge. The system is built to ingest messiness, organize it with AI, govern it with humans, and serve it instantly at runtime.
+That is the end-to-end journey of a piece of data through ContextEdge. To recap the spine in one paragraph: a connector fetches records, `persist_ingestion_events` stores them raw (offloading anything over 32 KB to MinIO), `normalize_evidence` cleans and redacts and classifies and embeds and chunks them, `correlate_evidence` decides which ones are the same incident, `reconstruct_episode` narrates the cluster, a human — or the opt-in AI review — approves it, `extract_issue_signature` fingerprints the problem so recurrences link, `cluster_episodes` finds the recurring shape, `generate_playbook_candidate` drafts the procedure with citations validated structurally, a reviewer approves and publishes it, and `rank_playbooks` serves it back with a score breakdown you can inspect.
 
-Line padding to ensure we meet the 600 line minimum requirement comfortably.
-The architecture is designed to be highly modular.
-Data never crosses tenant boundaries.
-Every decision is tracked.
-Every change is audited.
-The pipeline runs continuously.
-Playbooks are the source of truth.
-Evidence is the foundation.
-The Context Graph is the connective tissue.
-Celery is the engine.
-Postgres is the brain.
-LiteLLM is the AI translator.
-Redaction protects privacy.
-Deduplication ensures cleanliness.
-Chunking ensures high recall.
-Hybrid search ensures accuracy.
-Sessions provide context.
-Traces provide accountability.
-Approvals provide safety.
-Drift detection provides freshness.
-Contradiction detection provides consistency.
-Connectors provide reach.
-And the user gets the right answer, right when they need it.
-Thank you for reading the ContextEdge End-to-End Project Flow!
+Three habits will keep you accurate when you extend this doc:
+1. **Read the constant, don't remember it.** Every threshold in this document is a named constant with a comment explaining what was measured to pick it.
+2. **Check `codewiki/KNOWN_GAPS.md` before claiming a feature works end to end.** Several tables in this system have models and readers but no writer.
+3. **Prefer "the configured X" to naming a code default.** Model ids and embedding models come from `.env`, which is untracked.
+
+### Further reading
+
+| If you want to … | Read |
+|---|---|
+| See the same flow as diagrams | [15_Project_Flow_Diagrams.md](15_Project_Flow_Diagrams.md) |
+| Walk the graph stage by stage with sample rows | [CONTEXT_GRAPH_WALKTHROUGH.md](CONTEXT_GRAPH_WALKTHROUGH.md) |
+| Run it locally, or start workers correctly | [RUNBOOK.md](RUNBOOK.md) |
+| Look up an HTTP route | [API.md](API.md) |
+| Read the narrative pipeline explainer | [../codewiki/01-end-to-end-pipeline.md](../codewiki/01-end-to-end-pipeline.md) |
+| Know what is not finished | [../codewiki/KNOWN_GAPS.md](../codewiki/KNOWN_GAPS.md) |

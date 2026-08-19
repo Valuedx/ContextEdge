@@ -13,15 +13,15 @@ Start here to understand what ContextEdge does, who uses it, and how operational
 3. [01-end-to-end-pipeline.md](./01-end-to-end-pipeline.md) — How one incident travels from raw ticket to approved playbook to runtime recommendation.
 4. [14-control-plane-tenants-roles-policies.md](./14-control-plane-tenants-roles-policies.md) — How organizations, roles, and policies are structured.
 
-Each article includes an **"Example: Acme VPN data at this stage"** section with concrete data showing what goes in and what comes out at that layer — so you can trace a single VPN outage through the entire system without reading code.
+Every numbered article except [17](./17-ae-ops-context-graph-alignment.md) — which is a migration narrative rather than a pipeline stage — includes an **"Example: Acme VPN data at this stage"** section with concrete data showing what goes in and what comes out at that layer, so you can trace a single VPN outage through the whole system without reading code.
 
 ### Engineering readers
 
 Start with the system architecture, then follow the numbered deep dives:
 
-1. [01-end-to-end-pipeline.md](./01-end-to-end-pipeline.md) — Full pipeline from connector to audit trail.
-2. [02-api-and-request-lifecycle.md](./02-api-and-request-lifecycle.md) through [13-evaluation-drift-and-feedback.md](./13-evaluation-drift-and-feedback.md) — Vertical slices covering API, ingestion, search, AI, episodes, workers, graph, governance, retention, identity, and evaluation.
-3. [08-workers-celery-queues.md](./08-workers-celery-queues.md) — Background task topology (useful for operations and debugging).
+1. [01-end-to-end-pipeline.md](./01-end-to-end-pipeline.md) — Full pipeline from connector to audit trail, with the Celery task and queue that runs each stage.
+2. [02-api-and-request-lifecycle.md](./02-api-and-request-lifecycle.md) through [18-cost-observability-and-containment.md](./18-cost-observability-and-containment.md) — Vertical slices covering the API, ingestion, evidence storage, search, AI extraction, episodes and playbooks, workers, the graph, governance, retention, identity, evaluation, the control plane, dashboard workflows, decision traces, the AE Ops schema alignment, and LLM cost containment.
+3. [08-workers-celery-queues.md](./08-workers-celery-queues.md) — Background task topology across the eight queues (useful for operations and debugging).
 
 ### Maintainers
 
@@ -34,14 +34,17 @@ Start with the system architecture, then follow the numbered deep dives:
 | Doc | Description |
 | --- | --- |
 | [00-business-capability-map.md](./00-business-capability-map.md) | Business-first map of personas, outcomes, and product capabilities |
-| [CHUNKING_DESIGN.md](./CHUNKING_DESIGN.md) | Evidence chunking pipeline (`0030`): sibling-table design, per-source chunker strategy, search-rollup plan, backfill, redaction interaction |
+| [BACKLOG.md](./BACKLOG.md) | Consolidated, dependency-ordered backlog from the design reviews, with sizes and acceptance criteria |
+| [CHUNKING_DESIGN.md](./CHUNKING_DESIGN.md) | Evidence chunking pipeline (`0030`): sibling-table design, per-source chunker strategy, the (now-shipped) search rollup, backfill, redaction interaction |
 | [EDITORIAL-GUIDE.md](./EDITORIAL-GUIDE.md) | Voice, template, vocabulary, example format, and the Acme VPN scenario |
 | [BLUEPRINT_ALIGNMENT.md](./BLUEPRINT_ALIGNMENT.md) | Incident Intelligence Blueprint vs ContextEdge: seven-layer verdict table, what was built in response, remaining connector-shaped gaps |
 | [E2E_EXPERIMENT_STORY.md](./E2E_EXPERIMENT_STORY.md) | The 84-ticket isolated pipeline run told as a story: what broke, what it cost ($12.63), and what each observation changed |
 | [INCIDENT_DIAGNOSIS_ROADMAP.md](./INCIDENT_DIAGNOSIS_ROADMAP.md) | Measured gaps and sequenced plan for making the graph a diagnostic instrument: granularity, change/event awareness, topology, signature-first entry, remediation trust, agent write-back |
-| [LESSONS_LEARNED.md](./LESSONS_LEARNED.md) | Ten plain-English lessons from the build-measure-break cycle: measure first, concurrency bugs, head-truncation, guardrails, fast lanes, cold-start economics |
+| [LESSONS_LEARNED.md](./LESSONS_LEARNED.md) | Twelve plain-English lessons from the build-measure-break cycle: measure first, concurrency bugs, head-truncation, guardrails, fast lanes, cold-start economics, silent filter failures, duplicate schedulers, review passes before pushing |
 | [KNOWN_GAPS.md](./KNOWN_GAPS.md) | Implementation caveats, UI gaps, and operational footnotes |
+| [KNOWLEDGE_PLAYBOOK_PLAN.md](./KNOWLEDGE_PLAYBOOK_PLAN.md) | KB/SOP as a first-class playbook source: claim-by-claim verification and the sequenced fix plan |
 | [PLAN.md](./PLAN.md) | Scope table, cross-links, maintenance, and article ordering |
+| [REVIEW-2026-08-V6-SCHEMA.md](./REVIEW-2026-08-V6-SCHEMA.md) | Validation of the external v6-schema comparison — what confirmed, what did not, and the Epic F work it produced |
 | [ZOHO_DESK_CONNECTOR.md](./ZOHO_DESK_CONNECTOR.md) | Zoho Desk connector: tickets + KB articles, the live-verified API findings, and why its sync strategy differs from ServiceNow's |
 | [01-end-to-end-pipeline.md](./01-end-to-end-pipeline.md) | Full journey from sync to evidence to search to playbooks to audit |
 | [02-api-and-request-lifecycle.md](./02-api-and-request-lifecycle.md) | FastAPI, middleware, JWTs, service tokens, and request audit |
@@ -64,7 +67,7 @@ Start with the system architecture, then follow the numbered deep dives:
 
 ## Following one incident end to end
 
-Every article uses the same **Acme Corp VPN outage** scenario. To trace a single incident through the entire system, read the "Example: Acme VPN data at this stage" sections in this order:
+The articles below all use the same **Acme Corp VPN outage** scenario. To trace a single incident through the whole system, read their "Example: Acme VPN data at this stage" sections in this order:
 
 | Stage | Article | What you will see |
 | --- | --- | --- |
@@ -74,9 +77,9 @@ Every article uses the same **Acme Corp VPN outage** scenario. To trace a single
 | 3. Resolve identities | [12](./12-identity-resolution-and-thread-hydration.md) | "jsmith," "John Smith," and "J. Smith (IT)" resolve to one person |
 | 3b. Extract decisions | [09](./09-graph-and-correlation.md) | "Engineer restarted vpn-gw-east-01" becomes a decision graph edge linking actor to target |
 | 4. Classify and extract | [06](./06-ai-extraction-and-embeddings.md) | AI marks evidence as operational; proposes an episode with steps |
-| 5. Build episodes | [07](./07-episodes-patterns-playbooks.md) | Draft episode links to pattern; playbook candidate enters review |
+| 5. Build and review episodes | [07](./07-episodes-patterns-playbooks.md) | Draft episode passes review — a human, or the hourly AI sweep (off by default) behind deterministic quality floors; approval mints an issue signature so recurrences link back; pattern clustering drafts a playbook candidate |
 | 6. Connect relationships | [09](./09-graph-and-correlation.md) | Correlation edges link Jira ticket to Teams thread; graph scores playbooks; Graph Explorer visualizes the context network |
-| 7. Search and rank | [05](./05-search-hybrid-and-access.md) | Analyst searches "VPN certificate expired"; hybrid ranking returns results |
+| 7. Search and rank | [05](./05-search-hybrid-and-access.md) | Analyst searches "VPN certificate expired"; chunk-aware semantic search plus full-text signals rank the results |
 | 8. Resolve and execute | [10](./10-governance-sessions-execution-audit.md) | Responder opens session; playbook execution enforces safety caps; governed decision edges record approvals and outcomes |
 | 9. Monitor quality | [13](./13-evaluation-drift-and-feedback.md) | Evaluation run scores accuracy; drift scan flags negative feedback |
 | 10. Manage retention | [11](./11-retention-and-operational-events.md) | Nightly job archives stale chat but preserves legal-hold items |

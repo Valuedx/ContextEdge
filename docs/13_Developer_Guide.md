@@ -1,253 +1,265 @@
 # ContextEdge — Developer Guide
 
-Welcome to the **ContextEdge Developer Guide**. This document is designed for new developers joining the team. We will explain everything as if you are a complete beginner. 
+Welcome. This guide is for a developer joining the team. It explains things from scratch: how to get the stack running, how the pieces fit, and how to add each kind of new thing without breaking the pipeline.
 
-Our goal is to comprehensively answer for each feature:
+For every feature we try to answer:
 - **What** is it?
 - **Why** do we need it?
-- **Where** does it live?
+- **Where** does it live? (with `file:line` you can click through)
 - **Who** calls it?
 - **What happens next?**
-- **Input** and **Output**?
+- **Input** and **output**?
 - **Failure behavior**?
 - **Design rationale**?
 
-We will also rate important files from 1 to 10 (10 being the most important) to help you prioritize your onboarding.
+Files are rated 1–10 for importance so you know what to read first.
+
+> **Verified against the working tree on 2026-08-19.** Line numbers drift as files change — search for the named symbol if a citation looks a few lines off.
 
 ---
 
 ## 1. Prerequisites
 
-Before you write a single line of code, you need to install some essential tools.
+### Software
 
-### Software Requirements
-- **Python 3.12+**: 
-  - **What:** The programming language for our backend.
-  - **Why:** Python 3.12 offers better performance, improved error messages, and excellent typing support. It also has mature data science and AI libraries that we rely on heavily (like `litellm` and `pgvector`).
-- **Node.js 20+**: 
-  - **What:** The runtime environment for our frontend framework.
-  - **Why:** The frontend uses Next.js 14+ (App Router), which requires a modern version of Node.js for server-side rendering and build steps.
-- **npm**: 
-  - **What:** The package manager for Node.js.
-  - **Why:** Used to install and manage dependencies defined in `package.json`.
-- **Docker & Docker Compose**: 
-  - **What:** A containerization platform that packages software into standardized units.
-  - **Why:** Used to run infrastructure like the database (PostgreSQL), message broker (Redis), and object storage (MinIO) without installing them directly on your host machine. This ensures perfect parity across all developer machines and CI/CD pipelines.
-- **Git**: 
-  - **What:** A distributed version control system.
-  - **Why:** Essential for collaborating on code, branching, and version history.
-- **make**: 
-  - **What:** A build automation tool that runs shell commands defined in a `Makefile`.
-  - **Why:** (Optional but highly recommended) It provides short, easy-to-remember commands (e.g., `make up`) instead of long Docker commands.
+- **Python 3.12+**
+  - **What:** the backend language.
+  - **Why:** the launcher hard-refuses anything older (`backend/dev.py:11, 45-56`), and CI pins 3.12 (`.github/workflows/ci.yml:35`).
+- **Node.js 22**
+  - **What:** the frontend runtime.
+  - **Why:** CI runs Node 22 deliberately. The jsdom/undici stack in our lockfile needs `util.markAsUncloneable`, which Node 20 lacks — the first CI run failed on exactly that (`.github/workflows/ci.yml:53-56`). Node 20 may work for `npm run dev` but will fail `npm test`.
+- **npm** — package manager, drives `frontend/package.json`.
+- **Docker + Docker Compose** — runs PostgreSQL, Redis and MinIO locally (`docker-compose.yml`). Using containers for infrastructure keeps every machine and CI identical.
+- **Git**.
+- **make** (optional but recommended) — short commands instead of long ones (`Makefile`, rated 8/10). On Windows without `make`, open the `Makefile` and run the underlying command; each target is one or two lines.
 
-### System Requirements
-- **RAM**: Minimum 8GB (16GB strongly recommended due to Docker and local LLM overhead).
-- **Disk Space**: At least 20GB free for Docker images, volumes, and local node_modules.
-- **OS**: Windows 10/11 (with WSL2 enabled), macOS (M1/M2 preferred), or any modern Linux distribution.
+### System
 
-> [!NOTE]
-> If you are on Windows and don't have `make` installed, you can look inside the `Makefile` (Rated 8/10 for importance) and run the underlying commands manually in PowerShell or WSL.
+- **RAM:** 8 GB minimum, 16 GB comfortable (Postgres + Redis + MinIO + Next.js + several Celery processes).
+- **Disk:** ~20 GB for images, volumes and `node_modules`.
+- **OS:** Windows 10/11, macOS, or Linux. Windows is a first-class dev target here — see [§3.4 Windows worker topology](#34-windows-worker-topology), which is not optional reading.
 
 ---
 
-## 2. Initial Setup
+## 2. Initial setup
 
-Let's get your local environment running. Follow these steps sequentially.
+### 2.1 Clone and configure
 
-### Step-by-step setup from scratch
+```bash
+git clone <repository_url> ContextEdge
+cd ContextEdge
+```
 
-**What is this?** The process of getting the code, setting up environment variables, and installing dependencies.
-**Why?** The application needs configuration (like database URLs and secret keys) to start. Without this, the backend will crash immediately.
+Copy the environment template. `.env` lives at the **repo root** and is gitignored; `config.py` reads the root `.env` first, then `backend/.env` (`backend/src/contextedge/config.py:10-15`).
 
-1. **Clone the repository** (if you haven't already):
-   ```bash
-   git clone <repository_url> ContextEdge
-   cd ContextEdge
-   ```
+```powershell
+Copy-Item .env.example .env    # Windows PowerShell
+```
+```bash
+cp .env.example .env           # macOS / Linux
+```
 
-2. **Copy the Environment File**
-   The `.env` file holds all secrets and configuration overrides. Never commit it to git! We provide a template called `.env.example`.
+### 2.2 Generate the two keys
 
-   **Windows PowerShell instructions:**
-   ```powershell
-   Copy-Item .env.example .env
-   ```
+Both commands are printed in `.env.example` next to the key they fill.
 
-   **Linux/Mac instructions:**
-   ```bash
-   cp .env.example .env
-   ```
+**`FERNET_KEY`** — encrypts stored source credentials at rest:
+```bash
+python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+```
 
-3. **Generate a Secret Key**
-   You need a `FERNET_KEY` (for database encryption) and a `JWT_SECRET_KEY` (for auth tokens) in your `.env`.
+**`JWT_SECRET_KEY`** — signs auth tokens:
+```bash
+python -c "import secrets; print(secrets.token_hex(32))"
+```
 
-   To generate a Fernet key, run:
-   ```powershell
-   @'
-   from cryptography.fernet import Fernet
-   print(Fernet.generate_key().decode())
-   '@ | python -
-   ```
-   *Copy the output and paste it into `FERNET_KEY` in your `.env` file.*
+**Failure behavior if you skip these:** in `development` the app boots with the defaults. Outside development, `config.py` raises `RuntimeError` at *import time* — a default JWT secret at `config.py:248-252`, a missing or placeholder Fernet key at `config.py:254-264`. The Fernet guard is deliberately harsh: if that key changes, every previously encrypted source credential becomes unrecoverable garbage, so failing to boot is the kind outcome.
 
-   To generate a JWT key, you can use OpenSSL or just a random UUID:
-   ```bash
-   openssl rand -hex 32
-   ```
-   *Copy the output and paste it into `JWT_SECRET_KEY`.*
+### 2.3 Start the infrastructure
 
-### Docker setup
-
-We use Docker to run Postgres, Redis, and MinIO locally.
-**Where?** Look at `docker-compose.yml` (Rated 9/10).
-
-Start the infrastructure:
 ```bash
 make up
-# Or manually: docker compose up -d
+# equivalent: docker compose up -d
 ```
-This command downloads the necessary images and starts them in detached mode (`-d`).
 
-### Database setup (PostgreSQL)
-- **What:** We use PostgreSQL 16 equipped with the `pgvector` extension.
-- **Why:** To store both relational data (users, playbooks) and AI vector embeddings (for semantic search).
-- **Failure behavior:** If the DB is down or credentials in `.env` are wrong, the backend crashes on startup with an `asyncpg` or `SQLAlchemy` connection error.
+This starts three containers (`docker-compose.yml`):
 
-### Redis setup
-- **What:** An in-memory data structure store.
-- **Why:** Used as the message broker and result backend for Celery background tasks.
-- **Failure behavior:** Celery workers will refuse to start, throwing `ConnectionRefusedError`.
+| Service | Image | Ports | Why |
+| --- | --- | --- | --- |
+| postgres | `pgvector/pgvector:pg16` | 5432 | relational rows, full-text search **and** vector embeddings — one database, no separate vector store |
+| redis | `redis:7-alpine` | 6379 | Celery broker (DB 1), result backend (DB 2), app cache (DB 0) |
+| minio | `minio/minio` | 9000 API, 9001 console | raw payloads over 32 KB and attachment bytes |
 
-### MinIO setup
-- **What:** An S3-compatible object storage server.
-- **Why:** Used to store raw evidence and attachments (like large PDFs or JSON dumps) to keep the PostgreSQL database small and performant.
-- **Failure behavior:** The app might start, but evidence ingestion and attachment offload will fail with 500 errors.
+> ### Known trap: the Postgres port in `.env.example`
+> `.env.example` ships `DATABASE_URL=...@localhost:5433/contextedge` (`.env.example:12-15`) but `docker-compose.yml` publishes **5432:5432** (`docker-compose.yml:9-10`). If you copy the template verbatim you will get "connection refused" on first boot. Either change your `.env` to `5432`, or map 5433 in a compose override. The credentials come from the same `.env` (`POSTGRES_USER`, `POSTGRES_PASSWORD`), so whatever you set there is what the container is created with — and changing them after the volume exists has no effect until you drop the volume.
 
----
+**Failure behavior per service:**
+- **Postgres down or wrong URL** → the backend crashes on startup with an `asyncpg`/SQLAlchemy connection error, and `/ready` returns 503.
+- **Redis down** → Celery workers cannot start; the API's `/ready` reports the Redis check failed.
+- **MinIO down** → the API still starts (the lifespan marks `object_store_ok=False`, `main.py:44-59`), but raw-payload offload raises and the sync run fails. Timeouts are 1 s each with a single attempt (`services/object_store.py:28-33`) so a slow MinIO fails fast instead of stalling a worker.
 
-## 3. Running the Project
+### 2.4 Install dependencies
 
-Now that your infrastructure is running, let's start the application layer. You have two choices: running processes on your host machine (recommended for fast iteration) or running everything in Docker.
+```bash
+cd backend
+python -m venv .venv
+source .venv/bin/activate     # Windows: .venv\Scripts\activate
+pip install -e ".[dev]"
+```
 
-### Option A: Host-Run App (Recommended)
-
-1. **Install Backend Dependencies**
-   Open a terminal, activate your virtual environment, and run:
-   ```bash
-   cd backend
-   python -m venv .venv
-   source .venv/bin/activate  # On Windows: .venv\Scripts\activate
-   pip install -e ".[dev]"
-   ```
-
-2. **Install Frontend Dependencies**
-   Open a second terminal and run:
-   ```bash
-   cd frontend
-   npm install
-   ```
-
-3. **Start the backend**
-   - **Where:** `backend/` directory.
-   - **Command:** `make backend-dev` (or `cd backend && python dev.py api`)
-   - **What:** Starts the FastAPI application using Uvicorn with hot-reloading.
-   - **Output:** API available at `http://localhost:8000/docs`.
-
-4. **Start Celery workers**
-   - **Command:** `make celery-dev` (or `cd backend && python dev.py worker`)
-   - **What:** Starts background workers to process queues like `extraction`, `pattern`, and `evaluation`.
-   - **Why:** AI extraction takes time and cannot block the HTTP request.
-
-5. **Start Celery Beat**
-   - **Command:** `make celery-beat-dev` (or `cd backend && python dev.py beat`)
-   - **What:** Starts the scheduler for recurring tasks (like `detect_drift` and contradiction scans).
-
-6. **Start the frontend**
-   - **Command:** `make frontend-dev` (or `cd frontend && npm run dev`)
-   - **What:** Starts the Next.js development server.
-   - **Output:** UI available at `http://localhost:3000`.
-
-### Option B: Full Docker development
-
-If you prefer running everything (including the app code) in Docker:
-- **Command:** `make dev` (or `docker compose -f docker-compose.dev.yml up --build`)
-- **Design rationale:** Keeps your host machine clean and guarantees environment parity.
-- **Drawback:** Can be slower to rebuild during active development, especially when changing Python dependencies.
+```bash
+cd frontend
+npm install
+```
 
 ---
 
-## 4. Database Migrations
+## 3. Running the project
 
-We use **Alembic** to manage database schema changes. Migrations ensure that everyone's database structure looks exactly the same.
+### 3.1 Option A — host-run app (recommended for iteration)
 
-### How Alembic works
-- **What:** Alembic tracks changes to SQLAlchemy models and generates sequential SQL scripts.
-- **Where:** `backend/alembic/versions/` (This folder contains all migration scripts).
-- **File Rating:** `backend/alembic/env.py` (7/10) - This file connects Alembic to our SQLAlchemy `Base.metadata`. If a new model isn't imported here, Alembic won't see it!
+Five processes. Open five terminals, or use a process manager.
 
-### Creating a new migration
-- **Why:** You added a new table or column in `backend/src/contextedge/models/`.
-- **Command:**
-  ```bash
-  make migrate-new msg="added_widget_table"
-  ```
-- **What happens next:** Alembic looks at your models, compares them to the current database, and creates a python script (e.g., `1234abcd_added_widget_table.py`) in `alembic/versions/`. 
-- **Important:** ALWAYS review the generated script to ensure it didn't do something unexpected (like dropping a table by accident).
+| # | Command | What it starts | Where to look |
+| --- | --- | --- | --- |
+| 1 | `make backend-dev` (`cd backend && python dev.py api`) | FastAPI with hot reload on `http://localhost:8000` | `backend/dev.py:89-100` |
+| 2 | `make celery-dev` (`cd backend && python dev.py worker`) | a Celery worker consuming **all eight queues** | `backend/dev.py:102-126` |
+| 3 | `make celery-beat-dev` (`cd backend && python dev.py beat`) | the scheduler for the 14 recurring tasks | `backend/dev.py:127-137` |
+| 4 | `make frontend-dev` (`cd frontend && npm run dev`) | Next.js on `http://localhost:3000` | `frontend/package.json` |
+| 5 | `make migrate` then `make seed` (once) | schema + dev data | see §4, §5 |
 
-### Running migrations
-- **Command:** `make migrate`
-- **What:** Applies all pending SQL scripts to your local database, bringing it up to the "head".
-- **Who calls it:** You do, every time you pull new code from `main`.
+`python dev.py` prepends `backend/src` to `PYTHONPATH` for you (`dev.py:19-26`), which is why running `uvicorn` directly usually fails with `ModuleNotFoundError: No module named 'contextedge'`.
 
-### Rolling back
-- **Command:** `make migrate-down`
-- **What:** Reverts the last applied migration.
-- **Failure behavior:** If you roll back a destructive migration (like dropping a column), data in that column is permanently lost. Be careful!
+### 3.2 The eight queues — read this before you start a worker
 
-### Current migration head
-Always check `backend/alembic/versions/` for the latest file to see what schema changes are active. You can also run `alembic current` inside the `backend` directory.
+```
+default, sync, hydration, extraction, correlation, embedding, pattern, evaluation
+```
+
+That list is `DEFAULT_QUEUES` in `backend/dev.py:16`, and it is the authority. The routing table lives at `backend/src/contextedge/workers/celery_app.py:226-279`.
+
+**Why this matters more than it looks.** The `correlation` and `embedding` lanes were split out on 2026-08-17 after measured starvation: the extraction queue was growing ~70 tasks/min at 8,255 deep, `correlate_evidence` was dispatched but never consumed, and 1,879 chunks existed with only 289 (15 %) embedded. Evidence was being ingested and silently never becoming retrievable, and episodes stayed at zero. `dev.py:12-16` records that a stock deployment ran for a month with those two lanes unconsumed.
+
+If you start a worker with a hand-written `-Q` list, include all eight or you will reproduce that failure locally. **`docs/RUNBOOK.md`'s queue list and its Windows PowerShell block predate these two lanes** — use `dev.py:16` instead until the runbook catches up.
+
+### 3.3 Option B — full Docker development
+
+```bash
+make dev
+# equivalent: docker compose -f docker-compose.dev.yml up --build
+```
+
+- **Rationale:** your host stays clean and the environment is identical to CI.
+- **Drawback:** slower rebuilds, especially when Python dependencies change.
+- The dev compose worker already uses the correct eight-queue list (`docker-compose.dev.yml:47`).
+
+### 3.4 Windows worker topology
+
+This is the part that surprises people. Two facts, both measured:
+
+1. **Celery's prefork pool does not work on Windows.**
+2. **`-P threads` does not work either for the LLM-bearing lanes.** LiteLLM holds asyncio locks bound to the loop that created them, so a threads pool raises "Lock is bound to a different event loop" on every enrichment call, which trips the provider circuit breaker and fails the run near-silently. Measured on a live backfill, 2026-08-16 (`docs/RUNBOOK.md:257-262`).
+
+So parallelism comes from **separate processes**, each `-P solo` with its own event loop:
+
+```powershell
+# Worker A — the parallel one. Ticket processing is ~95% waiting on the LLM,
+# so process parallelism is near-linear. Note ALL EIGHT lanes minus the ones
+# Worker B owns.
+1..4 | ForEach-Object {
+  Start-Process python -ArgumentList "-m","celery","-A","contextedge.workers.celery_app",`
+    "worker","-l","INFO","-n","workerA$_@%h",`
+    "-Q","extraction,hydration,correlation,embedding,default","-P","solo"
+}
+
+# Worker B — the serialized one. Clustering and playbook generation operate on
+# the whole graph and have NO advisory lock (unlike sync), so two concurrent
+# runs could mint duplicate patterns.
+python -m celery -A contextedge.workers.celery_app worker -l INFO -n workerB@%h -Q sync,pattern,evaluation -P solo
+
+# Beat — exactly ONE instance. A second beat double-dispatches every entry.
+python -m celery -A contextedge.workers.celery_app beat -l INFO
+```
+
+`dev.py` defaults to `-P solo` on Windows unless you supply your own pool (`dev.py:113-124`).
+
+**Why the split is safe:** every task runs `asyncio.run` with a fresh `NullPool` engine (`workers/asyncio_runner.py:10-34`) so no loop or connection is shared; syncs take a per-source-object Postgres advisory lock so concurrent workers skip rather than race a checkpoint (`services/sync_worker_service.py:379-395`); and `task_acks_late=True` re-delivers a crashed worker's task (`workers/celery_app.py:196`).
+
+**Ceilings to respect:** roughly 8 concurrent Gemini calls ≈ 60–120 requests/min against the Vertex quota, and concurrent hydration can get you rate-limited by the source (move `hydration` to Worker B if Zoho starts returning 429s). NullPool means each running task holds its own DB connections — budget ~2–3 × concurrency.
+
+### 3.5 Before a bulk backfill
+
+Measured on a live 84-ticket Zoho backfill: a cold-start ingest burned the 2,000,000-token deployment-default daily budget in about two hours, and the `block` action froze the pipeline mid-run until an operator intervened.
+
+1. **Provision a `tenant_llm_budgets` row** for the onboarding tenant (size it around 100k tokens per thread-heavy ticket), or set its action to `warn` for the window and restore afterwards. `PUT /api/v1/admin/tenant-budget`.
+2. **Use the connector's own filter key** — `module_filters` for Zoho Desk, `table_filters` for ServiceNow. The wrong key is silently ignored and the whole modified window syncs.
+3. **Consider `EPISODE_RESOLUTION_GATE=cluster`** for corpora where many tickets carry no resolution. Episode synthesis was ~73 % of cold-start spend on the measured run; the gate defers those clusters at zero LLM cost and re-checks as new evidence arrives.
 
 ---
 
-## 5. Seeding Data
+## 4. Database migrations
 
-To test the app locally, you need dummy data (users, tenants, policies).
+We use **Alembic**. There are 72 revision files in `backend/alembic/versions/`.
 
-### seed.py explained
-- **Where:** `backend/src/contextedge/seed.py` (Rated 8/10)
-- **What:** A script that inserts default tenants, policies, and users into the database.
-- **Who calls it:** You run it via `make seed` (or `python dev.py seed`).
-- **Input:** Nothing, it uses predefined constants hardcoded in the file.
-- **Output:** Rows inserted into PostgreSQL tables (`tenants`, `users`, etc.).
-- **Design rationale:** We want local development to be turnkey. Without this, you wouldn't be able to log in.
+### How it works
+- **What:** Alembic compares your SQLAlchemy models to the database and generates ordered SQL scripts.
+- **Where:** `backend/alembic/versions/`, driven by `backend/alembic/env.py` (rated 7/10).
+- **env.py mechanics worth knowing:**
+  - It imports the model modules so `Base.metadata` is complete (`env.py:12-29`). **If a new model is not reachable from those imports, autogenerate will not see it** and will happily generate a migration that drops nothing and creates nothing.
+  - The URL comes from `settings.database_url_sync` (`env.py:42-44`).
+  - Before running anything online it widens `alembic_version.version_num` on a **separate bootstrap connection with its own commit** (`env.py:70-72`). Doing that on the migration connection made Alembic see a transaction it did not start, and `alembic upgrade` then reported success while changing nothing. The widening itself is idempotent (`backend/src/contextedge/migration_support.py:58-80`). It exists because six revision ids in this chain exceed 32 characters and databases created by pre-1.10 Alembic sized that column at `VARCHAR(32)` — those upgrades died on the *stamp*, which reads like a broken migration.
 
-### demo_maf_seed.py explained
-- **What:** Specific seed data for MAF (Microsoft Agent Framework) demos.
-- **Why:** To showcase agent interactions, it seeds specific context graphs and playbooks.
+### Commands
+
+| Goal | Command | Notes |
+| --- | --- | --- |
+| Apply everything | `make migrate` (`cd backend && alembic upgrade head`) | run this every time you pull |
+| New migration | `make migrate-new msg="add_widgets_table"` | **always read the generated script** before committing |
+| Roll back one | `make migrate-down` | destructive migrations lose data permanently |
+| What am I on? | `cd backend && alembic current` | |
+| What is the head? | `cd backend && alembic heads` | |
+
+> **Standing rule: never quote a head revision number in a doc.** Trust `alembic heads`. Two previous doc-drift incidents came from hardcoded head numbers (`codewiki/KNOWN_GAPS.md:49`).
+
+### Two runtime guards on the head
+- The API's `/ready` compares `alembic_version` to the bundled scripts' head and returns **503** on mismatch (`backend/src/contextedge/main.py:89-106, 179-210`).
+- Celery workers **exit at startup** on a definite mismatch (`workers/celery_app.py:83-139`). Without that, workers would consume the normalize queue against a stale schema and corrupt ingestion mid-transaction. If your worker keeps dying at boot, run `make migrate`.
+
+### Migrations that need operator care
+- `0026` / `0027` need the pre-migration dedupe and NULLing SQL documented in [RUNBOOK.md](RUNBOOK.md).
+- `0032_halfvec_hnsw_indexes` **requires pgvector server extension ≥ 0.7** and fails loud below it. `docker-compose.yml` pins `pgvector/pgvector:pg16`. An environment stamped at an earlier revision of that file never re-executes it and stays on sequential scans (`codewiki/KNOWN_GAPS.md:40`).
+
+---
+
+## 5. Seeding data
+
+### `seed.py` — rated 8/10
+- **Where:** `backend/src/contextedge/seed.py`
+- **What:** inserts the default tenant, workspaces, domains, policies and users.
+- **Run it:** `make seed` (`cd backend && python dev.py seed`).
+- **Rationale:** local development should be turnkey. Without it you cannot log in.
+
+### The destructive scripts are guarded
+`reset_db_and_seed.py` and `demo_maf_seed.py` TRUNCATE tenant-global tables. `seed_guard.require_destructive_reset_allowed` refuses to run either unless `APP_ENV=development` or `CONTEXTEDGE_ALLOW_DB_RESET=1` (`backend/src/contextedge/seed_guard.py:20-60`). `demo_maf_seed.py` additionally seeds context-graph and playbook data for Microsoft Agent Framework demos.
 
 ### Default credentials
-After running the seed script, you can log in to the frontend (`localhost:3000`) using:
-- **Admin User:** `admin@contextedge.local` / `admin123`
-- **Analyst User:** `analyst@contextedge.local` / `analyst123`
+- **Admin:** `admin@contextedge.local` / `admin123`
+- **Analyst:** `analyst@contextedge.local` / `analyst123`
 
-> ⚠️ These accounts exist only in the local development seed
-> (`backend/src/contextedge/seed.py`). Never create them, or reuse these
-> passwords, in any shared or production environment.
+> ⚠️ These exist only in the local development seed. Never create them, or reuse these passwords, in any shared or production environment.
+
+Note that `users.email` is **unique per tenant, not globally** (`models/tenant.py:68-85`). Login handles that deliberately: it fetches up to five matching active users, and if the same email and password work in two tenants it returns 401 "Ambiguous account" rather than guessing (`api/v1/auth.py:35-101`).
 
 ---
 
-## 6. How to Add a New Feature
+## 6. How to add a new feature
 
-This is the core of the Developer Guide. Follow these steps meticulously whenever you add new functionality to ContextEdge.
+### 6.1 Add a new API endpoint
 
-### 6.1. Add a New API Endpoint
+**Design rationale:** routers stay thin — validate, authorize, call a service, serialize. All logic lives in `services/`. That is what keeps things testable, and the whole backend test suite runs without live services because of it.
 
-**What:** Creating a new URL path that the frontend (or an external client) can call.
-**Design Rationale:** We use FastAPI. We keep routing logic thin and move all business logic to a dedicated service file. This makes testing much easier.
-
-#### Step 1. Create schema in schemas/
-Create Pydantic models for Input and Output validation.
-- **Where:** `backend/src/contextedge/schemas/widget.py`
+#### Step 1 — schema in `schemas/`
+`backend/src/contextedge/schemas/widget.py`:
 ```python
 from pydantic import BaseModel, Field
 
@@ -261,45 +273,47 @@ class WidgetResponse(BaseModel):
     size: int
 ```
 
-#### Step 2. Create/update model in models/
-Create the SQLAlchemy ORM model to define the database table.
-- **Where:** `backend/src/contextedge/models/widget.py`
+#### Step 2 — model in `models/`
+`backend/src/contextedge/models/widget.py`:
 ```python
 import uuid
-from sqlalchemy import Column, String, Integer
+from sqlalchemy import String, Integer
 from sqlalchemy.dialects.postgresql import UUID
-from .base import Base
+from sqlalchemy.orm import Mapped, mapped_column
+from contextedge.models.base import Base, TenantScopedMixin
 
-class Widget(Base):
+class Widget(Base, TenantScopedMixin):
     __tablename__ = "widgets"
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    name = Column(String, nullable=False)
-    size = Column(Integer, default=10)
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name: Mapped[str] = mapped_column(String, nullable=False)
+    size: Mapped[int] = mapped_column(Integer, default=10)
 ```
-*Don't forget to import this model in `backend/alembic/env.py`!*
 
-#### Step 3. Create service in services/
-**Who calls it:** The Router.
-- **Where:** `backend/src/contextedge/services/widget_service.py`
+**`TenantScopedMixin` is not optional for tenant data** (`models/base.py:22-27`). It adds the indexed `tenant_id` and, through `TimestampMixin`, the `created_at`/`updated_at` columns. Forgetting it is how a table ends up queryable across tenants.
+
+**Then import the module in `backend/alembic/env.py`** (or make it reachable from something already imported there), or Alembic will not see your table.
+
+#### Step 3 — service in `services/`
 ```python
 from sqlalchemy.ext.asyncio import AsyncSession
 from contextedge.models.widget import Widget
 from contextedge.schemas.widget import WidgetCreate
 
-async def create_widget(db: AsyncSession, data: WidgetCreate) -> Widget:
-    new_widget = Widget(name=data.name, size=data.size)
-    db.add(new_widget)
-    await db.commit()
-    await db.refresh(new_widget)
-    return new_widget
+async def create_widget(db: AsyncSession, tenant_id, data: WidgetCreate) -> Widget:
+    widget = Widget(tenant_id=tenant_id, name=data.name, size=data.size)
+    db.add(widget)
+    await db.flush()
+    return widget
 ```
 
-#### Step 4. Create router in api/v1/
-- **Where:** `backend/src/contextedge/api/v1/widgets.py`
+Prefer `await db.flush()` in the service and let the caller commit. `get_db` commits at the end of a successful request (`database.py:29-42`), and in a Celery task `run_async` commits after the task body returns (`workers/asyncio_runner.py:10-28`). Committing inside a service makes it unusable from a worker that needs the whole task to be one transaction.
+
+#### Step 4 — router in `api/v1/`
 ```python
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
-from contextedge.api.deps import get_db
+from contextedge.database import get_db
+from contextedge.deps import CurrentUser, get_current_user
 from contextedge.schemas.widget import WidgetCreate, WidgetResponse
 from contextedge.services import widget_service
 
@@ -307,294 +321,356 @@ router = APIRouter()
 
 @router.post("/", response_model=WidgetResponse)
 async def create(
-    widget_in: WidgetCreate, 
-    db: AsyncSession = Depends(get_db)
+    widget_in: WidgetCreate,
+    db: AsyncSession = Depends(get_db),
+    user: CurrentUser = Depends(get_current_user),
 ):
-    """
-    Create a new widget.
-    """
-    return await widget_service.create_widget(db, widget_in)
+    user.require_role("knowledge_manager")
+    return await widget_service.create_widget(db, user.tenant_id, widget_in)
 ```
 
-#### Step 5. Register router in api/v1/__init__.py
-- **Where:** `backend/src/contextedge/api/v1/__init__.py`
-```python
-from fastapi import APIRouter
-from .widgets import router as widgets_router
+**Always scope by `user.tenant_id`, never by a tenant id in the request body.** A previous review found bulk-delete resolving caller-supplied UUIDs *before* any tenant check — cross-tenant deletion was live (`codewiki/KNOWN_GAPS.md:46`). The rule that came out of it: resolve and authorize first, and a single foreign id fails the whole request with 404 before any statement runs.
 
-api_router = APIRouter()
-api_router.include_router(widgets_router, prefix="/widgets", tags=["Widgets"])
-```
+**Role names in use:** `platform_super_admin`, `tenant_admin`, `domain_admin`, `knowledge_manager`, `playbook_reviewer`. Note that `has_role` short-circuits True for `platform_super_admin`, `tenant_admin` and `admin` (`deps.py:37-44`), and that `RoleBinding.scope_type`/`scope_id` are stored but **not enforced** — a domain admin bound to one domain holds that role tenant-wide (`codewiki/KNOWN_GAPS.md:187-191`).
 
-#### Step 6. Create migration
-Run `make migrate-new msg="add_widgets_table"` then `make migrate`.
+#### Step 5 — register the router
+`backend/src/contextedge/api/v1/__init__.py`: add the module to the import block (`:5-39`) and one `router.include_router(...)` line (`:41-83`).
 
-#### Step 7. Test
-Write a test in `backend/tests/api/test_widgets.py`. Run `make test-backend`.
+#### Step 6 — migration
+`make migrate-new msg="add_widgets_table"` then `make migrate`.
 
-**Sequence Diagram:**
+#### Step 7 — test
+`backend/tests/test_widgets.py`, then `make test-backend`.
+
 ```mermaid
 sequenceDiagram
     participant Frontend
-    participant FastAPI Router
-    participant WidgetService
-    participant PostgreSQL
-    Frontend->>FastAPI Router: POST /api/v1/widgets {name: "Alpha"}
-    FastAPI Router->>WidgetService: create_widget()
-    WidgetService->>PostgreSQL: INSERT INTO widgets (name, size)
-    PostgreSQL-->>WidgetService: row data (id: 123)
-    WidgetService-->>FastAPI Router: Widget object
-    FastAPI Router-->>Frontend: 200 OK JSON {id: "123", name: "Alpha", size: 10}
+    participant Router as api/v1/widgets.py
+    participant Deps as deps.get_current_user
+    participant Service as services/widget_service.py
+    participant DB as PostgreSQL
+    Frontend->>Router: POST /api/v1/widgets {name: "Alpha"}
+    Router->>Deps: resolve principal, require_role
+    Deps-->>Router: CurrentUser(tenant_id, roles)
+    Router->>Service: create_widget(db, tenant_id, data)
+    Service->>DB: INSERT INTO widgets (tenant_id, name, size)
+    DB-->>Service: row
+    Service-->>Router: Widget
+    Router-->>Frontend: 200 {id, name, size}
 ```
 
 ---
 
-### 6.2. Add a New Database Table
+### 6.2 Add a new database table (no endpoint yet)
 
-If you just need a table without an immediate API endpoint:
-1. **Create model**: Add a `.py` file in `backend/src/contextedge/models/`. Make sure it inherits from `Base`.
-2. **Add to models/__init__.py**: You **MUST** import your model in `backend/alembic/env.py` or `models/__init__.py` so Alembic sees it.
-3. **Create migration**: `make migrate-new msg="new_table_name"`
-4. **Create CRUD operations**: Add functions in a `_service.py` file to handle Create, Read, Update, Delete so other backend code can interact with the table.
+1. Create the model under `models/`, inheriting `Base` and `TenantScopedMixin` if it holds tenant data.
+2. Make it reachable from `backend/alembic/env.py:12-29`.
+3. `make migrate-new msg="new_table_name"` and **read the script**.
+4. Add service functions rather than letting callers write raw queries.
+
+**One more rule that CI enforces:** `backend/tests/test_governance_column_writers.py` scans every `mapped_column` for a writer somewhere under `src/contextedge` and asserts set equality against a register of deliberately-unwritten columns, each carrying an owner and a reason. Set equality runs both ways, so a column that later *gains* a writer also fails CI until its register entry is removed. If you add a column you do not write yet, register it with a reason — a NULL-by-construction column that looks like shipped capability is exactly the problem that test exists to stop.
 
 ---
 
-### 6.3. Add a New UI Tab
+### 6.3 Add a new UI tab
 
 **Where:** `frontend/src/app/(dashboard)/`
-**Why:** To expose the new backend feature to the user.
 
-1. **Create page in app/(dashboard)/**
-   Create a folder, e.g., `widgets/page.tsx`. Next.js uses file-based routing.
+1. **Create the page.** Next.js App Router uses file-based routing, so `widgets/page.tsx` becomes `/widgets`.
    ```tsx
    export default function WidgetsPage() {
      return (
        <div className="p-6">
-         <h1 className="text-2xl font-bold mb-4">Widgets Dashboard</h1>
-         <p>Manage your widgets here.</p>
+         <h1 className="text-2xl font-bold mb-4">Widgets</h1>
        </div>
      );
    }
    ```
-2. **Add to shell navigation**
-   Find the Sidebar component (usually in `frontend/src/components/layout/sidebar.tsx` or similar) and add the navigation link pointing to `/widgets`.
-3. **Add API calls**
-   Use TanStack Query (`useQuery`, `useMutation`) to fetch data from the backend. Create a custom hook in `frontend/src/hooks/useWidgets.ts`.
-4. **Add components**
-   Use `shadcn/ui` components from `components/ui/` (like Buttons, Tables, Dialogs) to build out the interface.
+2. **Add it to the sidebar.** `frontend/src/components/shell/sidebar-nav.tsx:44-70` holds the ordered `navItems` array. Add `{ label, href, icon, requiredRoles? }`. Omit `requiredRoles` to show it to everyone.
+3. **Fetch data** with TanStack Query. API helpers live in `frontend/src/lib/api.ts` and `graph-api.ts`; shared hooks in `frontend/src/lib/hooks/`.
+4. **Build the UI** from `frontend/src/components/ui/` (shadcn/ui) plus the domain folders `components/common`, `components/graph`, `components/sources`, `components/patterns`, `components/decisions`.
+
+> **Nav visibility is UX filtering, not security.** The frontend's `hasRole` treats only `platform_super_admin` as a super-role (`frontend/src/lib/roles.ts:7-9`), while the backend also short-circuits `tenant_admin` and `admin` (`deps.py:37-44`). So a `tenant_admin` sees only nav items that list `tenant_admin` explicitly, yet the API would authorize them for `knowledge_manager`-gated calls anyway. Real enforcement is the API's 401/403 — the dashboard layout's redirect is client-side only (`frontend/src/app/(dashboard)/layout.tsx:17-21`).
 
 ---
 
-### 6.4. Add a New Celery Worker Task
+### 6.4 Add a new Celery task
 
-**What:** A background job that runs outside the web request lifecycle.
-**Why:** For long-running jobs (e.g., AI extraction, heavy data syncs) that would timeout an HTTP request or degrade API performance.
+**What:** a background job. **Why:** LLM calls take seconds to a minute and a backfill takes hours; neither can happen inside an HTTP request.
 
-1. **Create task file**
-   - **Where:** `backend/src/contextedge/workers/my_tasks.py`
+1. **Write the task** in `backend/src/contextedge/workers/my_tasks.py`:
    ```python
    from contextedge.workers.celery_app import celery_app
-   from contextedge.services.widget_service import heavy_processing
+   from contextedge.workers.asyncio_runner import run_async
 
-   @celery_app.task(name="process_widget_task")
-   def process_widget_task(widget_id: str):
-       print(f"Starting heavy processing for widget {widget_id}")
-       # In Celery, we usually have to spin up our own sync DB session
-       # or run asyncio code using a runner.
-       heavy_processing(widget_id)
+   @celery_app.task(name="evaluation.process_widget", bind=True, max_retries=3, default_retry_delay=60)
+   def process_widget_task(self, widget_id: str, tenant_id: str):
+       async def work(db):
+           return await do_the_thing(db, widget_id, tenant_id)
+       try:
+           return run_async(work)
+       except Exception as exc:
+           raise self.retry(exc=exc)
    ```
-2. **Register in celery_app.py**
-   Make sure the module `my_tasks.py` is imported in `celery_app.py` so the Celery worker process actually discovers the task upon startup.
-3. **Configure queue routing**
-   Assign it to a specific queue (like `default`, `extraction`, or `pattern`) in the Celery config settings, so that specific workers handle specific types of workloads.
+
+2. **Always go through `run_async`.** It creates a fresh `NullPool` engine and session per task, commits on success and rolls back on exception (`workers/asyncio_runner.py:10-34`). Never share a session, engine or event loop across tasks.
+
+3. **Register the module** in the `include=[...]` list at `workers/celery_app.py:142-190`, or the worker will not discover the task.
+
+4. **Choose the queue by naming the task correctly.** Routing is by task-name prefix and is **order-matched** (`celery_app.py:226-279`). `evaluation.*` → `evaluation`, `pattern.*` → `pattern`, `extraction.*` → `extraction` (with three explicit exceptions that go to `correlation` and two that go to `embedding`), `sync.*` → `sync`, `hydration.*` → `hydration`. A short name that matches nothing lands on `default` — which is how `identity.*` and `maintenance.*` end up there. If your task needs its own lane, add an explicit route **above** the wildcards and add the queue to `dev.py:16` and `docker-compose.dev.yml`.
+
+5. **Dispatch after commit, never before.** This is the single most common bug in this codebase's history. A task consumed before its transaction commits reads stale state and no-ops **without retry**. The pattern in every correct call site: commit, then `.delay(...)`, and treat a broker failure as a warning, not a rollback — see `api/v1/episodes.py:255-268` and `workers/evaluation_tasks.py:273-331`, both of which carry the comment explaining it.
+
+6. **Add a beat entry** only if it is genuinely recurring: `workers/celery_app.py:281-384`. Fan-out tasks take the literal `"all"` sentinel and iterate tenants with per-tenant try/except so one bad tenant never stops the sweep. Schedule it unconditionally even if a setting gates it — `ai-review-episodes-hourly` does exactly that so enabling the feature needs no beat restart.
+
+7. **Test the routing.** `backend/tests/test_celery_queue_routing.py` exists for this.
 
 ---
 
-### 6.5. Add a New Connector
+### 6.5 Add a new connector
 
-**What:** Connectors pull data from external systems (Jira, Teams, ServiceNow, etc.) into ContextEdge.
-**Why:** To build the operational memory graph, we need raw data from the tools humans use.
+**What:** connectors pull records from external systems. **Why:** the operational memory graph is built from the tools humans actually use.
 
-1. **Create connector folder**: `backend/src/contextedge/connectors/new_system/` (or whatever the source is).
-2. **Implement base class**: Inherit from the base connector interface (`BaseConnector`). 
-   - Implement `fetch()`: Authenticate with the external API and download raw data.
-   - Implement `normalize()`: Convert the raw vendor-specific JSON into our standard `EvidenceItem` schema.
-3. **Register in registry**: Add it to the connector factory so the ingestion engine knows how to route sync requests for that source type.
+1. **Create the package:** `backend/src/contextedge/connectors/new_system/`.
+2. **Subclass `BaseConnector`** (`connectors/base.py:78-141`) and implement all five abstract methods:
 
----
+   | Method | Returns | Notes |
+   | --- | --- | --- |
+   | `validate_credentials()` | `CredentialStatus` | should name what was and was not granted — partial scopes are normal |
+   | `discover_objects()` | `list[DiscoveredObject]` | one per syncable module/table/mailbox; skip an unreadable one rather than aborting |
+   | `backfill(object_id, object_type, window, checkpoint)` | `BackfillResult` | set `has_more=True` when a page budget is spent |
+   | `fetch_changes(object_id, object_type, checkpoint)` | `ChangeResult` | the checkpoint is **non-optional** |
+   | `hydrate_thread(thread_ref)` | `HydratedThread` | a no-op is acceptable if the source has no conversation API |
 
-### 6.6. Add a New AI Extractor
+3. **Emit `IngestionEvent`s** — `external_id`, `source_type`, `object_type`, `content` dict, optional `thread_id`, `timestamp`, `metadata` (`connectors/base.py:37-45`). You do **not** write evidence rows; `persist_ingestion_events` does, and `_normalize` derives everything else from your `content` dict.
+4. **Honour the cooperative stop.** Call `await self._check_control()` inside your page and record loops (`base.py:82-107`). A single `backfill()` call can run for a quarter of an hour, so a signal checked only between invocations does nothing for that whole time.
+5. **Register it** in `_register_connectors` (`connectors/registry.py:91-110`) and add its display entry to `_SOURCE_TYPE_LABELS` (`:36-66`). The UI catalog computes `connector_available` from the registry rather than from the label table (`source_type_catalog`, `:69-88`), so a registered connector can never be missing from the picker and a label can never claim a connector that does not exist. `backend/tests/test_source_type_catalog.py` asserts the two agree — that coupling exists because the lists once drifted in both directions, offering Confluence/SharePoint/Exchange (no connector, so creation succeeded and sync died) while hiding SapphireIMS and Zoho Desk (working connectors nobody could select).
+6. **Add a reference service** if the source exposes relationship fields (`services/servicenow_reference_service.py` is the model to copy). It turns vendor reference fields into case-link keys, typed graph edges and entity rows, and it runs inside a SAVEPOINT so a failure loses enrichment, never the correlation.
+7. **Check the chunker resolution** in `services/chunkers/registry.py:116-143`. A new ticket-shaped source belongs in the ticket set; a new conversational one in the thread set.
+8. **Map facets** if the source carries structured fields worth keeping — `source.config["facet_fields"]` feeds `services/source_facets.py:38-85`, and a stated environment or version skips a ~7,200-token applicability LLM call entirely.
 
-**What:** Code that uses LLMs to extract structured data (like Decisions, Identities, or Actions) from unstructured text.
-
-1. **Create extractor**: Create a new class inside `backend/src/contextedge/ai/extractors/`.
-2. **Add prompt**: Place your Jinja/text prompts in `backend/src/contextedge/ai/prompts/`. Keeping prompts separate from Python code allows for easier A/B testing and modification by prompt engineers.
-3. **Wire into extraction pipeline**: Update `workers/extraction_tasks.py` to invoke your new extractor during the evidence ingestion flow.
-
----
-
-### 6.7. Add a New Context Graph Node Type
-
-**What:** The Context Graph is our temporal, semantic representation of operational memory.
-**Why:** Adding a new node type (e.g., `Server`, `PullRequest`) allows the graph to represent new concepts.
-
-1. **Add to builder.py**: `backend/src/contextedge/graph/builder.py` - Define how the new node type is mapped from the relational ORM models into a graph node.
-2. **Add to queries.py**: Write the SQL/Cypher-like traversal logic to find this node and its neighbors.
-3. **Update agent contracts**: Update `docs/MAF_CONTEXT_GRAPH_INTEGRATION.md` to ensure any AI agents interacting with the graph know about the new node type.
+**Design lessons from the connectors we already have, worth reading before you write yours:**
+- Verify against a live instance if you possibly can. The Zoho connector's three most important behaviours (page size caps at 50, no modified-since filter exists, ties arrive id-ascending inside a time-descending walk) were all found live and would have shipped as bugs otherwise.
+- Prefer fail-closed guards on paging. Zoho's walk refuses a page that is out of descending order or missing a timestamp and does **not** advance the checkpoint (`connectors/zoho_desk/connector.py:858-874`); the next tick refetches and dedupe absorbs it.
+- If the vendor contract is not public, make it config-mapped rather than guessed — `connectors/sapphireims/` does this, and `validate_credentials` probes the configured path so a wrong mapping fails loudly at setup instead of silently fetching nothing.
 
 ---
 
-### 6.8. Add a New MAF Agent
+### 6.6 Add a new AI extractor or classifier
 
-**What:** Microsoft Agent Framework (MAF) integration allows autonomous agents to interact with ContextEdge.
+**What:** code that turns unstructured text into structured data using an LLM.
 
-1. **Create agent configuration**: Define the persona and system prompt for the new agent.
-2. **Register tools**: Expose specific ContextEdge python functions as tool definitions that the agent can call.
-3. **Set up context provider**: Ensure the Context Graph feeds relevant, scoped sub-graphs to the agent so it has the necessary context before taking action.
+1. **Add the prompt** under `backend/src/contextedge/ai/prompts/` as a versioned, immutable `Prompt` dataclass, registered in the family module and listed in `ai/prompts/__init__.py:189-201`.
+
+   > **Prompts are immutable once shipped. Never edit a released version — add a new one and update the default.** Old versions stay registered so evaluation baselines keep working. This is a repo convention in `CLAUDE.md`, not a suggestion.
+
+2. **Write the extractor** under `ai/extractors/` or the classifier under `ai/classifiers/`, and:
+   - Wrap untrusted evidence text in `fence_untrusted(...)` (`ai/fencing.py`) before it reaches the prompt.
+   - Bound the input with `salient_slice(...)` (`ai/text_salience.py`). Existing budgets: relevance and message-function 2,000 chars, identity and decision 4,000 chars.
+   - Call `llm_complete_json` (or `llm_complete_json_validated` when you have a Pydantic schema) from `ai/provider.py:504`, passing `task=` so the right model and output ceiling apply, and passing `prompt_name` + `prompt_version` so `llm.usage` records them.
+   - Pass `tenant_id` and `db` so the budget gate runs and the spend is attributed.
+   - **Gate the output with a schema.** Be "strict about structure, lenient about vocabulary" — `IssueSignatureDraft` (`services/issue_signature_service.py:47-73`) is the model: required fields with length bounds, enum-ish fields that silently null on an unknown value, and a confidence that clamps to `[0, 1]`.
+
+3. **Wire it into the pipeline.** `_normalize` (`workers/extraction_tasks.py:122-628`) is the ingest path; each enrichment there is individually try/except'd so a failure degrades rather than losing the evidence row. Follow that pattern.
+
+4. **Measure before you ship.** Any change to prompts, thinking budgets, truncation or slicing ships only with a before/after measurement on real data, and negative results get recorded so decisions do not get re-litigated (`CLAUDE.md`, "Measure-first discipline"). A cap that changes the model's *output structure* on identical input is a quality change, not a cost change.
+
+5. **Add a per-task output ceiling** in `config.py:132-138` if your task's correct answer is genuinely long. The flat 4096 ceiling once truncated playbook JSON mid-array, and the repair path then persisted a playbook with zero steps while reporting success.
+
+---
+
+### 6.7 Add a new context graph edge or node type
+
+**What:** the context graph is the `graph_edges` table in Postgres. **Why:** a new type lets the graph express a relationship it currently cannot.
+
+1. **Register the edge type** in `backend/src/contextedge/graph/edge_types.py:1-33`. There are 69 types in five semantic groups, and `require_registered` is enforced in `add_edge`, `ensure_edge`, `close_edge` and `replace_edge` — an unregistered type raises `UnknownEdgeType` at runtime.
+2. **Make the projection decision in the same change.** Either allowlist the type in `MAF_RELATIONSHIP_TYPES` or record why it is excluded in `PROJECTION_EXCLUSIONS`. `backend/tests/test_edge_type_registry.py` fails if you do neither. 18 registered types are deliberately not traversable by `maf.v1`; `mentions_identity` is excluded because it fans out 40–70 edges per handful of tickets.
+3. **Write edges through `ensure_edge`** (`graph/builder.py:50-135`), not raw INSERTs. It is race-safe via `ON CONFLICT DO NOTHING` against the partial unique index `uq_graph_edges_active_logical`.
+4. **Pass `weight` and `confidence` separately.** `weight` is traversal importance; `confidence` is belief. Conflating them was a real defect found in code written days earlier in this repo.
+5. **Follow the one domain-derivation rule.** Migration `0031` established a single owning row per edge type (`graph/agent/materializer.py:24-37`). Every writer must agree, or the unique index treats the same logical edge with different domains as two distinct edges.
+6. **If a node type is new,** add it to the `maf.v1` profile's node list (`graph/agent/profiles.py:59-87`) and give it a hydrator in `graph/agent/hydrators.py` so an agent sees facts, not a bare id.
+7. **For relational rows that should become edges,** extend `GraphRelationshipMaterializer.reconcile_tenant` (`graph/agent/materializer.py:54-359`). It is additive-only, idempotent, and runs every 6 hours.
+
+---
+
+### 6.8 Add a new MAF (Microsoft Agent Framework) tool
+
+**Where:** `backend/src/contextedge/integrations/maf/`
+
+1. **Define a client protocol and an implementation** in `client.py`. Every existing capability has an in-process form and, where it is HTTP-reachable, an HTTP form (`InProcessContextGraphClient` at `:105`, `HttpContextGraphClient` at `:128`).
+2. **Expose it as a tool class** in `tools.py` — see `ContextGraphTools` (`:25`), `CmdbTopologyTools` (`:184`), `ChangeRiskTools` (`:225`), `FixApplicabilityTools` (`:273`).
+3. **Add it to the plugin** so an agent gets it: `ContextGraphMAFPlugin` (`plugin.py:26`).
+4. **Consider proactive injection** instead of a tool. `ContextGraphProvider.before_run` (`provider.py:50`) pushes a scoped subgraph into the conversation without the agent having to ask, and `after_run` (`:114`) writes decisions back.
+5. **Respect the projection budget.** Defaults are 24 nodes / 48 relationships / depth 2 / 12,000 characters, hard-capped at 100 / 250 / 3 / 50,000 (`graph/agent/contracts.py:26-30`).
+
+> **Hard gate:** every MAF tool on this branch is read-or-propose. There is no write-capable agent tool and no executor (`codewiki/KNOWN_GAPS.md:34`), and **no side-effecting tool merges until the skills registry, approval binding and attempt ledger work are complete**. If your tool would mutate state, it belongs behind that gate.
+
+---
+
+### 6.9 Add a new chunker
+
+Chunking is what makes long evidence retrievable, so it is worth its own recipe.
+
+1. **Write the chunker** under `services/chunkers/`, implementing the protocol in `chunkers/base.py:65-102`. It must be **pure and deterministic — no I/O**; it receives `title`, `body` and the raw `payload` and returns `ChunkSpec` objects.
+2. **Set a `version`.** All current chunkers are version 1. Bumping a version writes a new generation alongside the old one rather than replacing it (`services/evidence_chunk_service.py:81-86`), which is what lets you compare two chunkings side by side.
+3. **Register it** in `services/chunkers/registry.py`. Registration is lazy and per-chunker fail-soft: a chunker module that fails to import logs `chunker.register_failed` and is skipped rather than taking down ingest.
+4. **Add a resolution rule** in `get_chunker` (`registry.py:116-143`). Order matters — **record shape beats source type**, which is why a Zoho `kb_article` resolves to the document chunker rather than the ticket chunker.
+5. **Decide the authority** in `_default_authority` (`evidence_chunk_service.py:135-169`). Evidence type is checked before source type, so a KB page carries `knowledge_article` authority and does not compete with an incident record on incident-specific fields.
+6. **Consider the inline budget.** Bodies under `INLINE_CHUNK_BUDGET_BYTES = 16 * 1024` from a source in `INLINE_CHUNK_SOURCE_ALLOWLIST` are chunked inside the normalize transaction (`workers/extraction_tasks.py:54, 60-62`). Add your source to that allowlist only after load-testing at typical body sizes.
 
 ---
 
 ## 7. Testing
 
-Quality is paramount. We test everything.
+### Backend (pytest)
+- **Where:** `backend/tests/` — about 170 test modules.
+- **Command:** `make test-backend` (`cd backend && python -m pytest -v`), or `python -m pytest -q` from `backend/` for the count.
+- **How it works:** `asyncio_mode = "auto"` and `testpaths = ["tests"]` (`backend/pyproject.toml:108-110`). `tests/conftest.py` puts `backend/src` on `sys.path` and provides a `make_user` helper for principals.
+- **Important correction to older docs:** the suite **does not** spin up a database. Every test uses fakes and mocks for PostgreSQL, Redis, MinIO and the LLM provider, which is why CI needs no service containers (`.github/workflows/ci.yml:3-5`). `testcontainers` appears in the dev extras (`pyproject.toml:69`) but nothing in `tests/` imports it.
+- **Consequence worth knowing:** because there is no live Postgres, SQLAlchemy will happily describe a column the database does not have. That gap produced three separate "ORM column no migration created" outages, and `backend/tests/test_orm_migration_column_parity.py` now reads the migration chain as text to catch the next one.
 
-### Backend tests (pytest)
-- **Where:** `backend/tests/`
-- **Command:** `make test-backend`
-- **Design Rationale:** We use `pytest` and `pytest-asyncio`. Our test suite automatically spins up a clean test database using Testcontainers. 
-- **What happens next:** The test runner executes all tests, verifying API status codes, database state mutations, and service logic.
-
-### Frontend tests (vitest)
-- **Where:** `frontend/src/` (usually placed right alongside the components they test, e.g., `Button.test.tsx`).
+### Frontend (vitest)
+- **Where:** alongside the components, e.g. `frontend/src/lib/roles.test.ts`.
 - **Command:** `npm test` or `make test-frontend`.
-- **Note:** We use `vitest` instead of Jest because it is significantly faster and natively compatible with modern ESM (ECMAScript Modules) builds that Next.js uses.
+- **Config:** `frontend/vitest.config.ts`. Vitest rather than Jest because it is faster and natively handles the ESM builds Next.js produces.
 
-### Running tests locally
-Always run `make test` (which runs both suites) before pushing a pull request to ensure you haven't broken existing functionality.
+### Everything
+`make test` runs both. Run it before opening a pull request.
+
+### The review discipline this repo expects
+`CLAUDE.md` at the repo root is binding for changes here. In short: every implementation gets **three review–fix–review passes before commit** — correctness (trace each changed path with a concrete input), blast radius (find every caller, including tests, workers and the `maf.v1` projection, and verify degrade-not-crash on malformed input), and tests-and-evidence (new behavior gets a test that fails without the change; run the full backend suite and record the count in the commit message). A pass that finds nothing must say what it looked for.
 
 ---
 
-## 8. Linting & Formatting
+## 8. Linting and formatting
 
-Clean, consistent code is mandatory. We enforce this via CI.
+### Ruff (backend)
+- **What:** a fast Python linter and formatter that replaces Flake8, Black and isort.
+- **Where:** configured in `backend/pyproject.toml:84-106`. Target `py312`, line length 100, rule sets `E, F, I, N, W, UP`.
+- **Commands:** `make lint` (check) and `make format` (rewrite).
+- **Deliberate exceptions carry their reasons in the config:** `N818` is globally ignored because four released exception classes would break catch sites if renamed; `E501` is ignored per-file for `ai/prompts/*` (prompt text is data, and eval baselines pin the exact strings), the two seed scripts, and `services/chunkers/attachment.py` (a markdown table in the module docstring).
+- **Ruff is a required CI gate** since the 2026-08 cleanup that took 367 findings to zero (`.github/workflows/ci.yml:64-80`).
 
-### Ruff configuration (Backend)
-- **What:** Ruff is a blazing fast python linter and formatter written in Rust. It replaces Flake8, Black, and isort.
-- **Where:** Configured in `backend/pyproject.toml`.
-- **Commands:** 
-  - `make lint` (Checks for errors without fixing).
-  - `make format` (Automatically reformats code to conform to our style guide).
-
-### ESLint configuration (Frontend)
-- **What:** The standard linter for TypeScript and React.
-- **Where:** Configured in `frontend/package.json` and `.eslintrc.json`.
+### ESLint (frontend)
+- **Where:** `frontend/eslint.config.mjs` (flat config — there is no `.eslintrc.json`).
 - **Command:** `npm run lint`.
 
 ---
 
-## 9. Docker Build
+## 9. Docker build
 
-### Building images for Production
-The `Dockerfile` in `backend/` and `frontend/` define how to build production-ready, minimal containers.
-- **Command:** `docker build -t contextedge-backend ./backend`
-- **Design rationale:** We use multi-stage builds. The final image only contains the compiled code and runtime dependencies, leaving out development tools to reduce image size and attack surface.
+### Production images
+`backend/Dockerfile` and `frontend/Dockerfile` use multi-stage builds so the final image carries only runtime dependencies — smaller image, smaller attack surface.
 
-### Docker Compose profiles
-- `docker-compose.yml`: Defines purely the infrastructure (Postgres, Redis, MinIO). Used when you want to run the app on your host machine.
-- `docker-compose.dev.yml`: Extends the base compose file to also build and run the backend, frontend, and celery workers in containers. Used for a fully isolated development environment.
+```bash
+docker build -t contextedge-backend ./backend
+```
+
+### Compose profiles
+- **`docker-compose.yml`** — infrastructure only (Postgres, Redis, MinIO). Use it when running the app on your host.
+- **`docker-compose.dev.yml`** — extends the base file and additionally builds the backend, frontend and Celery worker. The worker command already carries the eight-queue list (`docker-compose.dev.yml:47`), and the in-container DATABASE_URLs use the service name `postgres`, not `localhost`.
 
 ---
 
 ## 10. Deployment
 
-When taking ContextEdge to production, keep these things in mind:
-
 ### Environment configuration
-Always use environment variables for secrets. Never hardcode them in the codebase. Use a secret manager (like AWS Secrets Manager, HashiCorp Vault, or GitHub Secrets) in production.
+Secrets come from a secret manager, never from the repo. `.env` is gitignored and must stay that way — scan every staged diff before committing.
 
 ### Production settings
-- Use a cryptographically strong, randomly generated `JWT_SECRET_KEY` and `FERNET_KEY`.
-- Run the FastAPI backend behind a robust reverse proxy (like Nginx, Traefik, or AWS ALB) to handle TLS termination and load balancing.
-- Scale Celery workers based on queue length. You may need dedicated workers just for the `extraction` queue since it is heavily CPU and I/O bound.
+- Strong random `JWT_SECRET_KEY` and `FERNET_KEY`. Both are enforced at import time outside development (`config.py:248-264`). Set the Fernet key **once** and keep it: rotating it makes existing encrypted source credentials unrecoverable.
+- Run FastAPI behind a reverse proxy for TLS and load balancing.
+- **Scale workers by lane, not by count.** The eight queues exist because they have different profiles: `extraction` and `embedding` are the volume lanes, `correlation` is the graph lane, and `pattern`/`evaluation` must stay serialized because clustering and playbook generation have no advisory lock and two concurrent runs could mint duplicate patterns.
+- **Exactly one beat process**, always.
+- Provision `tenant_llm_budgets` rows. A tenant with no row falls back to the deployment defaults — 2,000,000 tokens/day, $25/day, action `block` (`config.py:191-198`) — which is a real ceiling that will freeze a cold-start ingest mid-run.
+- Point Prometheus at `/metrics` and load-balancer health checks at `/health` (liveness) and `/ready` (readiness — it 503s on a migration mismatch, which is what you want during a rolling deploy).
 
-### Security considerations
-- **PII Redaction:** Our redaction service MUST run before any data is sent to external LLM providers.
-- **Tokens:** JWT tokens must have strict expirations. Service-to-service communication should use strict `X-Service-Token` validation.
-- **CORS:** Cross-Origin Resource Sharing (CORS) in `APP_CORS_ORIGINS` must be tightly restricted to known frontend domains, preventing malicious sites from calling the API on a user's behalf.
-
----
-
-## 11. Configuration Reference
-
-This section explains EVERY environment variable required by the system (usually defined in your `.env` file).
-
-### Database Configuration
-- **`DATABASE_URL`**: 
-  - **What:** The asynchronous connection string for PostgreSQL.
-  - **Example:** `postgresql+asyncpg://user:pass@localhost:5432/contextedge`
-  - **Why:** Required by FastAPI and SQLAlchemy's async session engine.
-- **`DATABASE_URL_SYNC`**: 
-  - **What:** The synchronous connection string.
-  - **Example:** `postgresql://user:pass@localhost:5432/contextedge`
-  - **Why:** Used strictly by Alembic for running migrations and by Celery tasks that require synchronous database access.
-
-### Redis Configuration
-- **`REDIS_URL`**: 
-  - **What:** The connection string for the Redis cache.
-  - **Why:** Required for API rate-limiting and fast session caching.
-- **`CELERY_BROKER_URL`**: 
-  - **What:** The Redis URL used specifically for Celery messaging.
-  - **Why:** The broker handles task queues, passing messages between the API and the background workers.
-- **`CELERY_RESULT_BACKEND`**: 
-  - **What:** The Redis URL for Celery results.
-  - **Why:** Stores the state and return values of asynchronous workers so the API can check if a job is finished.
-
-### Object Storage (MinIO/S3)
-- **`MINIO_ENDPOINT`**: 
-  - **What:** The host and port for MinIO (or AWS S3 endpoint).
-  - **Why:** Dictates where object storage requests (like uploading attachments) are sent.
-- **`MINIO_ROOT_USER`**: Admin username for MinIO.
-- **`MINIO_ROOT_PASSWORD`**: Admin password for MinIO.
-- **`MINIO_BUCKET`**: 
-  - **What:** The default bucket name.
-  - **Why:** ContextEdge stores all evidence artifacts in this specific bucket.
-
-### Security & Authentication
-- **`JWT_SECRET_KEY`**: 
-  - **What:** The secret string used to sign authentication tokens. 
-  - **Why:** Keeps the platform secure. If compromised, attackers can forge logins. MUST be long and random.
-- **`JWT_ALGORITHM`**: Usually set to `HS256`.
-- **`FERNET_KEY`**: 
-  - **What:** The key used for symmetric encryption of sensitive fields in the database (like API keys provided by users).
-  - **Why:** Ensures that if the database is dumped, sensitive credentials remain encrypted at rest.
-
-### Application Settings
-- **`OPENAI_API_KEY`**: 
-  - **What:** The API key for OpenAI.
-  - **Why:** Required for all LLM extraction, classification, and agentic features.
-- **`APP_ENV`**: 
-  - **What:** `development` or `production`.
-  - **Why:** Dictates error verbosity and certain security bypasses (like allowing weak default passwords locally).
-- **`APP_DEBUG`**: `true` or `false`. Turns on detailed stack traces in the API response.
-- **`APP_LOG_LEVEL`**: Determines log verbosity (`INFO`, `DEBUG`, `WARNING`, `ERROR`). Set to `DEBUG` when troubleshooting locally.
-- **`FRONTEND_URL`**: 
-  - **What:** The URL of the frontend application.
-  - **Why:** Used by the backend to configure CORS (Cross-Origin Resource Sharing) headers, ensuring only the frontend can make browser-based requests to the API.
+### Security
+- **PII redaction runs before any text reaches an LLM or an embedding model** (`services/redaction_service.py`, gated by `redaction_enabled`, default True). Turning it off is a local-debugging move only.
+- JWTs expire in 60 minutes by default. Service-to-service calls use `X-Service-Token` validated against `SERVICE_TOKENS_JSON`; a service token without `allowed_domain_ids` is tenant-wide.
+- `APP_CORS_ORIGINS` must be restricted to known frontend domains.
+- Audit: `RequestAuditMiddleware` records every mutating `/api/v1` request, including denials, to `audit_logs` (`middleware/request_audit.py:25-124`). Unauthenticated 401 probes never resolve a tenant, so those exist only in structlog — alert on `http.mutating_request` with status 401.
 
 ---
 
-### Additional Important Information
+## 11. Configuration reference
 
-Here is a summary of the core workflow for an API request:
-1. HTTP Request comes into the FastAPI Router.
-2. Dependencies like `get_db` provide the database session.
-3. The Router validates input using Pydantic.
-4. The Router calls the Service function.
-5. Service executes business logic and interacts with SQLAlchemy Models.
-6. Data is returned through the Router and serialized back to JSON.
+Everything below is a field on `Settings` in `backend/src/contextedge/config.py`, sourced from the repo-root `.env` then `backend/.env`. `.env.example` is the annotated template and stays in sync with the code.
 
-### End of Guide
+### Database
+- **`DATABASE_URL`** — async connection string, e.g. `postgresql+asyncpg://postgres:postgres@localhost:5432/contextedge`. Used by FastAPI and by every Celery task's per-task engine.
+- **`DATABASE_URL_SYNC`** — synchronous string. Used by Alembic, by the worker's migration-head check, and by the audit middleware's off-thread insert.
+- **`POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB`** — consumed by docker-compose when it *creates* the container. Changing them after the volume exists does nothing until the volume is dropped.
 
-By following this guide, you should have a firm grasp of how ContextEdge is structured, how to run it locally, and how to safely extend its capabilities. If you encounter any issues not covered here, consult the `RUNBOOK.md` or reach out to a senior engineer. Happy coding!
+### Redis
+- **`REDIS_URL`** — DB 0, app cache (the `/runtime/match` explain payload lives here for one hour).
+- **`CELERY_BROKER_URL`** — DB 1, the task queues.
+- **`CELERY_RESULT_BACKEND`** — DB 2, task states and return values.
 
-(This document provides complete 360-degree knowledge transfer regarding local setup, docker processes, environment variables, task scheduling, frontend development with NextJS, API with FastAPI, and more for ContextEdge.)
+### Object storage
+- **`MINIO_ENDPOINT`**, **`MINIO_ROOT_USER`**, **`MINIO_ROOT_PASSWORD`**, **`MINIO_BUCKET`** (default `contextedge-evidence`), **`MINIO_USE_SSL`**.
+- Raw payloads over 32 KB go to `raw/{tenant_id}/{raw_id}.json`; attachment bytes go to `artifacts/{tenant_id}/{evidence_id}/{artifact_id}/{filename}`.
+
+### Auth and encryption
+- **`JWT_SECRET_KEY`** — REQUIRED outside development; the app refuses to boot on the default.
+- **`JWT_ALGORITHM`** (HS256), **`JWT_ACCESS_TOKEN_EXPIRE_MINUTES`** (60), **`JWT_REFRESH_TOKEN_EXPIRE_DAYS`** (7).
+- **`FERNET_KEY`** — REQUIRED outside development. Encrypts stored source credentials.
+- **`SERVICE_TOKENS_JSON`** — map of token string → `{tenant_id, user_id, email, roles[, allowed_domain_ids]}`.
+
+### LLM routing
+The provider is chosen by the LiteLLM prefix on each model id, not by a separate switch. `DEFAULT_LLM_PROVIDER` only matters when it is `vertex_ai` and bare `gemini-*` ids need routing.
+- **`DEFAULT_CLASSIFICATION_MODEL`** — the relevance gate, message function, identity work.
+- **`DEFAULT_EXTRACTION_MODEL`** — normalization and extraction.
+- **`PATTERN_MODEL`** — pattern synthesis. Deliberately unmeasured; it stays on its current model until it gets its own A/B.
+- **`PLAYBOOK_MODEL`** — playbook generation. The 2026-08-17 A/B moved this lane: grounded share 0.70 → 0.81, latency halved.
+- **`DEFAULT_EMBEDDING_MODEL`** — **must return exactly 3,072 dimensions.** `text-embedding-3-small` returns 1,536 and will raise (`ai/provider.py:787-793`); `.env.example:87-89` pins `text-embedding-3-large` and names `vertex_ai/gemini-embedding-001` as the alternative.
+- **`*_LOCATION`** — per-task Vertex region, all `global` by default.
+- Credentials: `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `AZURE_OPENAI_*`, `GOOGLE_API_KEY`, `GOOGLE_CLOUD_PROJECT`, `GOOGLE_APPLICATION_CREDENTIALS`.
+- **`LLM_FALLBACK_MODEL`** — retry one failed call on this model. Usage is recorded against whichever model actually served, so `generation_provenance.model_requested` can differ from what answered; `correlation_id` joins to the truth in `llm.usage`.
+
+### Cost containment
+Each of these is a **ceiling, not a target** — ordinary work stays well under all of them.
+- **`LLM_NUM_RETRIES`** (2) — each retry is a fully billed call.
+- **`LLM_MAX_OUTPUT_TOKENS`** (4096) — the global output ceiling.
+- **`LLM_TASK_OUTPUT_TOKENS`** (`{"playbook": 16384, "extraction": 16384, "pattern": 16384}`) — per-task overrides. Add any new long-output lane here; the flat ceiling once truncated playbook JSON mid-array and the repair path persisted a zero-step playbook while reporting success.
+- **`LLM_THINKING_BUDGETS`** (`{"relevance": 0}`) — exactly one entry. Disabling thinking on relevance cut output tokens ~70 % with an unchanged verdict; everything else keeps dynamic thinking because a controlled test showed identity-adjudication confidence dropping 0.95 → 0.80 under caps, which would have silently diverted auto-links into the review queue. **Do not add entries here without the A/B discipline.**
+- **`EMBEDDING_MAX_BATCH_SIZE`** (64) — texts per embedding request.
+- **`DEFAULT_DAILY_TOKEN_LIMIT`** (2,000,000), **`DEFAULT_DAILY_COST_CAP_USD`** (25.0), **`DEFAULT_BUDGET_ACTION_ON_EXCEED`** (`block`) — applied to any tenant with no `tenant_llm_budgets` row. Blank both to restore unlimited. Roll out as `warn`, then flip to `block`.
+
+### Pipeline gates
+- **`EPISODE_RESOLUTION_GATE`** — `off` (default) or `cluster`. `cluster` defers reconstruction for clusters carrying no resolution signal anywhere. It is a **cluster-level** check, never an evidence filter: in scattered-source deployments the problem and the fix arrive from different systems.
+- **`EPISODE_AI_REVIEW`** — `off` (default) / `advisory` / `auto_approve`. `advisory` stamps a verdict on `episodes.ai_review` for the human queue. `auto_approve` additionally approves the subset clearing both the model verdict **and** the deterministic floors, keeping `reviewer_user_id` NULL so machine approvals stay permanently distinguishable from human ones.
+- **`DOCUMENT_VISION_ENABLED`** — vision-model description of document figures during artifact extraction.
+
+### Ingest safety and retention
+- **`REDACTION_ENABLED`** (True) — regex redaction before embedding and LLM extraction.
+- **`RETENTION_PURGE_MODE`** (`soft_purge`) — `soft_purge` scrubs content in place; `hard_delete` removes rows and cascades.
+- **`RETENTION_DEFAULT_DAYS`** (365) — base window when a tenant has no retention policy.
+
+### Application
+- **`APP_ENV`** — anything other than `development` enforces the JWT and Fernet guards at startup.
+- **`APP_DEBUG`**, **`APP_LOG_LEVEL`** (`INFO`; set `DEBUG` when troubleshooting), **`APP_CORS_ORIGINS`**, **`BACKEND_PORT`** (8000), **`FRONTEND_URL`**.
+
+### Notifications (no-ops until configured)
+- **`SMTP_HOST` / `SMTP_PORT` / `SMTP_USERNAME` / `SMTP_PASSWORD` / `SMTP_FROM` / `SMTP_STARTTLS`**, **`NOTIFICATION_WEBHOOK_URL`** (Teams/Slack-compatible). Unconfigured channels log an explicit `*_skipped_unconfigured` line rather than failing.
+
+### Connectors
+`SERVICENOW_*`, `JIRA_*`, `TEAMS_*`, and `ZOHO_DESK_*`. Note on Zoho: scopes are fixed when the refresh token is issued, so adding one later means re-issuing the token; and `ZOHO_DESK_DATA_CENTER` must match the portal's region because the accounts host and API host are a pair.
+
+### Prompt A/B
+- **`TENANT_PROMPT_VARIANTS_JSON`** — `{"<tenant-uuid>": {"relevance": "v2", "episode": "v3"}}`. Resolution is tenant override → registered default. An unknown prompt *name* raises `KeyError` on purpose; an unregistered *override* falls back with a `prompt_variant_not_registered_falling_back` log, and malformed JSON logs `prompt_variants_config_invalid` and yields an empty map so ingest never crashes on config.
+
+---
+
+## 12. Where to go next
+
+| I want to… | Read |
+| --- | --- |
+| Understand the backend folder by folder | [04_Backend_KT.md](04_Backend_KT.md) |
+| Fix something that is broken | [14_Debugging_Guide.md](14_Debugging_Guide.md) |
+| Operate a running deployment | [RUNBOOK.md](RUNBOOK.md) |
+| Understand the API surface | [API.md](API.md), [10_API_Documentation.md](10_API_Documentation.md) |
+| Understand a design decision | `codewiki/` |
+| Know what is **not** finished | `codewiki/KNOWN_GAPS.md` — check it before claiming any feature works end to end |
+
+**The short version of everything above:** routers are thin, services do the work, workers own anything slow, commit before you dispatch, prompts are immutable, every LLM call is budgeted and attributed, and evidence must never be lost because an enrichment step failed.

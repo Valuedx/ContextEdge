@@ -1,560 +1,713 @@
 # Context Graph Walkthrough
 
-A visual, stage-by-stage tour of what's in the ContextEdge graph at each pipeline step, using concrete examples. Read this end-to-end if you want to see how an empty database becomes operational memory.
+A stage-by-stage tour of what is actually **in** the ContextEdge graph at each pipeline step, with concrete rows. Read it end to end if you want to watch an empty database become operational memory.
 
 > **Documentation map**
+> - [03_End_to_End_Project_Flow.md](03_End_to_End_Project_Flow.md) — the prose pipeline walkthrough
+> - [15_Project_Flow_Diagrams.md](15_Project_Flow_Diagrams.md) — the same flows as diagrams
 > - [TECHNICAL_BLUEPRINT.md](TECHNICAL_BLUEPRINT.md) — architecture and data model reference
-> - [MIGRATIONS.md](MIGRATIONS.md) — schema revision history including `0029_ae_ops_concept_alignment`
+> - [MIGRATIONS.md](MIGRATIONS.md) — schema revision history
 > - [API.md](API.md) — HTTP route surface
 > - [codewiki/01-end-to-end-pipeline.md](../codewiki/01-end-to-end-pipeline.md) — narrative pipeline overview
-> - [codewiki/17-ae-ops-context-graph-alignment.md](../codewiki/17-ae-ops-context-graph-alignment.md) — engineering narrative for `0029`
+> - [codewiki/KNOWN_GAPS.md](../codewiki/KNOWN_GAPS.md) — what is not finished
+
+**Verified against the working tree on 2026-08-19.** Every load-bearing claim carries a `path:line` citation that was read, not remembered. If a file has moved, search for the named symbol rather than trusting the number.
+
+---
+
+## How to read this document
+
+Three kinds of statement appear below, and they are labeled, because mixing them is how a design doc becomes a lie:
+
+| Label | Meaning |
+|---|---|
+| **Live** | Code writes these rows today. A citation names the writer. |
+| **Live, human-gated** | Code produces the row only after a person clicks approve, or after the opt-in AI review passes its floors. |
+| **Schema only** | The table and the readers exist; **nothing writes it yet**. Named explicitly, with the gap reference. |
+
+Sample rows are illustrative shapes, not dumps from a live database.
+
+**The canonical example.** Every doc in this repo follows one thread: the **Acme VPN incident**. Acme Corp's gateway `vpn-gw-east-01` starts dropping tunnels. Someone files ServiceNow incident `INC0010427`. Three engineers work it in a Teams thread, one emails a root-cause note quoting the incident number, and there is an older "How the corporate VPN works" KB article in ServiceNow. Five records, four systems, one incident. That thread runs through Examples 1-3 below. Example 4 is an explicitly-labeled additional scenario for the AutomationEdge case spine, which the VPN incident does not exercise.
 
 ---
 
 ## Contents
 
-- [Example 1 — AE Ops case lifecycle (MG22 DB Dump)](#example-1--ae-ops-case-lifecycle-mg22-db-dump): the design's flagship use case, end-to-end through the new `0029` tables.
-- [Example 2 — Episode reconstruction (Acme VPN outage)](#example-2--episode-reconstruction-acme-vpn-outage): how scattered Jira + Teams + ServiceNow evidence becomes a single `Episode` with ordered `EpisodeStep` rows.
-- [Example 3 — Pattern emergence (recurring SMTP timeout)](#example-3--pattern-emergence-recurring-smtp-timeout): how five closed cases get aggregated into one `Pattern` and an `ErrorSignature` with success counters.
-- [Example 4 — Playbook lifecycle and runtime selection](#example-4--playbook-lifecycle-and-runtime-selection): `candidate → under_review → approved`, version publishing, runtime ranking.
-- [Retention defaults](#retention-defaults): what the windows are, where they're set, what `0029` did and didn't change.
+- [Example 1 — Acme VPN: from empty database to a narrated episode](#example-1--acme-vpn-from-empty-database-to-a-narrated-episode)
+- [Example 2 — Acme VPN: recurrence, six months later](#example-2--acme-vpn-recurrence-six-months-later)
+- [Example 3 — Acme VPN: pattern, playbook, runtime selection](#example-3--acme-vpn-pattern-playbook-runtime-selection)
+- [Additional scenario — AE Ops case lifecycle (MG22 DB Dump)](#additional-scenario--ae-ops-case-lifecycle-mg22-db-dump)
+- [Retention defaults](#retention-defaults)
+- [Where to go next](#where-to-go-next)
 
-Diagrams use Mermaid; if your renderer doesn't support it, the prose under each diagram describes the same shape.
+Diagrams use Mermaid; if your renderer does not support it, the prose under each diagram describes the same shape.
 
 ---
 
-## Example 1 — AE Ops case lifecycle (MG22 DB Dump)
-
-**Scenario.** Business user `abc@xyz` reports: *"I did not receive my MG22 output today."* This is the design doc's flagship `output_not_received` use case. Every node and edge that appears below is queryable via the schema landed in migration `0029`.
+## Example 1 — Acme VPN: from empty database to a narrated episode
 
 ### Stage 0 — empty graph
 
-Right after `make migrate`, before any seed or ingest. Schema exists, no rows.
+Right after `alembic upgrade head`, before any sync. Schema exists, no rows.
 
 ```mermaid
 graph LR
-  empty[(no entities · no cases · no evidence · no claims · no decisions)]
+  empty[(no sources · no raw objects · no evidence<br/>no identities · no correlations · no episodes)]
 ```
 
-### Stage 1 — AE catalogue ingest
+A worker started against this database is fine. A worker started against a database that is **behind** the code's Alembic head refuses to boot — `raise SystemExit` on any definite mismatch, including "no `alembic_version` table at all" (`backend/src/contextedge/workers/celery_app.py:83-139`). Otherwise workers would consume the normalize queue against a stale schema and corrupt ingestion mid-transaction.
 
-Connector (or `make seed`) populates `entities` rows for the AutomationEdge catalogue. Edges in `graph_edges` carry temporal validity (`valid_from`/`valid_to` from `0029`) so "this user owned this workflow on the incident date" is a valid query.
+### Stage 1 — a source is configured and discovered
+
+An operator adds a ServiceNow source. Discovery decrypts the credentials (Fernet — a missing or placeholder key raises rather than minting a transient one, `backend/src/contextedge/services/source_service.py:17-48`), instantiates the connector, and upserts one `source_objects` row per readable table.
 
 ```mermaid
 graph LR
-  WF[entities · workflow<br/>name=MG22 DB Dump<br/>external_system=ae<br/>external_id=WF_MG22<br/>environment=prod]
-  AG[entities · agent_machine<br/>AE-AGENT-03]
-  SCH[entities · schedule<br/>Daily 10#58;00 IST]
-  OUT[entities · output_location<br/>email#58;finance-ops@bank]
-  USR[entities · user<br/>abc@xyz]
+  SRC[sources<br/>source_type=servicenow<br/>config: facet_fields, synthesis_role<br/>auth_status=connected<br/>discovery_status=completed]
+  SO1[source_objects · incident<br/>approved_for_backfill=true<br/>approved_for_sync=true]
+  SO2[source_objects · kb_knowledge<br/>approved_for_sync=true]
+  SO3[source_objects · change_request]
+  CRED[source_credentials<br/>encrypted_credentials · Fernet bytes]
 
-  USR -. mapped_to .-> WF
-  WF -. runs_on .-> AG
-  WF -. produces_output_at .-> OUT
-  SCH -. triggers .-> WF
-
-  classDef new fill:#e8f4ff,stroke:#2563eb,color:#0f172a;
-  class WF,AG,SCH,OUT,USR new;
+  SRC --- SO1
+  SRC --- SO2
+  SRC --- SO3
+  SRC --- CRED
 ```
 
-### Stage 2 — user complaint → case opened
+**Live** — `discover_source_objects` (`backend/src/contextedge/services/source_service.py:87-150`). Nothing is fetched until an object is approved: backfill requires `approved_for_backfill`, and the 15-minute Beat fan-out only picks up objects with `approved_for_sync=True` (`backend/src/contextedge/workers/sync_tasks.py:13-32`).
 
-Triage agent creates a `resolution_sessions` row. The case spine columns from `0029` (case_number / case_type / issue_type / priority / severity / environment + four entity FKs) are populated structurally instead of stuffed into the existing `entities[]` JSONB.
+Seven connector types are registered — `teams`, `gmail`, `servicenow`, `jira_sm`, `manageengine`, `sapphireims`, `zoho_desk` (`backend/src/contextedge/connectors/registry.py:91-122`). `confluence`, `sharepoint` and `exchange` appear in the picker with status `planned` and no implementation.
+
+### Stage 2 — raw objects land
+
+The backfill runs under a Postgres advisory lock, so a second worker for the same object returns `skipped_locked` rather than racing the checkpoint (`backend/src/contextedge/services/sync_worker_service.py:379-395`).
 
 ```mermaid
 graph LR
-  CASE[resolution_sessions<br/>case_number=CG-2026-000123<br/>case_type=ae_ops_support<br/>issue_type=output_not_received<br/>priority=P3 · environment=prod<br/>status=triaging]
-  WF[entities · workflow<br/>MG22]
-  USR[entities · user<br/>abc@xyz]
-  AG[entities · agent_machine<br/>AE-AGENT-03]
+  RAW1[raw_evidence_objects #1<br/>external_id=INC0010427-sys_id<br/>raw_payload = full ServiceNow record<br/>content_hash=sha256 of external_id + payload]
+  RAW2[raw_evidence_objects #2<br/>external_id=KB0012 · kb_knowledge<br/>raw_payload = _offloaded stub<br/>object_storage_key=raw/tenant/uuid.json]
+  CKPT[sync_checkpoints<br/>checkpoint_data: sys_updated_on + sys_id<br/>append-only, latest captured_at wins]
+  RUN[sync_runs<br/>run_type=backfill · status=completed<br/>items_processed=142<br/>errors.ingestion counts]
 
-  CASE -- workflow_entity_id --> WF
-  CASE -- user_entity_id --> USR
-  CASE -- agent_entity_id --> AG
-
-  TR[case_state_transitions<br/>null → triaging]
-  CASE -. has .-> TR
-
-  classDef new fill:#fef3c7,stroke:#d97706,color:#0f172a;
-  class CASE,TR new;
+  RUN --- RAW1
+  RUN --- RAW2
+  RUN --- CKPT
 ```
 
-### Stage 3 — evidence collected
+Two things happen here that shape everything downstream.
 
-Diagnostic agent fetches AE request status + a 60-second log window. Two `evidence_items` rows land — both with the new lineage columns from `0029` (`source_type`, `evidence_time`, `collected_by`, `redaction_status`).
+**The 32 KB rule.** If the serialized payload exceeds `OFFLOAD_THRESHOLD_BYTES = 32_768`, the JSON goes to MinIO at `raw/{tenant_id}/{raw_id}.json` and the database row keeps only `{"_offloaded": true, "size_bytes": N}` plus `object_storage_key` (`backend/src/contextedge/services/ingestion_persistence.py:16, 84-87`; `backend/src/contextedge/services/object_store.py:50-59`). The KB article above is exactly that case — a long article is the common offload.
 
-```mermaid
-graph LR
-  EV1[evidence_items #1<br/>source_type=AE_API<br/>evidence_time=10#58;42#58;00<br/>collected_by=diagnostic_agent<br/>excerpt='status=COMPLETED, output_path set']
-  EV2[evidence_items #2<br/>source_type=AE_AGENT_LOG<br/>evidence_time=10#58;42#58;13<br/>collected_by=log_parser<br/>redaction_status=applied<br/>excerpt='SMTP timeout while sending output email']
+> **Consequence you must carry into every query you write.** An offloaded row's `raw_payload` column holds a stub, not data. **Any SQL filter or backfill over `raw_evidence_objects.raw_payload` silently skips the biggest rows** — the longest conversations and the longest articles. Two live examples in the codebase: ingest-priority ordering reads `thread_count`/`resolution` out of `raw_payload` and therefore sorts every offloaded ticket to the back (`backend/src/contextedge/services/ingest_priority.py:76-95`), and reply-inheritance reconciliation explicitly skips offloaded rows (`backend/src/contextedge/workers/extraction_tasks.py:949-967`). The knowledge-state backfill was left undone for the same reason (`codewiki/KNOWN_GAPS.md:36`).
 
-  CASE[resolution_sessions · CG-2026-000123]
-  REQ[entities · workflow_request<br/>REQ-98231]
+**The handoff ledger.** Normalize tasks are dispatched **after** the commit, so the dispatch itself can fail while the data is already durable. Ids that were not enqueued are parked on `source_objects.metadata_extra["pending_normalize_raw_ids"]`, the run flips to `failed` with an `errors["handoff"]` blob, and the next successful run re-drains the ledger (`sync_worker_service.py:301-376`).
 
-  CASE -- request_entity_id --> REQ
-  EV1 -. cites .-> REQ
-  EV2 -. cites .-> REQ
+### Stage 3 — evidence items
 
-  classDef new fill:#dcfce7,stroke:#16a34a,color:#0f172a;
-  class EV1,EV2,REQ new;
-```
-
-`evidence_time` (the *subject* time, 10:42) is distinct from `ingested_at` (when the graph stored it, ~30s later) and from the existing `created_at_source`.
-
-### Stage 4 — claims formed
-
-Diagnostic agent posts `context.create_claim` against each piece of evidence. The relational claim → evidence trail is the spine that didn't exist before `0029`.
-
-```mermaid
-graph LR
-  C1[claims #1<br/>claim_type=symptom<br/>'Email delivery failed via SMTP'<br/>confidence=0.82<br/>validation_status=unverified]
-  C2[claims #2<br/>claim_type=probable_root_cause<br/>'Output generated; only delivery failed'<br/>confidence=0.75<br/>validation_status=unverified]
-
-  EV1[evidence #1 · AE_API]
-  EV2[evidence #2 · AE_AGENT_LOG]
-
-  C1 -- claim_evidence supports --> EV2
-  C2 -- claim_evidence supports --> EV1
-  C2 -- claim_evidence supports --> EV2
-
-  CASE[case CG-2026-000123]
-  CASE -. has_claim .-> C1
-  CASE -. has_claim .-> C2
-
-  classDef new fill:#fae8ff,stroke:#a21caf,color:#0f172a;
-  class C1,C2 new;
-```
-
-`validation_status='unverified'` blocks high-risk remediation per the design's Section 27.3 rule.
-
-### Stage 5 — decision created with options
-
-Remediation planner queries `error_signatures` (matches `SMTP_TIMEOUT_AFTER_OUTPUT_GENERATED`) and `fix_patterns` (returns "resend existing output"). Creates a `decisions` row with two options, then checks `action_policies`.
-
-```mermaid
-graph LR
-  D[decisions<br/>decision_intent=recommendation<br/>decision_summary='Resend existing output, do not rerun'<br/>risk_level=medium<br/>policy_result=approval_required]
-  O1[decision_options #1<br/>action=rerun_workflow<br/>risk_level=high<br/>selected=false<br/>rejection_code=duplicate_output_risk]
-  O2[decision_options #2<br/>action=resend_existing_output<br/>risk_level=medium<br/>selected=true]
-
-  ES[error_signatures<br/>SMTP_TIMEOUT_AFTER_OUTPUT_GENERATED<br/>success_count=2 · failure_count=0<br/>confidence=0.85]
-  FP[fix_patterns<br/>issue_type=output_not_received<br/>recommended_fix='Resend without rerun'<br/>success_count=2]
-  AP[action_policies<br/>action_name=rerun_workflow<br/>environment=prod<br/>policy_result=approval_required<br/>required_approver_roles=[Finance Process Owner]]
-
-  C2[claim · probable_root_cause]
-
-  D -- decision_evidence --> C2
-  D -- considered --> O1
-  D -- chose --> O2
-  D -- applied_policy --> AP
-  D -- based_on --> ES
-  D -- based_on --> FP
-
-  classDef new fill:#fef3c7,stroke:#d97706,color:#0f172a;
-  classDef ext fill:#fae8ff,stroke:#a21caf,color:#0f172a;
-  class D,O1,O2,ES,FP,AP new;
-  class C2 ext;
-```
-
-`Decision.policy_result = approval_required` is the **verdict** the executor checks (new column in `0029`). The `decision_evidence` link table replaces the loose JSONB cache for query-by-evidence.
-
-### Stage 6 — approval gated
-
-HITL agent emits a Teams adaptive card. Approver clicks Approve. `approval_requests` carries the new role / channel / SoD columns from `0029`.
-
-```mermaid
-graph LR
-  AR[approval_requests<br/>action_name=resend_existing_output<br/>approver_role=Finance Process Owner<br/>approval_channel=teams<br/>recommended_by=planner_agent<br/>executed_by=null<br/>sod_check_status=ok<br/>status=approved]
-
-  D[decisions]
-  CASE[case CG-2026-000123]
-
-  AR -- decision_trace_id --> D
-  AR -- case_id --> CASE
-  D -- required_approval --> AR
-
-  classDef new fill:#fde68a,stroke:#b45309,color:#0f172a;
-  class AR new;
-```
-
-`recommended_by ≠ approved_by ≠ executed_by` is the SoD check — three different actors, three columns now distinct.
-
-### Stage 7 — action executed (idempotent)
-
-Executor agent runs the resend. `execution_step_runs` carries the new `idempotency_key` so a retried orchestrator call can't double-send.
-
-```mermaid
-graph LR
-  ESR[execution_step_runs<br/>action_name=resend_existing_output<br/>action_type=remediation<br/>execution_mode=human_approved_auto<br/>executed_by=executor_agent<br/>idempotency_key=resend#58;WF_MG22#58;REQ-98231#58;sha256-abc<br/>status=completed]
-  TI[tool_invocations<br/>tool_name=ae.resend_output<br/>status=success<br/>duration_ms=412]
-
-  CASE[case CG-2026-000123]
-  D[decisions]
-  AR[approval_requests · approved]
-
-  ESR -- case_id --> CASE
-  ESR -- decision_trace_id --> D
-  ESR -- approval_satisfied_by --> AR
-  ESR -- has --> TI
-
-  classDef new fill:#bfdbfe,stroke:#1d4ed8,color:#0f172a;
-  class ESR new;
-```
-
-The partial unique index `WHERE idempotency_key IS NOT NULL` blocks the duplicate at insert time. NULL keys (read-only steps) stay unconstrained.
-
-### Stage 8 — outcome recorded → counters updated
-
-User confirms receipt. `case_outcomes` is written; `fix_patterns` and `error_signatures` counters tick up.
-
-```mermaid
-graph LR
-  CO[case_outcomes<br/>outcome_status=resolved<br/>confirmed_root_cause='SMTP relay timeout'<br/>successful_action=resend_existing_output<br/>failed_actions=[]<br/>user_confirmed=true<br/>mttr_minutes=42<br/>should_create_or_update_pattern=true]
-
-  CASE[case CG-2026-000123<br/>status=closed]
-  TR2[case_state_transitions<br/>monitoring → closed]
-
-  ES[error_signatures<br/>success_count=3 ↑<br/>confidence=0.88 ↑]
-  FP[fix_patterns<br/>success_count=3 ↑<br/>last_used_at=2026-04-27]
-
-  CO -- case_id --> CASE
-  CASE -. has .-> TR2
-  CO -. increments .-> ES
-  CO -. increments .-> FP
-
-  classDef new fill:#bbf7d0,stroke:#15803d,color:#0f172a;
-  class CO,TR2,ES,FP new;
-```
-
-`mttr_minutes = closed_at − opened_at`. `successful_action` feeds the `FixPattern` counter so the next `output_not_received` case ranks this fix higher.
-
-### Final shape — what's in the graph after one case closes
+One `normalize_evidence` task per raw id turns each payload into a normalized `evidence_items` row. The full ordered pipeline is in [03_End_to_End_Project_Flow.md §3](03_End_to_End_Project_Flow.md); here is what lands in the graph.
 
 ```mermaid
 graph TD
-  subgraph entities[entities · operational nouns]
-    USR[user · abc@xyz]
-    WF[workflow · MG22]
-    AG[agent_machine · AE-AGENT-03]
-    SCH[schedule · Daily 10AM]
-    OUT[output_location · email]
-    REQ[workflow_request · REQ-98231]
-  end
+  EV1[evidence_items #1 · the ticket<br/>evidence_type=incident · source_type=servicenow<br/>title='VPN tunnel flapping on vpn-gw-east-01'<br/>relevance_state=operational · relevance_score=0.93<br/>case_state=null · source_facets: component, environment<br/>embedding Vector 3072 · chunked_at set · chunk_count=3]
+  EV2[evidence_items #2 · a Teams message<br/>evidence_type=thread_message<br/>message_function=diagnostic_finding<br/>'Cert on the gateway expired 06:12 UTC']
+  EV3[evidence_items #3 · the email<br/>evidence_type=email · source_type=gmail<br/>body quotes 'INC0010427']
+  EV4[evidence_items #4 · the KB article<br/>evidence_type=kb_article<br/>knowledge_state=published<br/>chunks carry source_authority=knowledge_article]
+  DROP[[8 more Teams messages<br/>rejected by the noise gate:<br/>NO evidence row, raw object kept]]
 
-  subgraph case[case spine]
-    CASE[resolution_sessions · CG-2026-000123 · closed]
-    CO[case_outcomes · resolved · MTTR=42m]
-  end
-
-  subgraph reasoning[reasoning trail]
-    EV1[evidence · AE_API]
-    EV2[evidence · AE_AGENT_LOG]
-    C1[claim · symptom · unverified]
-    C2[claim · probable_root_cause · unverified]
-    D[decision · approval_required · medium risk]
-    O2[option · resend · selected]
-  end
-
-  subgraph governance[governance]
-    AP[action_policy · rerun_workflow · approval_required]
-    AR[approval · approved · teams]
-    ESR[step_run · idempotency_key set · completed]
-  end
-
-  subgraph learning[learning]
-    ES[error_signature · SMTP_TIMEOUT · 3 successes]
-    FP[fix_pattern · resend · 3 successes]
-  end
-
-  USR --- CASE
-  WF --- CASE
-  REQ --- CASE
-  AG --- CASE
-  CASE --- EV1
-  CASE --- EV2
-  EV1 --- C2
-  EV2 --- C1
-  EV2 --- C2
-  C2 --- D
-  D --- O2
-  D --- AP
-  D --- AR
-  AR --- ESR
-  ESR --- CO
-  CO --- CASE
-  CO --- ES
-  CO --- FP
-  ES --- D
-  FP --- D
+  classDef ev fill:#dcfce7,stroke:#16a34a,color:#0f172a;
+  class EV1,EV2,EV3,EV4 ev;
 ```
 
-Every node in `case` / `reasoning` / `governance` / `learning` is a column or table that did not exist before `0029`. The `entities` block is also new.
+**Live.** Four derivations run at insert, all pure functions of the payload, no model calls:
 
----
+| Column | Derived by | Rule for this example |
+|---|---|---|
+| `evidence_type` | `derive_evidence_type` (`backend/src/contextedge/services/evidence_typing.py:34-146`) | `("servicenow","incident") → incident`; `("servicenow","kb_knowledge") → kb_article`; every `hydrated_message` → `thread_message` |
+| `knowledge_state` | `derive_knowledge_state` (`backend/src/contextedge/services/knowledge_lifecycle.py:48-130`) | the KB article's `workflow_state` → `published`. NULL means "the source did not say" and always serves |
+| `case_state` | `derive_case_state` (`backend/src/contextedge/services/case_state.py:42-126`) | still NULL — the incident is open. It becomes `resolved` on the **re-ingest refresh path**, because closing a ticket does not rewrite its description |
+| `source_facets` | `derive_facets` (`backend/src/contextedge/services/source_facets.py:38-85`) | config-mapped `{root_cause, component, environment, version, …}` from the source's `facet_fields` |
 
-## Example 2 — Episode reconstruction (Acme VPN outage)
+**The noise gate is why eight messages have no row.** For hydrated thread messages only, `message_noise_reason` returns `delivery_failure`, `quote_only`, `empty` or `coordination_only` before any model call (`backend/src/contextedge/services/message_filter.py:81, 174-206`). "Any update on the VPN?" dies as `coordination_only`: under `MIN_DIAGNOSTIC_CHARS = 150` with no technical signal across 15 regexes. "Restarted IPSec on vpn-gw-east-01, tunnel stable" survives at 28 characters, because a hostname is a technical signal. Measured on the live corpus: **47% of 18,907 messages rejected** (`message_filter.py:104-108`). The raw object is kept and `MESSAGE_FILTER_VERSION` travels with every rejection, so a rule change can re-judge every rejected message exactly.
 
-**Scenario.** Acme Corp engineer files Jira `INC-4471` after the East-coast VPN gateway starts dropping connections. Over the next 90 minutes, two more Jira tickets, a Teams thread between three engineers, and a ServiceNow change record all reference the same incident. The Episode reconstructor pulls these five evidence items into a single ordered story with a root cause and a confirmed fix.
+**Scope is copied from the source at ingest**: `workspace_id` always, `domain_id` **only when the source has exactly one configured domain** — a multi-domain source leaves it NULL, which by graph convention means tenant-wide (`extraction_tasks.py:339-352`).
 
-`Episode` and `EpisodeStep` are existing tables (live since `0001_initial`). They model **operational stories**, not specific support cases — distinct from the `resolution_sessions`/`case_outcomes` spine added by `0029`. An Episode aggregates evidence across systems; a case is a specific incident a user opened.
+### Stage 4 — chunks
 
-### Inputs — five evidence items in five hours
+Long bodies become retrievable pieces. This is what closed the historical "8 KB cliff", where `embed_evidence(title, body[:8000])` made everything past ~8,000 characters invisible to semantic search.
 
 ```mermaid
 graph TD
-  EV1[evidence · 14#58;02 Jira<br/>INC-4471 'VPN drops every 30s']
-  EV2[evidence · 14#58;18 Teams<br/>'@oncall — gateway memory at 96%']
-  EV3[evidence · 14#58;25 Jira<br/>INC-4474 duplicate filed]
-  EV4[evidence · 14#58;47 ServiceNow<br/>CHG-9981 'Restart vpn-gw-east-01']
-  EV5[evidence · 15#58;12 Teams<br/>'connections stable after restart']
+  EV1[evidence_items · the ticket] --> C1[evidence_chunks · index 0<br/>chunk_kind=body · chunker_version=1<br/>metadata.source_authority=ticket<br/>embedding Vector 3072]
+  EV1 --> C2[evidence_chunks · index 1<br/>chunk_kind=comment · author from the ticket metadata]
+  EV4[evidence_items · the KB article] --> C3[evidence_chunks · index 0<br/>chunk_kind=heading_section<br/>parent_section='Certificate renewal'<br/>metadata.source_authority=knowledge_article]
+  EV4 --> C4[evidence_chunks · index 1<br/>chunk_kind=procedure_step]
 
-  IDA[canonical_identity · jsmith<br/>aliases: J. Smith IT, john.smith]
-
-  EV1 -. mentions .-> IDA
-  EV2 -. mentions .-> IDA
-  EV5 -. mentions .-> IDA
+  classDef ck fill:#e0e7ff,stroke:#4338ca,color:#0f172a;
+  class C1,C2,C3,C4 ck;
 ```
 
-### Reconstruction — Episode + ordered steps
+**Live** — `write_chunks` (`backend/src/contextedge/services/evidence_chunk_service.py:43-132`). Which chunker runs is decided by `get_chunker(source_type, evidence_type)` (`backend/src/contextedge/services/chunkers/registry.py:116-143`), and **record shape beats source type**: a `kb_article` goes to the heading-aware document chunker even when the source is a ticket system.
 
-The `episode_extractor` worker reads correlated evidence (joined via `correlation_edges` and `evidence_identity_links`) and emits a draft `Episode` with ordered `EpisodeStep` rows. Each step is one of `observation` / `hypothesis` / `action` / `verification`.
+`source_authority` is likewise decided evidence-type first: knowledge types get `knowledge_article` regardless of source (`evidence_chunk_service.py:135-169`). That is precisely why Acme's "How the corporate VPN works" page carries knowledge authority instead of competing with `INC0010427` as if it were a ticket.
+
+Small bodies (under 16 KB) from allowlisted sources are chunked **inline** inside the normalize transaction; everything else dispatches `extraction.chunk_evidence` to the dedicated `embedding` queue. Chunk embeddings run in batches of 32 and are **budget-gated and cost-attributed** — unlike the parent-evidence embedding, which passes no tenant context at its call site (`backend/src/contextedge/workers/chunk_tasks.py:133-191`; `extraction_tasks.py:65-71`).
+
+**The queue exists because of a measured failure**: 1,879 chunks with 289 embedded (15%) while 309 embed tasks sat behind 10,226 normalizations. Nothing errored — the evidence was ingested and silently unretrievable (`backend/src/contextedge/workers/celery_app.py:259-268`).
+
+### Stage 5 — identities
 
 ```mermaid
 graph LR
-  EP[episodes<br/>title='VPN gateway memory leak — east-01'<br/>status=draft<br/>extraction_confidence=0.78<br/>root_cause_summary='memory leak in IKE handshake path'<br/>final_outcome='restarted, monitoring']
+  ID1[canonical_identities<br/>entity_type=device<br/>canonical_name=vpn-gw-east-01<br/>resolution_state=resolved<br/>resolution_method=strong:hostname · confidence 1.0]
+  AL1[identity_aliases<br/>alias_type=hostname<br/>normalized_alias=vpn-gw-east-01<br/>UNIQUE per tenant]
+  ID2[canonical_identities<br/>entity_type=person<br/>canonical_name='Priya Sharma'<br/>resolution_state=needs_review<br/>adjudicated below the 0.95 person floor]
 
-  S1[episode_steps · order=1<br/>step_type=observation<br/>text='Connections drop every 30s'<br/>result_state=observed]
-  S2[episode_steps · order=2<br/>step_type=observation<br/>text='Gateway memory 96%'<br/>result_state=observed]
-  S3[episode_steps · order=3<br/>step_type=hypothesis<br/>text='Memory leak triggering renegotiation'<br/>result_state=unknown]
-  S4[episode_steps · order=4<br/>step_type=action<br/>text='Restart vpn-gw-east-01 service'<br/>successful_flag=true]
-  S5[episode_steps · order=5<br/>step_type=verification<br/>text='Connections stable for 30 minutes'<br/>successful_flag=true]
+  EV1[evidence #1 ticket] -- mentions_identity w=1.0 --> ID1
+  EV2[evidence #2 Teams] -- mentions_identity w=1.0 --> ID1
+  EV2 -- mentions_identity w=0.88 --> ID2
+  ID1 --- AL1
+
+  classDef id fill:#fae8ff,stroke:#a21caf,color:#0f172a;
+  class ID1,ID2,AL1 id;
+```
+
+**Live** — `link_evidence_identities` (`backend/src/contextedge/services/identity_service.py:810-918`). Resolution runs in four layers with a cost gate in the middle:
+
+1. **Strong identifier** — SQL lookup on `(tenant, alias_type, normalized_alias)`, confidence 1.0. `vpn-gw-east-01` is a single-token `device` name matching the hostname regex, so the normalizer promotes it to a `hostname` strong identifier — this exact string is the example in the code's own comment (`backend/src/contextedge/services/identity_normalizer.py:134-136`). After its first sighting it resolves here forever.
+2. **Typed exact alias** — 0.95.
+3. **Candidacy gate** — rejects facet types (`environment`, `version`, `vendor` belong in `source_facets`), unsupported types, and things that are not names (`backend/src/contextedge/services/identity_candidacy.py:65-196`). It sits below the free layers and above everything that costs a model call or a row: **identity work was 78% of all model spend before it existed**.
+4. **LLM adjudication** — up to 5 candidates from substring tokens or pg_trgm similarity above 0.3, prompt `identity_adjudication` v2, schema-validated. Auto-links only at `AUTO_LINK_THRESHOLDS`: **person 0.95, everything else 0.9** (`identity_service.py:58-59`). Below threshold or on abstention it creates a **new identity in `needs_review`** — never a silent link, never a silent fork. That is why Priya sits at `needs_review` at 0.88.
+5. **Provisional creation** at 0.5 for anything unmatched. A provisional identity linked by 2 to 5 distinct evidence items — the upper bound is a rarity guard against product-name hubs — flips to `resolved` at the exact moment it could first correlate anything (`backend/src/contextedge/services/identity_promotion.py:56-138`).
+
+A daily Beat pass, `identity.reconcile_identities`, **proposes** merges into `identity_merge_proposals` and never performs them; rejections persist so the schedule never re-raises a declined pair (`backend/src/contextedge/services/identity_reconciliation_service.py:29-98`).
+
+### Stage 6 — correlation: the case graph
+
+```mermaid
+graph TD
+  EV1[evidence #1 · ServiceNow INC0010427]
+  EV2[evidence #2 · Teams message]
+  EV3[evidence #3 · email quoting INC0010427]
+
+  CI[case_identifiers<br/>system=servicenow · value=INC0010427<br/>is_authoritative=true]
+  CL[case_links<br/>canonical_case_id=CASE-uuid<br/>confidence 1.0]
+  MEM[evidence_case_memberships<br/>evidence=#3 · relationship_type=explicit_reference<br/>confidence 0.9 · extraction_location=body]
+
+  CE1[correlation_edges<br/>#1 ↔ #3 · type=case_link_match<br/>confidence 1.0]
+  CE2[correlation_edges<br/>#1 ↔ #2 · type=identity_match<br/>confidence 0.75 — rare device, 7-day window]
+
+  EV1 --- CI
+  CI --- CL
+  EV3 --- MEM
+  EV1 --- CE1
+  EV3 --- CE1
+  EV1 --- CE2
+  EV2 --- CE2
+
+  classDef co fill:#fef3c7,stroke:#d97706,color:#0f172a;
+  class CL,MEM,CE1,CE2,CI co;
+```
+
+**Live** — `correlate_evidence_item` (`backend/src/contextedge/services/correlation_service.py:197-791`), on the dedicated `correlation` queue. Two tiers:
+
+**Tier 1, confidence 1.0** — deterministic `(system, external_id)` keys: the record's own id, `{source}:thread` plus the thread id, ServiceNow reference fields (`problem_id`, `rfc`, `caused_by`, `parent_incident` — these share a namespace with the referenced records' own ids, so incident ↔ problem ↔ change correlate **regardless of ingestion order**), Jira linked issues, SapphireIMS related tickets, Zoho ticket numbers. CI and assignment-group references are deliberately **never** case-link keys, because shared infrastructure would mass-merge unrelated incidents (`correlation_service.py:116-194`).
+
+**Tier 2, gated and scored** — identity co-occurrence. Only `resolved`/`verified`, active identities count. Degree statistics are computed before the link fetch, so hub identities never fan out: at or above `HUB_DEGREE_MIN = 200` an identity carries zero signal; at or below `RARE_DEGREE_MAX = 5` a non-person entity scores 0.75, otherwise 0.65, plus 0.1 when two or more non-hub identities are shared, capped at 0.85. A **single shared person is dropped entirely** (`correlation_service.py:36-88, 263-342`). The 7-day window fails **closed** when timestamps are missing.
+
+**The conflicting-ticket veto**: if both items hold anchor case memberships in disjoint case sets, the identity correlation is deleted and `correlation.conflicting_ticket_veto` is logged — "same infrastructure, different incidents" (`correlation_service.py:344-404`).
+
+**Ticket-number bridging** is what puts the email into the incident's case. Ticket sources register their human-readable number in `case_identifiers`; conversational sources extract ticket-shaped tokens and resolve-then-link into `evidence_case_memberships` (subject 0.98, body 0.9). Unknown tokens park in `pending_identifier_mentions` and reconcile the moment the ticket registers, so ingestion order does not matter. A message quoting three or more distinct cases becomes `mentioned_only` at 0.5, which the cluster resolver never expands through.
+
+An edge is **created once and never upgraded**; when both tiers matched, the case-link tier wins.
+
+### Stage 7 — episode reconstruction
+
+Correlation dispatches `extraction.reconstruct_episode` with a **180-second countdown** when it created edges (`backend/src/contextedge/workers/correlation_tasks.py:39-52`). Six gates run before any model call, because episode synthesis was measured at **29% of all tokens with 71% of its output superseded**.
+
+```mermaid
+graph LR
+  CLU[EpisodeCluster<br/>evidence_ids: #1 #2 #3<br/>reasons: ticket_ref, identity_match<br/>fingerprint=sha256 of the sorted member set]
+  G1[gate: cluster ≥ 3 members]
+  G2[gate: advisory lock on the fingerprint]
+  G3[gate: newest member older than 180 s<br/>unless the oldest is over 1800 s]
+  G4[gate: ≥ 1.5× the largest covered draft]
+  AI[prompt episode v3<br/>items labelled ev-N, fenced as untrusted]
+
+  CLU --> G1 --> G2 --> G3 --> G4 --> AI
+```
+
+`resolve_episode_cluster` materializes the connected component over `case_links` and `correlation_edges` in both directions, bounded at `MAX_CLUSTER_SIZE = 50`, `MAX_HOPS = 3`, and a `CLUSTER_TIME_WINDOW` of 30 days from the **nearest** seed — correlation chains cannot drag in last quarter's ticket. Legal-hold and pending-redaction rows are fenced out **in SQL**, so they never enter a cluster at all (`backend/src/contextedge/services/episode_cluster_service.py:47-105`).
+
+The resulting rows:
+
+```mermaid
+graph LR
+  EP[episodes<br/>title='VPN tunnel flapping — expired gateway certificate'<br/>primary_case_ref=INC0010427<br/>status=draft · reviewer_state=pending_review<br/>extraction_confidence=0.81<br/>root_cause_summary='gateway TLS certificate expired'<br/>final_outcome='certificate renewed, RADIUS restarted, tunnels stable'<br/>cluster_fingerprint=sha256...<br/>embedding Vector 3072<br/>generation_provenance: prompt episode v3]
+
+  S1[episode_steps · order=1<br/>step_type=complaint<br/>'Users cannot establish VPN tunnels'<br/>result_state=unknown]
+  S2[episode_steps · order=2<br/>step_type=diagnostic<br/>'Gateway logs show TLS handshake failure']
+  S3[episode_steps · order=3<br/>step_type=hypothesis<br/>'Gateway certificate expired']
+  S4[episode_steps · order=4<br/>step_type=remediation<br/>'Renewed certificate, restarted RADIUS'<br/>result_state=success · successful_flag=true]
+  S5[episode_steps · order=5<br/>step_type=outcome<br/>'Tunnels stable for 30 minutes'<br/>result_state=success]
+
+  L1[episode_evidence_links<br/>one row per grounding evidence<br/>link_reason = the cluster reason, 120 chars]
 
   EP --- S1
   EP --- S2
   EP --- S3
   EP --- S4
   EP --- S5
-
-  S1 -. evidence_refs .-> EV1[evidence #1 Jira]
-  S2 -. evidence_refs .-> EV2[evidence #2 Teams]
-  S4 -. evidence_refs .-> EV4[evidence #4 ServiceNow]
-  S5 -. evidence_refs .-> EV5[evidence #5 Teams]
+  EP --- L1
 
   classDef ep fill:#e0e7ff,stroke:#4338ca,color:#0f172a;
-  class EP,S1,S2,S3,S4,S5 ep;
+  class EP,S1,S2,S3,S4,S5,L1 ep;
 ```
 
-### What governance does next
+**Live** — `create_episodes_from_evidence` (`backend/src/contextedge/services/episode_service.py:114-333`).
 
-`reviewer_state='pending_review'` queues the Episode in the reviewer console. A human SRE either:
-- **Approves** the Episode → it becomes eligible for Pattern aggregation (Example 3).
-- **Rejects** with a `feedback_code` → reconstruction is filed as a learning signal but no Pattern emerges.
-- **Edits** the steps → an updated draft is re-queued.
+The step vocabulary is fixed and validated: `STEP_TYPES` = complaint, diagnostic, hypothesis, action, observation, failed_step, remediation, escalation, outcome; `RESULT_STATES` = success, failure, inconclusive, unknown (`backend/src/contextedge/ai/extractors/episode_schema.py:22-33`). Unknown values do not fail the episode — an unknown `step_type` coerces to `observation`, an unknown `result_state` to `unknown`. The gate is **strict about structure, lenient about vocabulary**.
 
-`Episode.embedding Vector(3072)` lets the reconstructor find similar past episodes during extraction, which is how a brand-new VPN ticket can immediately surface "we've seen this shape before".
+Three things make the grounding real rather than decorative:
+- Evidence items are labeled `[ev-N]` in the prompt, and `_translate_refs` maps the labels back to real UUIDs, **dropping anything the model invented** — the model cannot mint an evidence reference (`backend/src/contextedge/ai/extractors/episode_extractor.py:77-89`).
+- The whole evidence block is wrapped by `fence_untrusted`, because ticket and chat text is data, not instructions (`backend/src/contextedge/ai/fencing.py:13-28`).
+- `generation_provenance` is stamped **after** the schema gate, so the model cannot supply its own (`episode_extractor.py:159-161`). It records prompt name, version, task, the routed model, and a `correlation_id` that joins to the `llm.usage` events.
 
-The evidence inputs to this reconstruction are **chunked** as of `0030_evidence_chunks` — long Teams threads in this incident split into one chunk per message (with quoted-prior-message tails stripped), and an attached post-mortem markdown splits on heading boundaries with `parent_section` breadcrumbs. The reconstructor's `find similar past episodes` lookup (today still operating against `evidence_items.embedding`) inherits the recall benefit once the chunk-level retrieval rollup lands. See [codewiki/CHUNKING_DESIGN.md](../codewiki/CHUNKING_DESIGN.md) for the chunker strategy table; the rollup follow-up is tracked in [codewiki/KNOWN_GAPS.md](../codewiki/KNOWN_GAPS.md) "Resolved: Evidence chunking foundation".
+Prompt `episode` **v3** is the default. Its contribution is field-level **source authority**: the ticket source is authoritative for state, priority and close code; monitoring for technical observations; working discussion for what was actually tried; email for external commitments; bot output is never authoritative (`backend/src/contextedge/ai/prompts/episode.py:162-260`). v1 and v2 remain registered and immutable as evaluation baselines.
 
-### Episode vs case (when to use which)
+> **Open P1 — do not gloss over this.** Clusters larger than 20 evidence items split into 2-3 model calls, and each chunk's steps are concatenated with all of them numbered from #1. The worst live case shows **319 steps**. Row-level fields (title, root cause, outcome) stay clean; only steps stack. 949 live episodes are affected, and 836 pending drafts were stamped on hold for repair (`codewiki/KNOWN_GAPS.md:464-478`).
 
-| Concept | Driven by | Lifetime | Outcome shape |
-|---|---|---|---|
-| `Episode` (existing) | Evidence reconstruction | Spans systems and time | `final_outcome` text + `root_cause_summary` |
-| `ResolutionSession` + `CaseOutcome` (case spine, `0029`) | A user opening a support case | One incident, one user | Structured `outcome_status` + `successful_action` + counters |
+### Stage 8 — review
 
-Both can reference the same evidence; they answer different questions.
+`reviewer_state='pending_review'` queues the episode. A human `knowledge_manager` can:
+- **Approve** — `POST /api/v1/episodes/{id}/approve` sets `status` and `reviewer_state` to `approved`, stamps `reviewer_user_id`, **commits**, and only then dispatches signature extraction and per-domain pattern clustering (`backend/src/contextedge/api/v1/episodes.py:230-277`). Commit-before-dispatch is deliberate: a message consumed before the commit would read pending state and no-op **without retry**.
+- **Add or remove evidence** — endpoints update both the JSONB list and the normalized links.
+- **Re-narrate** — `POST /api/v1/episodes/reconstruct` with `settle=False`, which bypasses the debounce, because an explicit request is not a duplicate.
+
+**Optionally, AI review assists.** `settings.episode_ai_review` has exactly three values — `off` (default), `advisory`, `auto_approve` (`backend/src/contextedge/config.py:185-187`; `backend/src/contextedge/services/episode_review_service.py:40`).
+
+```mermaid
+graph LR
+  EP[episodes · pending_review · ai_review IS NULL] --> SW[evaluation.ai_review_episodes<br/>hourly, defers while ingest is active]
+  SW --> V[prompt episode_review v1<br/>verdict ∈ approve, hold<br/>citation-driven excerpts: 10 items × 450 chars]
+  V --> ST[episodes.ai_review<br/>verdict, confidence, reasons, prompt_version,<br/>mode, auto_approved, failed_floors, reviewed_at]
+  ST --> F{mode = auto_approve<br/>AND all four floors pass?}
+  F -- no --> H[held — advisory record only]
+  F -- yes --> A[status + reviewer_state = approved<br/>reviewer_user_id stays NULL]
+```
+
+The floors are deterministic and the model cannot argue with them (`episode_review_service.py:42-44, 89-101`): at least **2** evidence ids, a stripped `final_outcome` of at least **20** characters, verdict exactly `approve`, and confidence at least **0.8**.
+
+Mechanics worth knowing:
+- `ai_review IS NULL` is the selection filter, so the sweep never pays twice for one draft. That column's "NULL means never reviewed" contract is load-bearing.
+- Excerpt selection is **citation-driven**: evidence the steps cite first, then the chronologically last item (the fix confirmation lives at the end of a thread), then the first (the complaint). The first version sent a blind head+tail sample and held 100 of 100 drafts with "steps not supported by the provided evidence excerpts" — structurally true, because the cited evidence was never in the window.
+- After the roughly 14-second model call the row is re-read `SELECT ... FOR UPDATE` with `populate_existing=True` (without which SQLAlchemy's identity map returns stale attributes and the check is vacuous). A concurrent human decision, a dedup supersede, or a twin sweep's stamp always wins, and the sweep records `skipped_state_changed`.
+- Commit is **per episode, before any dispatch**. A batch-end commit made every verdict hostage to the last one; one deadlock cost 50 re-paid model calls.
+- A provider outage persists **nothing** for that draft, so it stays retryable; five consecutive transients abort that tenant's batch.
+
+### Stage 9 — dedup keeps the graph from re-inflating
+
+An hourly sweep merges duplicates across evidence, episodes, patterns and playbooks — reached from Beat, from the tail of every clustering run, and from `POST /api/v1/patterns/deduplicate` (`backend/src/contextedge/services/pattern_service.py:336-549`). It was scheduled because the passes were correct and called by nothing: the graph re-inflated from 643 to 2,869 pending drafts in one bulk-ingest night.
+
+Four episode passes, in order:
+- **By title**, but each title group is first **split into evidence-overlap connected components** via union-find. Title alone would merge different incidents that share a label.
+- **Containment** — a strict subset is retired. No threshold to tune. Partial overlap deliberately never merges: on the measured ticket, 148 non-nested overlapping pairs were different problems sharing a ticket.
+- **Semantic siblings** at cosine ≥ `SIMILAR_EPISODE_MIN_COSINE = 0.85` **that also share evidence**. Disjoint pairs at 0.85+ are exactly the recurrence case (Example 2) and are refused and counted — merging them would destroy that signal.
+- Merges never hard-delete. `_merge_episode_into` repoints links and edges and sets `reviewer_state = "superseded"`. Steps deliberately stay with the duplicate, because moving them concatenated whole narrations.
 
 ---
 
-## Example 3 — Pattern emergence (recurring SMTP timeout)
+## Example 2 — Acme VPN: recurrence, six months later
 
-**Scenario.** Over six weeks, five different cases close with the same root cause: SMTP relay timeout after the workflow has already generated its output file. The first three are MG22 (finance), the next is RR07 (risk reporting), and the last is OPS31 (ops audit). The Pattern aggregator notices the shape and emits a single `Pattern` plus an `ErrorSignature` row that any future case can match against.
+**Scenario.** In February, Acme's VPN gateway certificate expires and `INC0010427` closes with "renew certificate, restart RADIUS". In August, the renewed certificate expires again. A new ticket, a new cluster, a new episode — and the graph should say *"we have seen this exact shape before"* without merging the two incidents.
 
-### The five source cases (closed)
+### Stage A — an approved episode gets a signature
 
-| Case | Workflow | Successful action | Closed at |
-|---|---|---|---|
-| CG-2026-000089 | MG22 | resend_existing_output | 2026-03-12 |
-| CG-2026-000101 | MG22 | resend_existing_output | 2026-03-21 |
-| CG-2026-000123 | MG22 | resend_existing_output | 2026-04-27 |
-| CG-2026-000128 | RR07 | resend_existing_output | 2026-04-29 |
-| CG-2026-000131 | OPS31 | resend_existing_output | 2026-05-02 |
+```mermaid
+graph LR
+  EP1[episodes · approved · February<br/>'VPN tunnel flapping — expired gateway certificate']
+  SIG[issue_signatures<br/>signature_key=remote_access #124; tls_certificate #124; certificate_expired<br/>affected_capability=remote_access<br/>failing_component=tls_certificate<br/>failure_mode=certificate_expired<br/>environment=corporate_managed · scope=service_wide<br/>episode_count=1]
+  LNK[episode_issue_signatures<br/>confidence = the draft's confidence]
 
-Each case has a `case_outcomes` row with `successful_action='resend_existing_output'` and `should_create_or_update_pattern=true`. The Pattern worker (`workers/pattern_tasks.py`) sweeps cases periodically.
+  EP1 -- has_signature w=1.0 --> SIG
+  EP1 --- LNK
+  LNK --- SIG
 
-### What the worker creates
+  classDef sg fill:#bbf7d0,stroke:#15803d,color:#0f172a;
+  class SIG,LNK sg;
+```
+
+**Live, human-gated** — `extract_issue_signature` (`backend/src/contextedge/services/issue_signature_service.py:89-312`), task `evaluation.extract_issue_signature` on the `evaluation` queue. Four dispatch sites, all of which commit first: single human approve, bulk human approve, the AI review sweep after each auto-approval, and the sweep's bounded crash-recovery mop-up (limit 20 per sweep, scoped to auto-approvals so the pre-signature era is never surprise-backfilled).
+
+The prompt is `issue_signature` v1 — the only version. Its system prompt demands short generic snake_case values and **forbids device names, hostnames, ticket numbers and people** (`backend/src/contextedge/ai/prompts/issue_signature.py:14-42`). A signature naming `vpn-gw-east-01` would never match the next occurrence, which is the entire point.
+
+The schema gate is strict about structure and lenient about vocabulary (`issue_signature_service.py:47-73`): `affected_capability` and `failure_mode` are required; `environment` must be one of `production` / `corporate_managed` / `development` or it silently nulls; `scope` must be one of `single_device` / `multiple_devices` / `site_wide` / `service_wide`; confidence clamps to [0,1]. **A validation failure returns normally** with `invalid_draft` — so there is no Celery retry, and the episode has no signature until something re-dispatches.
+
+The key is `slug(capability)|slug(component or "-")|slug(failure_mode)`, truncated at 240 characters, unique per tenant. Trigger, environment and scope are **descriptive, not identity** — the same failure triggered differently still recurs under one key (`issue_signature_service.py:76-86`).
+
+### Stage B — August: the same key, a recurrence link
 
 ```mermaid
 graph TD
-  P[patterns<br/>title='SMTP relay timeout post-generation'<br/>pattern_type=recurring_issue<br/>episode_count=5<br/>confidence=0.86<br/>contradiction_score=0.0<br/>freshness_score=0.95<br/>observed_errors=['SMTP timeout', 'Could not connect to SMTP relay']<br/>root_causes=['SMTP relay unavailable', 'mail gateway throttling']<br/>resolution_steps=['confirm output exists', 'retry email step', 'do not rerun workflow']]
+  EP2[episodes · approved · August<br/>'VPN users cannot connect — certificate expired again']
+  SIG[issue_signatures · same signature_key<br/>episode_count=2 ↑]
+  CASE1[canonical case of INC0010427 · February]
+  EVSEED[evidence · the August ticket<br/>episode.evidence_ids 0 — the seed]
+  REC[evidence_case_memberships<br/>relationship_type=recurrence<br/>confidence=0.6<br/>extraction_location=issue_signature]
 
-  ES[error_signatures<br/>signature_key=SMTP_TIMEOUT_AFTER_OUTPUT_GENERATED<br/>display_name='SMTP timeout after output generated'<br/>success_count=5<br/>failure_count=0<br/>confidence=0.92<br/>recommended_actions=['resend_existing_output', 'verify_smtp_relay']<br/>risk_notes=['Full workflow rerun creates duplicate output']]
+  EP2 -- has_signature --> SIG
+  EVSEED --- REC
+  REC --> CASE1
 
-  FP[fix_patterns<br/>pattern_name='Resend existing output, do not rerun'<br/>issue_type=output_not_received<br/>error_signature_id=ES<br/>recommended_fix='Resend output file from existing path'<br/>success_count=5 · failure_count=0<br/>confidence=0.92<br/>approval_required=true<br/>risk_level=medium]
-
-  EV1[evidence_items · 5 logs]
-  EP1[episodes · 5 reconstructions]
-
-  P -. evidence_links .-> EV1
-  P -. derived_from .-> EP1
-  ES -- pattern_id --> P
-  FP -- error_signature_id --> ES
-
-  classDef ext fill:#dcfce7,stroke:#16a34a,color:#0f172a;
-  classDef new fill:#bbf7d0,stroke:#15803d,color:#0f172a;
-  class P ext;
-  class ES,FP new;
+  classDef rc fill:#fde68a,stroke:#b45309,color:#0f172a;
+  class REC rc;
 ```
 
-### How the trio works together
+**Live** — `_link_recurrence` (`issue_signature_service.py:249-312`), which runs **only** when the signature already existed. It finds the most recent other episode on that signature, finds that episode's first active `primary_case` membership among its first 50 evidence ids, and adds a `recurrence` membership from the new episode's seed evidence to that case, at `RECURRENCE_CONFIDENCE = 0.6`. The write is idempotent, first-writer-wins.
 
-- **`Pattern`** (existing) is the *high-level "there's a recurring issue here"* aggregation. It cites evidence and episodes, has a confidence that decays with `freshness_score`, and gets demoted via `contradiction_score` when claims conflict.
-- **`ErrorSignature`** (`0029`) is the *low-level "this exact log shape"* fingerprint. `signature_key` is the stable normalised name. Counters track success/failure of the recommended action per signature.
-- **`FixPattern`** (`0029`) is the *recommender's answer*: "for `output_not_received` on a workflow whose log matches this signature, here's the fix that's worked 5/5 times". Multiple FixPatterns can share the same Playbook with different precondition contexts.
+> **The load-bearing invariant.** The episode cluster resolver explicitly refuses to expand through `recurrence` (and `mentioned_only`) memberships: `relationship_type.notin_(("mentioned_only", "recurrence"))` appears in both membership queries (`backend/src/contextedge/services/episode_cluster_service.py:158-193`). Recurrence means **"similar problem, never the same occurrence"**. It exists for precedent retrieval and for the agent's seed layer, not for merging clusters. The semantic-sibling dedup pass refuses the same pairs for the same reason (`backend/src/contextedge/services/episode_service.py:645-656`).
 
-A Pattern can aggregate multiple ErrorSignatures (e.g. SMTP timeout + DNS resolution failure both map to "delivery problem post-generation"); a FixPattern points at one ErrorSignature and optionally one Playbook.
+### The three "signature" concepts, and which are live
 
-### Runtime effect on the next case
+This is the part most readers conflate. They are three different tables answering three different questions:
 
-When a sixth `output_not_received` case opens, the planner queries `error_signatures` first. A match returns `recommended_actions[]`, the planner pulls the matching `FixPattern` (`success_count=5, confidence=0.92`), and builds the `Decision` ranking *resend* far above *rerun_workflow* — without rebuilding the reasoning from scratch.
+| Concept | Question it answers | Status | Writer |
+|---|---|---|---|
+| **`error_signatures`** | "What is the exact log shape?" | **Live**, deterministic regex, runs on **every** evidence item at ingest — including ones the relevance gate skipped, since a confidently-irrelevant thread can still carry a pasted stack trace | `fingerprint_evidence` (`backend/src/contextedge/services/error_signature_service.py:176-260`), writing an `evidence -[exhibits]-> error_signature` edge at confidence 0.9 |
+| **`issue_signatures`** | "What is the generalized problem?" | **Live, human-gated** — one LLM call per approved episode | `extract_issue_signature` (`issue_signature_service.py:157-208`) |
+| **`fix_patterns`** | "What fix has worked for this signature, and how often?" | **Schema only.** The model, five readers, and a projection edge all exist. **Nothing constructs a `FixPattern` anywhere in the codebase** | none — verified by repo-wide grep; recorded at `codewiki/KNOWN_GAPS.md:10` |
+
+Two consequences follow, and any doc that skips them is misleading:
+- `IssueSignature.error_signature_id` is a real column with a real FK, and the materializer would project an `addresses` edge from it — but the only constructor never sets it (`issue_signature_service.py:168-177`). The deterministic and the generalized signature systems are **parallel and unjoined today**.
+- Because nothing mints a `FixPattern`, the fix-applicability ladder, the cohort counters and the verification fix-outcome write-back are **dormant, not merely unexercised**. `CaseOutcomeFixPattern` has a writer (`backend/src/contextedge/services/case_outcome_service.py:239`) but nothing for it to reference.
+
+### Where the recurrence chain is actually consumed
+
+**Live** — the agent seed resolver treats issue signatures as their own seed layer: a full-text query over `affected_capability`, `failing_component`, `failure_mode` and `trigger_change` with underscores replaced by spaces (the slugs have to be de-slugged or nothing could match), tiebroken by `episode_count DESC`, limit 3 (`backend/src/contextedge/graph/agent/repository.py:270-308`). `issue_signature` is a hydratable node type and the episode ↔ signature hop is in the `maf.v1` traversal profile.
 
 ---
 
-## Example 4 — Playbook lifecycle and runtime selection
+## Example 3 — Acme VPN: pattern, playbook, runtime selection
 
-**Scenario.** Based on the Pattern from Example 3, an SRE drafts a Playbook called `pb_resend_output_smtp_timeout`. It moves through governance, gets approved, ships a published version, and starts serving runtime traffic.
+**Scenario.** Across several months, three approved episodes describe certificate-expiry failures on VPN infrastructure. The clustering pass notices the shape, synthesizes a `Pattern`, and the pattern auto-enqueues a playbook candidate that reads Acme's own certificate-renewal SOP.
 
-### Lifecycle states (existing, in `services/playbook_service.py`)
-
-```
-candidate → under_review → approved → restricted | deprecated | expired | retired
-```
-
-Approval flips `lifecycle_state` to `approved` and stamps `current_version_id`. Runtime only ranks **approved** playbooks that have a **published** version (`PlaybookVersion.published_at IS NOT NULL`).
-
-### Stage A — draft
+### Stage A — pattern clustering
 
 ```mermaid
-graph LR
-  PB[playbooks<br/>stable_key=pb_resend_output_smtp_timeout<br/>title='Resend output after SMTP timeout'<br/>lifecycle_state=candidate<br/>risk_tier=medium<br/>automation_mode=suggest_only<br/>pattern_id=P · approval_policy_id=AP1]
+graph TD
+  E1[episode · approved · Feb · embedded]
+  E2[episode · approved · Aug · embedded]
+  E3[episode · approved · Sep · embedded]
 
-  V1[playbook_versions · 1.0.0<br/>published_at=NULL<br/>steps=[verify_output_exists, resend_email_step, confirm_delivery]<br/>verification_policy={auto_close_on_recheck#58;true}<br/>playbook_confidence=0.7]
+  P[patterns<br/>title='VPN gateway certificate expiry'<br/>pattern_type=recurring_issue — hardcoded on this path<br/>confidence=0.82 · episode_count=3<br/>trigger_conditions, core_entities, observed_errors,<br/>root_causes, resolution_steps, evidence_summary JSONB<br/>generation_provenance: prompt pattern v2]
 
-  P[patterns · SMTP timeout post-gen]
-  AP1[tenant_policies · approval_policy<br/>config={approver_roles#58;['L2','Finance Owner']}]
+  PEL[pattern_evidence_links · link_type=member<br/>episode membership only]
 
-  PB -- pattern_id --> P
-  PB -- approval_policy_id --> AP1
+  E1 -- belongs_to --> P
+  E2 -- belongs_to --> P
+  E3 -- belongs_to --> P
+  P --- PEL
+
+  ENR[virtual concept nodes, weight 1.5<br/>trigger_of · involved_in · discovered_in · causes]
+  P --- ENR
+
+  classDef pt fill:#dcfce7,stroke:#16a34a,color:#0f172a;
+  class P,PEL,ENR pt;
+```
+
+**Live, human-gated** — `_cluster` (`backend/src/contextedge/workers/pattern_tasks.py:127-372`) on the `pattern` queue.
+
+**There is no Beat entry for clustering.** Verified by reading the whole `beat_schedule` (`backend/src/contextedge/workers/celery_app.py:281-384`). It is dispatched from three places: after human episode approve or bulk-approve, per affected domain (`api/v1/episodes.py:270-277, 330-337`); by the hourly AI review sweep, once per domain that had auto-approvals (`backend/src/contextedge/workers/evaluation_tasks.py:335-351`); and manually via `POST /api/v1/patterns/cluster`. Dispatching with `domain_id=None` clusters **only** NULL-domain episodes, which on a live graph is nothing — hence per-domain dispatch.
+
+The loop, per candidate (limit 100 per run):
+1. Repair embeddings on approved episodes that have none.
+2. **Existing-pattern probe** at cosine distance **< 0.35**, then `validate_pattern_match` adjudicates. That call uses an **inline prompt, not the registry**, so `llm.usage` records NULL prompt name and version for it. It **fails open**: any exception returns `{"is_match": True, "confidence": 0.75}`, so during a provider outage the 0.35 embedding probe alone decides membership (`backend/src/contextedge/ai/extractors/pattern_extractor.py:81-112`).
+3. **New cluster** from same-scope approved unlinked episodes at cosine distance **< 0.20**; empty means a single-episode cluster, which is allowed — better a pattern than a silently dropped approved episode.
+4. **Synthesis** with prompt `pattern` **v2** on `vertex_ai/gemini-2.5-flash`. There is **no Pydantic gate** on this output; fields are read with `.get()`. A returned title containing "no incident" / "no pattern" / "no operational pattern" / "no recurring pattern" skips persistence.
+5. On any synthesis exception, a **fallback** pattern titled `"Auto: <episode title>"` at confidence 0.75 with no synthesized fields and NULL provenance.
+
+Persistence asserts domain-safe membership: a domain-scoped episode may never enter a NULL-domain pattern, and a foreign-tenant id gets the same "does not exist" message as a missing one, so another tenant's data is never confirmed (`backend/src/contextedge/services/pattern_service.py:21-59`).
+
+Two honest caveats. `PatternEvidenceLink.evidence_id` is **never populated** by this path — membership is episodes only. And a full 100-episode pass ran **25 minutes inside a single database transaction** with roughly 156 model calls; a late failure rolls back every row while the spend stays spent, and an operator watching the `patterns` table sees zero the whole time (`codewiki/KNOWN_GAPS.md:528-539`).
+
+### Stage B — playbook candidate, generated with the tenant's own SOP in the prompt
+
+```mermaid
+graph TD
+  P[patterns · VPN gateway certificate expiry · confidence 0.82]
+  KR[retrieve_knowledge_for_pattern]
+  KB[evidence · kb_article<br/>'Certificate renewal procedure'<br/>knowledge_state=published]
+  PB[playbooks<br/>stable_key=pb-a1b2c3d4e5f6<br/>lifecycle_state=candidate<br/>automation_mode=suggest_only<br/>risk_tier = max of safety-class floor, LLM suggestion]
+  V1[playbook_versions · 0.1.0<br/>steps with grounding_status<br/>citation_validation: kept / dropped<br/>evidence_refs: evidence_ids, episode_ids, pattern_id<br/>knowledge_ids recorded SEPARATELY<br/>conflicts persisted UNRESOLVED for the reviewer<br/>published_at=NULL]
+  PEL2[playbook_evidence_links<br/>normalized rows — without them,<br/>playbook-scoped semantic search returns zero]
+
+  P --> KR
+  KR --> KB
+  KB -- supported_by w=confidence=similarity --> P
+  P --> PB
   PB --- V1
+  V1 --- PEL2
+  PB -- derived_from --> P
 ```
 
-`automation_mode=suggest_only` means the playbook can be *recommended* by runtime but not executed — even if a caller approves it, the executor short-circuits.
+**Live** — `generate_playbook_candidate` (`backend/src/contextedge/workers/pattern_tasks.py:405-684`), auto-enqueued by pattern creation and by membership growth.
 
-### Stage B — under review
+**The retrieval step is the interesting part.** The query text is the **pattern's** vocabulary — title, description, and the root cause / title / outcome of up to 5 episodes, capped at 4,000 characters — not the incident title. "Laptop Wi-Fi not working" matches nothing; "Intel AX201 Code 10 driver rollback" matches the article. That is why this runs at pattern time rather than at ingest (`backend/src/contextedge/services/knowledge_retrieval_service.py:199-288`).
 
-A reviewer opens the playbook and walks the steps in shadow mode (`automation_mode='shadow'` runs the motions without real side effects). The contradiction scanner (`workers/contradiction_tasks.py`) fans out from the playbook version against `evidence_items` to flag any evidence that contradicts the proposed steps. Output rows land in `contradictions` and `contradiction_scan_state` (the latter from `0022_contradiction_scan_state`).
+Then, in order (`knowledge_retrieval_service.py:291-418`):
+- keep only `KNOWLEDGE_EVIDENCE_TYPES = {kb_article, sop, documentation}`;
+- **withhold** anything whose `knowledge_state` is not current, counted and logged — a human retired it in their own system, and serving it ranked-last would override that decision. "No guidance exists" and "all of it is retired" are different answers;
+- drop anything past `MAX_DISTANCE = 0.25`;
+- re-rank **multiplicatively, never filtering**: empirical support (`proven` 0.80, `emerging` 0.92, `unproven` 1.0, `contested` 1.25 — absent is exactly neutral, because silence is not failure), an applicability penalty, and supersession at **1.6**, heavier than contested because a human reviewed it;
+- truncate to `MAX_KNOWLEDGE_DOCS = 5`, attach up to `MAX_SECTIONS_PER_DOC = 6` sections each, flagging vision-read sections as `model_derived` so a paraphrase is never presented as the SOP's exact wording.
+
+Documents that survive at similarity ≥ `KNOWLEDGE_LINK_MIN_SIMILARITY = 0.75` and without an applicability mismatch become durable `pattern -[supported_by]-> evidence` edges carrying `weight = confidence = similarity`. The 0.75 was **measured**: genuine pairs sat at 0.75-0.84 and vocabulary noise at 0.62-0.69, and `MAX_DISTANCE` is derived as `1 − 0.75` so "too weak to link" and "too weak to prompt" agree by construction.
+
+An empty result renders as the literal string `"None found. Base the playbook on observed practice only."` so the model cannot invent normative sources to fill silence.
+
+**Deterministic gates around the model** (`pattern_tasks.py:32-65, 443-576`):
+- confidence floor 0.5, calibrated by reading 37 generated playbooks — below it the corpus was structured but hollow;
+- risk floor from each step's `safety_class` (`read_only` → low, `low_side_effect` → medium, `high_side_effect`/`destructive` → high, unknown → high); the model may only **raise** it. Risk assessment is policy, not model output;
+- empty-steps refusal — a steps-less result fails the task rather than minting an empty candidate. The motivating incident: a truncated response whose complete-looking prefix survived JSON repair and persisted a playbook with **zero steps**.
+
+**Post-processing, in a fixed order** (`backend/src/contextedge/ai/generators/playbook_generator.py:90-241`): `validate_source_refs` translates only the labels actually shown and **drops minted citations**, recording `{kept, dropped}` on the version; `classify_step_grounding` is structural and not arguable — a step with surviving `source_refs` is `grounded`, a step without is **forced** to `non_grounded` / `best_practice` even if the model claimed otherwise; provenance is stamped last.
+
+Acme, concretely: the pattern retrieves the certificate-renewal SOP; the episodes show engineers renewing and restarting but never backing up the certificate; the generated playbook keeps the SOP's backup step, cites `[kb-1]`, and records the documented-versus-observed disagreement in `conflicts` for the reviewer rather than silently picking a side.
+
+> **The manual route is not this route.** `POST /api/v1/playbooks/generate` calls the same generator but skips knowledge retrieval, the confidence floor, the risk floor, the empty-steps guard and `embed_playbook` — and its episode summaries omit ids, so every `ep-N` citation the model writes is dropped by `validate_source_refs` (`backend/src/contextedge/api/v1/playbooks.py:654-767`). It exists for patterns below the floor and for humans who disagree with the floor. Use it knowingly.
+
+### Stage C — lifecycle and publication
 
 ```mermaid
-graph LR
-  V1[playbook_versions · 1.0.0]
-  EV[evidence_items · 47 cited]
-  CS[contradiction_scan_state<br/>27 no_contradiction · 18 skipped_token_overlap · 2 skipped_budget · 0 contradicts]
-  PA1[playbook_approvals<br/>action=request_review<br/>approver=sre@xyz]
-
-  V1 -. evidence_links .-> EV
-  V1 -. scanned_pairs .-> CS
-  V1 -. approval .-> PA1
+stateDiagram-v2
+    [*] --> candidate
+    candidate --> under_review
+    under_review --> approved
+    under_review --> candidate
+    approved --> under_review
+    approved --> restricted
+    approved --> deprecated
+    approved --> expired
+    approved --> retired
+    restricted --> approved
+    restricted --> deprecated
+    restricted --> retired
+    deprecated --> retired
+    expired --> under_review
+    expired --> retired
+    retired --> [*]
 ```
 
-### Stage C — approved + published
+Transitions are validated against `VALID_TRANSITIONS` (`backend/src/contextedge/services/playbook_service.py:22-30`); an illegal jump raises `InvalidTransitionError`, and `retired` is terminal.
 
-Approver clicks **Approve**. `playbook_approvals` records the action; `Playbook.lifecycle_state='approved'`; `PlaybookVersion.published_at` and `published_by` get stamped.
+While a playbook is `under_review`, the contradiction scanner compares its steps against similar knowledge evidence. It is LLM-bearing, so it runs behind a three-gate funnel — top-K vector candidates (`DEFAULT_TOP_K_CANDIDATES = 20`), a scan cursor so a pair is never re-judged at the same version, and a lexical token-overlap check — all under `DEFAULT_SCAN_BUDGET = 1000` (`backend/src/contextedge/services/contradiction_service.py:49-330`). Per-pair outcomes land in `contradiction_scan_state`, so "we looked and it was fine" stays distinguishable from "we never looked".
 
-```mermaid
-graph LR
-  PB[playbooks<br/>lifecycle_state=approved<br/>automation_mode=human_confirmed<br/>current_version_id=V1.id]
-  V1[playbook_versions · 1.0.0<br/>published_at=2026-04-30 11#58;15<br/>published_by=approver_user]
-  PA2[playbook_approvals<br/>action=approve<br/>approver=l2_lead@xyz]
+`create_playbook_version` validates step-to-skill bindings, enforces semantic-version uniqueness with retries, writes normalized `playbook_evidence_links`, repoints `current_version_id` immediately, and emits `playbook.version_created` (`playbook_service.py:360-436`).
 
-  PB --- V1
-  PB --- PA2
-
-  classDef appr fill:#bbf7d0,stroke:#15803d,color:#0f172a;
-  class PB,V1,PA2 appr;
-```
-
-`automation_mode='human_confirmed'` means each step needs explicit per-step approval at runtime.
+`automation_mode` is a separate axis from lifecycle. `suggest_only` means the playbook can be recommended but not executed. Only `tenant_admin` may change it — deliberately narrower than the right to edit the playbook, since automation mode is what makes every other approval gate load-bearing (`frontend/src/lib/roles.ts:22-56`).
 
 ### Stage D — runtime selection
 
-A new case `CG-2026-000147` (`output_not_received`, MG22) reaches the planner. `hybrid_ranker` ranks playbooks:
+A new VPN complaint arrives. `POST /api/v1/runtime/match` assembles a memory context, ranks approved playbooks, and returns results with a full score breakdown.
 
-```text
-score = 0.30 * semantic + 0.25 * pattern_match
-      + 0.20 * error_signature_match + 0.10 * fix_pattern_confidence
-      + 0.10 * outcome_success + 0.05 * recency
-```
+**The real scoring weights** (`backend/src/contextedge/search/hybrid_ranker.py:22-31`):
 
-`pb_resend_output_smtp_timeout` wins: pattern match, error-signature match, fix-pattern confidence 0.92, recent success. `runtime/match` returns the playbook + a `match_id`; `/runtime/explain/{match_id}` (cached in Redis) shows the score breakdown.
+| Signal | Weight | What it measures |
+|---|---|---|
+| keyword | 0.25 | `search_playbooks_fts` rank, normalized to [0,1] |
+| semantic | 0.30 | best distance from playbook-scoped chunk search → `max(0, 1 − d/2)`, then gated by keyword: `min(1, sem × (0.6 + 0.4 × keyword))` |
+| graph_distance | 0.15 | edges touching the playbook, plus correlation edges between its evidence and this query's semantic hits |
+| evidence_quality | 0.10 | `0.6 × playbook_confidence + 0.4 × min(hits/5, 1)` |
+| identity | 0.05 | distinct `references_identity` edges to the query's resolved identities |
+| recency | 0.10 | equals the freshness score |
+| freshness | 0.05 | 0 if past `expiry_at`; else `max(0, 1 − days_since_validated/180)`; 0.5 if never validated |
+| negative_penalty | −0.05 | contradiction edges plus domain negative-knowledge count |
 
-```mermaid
-graph LR
-  CASE[case CG-2026-000147]
-  M[runtime match · match_id=m_abc]
-  PB[playbooks · pb_resend_output_smtp_timeout · v1.0.0]
-  R[Redis · explain cache · TTL 300s]
-
-  CASE -- /runtime/match --> M
-  M -- ranked top --> PB
-  M -- explain payload --> R
-```
-
-### Stage E — execution
-
-Planner creates a `Decision` (`decision_intent=remediation`, `policy_result=approval_required`); HITL approves; an `ExecutionRun` starts with `automation_mode=human_confirmed`. Each `ExecutionStepRun` carries the `idempotency_key` from `0029` so retries can't duplicate. On success the step's `tool_invocations` row records the `ae.resend_output` call.
+Because `recency_score = freshness` (`hybrid_ranker.py:334`), freshness effectively carries 0.15.
 
 ```mermaid
 graph LR
-  D[decisions]
-  ER[execution_runs<br/>playbook_id=PB · playbook_version_id=V1<br/>automation_mode=human_confirmed<br/>status=completed<br/>outcome=success]
-  S1[step_runs · verify_output_exists<br/>safety_class=read_only · status=completed]
-  S2[step_runs · resend_email_step<br/>safety_class=low_side_effect<br/>idempotency_key=resend#58;WF_MG22#58;REQ-99001#58;sha256-def<br/>status=completed]
-  S3[step_runs · confirm_delivery<br/>safety_class=read_only · status=completed]
+  Q[POST /api/v1/runtime/match<br/>symptoms, entities, session_id]
+  R[rank_playbooks<br/>domain filter, token allowlist, risk cap]
+  A{top score &lt; 0.35?}
+  E[abstain — empty list<br/>+ ranking.abstained log]
+  M[match_id + ranked results with breakdown]
+  C[(Redis runtime:match:match_id<br/>TTL 3600 s)]
+  X[GET /runtime/explain/match_id<br/>403 wrong tenant · 404 expired]
+  T[decision_trace_events row<br/>+ runtime.match_completed event]
 
-  ER --- S1
-  ER --- S2
-  ER --- S3
-  D -. executed_playbook .-> ER
+  Q --> R --> A
+  A -- yes --> E
+  A -- no --> M
+  M --> C --> X
+  M --> T
 ```
 
-### Stage F — outcome and back-pressure on the recommender
+**Abstention is a feature.** Results below `MIN_RECOMMENDATION_SCORE = 0.35` are dropped, and when candidates existed but all fell below, `ranking.abstained` is logged with the top score. **An empty list means "no recommendation"** — that is the contract, not an error (`hybrid_ranker.py:168-171, 368-379`).
 
-`CaseOutcome.successful_action='resend_existing_output'` increments `FixPattern.success_count` to 6; `ErrorSignature.success_count` to 6; `Pattern.episode_count` to 6 with a small confidence bump. The Playbook's own usage stats (queryable via `decision_outcomes` filtered by `decision_type='execute_playbook'` for that playbook) show 100% success across six executions.
+The risk cap comes from the caller's roles: admins uncapped, `knowledge_manager` and service accounts capped at `high`, everyone else at `medium` (`backend/src/contextedge/api/v1/runtime.py:42-52`).
 
-If a future case fails this fix:
-- `case_outcomes.failed_actions[]` would include `resend_existing_output`.
-- `FixPattern.failure_count` increments; `confidence` decays.
-- The contradiction scanner re-runs against the playbook's cited evidence.
-- If decay drops below the recommender threshold, `hybrid_ranker` stops surfacing it as the top match — the playbook stays `approved` but is naturally demoted by the math.
+### Stage E — execution, and what the ledger actually is
 
-This is the closed-loop learning signal: **outcomes write counters, counters write rankings, rankings drive next-case recommendations**.
+**Live, but caller-driven.** `execution_service` is a governed ledger, not an executor. `start_execution` evaluates the automation-mode cap and per-step `action_policies` (scope filter → specificity → conflict resolution, default `most_restrictive`, with an unknown verdict ranking most restrictive so a typo cannot read as `allowed_auto`), checks trust suspension, and assigns idempotency keys to side-effecting steps derived from the approved artifact hash scoped to the case. `request_approval` binds an approval to `artifact_version` / `artifact_hash` / `policy_snapshot` / `expires_at`, and `record_tool_invocation` re-checks both the hash and the duplicate key — refusing with **409, not 500**, because a duplicate replay and a stale binding are well-formed requests the state declines.
+
+Every policy evaluation writes an append-only `policy_checks` row keyed to the policy **version**, including on the denial path (`backend/src/contextedge/services/policy_check_service.py:34`). Audit writes are fail-soft by design: the gate has already decided, and an audit failure must not turn an allowed action into a failed one.
+
+> **There is no executor and no write-capable agent tool on this branch.** All six MAF tools are read-or-propose, and `execution_service` is driven by external callers (`codewiki/KNOWN_GAPS.md:34`). These controls are prerequisites, not live exposure.
+
+### Stage F — the feedback loop that exists today
+
+```mermaid
+graph LR
+  FB[retrieval_feedback<br/>wrong_match, step_ineffective, expired_workaround]
+  DR[drift_service.list_drift_alerts<br/>DETERMINISTIC — no LLM]
+  PB[playbooks · approved]
+  VER[execution_runs.verification_status<br/>verified / failed / unverifiable]
+  KS[evidence_items.knowledge_support<br/>proven / emerging / unproven / contested]
+  RANK[hybrid_ranker]
+
+  FB --> DR
+  PB --> DR
+  DR -- past_expiry, not validated in N days,<br/>3+ negative feedback, pattern updated after --> ALERT[drift alert + lifecycle transition]
+  VER --> KS
+  KS -- SUPPORT_RANK_FACTORS multiply distance --> RANK
+  FB --> RANK
+```
+
+**Live.** Drift runs every 6 hours and is **entirely deterministic** — no model call. `list_drift_alerts` flags a playbook when it is past `expiry_at`, has not been validated in over 90 days, has 3 or more negative retrieval-feedback rows in the last 30 days, or its source pattern was updated after the playbook (`backend/src/contextedge/services/drift_service.py:13-81`). The alert snapshot is taken **before** `apply_expired_playbook_transitions` runs, so past-expiry playbooks still appear in the alerts.
+
+Verification (`evaluation.verify_executions`, every 15 minutes) re-checks completed runs after the version's `recheck_after_sec` (default 1800, floor 300). **Absence now passes only when the CI has actually produced an incident or alert in the last 30 days**; otherwise the criterion is `not_observable` and the verdict is `inconclusive`. Runs that previously read `verified` on a silent CI now read `unverifiable` — that is the correction, not a regression, because those counters were being fed silence as success.
+
+Verification verdicts refresh `evidence_items.knowledge_support`, which re-ranks knowledge retrieval multiplicatively (Stage B). That is the closed loop as it exists today: **outcomes adjust support levels, support levels adjust retrieval ranking, ranking shapes the next generated playbook.** The `FixPattern` counter loop drawn in older versions of this document is **schema only** — nothing mints the row it depends on.
+
+---
+
+## Additional scenario — AE Ops case lifecycle (MG22 DB Dump)
+
+> **This is an additional scenario, not the canonical one.** It exists because it exercises the case-spine tables from migration `0029` — `resolution_sessions` case columns, `case_state_transitions`, `case_outcomes`, `claims`, `action_policies`, `approval_requests`, `execution_step_runs` — which the Acme VPN thread does not touch. Read Examples 1-3 first.
+
+**Scenario.** Business user `abc@xyz` reports: *"I did not receive my MG22 output today."* This is the AutomationEdge Ops `output_not_received` use case.
+
+### Stage 1 — catalogue entities
+
+```mermaid
+graph LR
+  WF[entities · workflow<br/>name=MG22 DB Dump<br/>external_system=ae · external_id=WF_MG22]
+  AG[entities · agent_machine · AE-AGENT-03]
+  SCH[entities · schedule · Daily 10#58;00 IST]
+  OUT[entities · output_location · email#58;finance-ops@bank]
+  USR[entities · user · abc@xyz]
+
+  USR -. mapped_to .-> WF
+  WF -. runs_on .-> AG
+  WF -. produces_output_at .-> OUT
+  SCH -. triggers .-> WF
+```
+
+**Live.** `entities` rows carry an `(entity_type, external_system, external_id)` natural key, and `graph_edges` carry temporal validity (`valid_from` / `valid_to`), so "this user owned this workflow on the incident date" is a valid query. `edge_valid_at(as_of)` supplies the predicate (`backend/src/contextedge/graph/temporal.py:29-36`).
+
+> **`as_of` caveat.** Historical edges combine with **current** node facts. The agent projection says so in an explicit warning, and callers must not draw historical operational conclusions from a point-in-time projection (`backend/src/contextedge/graph/agent/selector.py:236-242`; `codewiki/KNOWN_GAPS.md:66`).
+
+### Stage 2 — case opened
+
+```mermaid
+graph LR
+  CASE[resolution_sessions<br/>case_number=CG-2026-000123<br/>case_type=ae_ops_support<br/>issue_type=output_not_received<br/>priority=P3 · environment=prod<br/>status=triaging]
+  WF[entities · workflow · MG22]
+  USR[entities · user · abc@xyz]
+  AG[entities · agent_machine]
+  TR[case_state_transitions<br/>null → triaging]
+
+  CASE -- workflow_entity_id --> WF
+  CASE -- user_entity_id --> USR
+  CASE -- agent_entity_id --> AG
+  CASE -. has .-> TR
+```
+
+**Live** for the row and the transitions — `case_outcome_service` writes `CaseOutcome` and `CaseStateTransition` (`backend/src/contextedge/services/case_outcome_service.py:161`). The case-spine columns are all nullable for back-compat and are populated by AE/ServiceNow ingestion or graduated from the older `entities[]` JSONB during an enrichment pass (`backend/src/contextedge/models/session.py:48-56`).
+
+### Stage 3 — evidence and claims
+
+```mermaid
+graph LR
+  EV1[evidence_items #1<br/>source_type=AE_API · evidence_time=10#58;42#58;00<br/>collected_by=diagnostic_agent<br/>'status=COMPLETED, output_path set']
+  EV2[evidence_items #2<br/>source_type=AE_AGENT_LOG · evidence_time=10#58;42#58;13<br/>redaction_status=applied<br/>'SMTP timeout while sending output email']
+  C1[claims #1 · claim_type=symptom<br/>validation_status=unverified]
+  C2[claims #2 · claim_type=probable_root_cause<br/>validation_status=unverified]
+
+  EV1 -. cites .-> REQ[entities · workflow_request · REQ-98231]
+  EV2 -. cites .-> REQ
+  C1 -. SCHEMA ONLY .-> EV2
+  C2 -. SCHEMA ONLY .-> EV1
+```
+
+`evidence_time` (the **subject** time, 10:42) is distinct from `ingested_at` (when the graph stored it) and from `created_at_source`.
+
+**Live**: `claims` rows — `claim_service` constructs them (`backend/src/contextedge/services/claim_service.py:77`).
+**Schema only**: `claim_evidence` and `decision_claims`. Nothing links a claim to its evidence or to a decision, and nothing moves a claim past `unverified`, so the `VALIDATION_STATUSES` lifecycle is currently unreachable (`codewiki/KNOWN_GAPS.md:11`). The dotted edges above are drawn as design intent, not as rows you will find.
+
+### Stage 4 — decision, approval, execution
+
+```mermaid
+graph LR
+  D[decisions<br/>decision_intent=recommendation<br/>risk_level from the SELECTED option only<br/>policy_result = strictest action-policy verdict]
+  O1[decision_options #1 · rerun_workflow · selected=false]
+  O2[decision_options #2 · resend_existing_output · selected=true]
+  AP[action_policies<br/>action_name=rerun_workflow · environment=prod<br/>verdict=approval_required]
+  AR[approval_requests<br/>artifact_version + artifact_hash + policy_snapshot<br/>expires_at · status=approved]
+  ESR[execution_step_runs<br/>idempotency_key derived from the artifact hash + case<br/>status=completed]
+  TI[tool_invocations · ae.resend_output · success]
+  PC[policy_checks<br/>append-only, keyed to the policy VERSION<br/>records the DENIAL path too]
+
+  D -- considered --> O1
+  D -- chose --> O2
+  D -- applied_policy --> AP
+  D -- required_approval --> AR
+  AR --- ESR
+  ESR --- TI
+  AP -.-> PC
+```
+
+**Live.** `Decision.policy_result` carries the run's strictest verdict; NULL means "no rule existed", which is distinct from `allowed_auto`. The idempotency key is live as of the F8 work: derived from the approved artifact hash scoped to the case, assigned only to side-effecting steps, skipped-and-recorded on a duplicate, and refused again at `record_tool_invocation` (`codewiki/KNOWN_GAPS.md:20`).
+
+**Residual to state honestly**: separation of duties is enforced only on the initiator ↔ approver axis via `forbid_self_approval`, never recommender ↔ approver; `recommended_by`, `sod_check_status`, `sod_violation_reason`, `approval_channel` and `approval_note` remain unwritten (`codewiki/KNOWN_GAPS.md:12`).
+
+### Stage 5 — outcome
+
+```mermaid
+graph LR
+  CO[case_outcomes<br/>outcome_status=resolved<br/>confirmed_root_cause='SMTP relay timeout'<br/>successful_action=resend_existing_output<br/>failed_actions=[] · user_confirmed=true<br/>mttr_minutes = closed_at − started]
+  CASE[resolution_sessions · closed]
+  TR2[case_state_transitions · monitoring → closed]
+  ES[error_signatures · SMTP timeout shape<br/>LIVE — deterministic regex at ingest]
+  FP[fix_patterns<br/>SCHEMA ONLY — no constructor exists]
+
+  CO -- case_id --> CASE
+  CASE -. has .-> TR2
+  CO -. would increment .-> FP
+```
+
+**Live**: `case_outcomes`, `case_state_transitions`, `error_signatures`.
+**Schema only**: `fix_patterns`. `CaseOutcomeFixPattern` has a writer, but nothing mints the `FixPattern` it references, so that write is unreachable in practice. Until Epic B populates it, MTTR and first-time-right numbers derived from a fix-pattern counter are **not measurable** from this system.
 
 ---
 
 ## Retention defaults
 
-Source: `backend/src/contextedge/services/retention_service.py` and `services/memory_service.py`.
+Sources: `backend/src/contextedge/services/retention_service.py`, `backend/src/contextedge/services/memory_service.py`, `backend/src/contextedge/workers/retention_tasks.py`, `backend/src/contextedge/config.py`.
 
 | Knob | Default | Where set |
 |---|---|---|
-| `retention_days` (base) | **No code default — caller must supply.** Tests pass `30`. Per-tenant override via `Tenant.retention_defaults JSONB` or `TenantPolicy(policy_type='retention')` | `apply_retention_policy(retention_days=…)` |
-| Short-term window | `base` days (= `retention_days`) | `memory_retention_windows()` |
-| Reasoning window | `max(base × 3, 90)` days | `memory_retention_windows()` |
-| Long-term window | `max(base × 6, 180)` days | `memory_retention_windows()` |
-| Archive grace (archive → purge) | **`30` days** | `DEFAULT_ARCHIVE_GRACE_DAYS` |
-| Purge mode | `hard_delete` (default) or `soft_purge` | `purge_archived_evidence(mode=…)` |
-| Purge limit per tick | `1000` rows, oldest-first (review F-16) | `purge_archived_evidence(limit=…)` |
-| Legal-hold items | **Always excluded** from archive + purge | `evidence_filters.exclude_legal_hold()` |
+| `retention_days` (base) | The scheduled task resolves the newest active `TenantPolicy(policy_type="retention")` `config.retention_days`, and falls back to **`settings.retention_default_days = 365`** | `workers/retention_tasks.py:38-65`; `config.py:217-219` |
+| Short-term window | `base` days | `memory_retention_windows()` (`services/memory_service.py:64-71`) |
+| Reasoning window | `max(base × 3, 90)` days | same |
+| Long-term window | `max(base × 6, 180)` days | same |
+| Archive grace (archive → purge) | **30 days** | `DEFAULT_ARCHIVE_GRACE_DAYS` (`services/retention_service.py:66`) |
+| Scheduled purge mode | **`soft_purge`** — `hard_delete` is opt-in | `settings.retention_purge_mode` (`config.py:212-215`) |
+| Purge limit per tick | 1,000 rows, oldest-first | `purge_archived_evidence(limit=…)` (`services/retention_service.py:177-196`) |
+| Legal-hold items | **Always excluded** from archive and purge — in the SQL `WHERE`, never post-filtered | `evidence_filters.exclude_legal_hold()` |
+
+> Two corrections to older versions of this table: `retention_days` **does** have an effective default now (the scheduled path supplies 365 when no policy exists), and the scheduled purge default is **`soft_purge`**, not `hard_delete`.
 
 ### Memory-class assignment (`classify_evidence_memory_class`)
 
@@ -562,24 +715,30 @@ Source: `backend/src/contextedge/services/retention_service.py` and `services/me
 - `canonical_entity_refs.identities` populated → **long_term**
 - everything else → **short_term**
 
-### Worked example (caller passes `retention_days=30`)
+`reasoning` is a class used for decision and execution material in the runtime memory context; evidence classification only ever yields short or long (`memory_service.py:73-79`).
+
+### Worked example (base 365, the deployment default)
 
 | Memory class | Window |
 |---|---|
-| short_term | 30 days |
-| reasoning | 90 days (`max(30 × 3, 90)`) |
-| long_term | 180 days (`max(30 × 6, 180)`) |
-| Then: archived | +30 days grace |
-| Then: hard_delete or soft_purge | `soft_purge` nulls `body_text`, `body_summary`, `embedding`, `canonical_entity_refs`, `raw_object_ref`; sets `title='[purged]'` |
+| short_term | 365 days |
+| reasoning | 1,095 days (`max(365 × 3, 90)`) |
+| long_term | 2,190 days (`max(365 × 6, 180)`) |
+| then archived | +30 days grace |
+| then purged | `soft_purge` by default |
 
-### Soft-purge vs hard-delete
+Acme, concretely: the `INC0010427` evidence carries resolved identities, so it is `long_term` and archives after 2,190 days. A drive-by Teams message with no identities archives after 365.
 
-- **`hard_delete`** removes the `evidence_items` row entirely. Cascades clean up `attachment_artifacts`, `correlation_edges`, `claim_evidence`, `decision_evidence`. The companion daily Beat task (`workers/cleanup_tasks.py::cleanup_hard_deleted_evidence`) reaps MinIO blobs and `graph_edges` rows that referenced the deleted evidence (review F-18, F-20). `playbook_evidence_links.evidence_id` is `SET NULL` rather than `CASCADE` so the audit record "this playbook version was built with support from evidence that has since been removed" survives (review F-19, migration `0027`).
-- **`soft_purge`** keeps the row and FK targets but scrubs identifying content. Useful for GDPR right-to-erasure where the audit trail must remain.
+### Soft purge vs hard delete
 
-### What `0029` did not add to retention
+- **`soft_purge`** (the scheduled default) keeps the row and its FK targets but scrubs content: NULLs `embedding`, `body_text`, `body_summary`, `canonical_entity_refs` (extracted person and service names in clear text) and `raw_object_ref` (so the object-store blob can be lifecycle-reaped and a re-ingest cannot rehydrate it), and sets `title = "[purged]"`. It then **explicitly deletes the evidence's `evidence_chunks` rows** — chunks carry the same content and the same embeddings, and the hard-delete FK cascade does not apply when the parent row survives (`retention_service.py:212-242`).
+- **`hard_delete`** removes the `evidence_items` row entirely. Cascades clean up `attachment_artifacts`, `correlation_edges` and `contradiction_scan_state`. `playbook_evidence_links.evidence_id` is `ON DELETE SET NULL` rather than `CASCADE`, so the audit record — "this playbook version was built with support from evidence that has since been removed" — survives.
 
-The design's Section 43.9 `cg_retention_policy` table is **not** in `0029` — retention still flows through `TenantPolicy(policy_type='retention')` + the per-tenant `Tenant.retention_defaults` JSONB. That's a deliberate next-wave hook (listed in [codewiki/17-ae-ops-context-graph-alignment.md](../codewiki/17-ae-ops-context-graph-alignment.md) under "What's deliberately not in 0029").
+### The daily orphan sweep
+
+`evaluation.cleanup_hard_deleted_evidence` reaps what hard delete deliberately leaves: `raw_evidence_objects` rows and their MinIO blobs that no `evidence_items.raw_object_ref` references (there is no FK), and `graph_edges` whose evidence endpoint no longer exists (edge node ids are plain UUIDs, also with no FK). Blob-delete failures leave the DB row in place so the next sweep retries. **Attachment blobs are a documented stub returning 0** — once the rows are gone, a DB scan cannot find them; run an S3 lifecycle rule on the `artifacts/` prefix instead (`backend/src/contextedge/workers/cleanup_tasks.py:50-223`).
+
+**Caveat that still stands**: offloaded raw payloads for *live* evidence have no TTL or garbage collection in code. Blob retention for those depends on an external bucket lifecycle rule (`codewiki/KNOWN_GAPS.md:222`).
 
 ---
 
@@ -587,9 +746,13 @@ The design's Section 43.9 `cg_retention_policy` table is **not** in `0029` — r
 
 | If you want to … | Read |
 |---|---|
+| The prose pipeline walkthrough | [03_End_to_End_Project_Flow.md](03_End_to_End_Project_Flow.md) |
+| The same flows as diagrams | [15_Project_Flow_Diagrams.md](15_Project_Flow_Diagrams.md) |
 | Understand the full pipeline narratively | [codewiki/01-end-to-end-pipeline.md](../codewiki/01-end-to-end-pipeline.md) |
-| Dive into Episode reconstruction internals | [codewiki/07-episodes-patterns-playbooks.md](../codewiki/07-episodes-patterns-playbooks.md) |
+| Dive into episode reconstruction internals | [codewiki/07-episodes-patterns-playbooks.md](../codewiki/07-episodes-patterns-playbooks.md) |
 | See how `graph_edges` adjacency works | [codewiki/09-graph-and-correlation.md](../codewiki/09-graph-and-correlation.md) |
+| Read the chunker strategy table | [codewiki/CHUNKING_DESIGN.md](../codewiki/CHUNKING_DESIGN.md) |
 | Read the AE Ops alignment design notes | [codewiki/17-ae-ops-context-graph-alignment.md](../codewiki/17-ae-ops-context-graph-alignment.md) |
-| Check the migration that landed the `0029` columns | [docs/MIGRATIONS.md](MIGRATIONS.md) |
-| Look up an HTTP route | [docs/API.md](API.md) |
+| Run it locally, or start workers correctly | [RUNBOOK.md](RUNBOOK.md) |
+| Look up an HTTP route | [API.md](API.md) |
+| Check what is not finished before you claim it works | [codewiki/KNOWN_GAPS.md](../codewiki/KNOWN_GAPS.md) |

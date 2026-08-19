@@ -2,9 +2,9 @@
 
 ## Summary
 
-You will understand how a Zoho Desk help desk becomes a ContextEdge source: which two record families it contributes (tickets and knowledge-base articles), why its sync strategy looks nothing like the ServiceNow connector's despite solving the same problem, and which of its behaviours were **verified against a live instance** rather than inferred from documentation.
+You will understand how a Zoho Desk help desk becomes a ContextEdge source: which two record families it contributes (tickets and knowledge-base articles), why its sync strategy looks nothing like the ServiceNow connector's despite solving the same problem, and which of its behaviours were **verified against a live instance** rather than inferred from documentation. The API contract for both record families was checked against a real portal — the KB against its 629 articles (2026-08-03), tickets against a 1,000-ticket backfill (2026-08-16) — but only the ticket path has actually been *ingested*: the `articles` module is discovered and left unapproved, so no Zoho article has ever become evidence here (see **Known limits**).
 
-This page exists because Zoho Desk breaks three assumptions the other ticket connectors were built on, and each break is load-bearing. If you are adding a fifth connector, read the **Design decisions** section before you copy an existing one.
+This page exists because Zoho Desk breaks several assumptions the other ticket connectors were built on, and each break is load-bearing — including one where the API answers quota exhaustion with **empty results instead of errors**. If you are adding another connector, read the **Design decisions** section before you copy an existing one.
 
 ## Business picture
 
@@ -14,44 +14,57 @@ The **tickets** are what broke and who fixed it — the incident record, the cus
 
 Connecting Zoho Desk once brings both into the same evidence pool as the organization's Jira tickets, Teams threads, and ServiceNow incidents — so a search for "VPN gateway timeouts" returns the incident, the chat where it was diagnosed, *and* the KB article that documents the fix, ranked together.
 
-One operational caveat is worth stating up front, because it is the most common way this integration disappoints: **Zoho's OAuth grant is per-module**. A token issued with only knowledge-base permission will sync 629 articles perfectly and silently contribute zero tickets. The connector reports this explicitly rather than looking empty — see **Scope reporting** below.
+One operational caveat is worth stating up front, because it is the most common way this integration disappoints: **Zoho's OAuth grant is per-module**. A token issued with only knowledge-base permission discovers and syncs the knowledge base — 629 articles on the portal this was verified against — and silently contributes zero tickets. The connector reports that explicitly rather than looking empty: `validate_credentials` names which modules are readable and which are not (connector.py:611-648).
 
 ## What was verified against a live instance
 
-Everything in the sync strategy was checked against a real Zoho Desk portal (`desk.zoho.in`, org `60001911841`, 629 published articles) rather than taken from documentation. The findings that changed the implementation:
+Everything in the sync strategy was checked against a real Zoho Desk portal (`desk.zoho.in`, org `60001911841`) rather than taken from documentation — first the KB (629 published articles), later the ticket path against a live 1,000-ticket backfill once `Desk.tickets.READ` was granted. The findings that changed the implementation:
 
 | Finding | Consequence |
 | --- | --- |
-| `limit` is capped at **50**. `limit=51` returns `422 UNPROCESSABLE_ENTITY: exceeds the range of '1-50'`. | A page size copied from the ServiceNow connector (100) would 422 on **every** call. |
-| **No modified-since filter exists.** `modifiedTimeRange` is rejected as an extra query parameter. | Incremental sync cannot be a server-side window. It is a newest-first walk with an early stop. |
+| `limit` is capped at **50**. `limit=51` returns `422 UNPROCESSABLE_ENTITY: exceeds the range of '1-50'`. | A page size copied from the ServiceNow connector (100) would 422 on **every** call (connector.py:118-119). |
+| **No modified-since filter exists.** `modifiedTimeRange` is rejected as an extra query parameter. | Incremental sync cannot be a server-side window. It is a newest-first walk with an early stop (connector.py:764-770). |
 | `sortBy=-modifiedTime` returns strictly descending order — confirmed across all 13 pages of the live KB. | This ordering is the entire foundation of incremental sync. |
 | Records sharing a `modifiedTime` arrive in **ascending id** order inside that descending sequence. | A ServiceNow-style `(time, id)` compound cursor does not describe this API and cannot be used. See **Design decision 2**. |
-| List rows carry `summary` but **not** the body. `answer` (articles) and `description` (tickets) only exist on the per-record detail call. | Sync issues one detail call per changed record, or ingests teaser-only evidence. |
-| Missing permissions fail as `403 SCOPE_MISMATCH`, **per module**. | Discovery must skip an unreadable module, not abort. |
-| The API root includes `/api/v1`; omitting it returns a bare `404`. | A `404` here reads exactly like a missing scope — a real bug found during live testing. |
-| Rate limiting is metered by request *weight* per org (`X-Rate-Limit-Remaining-v3`), not a flat RPS. | 5 rps with a small burst leaves ample headroom for detail calls. |
+| List rows carry `summary` but **not** the body. `answer` (articles) and `description` (tickets) only exist on the per-record detail call. | Sync issues one detail call per changed record, or ingests teaser-only evidence (connector.py:919-926). |
+| The ticket list endpoint does **not** return `modifiedTime` by default, and `fields=` **replaces** the projection rather than adding to it. | Every field the mapper reads must be named in `TICKET_FIELDS` (27 fields); before the fix, incremental ticket sync compared `""` against the checkpoint and returned zero, forever, while backfill silently ignored its window (connector.py:130-189). |
+| `assigneeId` / `contactId` are bare ids; the people **records** only arrive with `include=contacts,assignee,team,products`. | Without the include, assignee/reporter fields were empty on **all 1,000 tickets** of a live backfill. It costs no extra API call — the objects come back inline (connector.py:262-269). |
+| Zoho allows **5 refresh-token exchanges/minute and 30 live access tokens per refresh token** — and exceeding either returns *empty results*, not an error. | Hydrating 20 threads in a loop stored 9 full conversations and 11 empty ones, twice, while reporting success. Tokens are now cached process-wide and minting is serialized; auth/quota failures are classified fatal-for-the-run (connector.py:191-222, 225-249, 363-379). |
+| Missing permissions fail as `403 SCOPE_MISMATCH`, **per module**. | Discovery must skip an unreadable module, not abort (connector.py:652-683). |
+| The API root includes `/api/v1`; omitting it returns a bare `404`. | A `404` here reads exactly like a missing scope — a real bug found during live testing (connector.py:98-105). |
+| Rate limiting is metered by request *weight* per org (`X-Rate-Limit-Remaining-v3`), not a flat RPS. | 5 rps with a burst of 10 leaves ample headroom for detail calls (connector.py:1494-1499). |
+
+All `connector.py` citations in this page are `backend/src/contextedge/connectors/zoho_desk/connector.py`.
 
 ## Technical walkthrough
 
-1. **Authentication.** `_token()` exchanges a long-lived refresh token for a one-hour access token at the data center's accounts host, caches it for the life of the connector instance, and re-mints on a 401 so a token revoked mid-sync recovers instead of failing the run. Zoho pins accounts to the data center they were created in, so `credentials["data_center"]` (`com`, `in`, `eu`, `au`, `jp`, `ca`, `sa`, `uk`) selects a matching accounts/API host **pair** — a cross-DC call fails authentication.
+1. **Authentication — process-wide token cache, serialized minting.** `_token()` exchanges the long-lived refresh token for a one-hour access token at the data center's accounts host. The cache is **process-wide**, not per-instance, keyed by `sha256(client_id|refresh_token)` so the module global never holds a second copy of the secret (connector.py:363-416) — every Celery task builds a fresh connector, so an instance cache would never be reused and each task would mint its own token. That matters because Zoho's quota failure mode is *silence*: 5 refresh exchanges/minute, 30 live tokens per refresh token, and exceeding either makes subsequent API calls return **empty results** with no error (connector.py:370-377). Minting is serialized by an `asyncio.Lock` held per event loop and per credential set in a `WeakKeyDictionary` — a single global lock would bind to the first task's loop and raise for every later one under Celery's per-task `asyncio.run()` (connector.py:200-222). A dead refresh token answers 200 with `{"error": ...}`; `_mint_token` converts that into a `ValueError` so the failure is legible instead of an all-403 sync (connector.py:439-446). Tokens are refreshed 120 s before expiry so one cannot die mid-page (connector.py:299-304). Zoho pins accounts to the data center they were created in, so `credentials["data_center"]` (`com`, `in`, `eu`, `au`, `jp`, `ca`, `sa`, `uk`) selects a matching accounts/API host **pair** (connector.py:107-116).
 
-2. **Discovery.** `discover_objects()` probes each module in `MODULES` and emits one `DiscoveredObject` per readable one, carrying the record count from `/ticketsCount` or `/articles/count`. A module answering `403`/`404` is logged and skipped. With `source_config["per_department"]`, tickets are offered as one object per department (`tickets:<departmentId>`) instead of one object for all of them.
+2. **Transport.** `_get()` makes up to 3 attempts: one forced token re-mint and replay on a 401 (a token revoked mid-sync recovers instead of failing the run); retry honoring `Retry-After` (capped at 60 s) on 429/5xx; any other 4xx raises immediately — a `SCOPE_MISMATCH` will not improve on retry (connector.py:477-534). An empty result set arrives as 204/no-body, which `_rows` turns into `[]` (connector.py:545-556). Because a quota-starved call *also* looks like an empty result, `_is_fatal_for_the_run` classifies auth/quota failures (`ValueError` from minting, 401/403/429 after replay) as fatal so callers re-raise instead of storing plausible-looking empty data (connector.py:225-249).
 
-3. **Incremental sync.** `_walk_desc()` reads newest-first with `sortBy=-modifiedTime` and 1-based `from` offset paging, stopping at the checkpoint. The checkpoint is a **timestamp plus the set of ids already emitted at that timestamp** — not a compound cursor (decision 2). A row strictly older than the boundary stops the walk; a row *at* the boundary is emitted only if its id is new and does not stop the walk, so the remainder of a tied bulk edit is always reached.
+3. **Ticket list projection.** The ticket list endpoint omits `modifiedTime` by default, and `fields=` **replaces** the projection, so every field the mapper reads is named explicitly in `TICKET_FIELDS` — 27 fields including `threadCount`/`commentCount` (which the `min_thread_count` filter reads on the raw row and ingest prioritization reads once mapped into the payload) and the people/team/product ids (connector.py:159-189). An unrecognised name 500s the whole call rather than being ignored, which is why `subStatus`, `statusText` and `isArchived` are absent — the live API returns them by default but rejects them by name (connector.py:149-153). `include=contacts,assignee,team,products` rides on every ticket list and detail call so those ids come back as records with names and emails (connector.py:262-269, 939). Custom fields are deliberately absent from the list projection — `cf` only carries values on the detail call, which `_hydrate_rows` already makes (connector.py:154-158).
 
-4. **Ordering guard.** Every page is checked for descending `modifiedTime` before its rows are consumed. Out-of-order pages stop the walk **without advancing the checkpoint** — refetching next tick is safe because dedupe absorbs it; skipping unreturned records is silent data loss. This is the same fail-closed contract as the ServiceNow connector's `page_order_violation`.
+4. **Discovery.** `discover_objects()` probes each module in `MODULES` and emits one `DiscoveredObject` per readable one, carrying the record count from `/ticketsCount` or `/articles/count`. A module answering `403`/`404` is logged (`zoho_desk.module_unavailable`) and skipped (connector.py:652-714). With `source_config["per_department"]`, tickets are offered as one object per department (`tickets:<departmentId>`; needs `Desk.settings.READ`) (connector.py:687-704).
 
-5. **Backfill.** The same descending walk, bounded by the requested window: rows newer than `window.end` are skipped and the walk continues; the first row older than `window.start` ends it. When the page budget runs out mid-window, the checkpoint stores an **offset** rather than a timestamp, so a partial sweep can never seed incremental sync from an incomplete picture.
+5. **Incremental sync.** `_walk_desc()` reads newest-first with `sortBy=-modifiedTime` and 1-based `from` offset paging, stopping at the checkpoint (connector.py:753-917). The checkpoint is a **timestamp plus the set of ids already emitted at that timestamp** — not a compound cursor (decision 2; `_read_checkpoint`/`_checkpoint_data`, connector.py:1527-1556). A row strictly older than the boundary stops the walk; a row *at* the boundary is emitted only if its id is new and does not stop the walk, so the remainder of a tied bulk edit is always reached (connector.py:886-894). The control signal is consulted between pages, and a stop **returns** what was collected rather than discarding it (connector.py:813-823).
 
-6. **Detail hydration.** `_hydrate_rows()` fetches the per-record body that list rows omit, bounded by `DETAIL_FETCH_LIMIT`. A failed detail call degrades to the list row rather than dropping the record.
+6. **Ordering guards, both fail-closed.** Every page is checked for descending `modifiedTime` before its rows are consumed; an out-of-order page stops the walk **without advancing the checkpoint** — refetching next tick is safe because dedupe absorbs it, skipping unreturned records is silent data loss (connector.py:868-874). A page with any row *missing* `modifiedTime` is refused the same way, because every downstream comparison degrades to a silent wrong answer on `""` — this is exactly what the ticket module did before `fields=` was sent (connector.py:845-866). `fetch_changes` additionally clamps `max_time < stop_at_time` back to the old checkpoint, so it can never move backwards (connector.py:1062-1065).
 
-7. **Body conversion.** `html_text.html_to_text()` converts Zoho's rich text to heading-preserving plain text using only `html.parser` — no new dependency. Headings survive as `#` markers because `chunkers/attachment.py` splits documents on heading boundaries.
+7. **Backfill.** The same descending walk, bounded by the requested window: rows newer than `window.end` are skipped and the walk continues; the first row older than `window.start` ends it (connector.py:896-905). When the page budget (`max_pages` × 50) runs out mid-window, the checkpoint stores an **offset** rather than a timestamp, so a partial sweep can never seed incremental sync from an incomplete picture; on completion the time checkpoint is written, seeded at `min(window.end, now)` when the window was empty (connector.py:1006-1019). `has_more=True` signals the budget case — note the sync job does not auto-redispatch; the next scheduled or manual run continues from the offset (connector.py:1021-1026).
 
-8. **Thread hydration.** For tickets, `hydrate_thread()` merges two endpoints that both matter: `/threads` (the customer email exchange) and `/comments` (the internal agent discussion — the ServiceNow work-notes equivalent). Thread bodies are not on the list response, so each needs its own detail call. Articles have no conversation and hydrate to a no-op.
+8. **Client-side filter backstop.** `module_filters` are sent server-side, then re-verified per returned row by `_matches_module_filter`, because a filter value the API does not recognise is *silently ignored* server-side and the full unfiltered window comes back (connector.py:574-607). `min_thread_count` filters tickets on `threadCount` the same way (connector.py:583-591). Filtering runs after the walk and **before** detail hydration, so unmatched rows never spend a detail call (connector.py:997-1002, 1053-1058).
 
-9. **Reference enrichment.** `zoho_desk_reference_service` turns product, team, account, and KB category into graph entities with typed edges, article tags into topics, and related-ticket ids into symmetric case-link keys.
+9. **Detail hydration.** `_hydrate_rows()` fetches the per-record body that list rows omit, bounded by `detail_fetch_limit` (config, default `DETAIL_FETCH_LIMIT` = 200) (connector.py:919-941). The bound silently decided the quality of a whole backfill once: at the old hard-coded 200 against a 1,000-ticket window, 823 tickets kept their list row — median `description` 38 characters versus 488 for a detail-fetched record, no `resolution`, no custom fields — which is why it is now config-driven (connector.py:931-938; [KNOWN_GAPS.md](./KNOWN_GAPS.md), teaser entry). A failed detail call degrades to the list row rather than dropping the record; the control signal is checked every 25 records so a pause lands in seconds (connector.py:941-968).
 
-10. **Scope reporting.** `validate_credentials()` returns valid only when at least one module is readable, and names both what was granted and what was not. `probe_configuration()` is the fuller read-only setup report: granted scope string, per-module readability, record counts, and whether detail calls actually return a body.
+10. **Body conversion.** `html_text.html_to_text()` converts Zoho's rich text to heading-preserving plain text using only `html.parser` — no new dependency (backend/src/contextedge/connectors/zoho_desk/html_text.py). Headings survive as `#` markers because the document chunker splits on heading boundaries.
+
+11. **Event mapping.** `_event()` builds the `IngestionEvent`: `external_id` is the 18-digit row id, `thread_id` is `zoho_ticket:<id>` / `zoho_article:<id>`, and `content["evidence_type"]` is stamped `"ticket"` / `"kb_article"` — the explicit stamp that wins in `derive_evidence_type` downstream (connector.py:1083-1119). Ticket content merges `description` + `resolution` into one body, carries the quotable `ticket_number` (distinct from the opaque row id), `thread_count`/`comment_count`, `status` (the field `derive_case_state` reads at normalization), people/team/product names, `related_tickets`, attachment metadata under `attachment_refs`, and bounded custom fields under `cf` (max 40) (connector.py:1121-1178, 1666-1678). Article content carries `answer` → heading-preserving text, plus `status` — the field `derive_knowledge_state` reads, so a `Draft` or `Review` article would be withheld from retrieval once ingested (connector.py:1180-1218). Those are the only two withholding values mapped for Zoho: the lifecycle table has `published`/`draft`/`review` and no Zoho `retired`, so a status this table does not know serves and is logged once (services/knowledge_lifecycle.py:80-90).
+
+12. **Thread hydration.** For tickets, `hydrate_thread()` merges two endpoints that both matter: `/tickets/{id}/threads` (the customer email exchange; bodies need one detail call per thread, capped at `THREAD_FETCH_LIMIT` = 50) and `/tickets/{id}/comments` (the internal agent discussion — the ServiceNow work-notes equivalent, usually where the diagnosis lives) (connector.py:1222-1358). Messages are `{id, body, type: thread|comment, direction/is_public, from, timestamp}`, sorted by timestamp. Per-endpoint failures are recorded separately, and if **both** endpoints failed the listing error is re-raised — an empty return would be stored as "hydrated, no conversation" and never fetched again (connector.py:1344-1349). Fatal auth/quota errors always re-raise for the same reason (connector.py:1264-1266, 1314-1316). Articles have no conversation and hydrate to a no-op (connector.py:1240-1247).
+
+13. **Reference enrichment.** `zoho_desk_reference_service.process_zoho_desk_references` turns product, team, account, and KB category into graph entities with typed edges, article tags into topics, and each validated related-ticket id into a generic `related_ticket` edge between the two evidence rows (backend/src/contextedge/services/zoho_desk_reference_service.py:177-230). The **case-link keys** are made one layer up: `correlation_service.extract_case_link_candidates` adds the ticket's own `ticket_number` plus every id from `extract_ticket_references` into the `zoho_desk` key namespace, which is what makes the link symmetric and ingestion-order-independent (backend/src/contextedge/services/correlation_service.py:177-191).
+
+14. **Scope reporting.** `validate_credentials()` returns valid only when the token mints *and* at least one module is readable, naming both what was granted and what was not (connector.py:611-648). `probe_configuration()` is the fuller read-only setup report: granted scope string, per-module readability, record counts, and — by running one sampled record through detail hydration and event mapping — the actual body length a sync would ingest (connector.py:1441-1492).
 
 ## Example: Acme VPN data at this stage
 
@@ -112,6 +125,8 @@ Everything in the sync strategy was checked against a real Zoho Desk portal (`de
 {"last_updated": "2026-08-03T05:12:05.000Z", "last_ids": ["11270000079869964"]}
 ```
 
+Two notes on what happens next. The ticket's `status` feeds `derive_case_state` at normalization (a `Closed`/`Resolved …` value marks the evidence resolved — the signal the episode-synthesis resolution gate reads when `EPISODE_RESOLUTION_GATE=cluster` is enabled), and the article's `status` feeds `derive_knowledge_state` (a `Draft` or `Review` article is withheld from retrieval). And the `team`/`account` fields shown above illustrate the mapper's capability — on the live tenant, `team` and `products` come back null and `accounts` is not in the include list, so those names are empty in practice (see **Known limits**).
+
 ## Design decisions
 
 **1. Newest-first walk with an early stop, instead of a server-side time window.**
@@ -127,16 +142,16 @@ Everything in the sync strategy was checked against a real Zoho Desk portal (`de
 *Why:* The ServiceNow connector refuses `sysparm_offset` for incremental sync because offset paging over an ascending list shifts rows *left* when records are updated mid-walk, silently skipping them. Descending order inverts that: an updated record jumps to position 1 and shifts everything after it one place *later*, so concurrent updates can only re-deliver, never skip.
 *Tradeoff:* A *deletion* mid-walk shifts rows earlier and can skip one. The early stop keeps that window to the records changed since the last tick, and a backfill repairs it.
 
-**4. One detail call per changed record, on by default.**
-*Why:* Verified live — an `/articles` list row has `summary` but no `answer`; the body only exists on `/articles/{id}`. Ingesting list rows alone produces evidence whose body is a one-line teaser: searchable in name only, and worthless to the chunker and reranker.
-*Tradeoff:* One extra HTTP round trip per changed record. Bounded by `DETAIL_FETCH_LIMIT` per invocation and disableable via `source_config["fetch_detail"] = false` for operators who want cheap summary-level sync.
+**4. One detail call per changed record, on by default — with a cap the operator sizes to the backfill.**
+*Why:* Verified live — an `/articles` list row has `summary` but no `answer`; the body only exists on `/articles/{id}`. Ingesting list rows alone produces evidence whose body is a one-line teaser: searchable in name only, and worthless to the chunker and reranker. The cap is config-driven (`detail_fetch_limit`, default 200) because the hard-coded 200 silently left 823 of 1,000 backfilled tickets as teasers — the fix moved description medians from 38 to 390 chars, resolution-note coverage from 15% to 68%, and custom fields from 18% to 84% on the same tenant ([KNOWN_GAPS.md](./KNOWN_GAPS.md), teaser entry).
+*Tradeoff:* One extra HTTP round trip per changed record — the long pole of a sync (1,855 sequential calls, 913 s on the live corpus). Bounded per invocation, and disableable via `source_config["fetch_detail"] = false` for operators who want cheap summary-level sync.
 
 **5. KB articles carry `evidence_type: "kb_article"` and take the document path, not the ticket path.**
 *Why:* A single Zoho source emits two record shapes, which no previous connector did. An article is a structured document whose author-written headings are the meaningful chunk boundaries, and whose synthesis authority is *document*, not *ticket*. Letting a general "how the VPN works" page inherit ticket authority would let it outrank the actual incident record on incident-specific fields.
 *Tradeoff:* Two shared resolvers had to learn about evidence type — `chunkers/registry.get_chunker` and `extraction_tasks.resolve_synthesis_role`. Both changes are additive: no existing source emits `kb_article`, and the attachment-resolution order for existing sources is deliberately unchanged.
 
 **6. A module the token cannot read is skipped, not fatal.**
-*Why:* The same rule the ServiceNow connector applies to `em_alert` on an instance without ITOM — and verified necessary here. The live instance's token carries only `Desk.articles.READ`, so a connector that aborted discovery on the tickets `403` would offer **nothing** from a portal with 629 syncable articles.
+*Why:* The same rule the ServiceNow connector applies to `em_alert` on an instance without ITOM — and verified necessary here. At verification time the live instance's token carried only `Desk.articles.READ`, so a connector that aborted discovery on the tickets `403` would have offered **nothing** from a portal with 629 syncable articles. (`Desk.tickets.READ` has since been granted; the rule stands for the next partial grant.)
 *Tradeoff:* A partial grant looks like a working integration unless someone reads the message. Mitigated by `validate_credentials` naming the ungranted modules and their required scopes, and by `probe_configuration` reporting the granted scope string directly.
 
 **7. Product, team, account, and category are entities — never case-link keys.**
@@ -151,22 +166,34 @@ Everything in the sync strategy was checked against a real Zoho Desk portal (`de
 *Why:* A connector is a poor reason to add an HTML parser to every deployment, and `html.parser` is lenient about the malformed markup pasted email produces.
 *Tradeoff:* Lower fidelity than a real parser — styling, classes, and nested table structure are dropped. Headings, lists, and image placeholders are preserved because those are what the chunker and the "is this body empty" check depend on.
 
+**10. Access tokens are cached process-wide, and minting is serialized per credential set.**
+*Why:* Zoho's token quotas (5 refresh exchanges/minute, 30 live tokens per refresh token) fail as **empty API results, not errors** — the single most dangerous behaviour in this integration, measured as 11 of 20 hydrated threads stored empty while the run reported success. Every Celery task constructs a fresh connector, so only a process-level cache survives between tasks; the per-loop `asyncio.Lock` stops a worker that starts several syncs at once from spending its whole per-minute quota racing to mint the same token (connector.py:191-222, 363-404). The companion control is `_is_fatal_for_the_run`: auth/quota failures re-raise instead of degrading, so silence cannot masquerade as an empty ticket (connector.py:225-249).
+*Tradeoff:* Process-global mutable state, with the usual caveats — the cache key is a hash so no second copy of the refresh token sits in a module global, and locks are weak-keyed per event loop so a finished loop takes its locks with it. Cross-*process* raced minting is still possible (each worker process holds its own cache), bounded by the fact that one token serves a process for an hour.
+
 ## Code map
+
+All module paths below are under `backend/src/contextedge/`.
 
 | Concern | Module | Key symbol | When it runs |
 | --- | --- | --- | --- |
-| OAuth + transport | `connectors/zoho_desk/connector.py` | `_token`, `_get` | Every API call |
-| Module discovery | `connectors/zoho_desk/connector.py` | `discover_objects`, `MODULES` | Discovery job |
-| Incremental strategy | `connectors/zoho_desk/connector.py` | `_walk_desc` | Incremental + backfill |
-| Checkpoint model | `connectors/zoho_desk/connector.py` | `_read_checkpoint`, `_checkpoint_data` | Between sync runs |
-| Payload mapping | `connectors/zoho_desk/connector.py` | `_ticket_content`, `_article_content` | Per record |
-| Conversation | `connectors/zoho_desk/connector.py` | `hydrate_thread` | Hydration worker |
-| Setup diagnostics | `connectors/zoho_desk/connector.py` | `probe_configuration` | Operator-invoked |
+| OAuth: cache, locks, minting | `connectors/zoho_desk/connector.py` | `_token` (363), `_mint_token` (418), `_token_lock` (216) | Every API call |
+| Fatal-vs-degradable failures | `connectors/zoho_desk/connector.py` | `_is_fatal_for_the_run` (225) | Hydration + record fetches |
+| Transport, retry, 401 replay | `connectors/zoho_desk/connector.py` | `_get` (477) | Every API call |
+| Ticket projection + includes | `connectors/zoho_desk/connector.py` | `TICKET_FIELDS` (159), `MODULES` (252) | Every list/detail call |
+| Module discovery | `connectors/zoho_desk/connector.py` | `discover_objects` (652) | Discovery job |
+| Incremental strategy + guards | `connectors/zoho_desk/connector.py` | `_walk_desc` (753) | Incremental + backfill |
+| Checkpoint model | `connectors/zoho_desk/connector.py` | `_read_checkpoint` (1527), `_checkpoint_data` (1546) | Between sync runs |
+| Filter backstop | `connectors/zoho_desk/connector.py` | `_matches_module_filter` (574) | Per returned row |
+| Detail hydration | `connectors/zoho_desk/connector.py` | `_hydrate_rows` (919) | After each walk |
+| Payload mapping | `connectors/zoho_desk/connector.py` | `_ticket_content` (1121), `_article_content` (1180) | Per record |
+| Conversation | `connectors/zoho_desk/connector.py` | `hydrate_thread` (1224) | Hydration worker |
+| Attachment bytes (opt-in helper) | `connectors/zoho_desk/connector.py` | `fetch_attachments` (1369) | No production caller yet |
+| Setup diagnostics | `connectors/zoho_desk/connector.py` | `probe_configuration` (1441) | Operator-invoked |
 | HTML → text | `connectors/zoho_desk/html_text.py` | `html_to_text` | Per record |
-| Graph enrichment | `services/zoho_desk_reference_service.py` | `process_zoho_desk_references` | Correlation hook |
-| Chunker routing | `services/chunkers/registry.py` | `_DOCUMENT_EVIDENCE_TYPES` | Normalize |
-| Synthesis authority | `workers/extraction_tasks.py` | `EVIDENCE_TYPE_ROLE_MAP` | Episode reconstruction |
-| Deep links | `services/source_deep_link_service.py` | `_zoho_desk_link` | Reviewer console |
+| Graph enrichment | `services/zoho_desk_reference_service.py` | `process_zoho_desk_references` (177) | Correlation hook |
+| Chunker routing | `services/chunkers/registry.py` | `_DOCUMENT_EVIDENCE_TYPES` (50), `get_chunker` (116) | Normalize |
+| Synthesis authority | `workers/extraction_tasks.py` | `EVIDENCE_TYPE_ROLE_MAP` (876), `resolve_synthesis_role` (887) | Episode reconstruction |
+| Deep links | `services/source_deep_link_service.py` | `_zoho_desk_link` (91) | Reviewer console |
 
 ## Acme VPN incident (this layer)
 
@@ -189,21 +216,30 @@ When Acme's VPN outage reaches a Zoho Desk portal, ticket `#4021` arrives as evi
 
 | Key | Default | Effect |
 | --- | --- | --- |
-| `modules` | all | Subset of `tickets` / `articles` to sync |
-| `module_filters` | `{}` | Per-module query params merged into every list call, e.g. `{"tickets": {"status": "Open"}}` |
-| `per_department` | `false` | Offer one syncable object per department instead of one for all tickets |
-| `fetch_detail` | `true` | Set false to skip detail calls (summary-level, no body) |
-| `max_pages` | `20` | Page budget per sync invocation |
-| `type_kind_map` | see connector | Zoho classification → shared record-kind vocabulary |
+| `modules` | all | Subset of `tickets` / `articles` to sync (connector.py:662-667) |
+| `module_filters` | `{}` | Per-module query params merged into every list call, e.g. `{"tickets": {"status": "Open"}}` — sent server-side *and* re-verified client-side, because unrecognised values are silently ignored by the API (connector.py:568-607) |
+| `min_thread_count` | — | Client-side backstop: skip tickets whose `threadCount` is below this (connector.py:583-591) |
+| `per_department` | `false` | Offer one syncable object per department instead of one for all tickets (connector.py:687-704) |
+| `fetch_detail` | `true` | Set false to skip detail calls entirely (summary-level, no body) (connector.py:328, 928-929) |
+| `detail_fetch_limit` | `200` | Detail calls per sync invocation. Size it to the backfill: too small and the overflow keeps teaser-quality list rows (connector.py:931-938) |
+| `max_pages` | `20` | Page budget per sync invocation (connector.py:329-332) |
+| `max_days` / `max_records` | — | Optional hard bounds on how far back / how many records an incremental walk collects (connector.py:333-346, 907-910, 1039-1043) |
+| `download_attachments` | `false` | Gates the `fetch_attachments` helper (10 MiB / 10-per-record caps). See **Known limits** — nothing in the sync path invokes it yet (connector.py:1362-1367, 1386-1387) |
+| `type_kind_map` | see connector | Zoho classification → shared record-kind vocabulary (connector.py:284-293, 347-353) |
 | `portal_url` + `org_slug` | — | Enables agent-console deep links |
 | `deep_link_template` | — | Generic override, wins over everything |
 
 ## Known limits
 
+- **The Zoho knowledge path is corpus-dark.** The `articles` module is discovered on the live tenant, but `approved_for_backfill` and `approved_for_sync` are both false — **no Zoho article has ever been ingested**. The article mapping and the `knowledge_state` derivation for Zoho (`Published`/`Draft`/`Review`) are code-verified and covered by tests, but only `Published` has been observed in the wild ([KNOWN_GAPS.md](./KNOWN_GAPS.md), knowledge-lifecycle entry).
+- **Team, product, and account names are empty on the live tenant.** `team` and `products` come back null on these tickets, and `accounts` is not in the include list — so `team_name` / `product_name` / `account_name` map correctly but carry nothing in practice ([KNOWN_GAPS.md](./KNOWN_GAPS.md), source-verdict entry).
+- **Email threads are not yet hydrated for the resolved corpus.** For tickets whose description is a one-liner, the diagnosis lives in the customer email thread and agent comments — which the 1,000-ticket backfill has not hydrated yet, so that text is still unread ([KNOWN_GAPS.md](./KNOWN_GAPS.md), source-verdict entry).
 - **Conversational bridging of Zoho ticket numbers.** Zoho numbers are bare integers with no system prefix, and the shared ticket-token regex deliberately never matches those (`order #12345 is unrelated` is an explicit assertion in `test_ticket_bridging.py`). Zoho tickets still register their number as a `CaseIdentifier` and get their primary case membership — only the conversational direction (a Teams message quoting `#4021` attaching to the ticket's case) is unavailable. Widening the shared regex would also match order numbers and hex colors, so it is a product decision rather than a connector one; the narrower fix is to resolve numeric candidates against registered identifiers inside `bridge_conversational_mentions`, which has `db` + `tenant_id` in scope.
-- **Attachment bytes are not downloaded.** Attachment *metadata* is carried under `attachment_refs`; fetching the bodies is a bandwidth and retention decision for the operator, not a connector default.
-- **Ticket-side behaviour is unverified against a live instance.** The live token grants only `Desk.articles.READ`, so the tickets path is implemented against Zoho's documented v1 contract and covered by tests, but has not been exercised against real ticket data. Run `probe_configuration()` after granting `Desk.tickets.READ` before trusting a first production sync.
+- **Attachment bytes are not downloaded.** Attachment *metadata* is carried under `attachment_refs` — deliberately not under `attachments`, which the registrar would silently no-op on (connector.py:1609-1618). A `fetch_attachments` helper exists behind the `download_attachments` opt-in, with 10 MiB and 10-per-record caps (connector.py:1362-1429), but **nothing in the sync or hydration path calls it yet** — it is exercised only by unit tests, so setting the flag does not ingest bytes today.
+- **Quota exhaustion looks like an empty help desk.** If the token cache is ever bypassed (e.g. many worker *processes* minting at once), the API's answer is empty results, not errors. The tell is thread hydrations storing zero messages in a pattern — the mitigation and the fatal-error classification are in walkthrough steps 1-2.
 - **No CMDB equivalent.** Zoho Desk has no configuration-management database, so there is no topology lookup to offer — product and account are the closest anchors and are modeled as entities.
+
+The former limit "ticket-side behaviour is unverified against a live instance" is **closed**: `Desk.tickets.READ` was granted and the ticket path was exercised by a live 1,000-ticket backfill on 2026-08-16, which is what surfaced the projection, include, and detail-cap findings above ([KNOWN_GAPS.md](./KNOWN_GAPS.md), teaser entry).
 
 ## Further reading
 
