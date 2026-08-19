@@ -56,9 +56,24 @@ erDiagram
     EPISODES ||--o{ EPISODE_ISSUE_SIGNATURES : "fingerprinted as"
     ISSUE_SIGNATURES ||--o{ EPISODE_ISSUE_SIGNATURES : "recurs across"
     
+    EVIDENCE_ITEMS ||--o{ KNOWLEDGE_CASES : "documented as (one per article)"
+    KNOWLEDGE_CASES ||--o{ KNOWLEDGE_CASE_STEPS : "has documented steps"
+    
     EVIDENCE_ITEMS ||--o{ EVIDENCE_CASE_MEMBERSHIPS : "belongs to case"
     
+    %% The four SITUATION_* tables below are schema only (migration 0074).
+    %% Nothing under backend/src/contextedge constructs them, so these
+    %% relationships describe the declared shape, not a running pipeline.
+    TENANTS ||--o{ OPERATIONAL_SITUATIONS : "has"
+    OPERATIONAL_SITUATIONS ||--o{ SITUATION_EVIDENCE_MEMBERSHIPS : "assembled from"
+    OPERATIONAL_SITUATIONS ||--o{ SITUATION_ENTITY_IMPACTS : "affects (and clears)"
+    OPERATIONAL_SITUATIONS ||--o{ SITUATION_CHANGE_CANDIDATES : "ranks changes"
+    OPERATIONAL_SITUATIONS ||--o| OPERATIONAL_SITUATIONS : "merged into"
+    EVIDENCE_ITEMS ||--o{ SITUATION_EVIDENCE_MEMBERSHIPS : "is a signal in"
+    ENTITIES ||--o{ SITUATION_ENTITY_IMPACTS : "impacted in"
+    
     PATTERNS ||--o{ PATTERN_EVIDENCE_LINKS : "based on"
+    PATTERNS ||--o{ PATTERN_EVIDENCE : "supported by (ledger, by class)"
     
     PLAYBOOKS ||--o{ PLAYBOOK_VERSIONS : "has versions"
     PLAYBOOKS ||--o{ PLAYBOOK_APPROVALS : "requires"
@@ -187,7 +202,7 @@ erDiagram
 ### `raw_evidence_objects`
 - **Purpose**: Immutable raw payload data as ingested from a source.
 - **Columns**: `id`, `tenant_id`, `source_id`, `source_object_id`, `external_id` (500), `raw_payload` (JSONB, **nullable**), `content_hash` (64), `stored_at`, `object_storage_key` (500) — `backend/src/contextedge/models/evidence.py:25-44`.
-- **The 32 KB offload — read this before writing any SQL against `raw_payload`**: when a serialized payload exceeds `OFFLOAD_THRESHOLD_BYTES = 32_768` it is uploaded to MinIO and the DB column is replaced with the stub `{"_offloaded": true, "size_bytes": N}`, with the object key in `object_storage_key` (`backend/src/contextedge/services/ingestion_persistence.py:16, 85-87`). Consequence: **every SQL filter or backfill that reads `raw_payload` silently skips the biggest rows** — which are exactly the longest tickets and the real SOPs. Code that needs the payload calls `load_raw_payload`, which downloads it back (`backend/src/contextedge/services/artifact_extraction_service.py:341-346`); an offloaded row with no storage key is legacy corruption and surfaces as `{"error": "raw_payload_offloaded_without_storage_key"}` (`backend/src/contextedge/workers/extraction_tasks.py:128-131`).
+- **The 32 KB offload — read this before writing any SQL against `raw_payload`**: when a serialized payload exceeds `OFFLOAD_THRESHOLD_BYTES = 32_768` it is uploaded to MinIO and the DB column is replaced with the stub `{"_offloaded": true, "size_bytes": N}`, with the object key in `object_storage_key` (`backend/src/contextedge/services/ingestion_persistence.py:16, 85-87`). Consequence: **every SQL filter or backfill that reads `raw_payload` silently skips the biggest rows** — which are exactly the longest tickets and the real SOPs. Code that needs the payload calls `load_raw_payload`, which downloads it back (`backend/src/contextedge/services/artifact_extraction_service.py:341-346`); an offloaded row with no storage key is legacy corruption and surfaces as `{"error": "raw_payload_offloaded_without_storage_key"}` (`backend/src/contextedge/workers/extraction_tasks.py:131-134`).
 - **Primary Key**: `id`
 - **Importance**: 8
 
@@ -231,6 +246,10 @@ erDiagram
 
 ### `episodes`
 - **Purpose**: An aggregation of correlated evidence narrating one incident — what happened, in order, and how it ended.
+- **What may become a row here (new, commit `5dcfeca`)**: an episode asserts that something *happened*, so a cluster made only of knowledge — `kb_article`, `sop`, `documentation` — no longer becomes one. `_cluster_has_observational_evidence` reads the distinct `evidence_type` of the cluster's members and returns false only when every one of them is in `KNOWLEDGE_EVIDENCE_TYPES` (`backend/src/contextedge/workers/extraction_tasks.py:1014-1049`; the frozenset is `backend/src/contextedge/services/evidence_typing.py:92` and holds exactly those three names — `runbook` is an *uploadable* type at line 109, not a knowledge type here, so a runbook-only cluster still synthesizes). Two properties are worth memorising:
+  - **It gates synthesis only.** Knowledge still correlates, still embeds, still reaches `graph_edges`, still seeds patterns. What it cannot do is become an account of something that occurred.
+  - **It fails open.** An empty id list, a query error, a NULL `evidence_type` — anything short of a positive identification as knowledge-only — returns `True` and lets synthesis proceed (lines 1027-1049). Wrongly allowing one draft costs a review; wrongly blocking one loses a real incident silently.
+- **Where the gate sits, and why there**: the call is at line 1219, immediately before synthesis and *after* every cheaper exit — below-minimum cluster, no resolution signal, advisory lock, unsettled debounce, duplicate `cluster_fingerprint` — so only a cluster that was about to spend an LLM call pays for the query. A refusal returns `{"status": "skipped_knowledge_only_cluster"}` and logs `episode.skipped_knowledge_only_cluster`. Found live: after a knowledge backfill took the corpus from 53 articles to 629, 299 episodes turned out to have all-knowledge evidence — 8 of them predating the backfill, so the defect was long-standing and merely too rare to see. Migration `0073` moved the affected rows into `knowledge_cases`.
 - **Columns** (`backend/src/contextedge/models/episode.py:213-266`): `id`, `tenant_id`, `primary_case_ref` (line 229 — the openable ticket, e.g. `INC0010427`), `title`, `status`, `extraction_confidence`, `root_cause_summary`, `final_outcome`, `reviewer_state` (line 235, default `pending_review`), `evidence_ids` JSONB (241), `cluster_fingerprint` (244), `entity_refs`, `contradictions` JSONB, `embedding` Vector(3072) (249), `generation_provenance` JSONB (254, migration `0055`), `ai_review` JSONB (261, migration `0070`).
 - **`cluster_fingerprint`** is a SHA-256 of the sorted member set of the evidence cluster the episode was synthesized from. It powers draft idempotency and supersede-on-growth: the same cluster does not mint a second draft, and a materially bigger cluster supersedes the old one.
 - **`ai_review`** holds the AI reviewer's verdict for exactly this row, written by the hourly Celery task `evaluation.ai_review_episodes` (`backend/src/contextedge/workers/evaluation_tasks.py:125-358`). It exists so the sweep never re-pays for an episode it already reviewed, the human reviewer can see why a draft was held, and an auto-approval stays distinguishable from a human approval forever. The review **mode** is configuration, not schema: `EPISODE_AI_REVIEW` is exactly one of `off` \| `advisory` \| `auto_approve` (`backend/src/contextedge/config.py:185-187`), and a dispatch-time override may only downgrade, never escalate.
@@ -238,12 +257,36 @@ erDiagram
 
 ### `episode_steps`
 - **Purpose**: The ordered timeline inside an episode — one row per narrated step, with `result_state`, `failed_flag` / `successful_flag`, `observation` and `evidence_refs` (`backend/src/contextedge/models/episode.py:269-290`).
-- **Uniqueness (migration `0071`, current head)**: `UNIQUE (episode_id, step_order)` as `uq_episode_step_order`. A 2026-08-18 run left 949 episodes with several narrations' step lists stacked onto one episode, all numbered from step 1; the writer could not be found by reading code, so the invariant is enforced at the database and the next bad append raises `IntegrityError` with a stack trace naming the culprit. Note the constraint lives in the database only — the ORM class declares no `__table_args__`.
+- **Uniqueness (migration `0071`)**: `UNIQUE (episode_id, step_order)` as `uq_episode_step_order`. A 2026-08-18 run left 949 episodes with several narrations' step lists stacked onto one episode, all numbered from step 1; the writer could not be found by reading code, so the invariant is enforced at the database and the next bad append raises `IntegrityError` with a stack trace naming the culprit. Note the constraint lives in the database only — the ORM class declares no `__table_args__`.
 - **Importance**: 7
 
 ### `episode_evidence_links`
 - **Purpose**: Normalized episode↔evidence provenance (migration `0037`) — which evidence grounds which episode and why (`link_reason` is the cluster reason, or `model_attribution` when the extractor assigned it). `Episode.evidence_ids` stays as a cheap JSONB read; this table is the queryable version.
 - **Importance**: 7
+
+### `knowledge_cases` / `knowledge_case_steps`
+
+- **Purpose**: What a curated source *says* resolves something — a KB article, SOP or vendor advisory reconstructed into the same structured shape an episode carries (symptoms, cause, resolution, steps, entities, applicability), but with the truth claim kept straight. Migration `0072`, models at `backend/src/contextedge/models/knowledge_case.py:46-183`.
+- **Why a table and not `episodes.kind`**: with a discriminator column, every query that counts, clusters, scores, reviews or cites episodes stays correct only while everyone remembers `AND kind = 'observed'` — and one forgotten predicate silently recreates the contamination. A missing join is a loud failure; a missing predicate is a quiet wrong number (the argument is written into `0072`'s module docstring, lines 9-20).
+- **Columns** (`knowledge_cases`): `id`, `tenant_id`, `workspace_id`, `domain_id`, `source_evidence_id` (FK → `evidence_items.id`), `source_kind` (default `kb_article`), `source_authority` (default `internal_kb` — a vendor advisory and a community post are both "documented" and not equally trustworthy), `source_state` / `source_published_at` / `source_updated_at` (the *source's* lifecycle, not ours), `title`, `symptom_summary`, `documented_cause`, `documented_resolution`, `validation_guidance`, `entity_refs` JSONB, `applicability` JSONB, `extraction_confidence`, `embedding` `vector(3072)`, `generation_provenance`, `migrated_from_episode_id`, timestamps.
+- **What is deliberately absent, and why**: no `final_outcome`, no reopen count, no duration, no `occurred_at`, and no empirical confidence. A document did not occur, so it has no occurrence time and no outcome; how well a documented resolution actually *works* is a property of the pattern it supports, measured from episodes and recorded on `pattern_evidence`. The field is `documented_cause`, not `root_cause`: the source asserts it and nobody confirmed it here (model docstring, lines 19-25 and 92-94).
+- **Identity**: unique index `uq_knowledge_case_source` on `(tenant_id, source_evidence_id)` — one case per source document, because an article reconstructed twice is a duplicate, not a second opinion.
+- **`knowledge_case_steps`**: `knowledge_case_id` (FK **ON DELETE CASCADE**), `step_order`, `step_type` (default `action`), `text`, `expected_outcome`, `extraction_confidence`, `evidence_refs`, `created_at`; unique on `(knowledge_case_id, step_order)`. The fields an `episode_steps` row carries about what *happened* — `failed_flag`, `successful_flag`, `result_state` — are absent on purpose: a document describes an action to take, never one that was taken. Adding an outcome field here is exactly how the distinction would erode (model docstring, lines 140-147).
+- **How rows get here today — say this plainly**: only migration `0073`, whose SQL inserts them. There is **no `KnowledgeCase(...)` constructor anywhere under `backend/src/contextedge`** and no ingest-path writer, so a newly synced KB article does not produce a case yet; `services/knowledge_case_service.py` can place an existing case against a pattern but has no production caller either (see `pattern_evidence` below). Treat the table as populated-by-backfill, not as a live pipeline.
+- **Importance**: 8
+
+### `pattern_evidence`
+
+- **Purpose**: The evidence ledger behind a pattern — what each contributor offers and on what epistemic footing (migration `0072`; model `backend/src/contextedge/models/pattern.py:87-182`). A bare `patterns.episode_count` cannot tell three KB articles from nineteen resolved incidents, and those are not the same pattern.
+- **Columns**: `tenant_id`, `pattern_id`, `evidence_object_type` + `evidence_object_id` (polymorphic — `episode`, `knowledge_case`, and room for procedures and advisories later, because one nullable FK per kind does not survive that list growing), `support_role` (default `supports_resolution`; `contradicts_resolution` is the one that keeps a pattern from recommending something that stopped working), `evidence_class` (`empirical` / `documented` / `prescriptive` / `conversational` / `inferred`), `strength`, `confidence`, `observed_at` (NULL for anything that did not occur), `outcome` (`success` / `partial` / `failure` / `unknown`, empirical only), timestamps.
+- **The invariant is in the database, not in a service**: `CheckConstraint ck_pattern_evidence_empirical_is_episode` — `(evidence_class = 'empirical' AND evidence_object_type = 'episode') OR (evidence_class <> 'empirical' AND outcome IS NULL)` (lines 177-181, and identically in `0072`). Only an episode may be empirical, and only an empirical row may carry an outcome, so a documented claim cannot become an observed success because some later code path set a field.
+- **Distinct from `pattern_evidence_links`**, which stays: that table records *that* an episode belongs to a pattern and is what clustering and the subgraph endpoint read. This one records what the contribution is worth. Both exist; neither replaces the other.
+- **Unique key**: `(pattern_id, evidence_object_type, evidence_object_id, support_role)` — the same object may both support and contradict, and losing that would lose the drift signal.
+- **What it makes possible**: *cold start* — a pattern supported only by documentation that **graduates** as incidents arrive (the pattern graduates; the knowledge case never does) — and *knowledge drift*, where a documented resolution accumulating `contradicts_resolution` rows while its article stays approved upstream becomes a query instead of an impossibility.
+- **Who writes it**: one constructor, `_record` in `backend/src/contextedge/services/knowledge_case_service.py:116-141`, and it only ever writes `evidence_class='documented'`. It is reached from `attach_case` (line 144), which **has no caller under `backend/src/contextedge` — only tests**. The empirical rows on this deployment (1,416, backfilled from the pattern↔episode links that already existed) and the attach run that placed the 135 knowledge cases (75 seeded a new pattern, 60 attached to one — so roughly 55% of the KB documents failure modes this incident history has never seen) both came from one-off operational scripts, not from a task or an API route. Nothing schedules this yet.
+- **How the ledger is read back**: `pattern_support` (`knowledge_case_service.py:246-301`) groups by class, role and outcome and derives one word a reviewer can act on — `empirically_supported` when any empirical row exists, else `documented_only` when documented or prescriptive rows exist, else `unsupported`. `documented_only` is not a deficiency: it is a pattern that exists because somebody wrote the failure mode down before it happened here.
+- **Attachment thresholds, for when a caller does arrive**: `KNOWLEDGE_ATTACH_MAX_DISTANCE = 0.27` (line 49) — deliberately tighter than clustering's `PATTERN_MATCH_MAX_DISTANCE = 0.30` (`backend/src/contextedge/workers/pattern_tasks.py:50`), because a wrong attachment files a document behind a procedure it does not describe and the playbook generator will cite it. A case that matches nothing seeds a new pattern at `DOCUMENTED_ONLY_PATTERN_CONFIDENCE = 0.4` with `episode_count = 0` — below the 0.5 playbook-generation floor, so a documented-only pattern generates no playbook until an incident confirms it. Distance is measured to a pattern's *member episodes* (patterns have no embedding of their own) with an explicit `ORDER BY distance ASC`, not an unordered `LIMIT 1`.
+- **Importance**: 8
 
 ### `issue_signatures` / `episode_issue_signatures`
 - **Purpose**: The structured problem fingerprint (migration `0045`) — `affected_capability`, `failing_component`, `failure_mode`, optional `trigger_change`, `environment`, `scope`, a nullable `error_signature_id`, plus `episode_count` (`IssueSignature`, `backend/src/contextedge/models/issue_signature.py:30-63`; the join table `EpisodeIssueSignature` is lines 66-95, unique on `(episode_id, issue_signature_id)`). Broader than an `error_signatures` exact error shape, narrower than embedding similarity.
@@ -260,10 +303,31 @@ erDiagram
 - **Purpose**: Deterministic case membership at confidence 1.0 — `(system, external_id)` keys resolved to one `canonical_case_id`, written by the correlation task (`backend/src/contextedge/models/session.py:148-181`). Shared infrastructure (a CI, an assignment group) is deliberately **never** a case-link key: that would mass-merge every ticket touching the same gateway.
 - **Importance**: 8
 
+### `operational_situations` / `situation_evidence_memberships` / `situation_entity_impacts` / `situation_change_candidates`
+
+- **Status first, because it decides how to read the rest: this is schema only.** Migration `0074` created the four tables and `backend/src/contextedge/models/situation.py` declares them, but **no correlation logic runs yet** — there is no `OperationalSituation(...)` constructor anywhere under `backend/src/contextedge`, no task, no route. On this deployment the tables are empty and will stay empty until the correlation phase ships. Do not describe situation detection as a capability the product has.
+- **Purpose**: One bounded real-world occurrence, *still unfolding*, assembled from the signals that appear to describe it. The three-way distinction is the whole point (`models/situation.py:9-11`):
+  - a **situation** is what is happening now;
+  - an **episode** is what happened and what worked;
+  - a **knowledge case** is what a source says works.
+- **Not a renamed `correlation_edges` row.** An edge says two pieces of evidence look related; a situation says many signals collectively describe **one** occurrence, which is a stronger claim about a different kind of object. And not an episode either: a situation may exist while nothing is resolved, and must not become an episode merely by existing — an episode needs a resolution to reconstruct.
+- **`operational_situations`** (lines 118-223): `situation_type` (`outage`, `degradation`, `incident_storm`, `change_failure`, …), `state` (`emerging` → `active` → `stabilizing` → `resolved`, plus `reopened` / `merged` / `invalidated`; note `stabilizing` means recovery evidence, not merely fewer signals arriving, and `resolved` means verified, not merely quiet), `title`, `summary`, `severity`, `situation_confidence`, the five timestamps (`onset_at` is when it began in the world, `detected_at` is when we first saw it, plus `last_signal_at` / `stabilizing_at` / `resolved_at`), `primary_entity_id` and `primary_service_entity_id` (both FK → `entities.id`), five counters, `fingerprint`, `correlation_version` (persisted so a situation scored last month stays explainable after the weights change), `merged_into_situation_id` (self-FK).
+  - **`fingerprint` is deliberately NOT unique.** It is a lookup and duplicate-suppression key, not identity: the same service can fail twice in one window for unrelated reasons (lines 187-191). The index over it is the plain `ix_situations_tenant_fingerprint`.
+  - **`ck_situation_merged_has_target`**: `state = 'merged'` requires `merged_into_situation_id`, and any other state forbids it. Merged rows are never deleted — they are how "why did these two become one" stays answerable.
+- **`situation_evidence_memberships`** (lines 226-314): why one piece of evidence is considered part of one situation. `evidence_role`, `membership_status` (`confirmed` / `inferred` / `provisional` / `rejected` / `retired` — membership is not binary, and forcing an early choice is how a false merge becomes permanent), `membership_confidence`, `correlation_method`, `score_breakdown` JSONB (**the decomposed score, not just a total**: "why was INC1002 associated with SIT44" has to be answerable and an opaque 0.87 does not answer it), `source_lineage_group` (records derived from one source event — an alert, the ticket it opened, the mail it sent — share a group so confidence does not count one observation three times), and the review fields. Unique on `(situation_id, evidence_id)` so a retried evaluation updates one row instead of inventing a second membership. A **rejected** membership is kept, never deleted: the machine score beside the human verdict is the only record of what the model got wrong.
+- **`situation_entity_impacts`** (lines 317-376): what appears affected **and what appears fine**. `healthy_control` is a first-class `impact_role` alongside `primary_affected`, `downstream_affected`, `shared_dependency`, `suspected_root_component` and the rest, because a healthy control narrows a diagnosis as much as a failure does. That is also why the row carries `signal_observed_at` separately from `first_seen_at` / `last_seen_at`: "database healthy" is useful at two minutes old and dangerous at eight hours, so the claim has to carry its own age. `basis` JSONB answers "why do you think the database is fine". Unique on `(situation_id, entity_id, impact_role)` — one entity can legitimately be both `affected` and a `shared_dependency`.
+- **`situation_change_candidates`** (lines 379-460): a change that might explain it, with a lifecycle from `weak_candidate` through `candidate` / `suspected` / `corroborated` / `confirmed`, plus `rejected`, `remediation` and `rollback`. Two things to hold onto:
+  - **`correlation_score` is a ranking, never a probability.** 0.86 means "strong under the current explainable model", not "86% likely to be the cause"; a calibrated probabilistic model would get its own column rather than quietly redefining this one.
+  - **`ck_change_after_onset_not_causal`**: `NOT (temporal_relation = 'after_onset' AND status IN ('suspected','corroborated','confirmed'))`. A change that happened after onset cannot have caused it — but it *can* be `remediation` or `rollback`, and those statuses stay legal. `confirmation_basis` exists so `confirmed` is reachable only from governed evidence (an ITSM caused-by relation, an approved RCA, a human decision) and never from a score or an agent's opinion.
+- **Graph vocabulary**: the same commit registers seven relations in `backend/src/contextedge/graph/edge_types.py:141-151` (code, not DDL — `graph_edges` needs no migration to learn a type) — `part_of_situation`, `situation_affects`, `suspected_change`, `confirmed_change`, `similar_situation`, `recurred_from`, `merged_into`. Four are MAF-traversable (`situation_affects`, `suspected_change`, `confirmed_change`, `similar_situation`); the other three are excluded from the agent projection with their reasons recorded as data in `PROJECTION_EXCLUSIONS` (lines 201-217) — `part_of_situation` because an incident storm is hundreds of memberships and the situation node already carries the count, `merged_into` because it is audit lineage rather than reasoning, and `recurred_from` because surfacing an older occurrence beside current signals would read as though it were also happening now.
+- **What the data would need, and does not have**: this deployment has only `zoho_desk` connected. There are zero change records, zero monitoring alerts, zero CI or service entities (all 849 entities are `topic` or `knowledge_category`) and zero topology edges — so `situation_change_candidates`, `situation_entity_impacts` and the topology-distance columns have no inputs even once the correlation code exists.
+- **Importance**: 6 today (no rows, no writer); the design intent is 9.
+
 ### `patterns`
 - **Purpose**: Recurring issues identified across multiple episodes.
 - **Columns**: `id`, `tenant_id`, `title`, `description`, `pattern_type` (default `recurring_issue`), `confidence`, `episode_count`, `active_flag`, `contradiction_score`, `freshness_score`, `trigger_conditions`, `core_entities`, `observed_errors`, `root_causes`, `resolution_steps`, `evidence_summary`, `generation_provenance` (`backend/src/contextedge/models/pattern.py:23-57`).
-- **No embedding column.** Patterns are reached by full-text search (the agent's seed resolver builds a `tsvector` over title + description on the fly) and by graph traversal from episodes — not by vector search. Any doc claiming a `patterns.embedding` is wrong.
+- **No embedding column.** Patterns are reached by full-text search (the agent's seed resolver builds a `tsvector` over title + description on the fly) and by graph traversal from episodes — not by vector search. Any doc claiming a `patterns.embedding` is wrong. It is also why proximity *to* a pattern is measured against its member episodes' embeddings — see `pattern_evidence` above.
+- **`episode_count` is no longer the whole story.** It counts occurrences and cannot distinguish three KB articles from nineteen resolved incidents; the `pattern_evidence` ledger (migration `0072`) carries that breakdown. `episode_count` stays as the cheap number every existing query already reads, and a pattern seeded from documentation alone carries `episode_count = 0` with `confidence = 0.4` — deliberately, since nothing has happened.
 - **Who writes it**: the Celery task `pattern.cluster_episodes`, routed to the `pattern` queue by the `pattern.*` rule (`backend/src/contextedge/workers/celery_app.py:271`). The documented worker topology gives that queue one `-P solo` process ([RUNBOOK — Worker topology](RUNBOOK.md)), so clustering, playbook generation and the hourly dedup sweep serialize instead of racing. That is a deployment convention, not a code guarantee: there is no advisory lock here, unlike sync, so two concurrent clustering runs could mint duplicate patterns.
 - **Importance**: 8
 
@@ -277,11 +341,11 @@ erDiagram
 
 ### `graph_edges`
 - **Purpose**: Adjacency table for the context graph, supporting "what was true at incident time" temporal queries.
-- **Columns** (`backend/src/contextedge/models/pattern.py:174-273`): `id`, `tenant_id`, `domain_id`, `source_node_type`/`source_node_id`, `target_node_type`/`target_node_id`, `edge_type`, `weight` (Float, ≥ 0), `confidence` (nullable, 0..1 CHECK), `metadata_extra` JSONB, `valid_from`, `valid_to`.
+- **Columns** (`backend/src/contextedge/models/pattern.py:272-379`): `id`, `tenant_id`, `domain_id`, `source_node_type`/`source_node_id`, `target_node_type`/`target_node_id`, `edge_type`, `weight` (Float, ≥ 0), `confidence` (nullable, 0..1 CHECK), `metadata_extra` JSONB, `valid_from`, `valid_to`.
 - **`weight` and `confidence` are different things**: weight is traversal importance, confidence is belief. Writers that mean both pass both.
 - **Race safety**: the partial unique index `uq_graph_edges_active_logical` covers the full logical key `WHERE valid_to IS NULL` with `NULLS NOT DISTINCT`, which is what lets `ensure_edge` do `INSERT ... ON CONFLICT DO NOTHING` and re-select instead of aborting the caller's transaction (`backend/src/contextedge/graph/builder.py:50-135`).
 - **Temporal semantics**: current state is `valid_to IS NULL`; a point-in-time read uses `valid_from <= as_of AND (valid_to IS NULL OR valid_to > as_of)`. One caveat the agent projection states out loud in a warning: **historical edges are combined with current node facts**, so an `as_of` query is not a full time machine.
-- **Vocabulary is closed on the write side**: 69 registered edge types (`backend/src/contextedge/graph/edge_types.py`), and `add_edge` / `ensure_edge` / `close_edge` raise `UnknownEdgeType` for anything else — a typo would otherwise create an edge nothing ever reads.
+- **Vocabulary is closed on the write side**: **76** registered edge types (`backend/src/contextedge/graph/edge_types.py`; count it with `len(EDGE_TYPES)` rather than trusting this number), and `add_edge` / `ensure_edge` / `close_edge` raise `UnknownEdgeType` for anything else — a typo would otherwise create an edge nothing ever reads. The most recent group is `_SITUATION`, seven relations shipped alongside `0074` (lines 141-151), of which four are agent-traversable and three carry a written reason in `PROJECTION_EXCLUSIONS`. **Registered is not written**: no caller passes any of those seven to `ensure_edge`, so there are zero rows of these types and the projection has nothing to traverse. (Do not be misled by `merged_into` appearing in `services/identity_service.py:1149` — that is a JSONB key inside `metadata_extra` on a canonical identity, not an edge type.) Registering a type is deliberately two decisions: name it, then either allow it in `MAF_RELATIONSHIP_TYPES` or say in `PROJECTION_EXCLUSIONS` why not — `tests/test_edge_type_registry.py` fails if you do neither.
 - **Reconciliation**: `evaluation.reconcile_graph_relationships` every 6 hours rebuilds edges from relational rows; it is additive-only and idempotent, and there is no event-driven materialization.
 - **Importance**: 9
 
@@ -364,7 +428,8 @@ erDiagram
 - **Importance**: 8
 
 ### `entities`
-- **Purpose**: Operational-noun graph nodes (workflows, agent_machines, databases) distinct from human identities.
+- **Purpose**: Operational-noun graph nodes (workflows, agent_machines, databases) distinct from human identities. `entity_type` is a plain `VARCHAR(50)` (`backend/src/contextedge/models/entity.py:87`); the vocabulary is a code registry, not a CHECK.
+- **What is actually in this table here — check before building on it**: the purpose line above describes what the type is *for*, not what this deployment holds. All 849 rows are `topic` or `knowledge_category`, both produced from Zoho tags and KB categories. There are **zero CI or service entities** and zero topology edges between them, because the only connector is `zoho_desk` and no CMDB is wired. Anything that reasons over "which service is affected" — `situation_entity_impacts`, topology distance, blast radius — has no inputs on this deployment regardless of whether its code exists.
 - **Importance**: 9
 
 ### `claims` / `claim_evidence`
@@ -396,7 +461,7 @@ erDiagram
 
 ### Tables not individually documented above
 
-The ORM defines 84 tables (count the distinct `__tablename__` declarations under `backend/src/contextedge/models/`). The ones below are real and queried, but their design story lives with the subsystem that owns them:
+The ORM defines **91** tables (count the distinct `__tablename__` declarations under `backend/src/contextedge/models/`; it was 84 before `0072` and `0074` added seven). The ones below are real and queried, but their design story lives with the subsystem that owns them:
 
 | Table | One-line purpose | Model |
 | --- | --- | --- |
@@ -417,12 +482,15 @@ For a developer tracing a row back to the code that made it:
 | Table | Written by | When |
 | --- | --- | --- |
 | `raw_evidence_objects` | `persist_ingestion_events` (`services/ingestion_persistence.py`) | during `sync.run_backfill` / `sync.run_incremental_sync` |
-| `evidence_items` | `_normalize` (`workers/extraction_tasks.py:122`, wrapped by task `extraction.normalize_evidence` at lines 1313-1319, queue `extraction`) | once per new raw object; the dedup path refreshes an existing row instead |
-| `evidence_items.embedding` | `_ensure_embedding` → `embed_evidence` (`workers/extraction_tasks.py:65-70`) | inline inside `_normalize`, before chunk dispatch |
+| `evidence_items` | `_normalize` (`workers/extraction_tasks.py:125`, wrapped by task `extraction.normalize_evidence` at lines 1394-1400, queue `extraction`) | once per new raw object; the dedup path refreshes an existing row instead |
+| `evidence_items.embedding` | `_ensure_embedding` → `embed_evidence` (`workers/extraction_tasks.py:68-73`) | inline inside `_normalize`, before chunk dispatch |
 | `evidence_chunks` | `write_chunks` (`services/evidence_chunk_service.py:43-132`) via inline dispatch or task `extraction.chunk_evidence` (queue `embedding`) | after the parent embedding lands |
 | `evidence_chunks.embedding` | task `extraction.embed_chunks_batch` (queue `embedding`), 32 chunks per LLM call | after chunks are written |
 | `correlation_edges`, `case_links` | `correlate_evidence_item` (`services/correlation_service.py:197-791`) via task `extraction.correlate_evidence` (queue `correlation`) | fanned out post-commit from `_normalize` |
-| `episodes`, `episode_steps` | `_reconstruct` via task `extraction.reconstruct_episode` (queue `correlation`, 180s debounce) | when correlation created links |
+| `episodes`, `episode_steps` | `_reconstruct` via task `extraction.reconstruct_episode` (queue `correlation`, 180s debounce) | when correlation created links, and only when the cluster holds at least one non-knowledge evidence type |
+| `knowledge_cases`, `knowledge_case_steps` | **migration `0073` only** — no constructor exists under `backend/src/contextedge` | one-off backfill; a newly synced KB article does not create a case |
+| `pattern_evidence` | `_record` (`services/knowledge_case_service.py:116-141`), reachable only from `attach_case`, which has no production caller | never automatically today; the rows on this deployment came from one-off scripts |
+| `operational_situations` and its three child tables | nothing — schema only (`0074`) | not yet; the correlation phase is unbuilt |
 | `issue_signatures` | task `evaluation.extract_issue_signature` (queue `evaluation`) | on episode approval only |
 | `patterns` | task `pattern.cluster_episodes` (queue `pattern`, solo worker) | dispatched per domain that had approvals |
 | `playbooks` / `playbook_versions` | task `pattern.generate_playbook_candidate` (queue `pattern`) | after clustering |
@@ -447,6 +515,11 @@ Acme Corp's corporate VPN fails. ServiceNow incident `INC0010427` names the CI `
 9. `patterns` → `playbooks` / `playbook_versions` — clustering and generation turn repeated occurrences into a reviewed procedure.
 10. `operational_events` — `llm.usage`, `correlation.case_linked`, `episode.ai_approved` and the rest, all carrying the `correlation_id` that started at the operator's click.
 
+Two rows that are now *deliberately absent* from that list:
+
+- **The "VPN certificate rotation" KB article does not become an episode.** It correlates, it embeds, it reaches the graph and it can seed a pattern — but a cluster made only of knowledge is refused before synthesis, because narrating the article would turn "this document claims X resolves it" into "an engineer did X and it worked". Its structured content belongs in a `knowledge_cases` row instead, and on this deployment such rows exist only where migration `0073` put them.
+- **There is no `operational_situations` row for the VPN outage.** The tables exist and the invariants are enforced, but nothing assembles a situation yet, and the signals a situation is made of — change records, monitoring alerts, CI entities, topology — do not exist on this deployment either. The only connector here is `zoho_desk`, and the evidence types present are `thread_message`, `ticket` and `kb_article`.
+
 ## 4. Vector Columns
 
 The application relies heavily on embeddings for semantic retrieval.
@@ -459,7 +532,7 @@ Why the cast: pgvector's HNSW supports at most 2,000 dimensions on the `vector` 
 
 **Two consequences a developer must internalise:**
 
-1. **Every cosine ordering must use the same expression the index was built on.** Route it through `halfvec_cosine_distance` (`backend/src/contextedge/search/vector_ops.py:40-45`). A plain `Model.embedding.cosine_distance(...)` compiles fine, returns correct results, and is a guaranteed sequential scan.
+1. **Every cosine ordering must use the same expression the index was built on.** Route it through `halfvec_cosine_distance` (`backend/src/contextedge/search/vector_ops.py:40-45`). A plain `Model.embedding.cosine_distance(...)` compiles fine, returns correct results, and is a guaranteed sequential scan. One live example to keep in mind: `_nearest_pattern` in `services/knowledge_case_service.py:58-113` compares a knowledge case to every active pattern's member episodes with the raw `<=>` operator and a `GROUP BY`/`min()`, so it does not use the ANN index — an aggregate over all members could not anyway, and at 135 cases against this corpus that is a deliberate non-problem rather than an oversight.
 2. **Raise recall before a tenant-filtered ANN query.** The indexes are global across tenants while every query post-filters by `tenant_id`; at pgvector's default `ef_search = 40`, a small tenant's rows can be absent from the candidate set entirely and the query silently returns fewer rows than asked for. Callers run `await tune_ann_recall(db)` first, which issues `SET LOCAL hnsw.ef_search = 200` for the transaction (`backend/src/contextedge/search/vector_ops.py:31-37`).
 
 **Deployment caveat:** `0032` raises a `RuntimeError` on pgvector < 0.7 rather than degrading, because the query side casts to halfvec unconditionally. But an environment already stamped at an *earlier* revision of that file never re-executes it and stays on sequential scans — check for the index names, not the stamp (`codewiki/KNOWN_GAPS.md:40`).
@@ -473,6 +546,7 @@ Why the cast: pgvector's HNSW supports at most 2,000 dimensions on the `vector` 
 | `episodes.embedding` | the episode narrative | `ix_episodes_embedding_halfvec_hnsw` (`0032`) |
 | `decisions.embedding` | `decision_type` + `compact_trace[:2000]` + `rationale_summary[:6000]` (`backend/src/contextedge/ai/embeddings.py:38-64`) | `ix_decisions_embedding_halfvec_hnsw` (`0032`) |
 | `playbooks.embedding` | title + description + the **current** version's triggers and step titles, capped at 4,000 characters (`services/playbook_embedding.py:25, 54-76`) — "current" means the latest-created version, which `create_playbook_version` repoints to immediately, before review | `ix_playbooks_embedding_halfvec_hnsw` (`0035`) |
+| `knowledge_cases.embedding` (`0072`) | inherited verbatim from the episode it was migrated from; nothing re-embeds a case today | **none** — `0072` declares the column (`ALTER TABLE knowledge_cases ADD COLUMN embedding vector(3072)`, lines 119-120) and builds no ANN index |
 
 `patterns` has **no** embedding column. Rows written before their column existed stay NULL: pre-`0035` playbooks until the one-off `evaluation.backfill_playbook_embeddings` task is run, and pre-existing decisions indefinitely — no backfill task exists for those, and they fall back to `created_at DESC` ordering in similar-decision search.
 
@@ -490,7 +564,7 @@ PostgreSQL's built-in full-text search is used for keyword matching.
 
 ## 6. Migration History
 
-Migrations are managed via Alembic (`backend/alembic.ini`). Every schema change after the first revision is an explicit, chronologically ordered revision file. As of 2026-08-19 the chain holds **72 revisions** and the head is `0071_episode_step_uniqueness` — but do not trust that number from a document: run `alembic heads`. One revision id in the chain is not numbered (`a4ccd43dcf94_enrich_pattern_data`, between `0006` and `0007`), so tooling that assumes a `NNNN_` prefix will trip.
+Migrations are managed via Alembic (`backend/alembic.ini`). Every schema change after the first revision is an explicit, chronologically ordered revision file. As of 2026-08-20 the chain holds **75 revisions** and the head is `0074_operational_situations` — but do not trust that number from a document: run `alembic heads`. One revision id in the chain is not numbered (`a4ccd43dcf94_enrich_pattern_data`, between `0006` and `0007`), so tooling that assumes a `NNNN_` prefix will trip.
 
 The per-revision narrative lives in [MIGRATIONS.md](MIGRATIONS.md); operational procedure (including the pre-migration dedupe steps `0026` and `0027` require) lives in [RUNBOOK.md](RUNBOOK.md#5-database-migrations).
 
@@ -512,7 +586,10 @@ The per-revision narrative lives in [MIGRATIONS.md](MIGRATIONS.md); operational 
 15. `0067_knowledge_lifecycle_state.py` / `0068_case_state_and_source_facets.py` - Teach evidence what the *source system* already knew: article currency, how a case ended, and human-typed facets.
 16. `0069_sync_run_control.py` - Cooperative pause / cancel / resume for a running sync.
 17. `0070_episode_ai_review.py` - `episodes.ai_review`, where the AI reviewer's verdict is recorded on the row it assessed.
-18. `0071_episode_step_uniqueness.py` - Current head. `UNIQUE (episode_id, step_order)` on `episode_steps`, added to convert silent timeline corruption into a loud `IntegrityError`.
+18. `0071_episode_step_uniqueness.py` - `UNIQUE (episode_id, step_order)` on `episode_steps`, added to convert silent timeline corruption into a loud `IntegrityError`.
+19. `0072_knowledge_case_and_pattern_evidence.py` - `knowledge_cases` + `knowledge_case_steps` (what a source *says*) and `pattern_evidence` (what supports a pattern, and on what footing). Carries the `ck_pattern_evidence_empirical_is_episode` CHECK, which is the split's invariant written where a future code path cannot forget it. Schema only — no data moves here.
+20. `0073_migrate_knowledge_episodes_to_cases.py` - The data half: knowledge-derived episodes become knowledge cases and the originals are tombstoned into `episodes_knowledge_migrated_backup` / `episode_steps_knowledge_migrated_backup`. A **no-op** on any database whose rows were never marked (see MIGRATIONS.md).
+21. `0074_operational_situations.py` - Current head. `operational_situations` + `situation_evidence_memberships` + `situation_entity_impacts` + `situation_change_candidates`, with `ck_change_after_onset_not_causal` and `ck_situation_merged_has_target`. Schema only; nothing populates them yet.
 
 ## 7. Multi-Tenancy
 
@@ -550,4 +627,4 @@ The per-revision narrative lives in [MIGRATIONS.md](MIGRATIONS.md); operational 
 | What is *not* finished before you claim a table is live | [../codewiki/KNOWN_GAPS.md](../codewiki/KNOWN_GAPS.md) |
 
 ---
-*Verified against the working tree on 2026-08-19. Where a line number and a symbol name disagree, trust the symbol name.*
+*Verified against the working tree on 2026-08-20 (head `0074_operational_situations`). Where a line number and a symbol name disagree, trust the symbol name.*

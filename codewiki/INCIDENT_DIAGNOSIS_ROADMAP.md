@@ -171,6 +171,80 @@ The `session` / `decision` / `chose` / `resulted_in` machinery exists, but nothi
 
 ---
 
+## Workstream G — epistemic separation: what happened vs what a source claims
+
+*Shipped 2026-08-19/20. Recorded here because the rest of the roadmap now depends on the distinction.*
+
+### G1. Knowledge is not observation ✅
+
+A KB article reconstructed into an `episode` asserts that something happened. It did not — a document claims a resolution works. Everything downstream then read it as observed: the playbook prompt tells the model episode outcomes are empirical evidence a step works, patterns counted them as recurrence, the agent cited them as `[ep-N]`. Found when a knowledge backfill took the corpus from 53 articles to 629 and surfaced 299 all-knowledge episodes — 8 of them predating the backfill, so the gap was long-standing and merely too rare to see.
+
+`_cluster_has_observational_evidence` now gates episode **synthesis** only. Knowledge still correlates, embeds, reaches the graph and seeds patterns; what it cannot do is become an account of something that happened.
+**In code:** `workers/extraction_tasks.py`; migrations 0072–0073.
+
+### G2. `KnowledgeCase` as a first-class object ✅
+
+Not an `episodes.kind` discriminator: with a kind column every query that counts, clusters, scores, reviews or cites episodes stays correct only while everyone remembers `AND kind = 'observed'`, and one forgotten predicate silently recreates the contamination. A missing join fails loudly; a missing predicate returns a wrong number. 482 episodes migrated into 135 cases (duplicate reconstructions of one article collapsed, richest kept), originals tombstoned.
+
+### G3. `PatternEvidence` — the evidence ledger ✅
+
+`episode_count` cannot tell three KB articles from nineteen resolved incidents. The ledger records what each piece of evidence contributes and on what footing — `support_role` (including `contradicts_resolution`), `evidence_class`, `observed_at`, `outcome`. A CHECK constraint enforces that only an episode may be `empirical` and only empirical rows carry an outcome, because that is the one place a future code path cannot forget it.
+
+This is what makes two capabilities possible: **cold start**, where a pattern exists on documentation alone and *graduates* as incidents arrive (measured: ~55% of knowledge cases match no existing pattern — most of the KB documents failure modes the incident history has never seen), and **knowledge drift**, where a documented resolution accumulating contradictions from recent episodes becomes a query rather than an impossibility.
+
+### G4. Claim-level epistemic status — *not started*
+
+Source type is not epistemic status. A Teams message saying "I think restarting IIS might help" is hypothesis; "restarted at 14:32, recovered at 14:34" is observation. The target taxonomy is prescriptive → documented → empirical → conversational → inferred, carried on claims rather than inferred from the connector. `claim` already has `claim_type` / `validation_status`; this extends rather than replaces it.
+
+### G5. Prescriptive knowledge as its own object — *not started*
+
+A known-error KB article and a mandatory SOP are both "approved knowledge" and mean different things: one reports what tends to work, the other dictates what must be done. Today both become `KnowledgeCase`. Splitting them matters when a playbook must reconcile "the SOP requires a backup step" with "no episode performed one".
+
+---
+
+## Workstream H — operational situation intelligence: "what is happening now?"
+
+*Schema shipped 2026-08-20 (H1). The rest is blocked on connectors, not on code.*
+
+ContextEdge can say what happened (episodes) and what a source claims (knowledge cases). It cannot say what is happening: an agent receiving an incident sees that incident and must work out unaided whether it is isolated or one signal of a wider occurrence.
+
+An `OperationalSituation` is a bounded real-world occurrence assembled from many signals. Deliberately **not** a renamed `CorrelationEdge` — an edge says two pieces of evidence look related; a situation says many signals describe one thing. Nor is it an episode: a situation may exist while nothing is resolved, and an episode needs a resolution to reconstruct.
+
+### H1. Situation schema and graph vocabulary ✅
+
+`operational_situations`, `situation_evidence_memberships`, `situation_entity_impacts`, `situation_change_candidates`, plus seven registered graph relations (four MAF-traversable, three excluded with reasons). Three invariants live in the database: a change after onset cannot be a cause, a merged situation must name its survivor, and membership/impact are unique so a retry cannot invent a second occurrence.
+**In code:** `models/situation.py`, `graph/edge_types.py`, migration 0074.
+
+### H2. Coverage and missing-context reporting — *next, and unblocked*
+
+The highest-value item in this workstream **because** so much is missing. Today an agent silently reasons as though absent change data means no changes occurred. The contract is that ContextEdge reports what it knows *and what it does not*: no monitoring connector, CMDB not present, topology last synced N hours ago. Implementable now against the current corpus; every other item below is not.
+
+### H3. Deterministic situation correlation — *partially blocked*
+
+Of the intended signals — major-incident links, duplicate/parent, monitoring lineage, exact CI, exact service, issue signature, environment veto, hub suppression — only **issue signature, environment and hub suppression** have data today. Zoho Desk has no major-incident or parent-child semantics, and there are no CI entities. Buildable now in restricted form; completed when an ITSM connector supplies the rest.
+
+### H4. Topology correlation and blast radius — *blocked on CMDB*
+
+`depends_on` / `hosted_on` / `runs_on` are registered in the edge vocabulary and **zero rows exist**; all 849 entities are `topic` or `knowledge_category`. Depends on C1.
+
+### H5. Monitoring integration — *blocked on a monitoring connector*
+
+Alert rollups, event grouping, source lineage (an alert, the ticket it opened and the mail it sent are one observation, not three), independent corroboration (three monitoring systems agreeing genuinely is three), recovery evidence, storm velocity. No alert evidence exists today.
+
+### H6. Situation-aware change correlation — *blocked on change records*
+
+Evidence typing already maps `servicenow/change_request → change`; no change rows exist. Supersedes same-CI-preceding-change lookup (B4) with situation → affected entities → bounded topology → ranked candidates. `correlation_score` is a ranking, never a probability, and `confirmed` is reachable only from governed evidence.
+
+### H7. Diagnostic context service — *depends on H2–H6*
+
+One bounded, security-filtered, provenance-aware bundle: case, situation, signals, impact, topology, changes, history, knowledge, patterns, decisions, coverage. The acceptance test is that an agent given one incident identifier obtains the operational context around it rather than reasoning from the description alone.
+
+### H8. Lifecycle, merge and review — *depends on H3*
+
+`emerging → active → stabilizing → resolved`, plus reopen, recurrence and merge. Absence of signal is never recovery. Automatic split is deliberately out of scope for v1: a split proposal is safe, an automatic split is not.
+
+---
+
 ## Sequencing
 
 | Order | Item | Workstream | Effort | Depends on | Rationale |
@@ -186,6 +260,25 @@ The `session` / `decision` / `chose` / `resulted_in` machinery exists, but nothi
 | 9 | Efficacy rollups + applicability + negative knowledge | E1–E3 | M | — | trustworthy remediation choice |
 | 10 | Agent decision write-back | F1 | M–L | — | the compounding loop |
 | 11 | Claims population | A4 | M–L | A2 | granular assertions, once summaries prove out |
+
+Revised 2026-08-20. Workstream G shipped out of order because a knowledge backfill exposed the contamination as a live defect rather than a planned improvement; the sequence below reflects what the corpus can now support.
+
+| Order | Item | Workstream | Effort | Depends on | Rationale |
+| --- | --- | --- | --- | --- | --- |
+| ✅ | Epistemic separation (knowledge ≠ observation) | G1–G3 | — | — | shipped; a document's claim was being counted as an observed outcome |
+| ✅ | Situation schema and graph vocabulary | H1 | — | — | shipped ahead of its connectors so the data has somewhere to arrive |
+| 1 | Coverage / missing-context reporting | H2 | S | — | **unblocked and highest value now** — the agent currently cannot tell "no changes occurred" from "no change connector" |
+| 2 | Restricted situation correlation (signature + environment + hub suppression) | H3 | M | H2 | the only correlation signals with data today |
+| 3 | `change_request` ingestion | B1 | S | ITSM connector | unlocks H6 and the change join |
+| 4 | `cmdb_rel_ci` topology + criticality facts | C1, C2 | M | CMDB connector | unlocks H4 blast radius |
+| 5 | Monitoring alert/event ingestion | H5 | M | monitoring connector | unlocks corroboration and lineage |
+| 6 | Situation-aware change correlation | H6 | M | 3, 4 | supersedes B4's same-CI lookup |
+| 7 | Diagnostic context service | H7 | M–L | 1–6 | the actual product acceptance criterion |
+| 8 | Situation lifecycle, merge, review | H8 | M | 2 | reopen vs recurrence, merge without losing lineage |
+| 9 | Claim-level epistemic status | G4 | M–L | — | source type is not epistemic status |
+| 10 | Prescriptive knowledge as its own object | G5 | M | G4 | an SOP and a known-error article are not the same claim |
+
+**Items 3–6 are blocked on connectors, not on engineering.** The vocabulary, evidence typing and connector classes already exist for changes, alerts and topology; what is absent is a connected source. Building their correlation logic before data exists means testing against synthetic fixtures that prove the code runs, not that it works — and the adversarial cases that matter (generic-word merges, same-engineer merges, monitoring floods) are only meaningful against a real corpus.
 
 Every item that changes model-facing prompts or projection composition follows the measurement discipline established for thinking budgets and projection caps ([18](18-cost-observability-and-containment.md)): measure before, A/B on real data, ship only what the numbers support, record negative results.
 

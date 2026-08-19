@@ -4,7 +4,9 @@ This document explains the architecture of the ContextEdge platform. ContextEdge
 
 This guide is written in simple English for developers who are new to the project. It covers what each part of the system does, why it exists, and how the parts talk to each other.
 
-**Accurate as of 2026-08-19.** Every mechanism claim below carries a `file:line` citation you can click through. Paths are relative to the repository root. If a citation and this prose ever disagree, the code wins — say so in a PR and fix the doc.
+**Accurate as of 2026-08-20.** Every mechanism claim below carries a `file:line` citation you can click through. Paths are relative to the repository root. If a citation and this prose ever disagree, the code wins — say so in a PR and fix the doc.
+
+**What moved on 2026-08-20.** Five commits drew one line through the middle of the system: **what happened**, **what a document says works**, and **what is happening now** are three different objects in three different sets of tables, and the database refuses to confuse them. That changes §6 (a new §6.5), §8.1 (the edge vocabulary gained a sixth group), §8.4 (four new agent-traversable relations that nothing writes yet), and §11 (episode synthesis gained a seventh gate). Read §6.5 first if you only read one.
 
 **The running example.** Throughout the docs we trace one incident: the **Acme VPN incident** — ServiceNow incident `INC0010427`, "VPN tunnel flapping on `vpn-gw-east-01`", with the Teams working thread and the engineer's email that quotes the ticket number. Reuse this example rather than inventing a new one, so a reader can follow one record end to end across every document.
 
@@ -380,6 +382,38 @@ The system uses PostgreSQL for structured data and vector search.
 - The FastAPI dependency `get_db` yields a database session for a web request. It automatically calls `session.commit()` if the request is successful, and `session.rollback()` if there is an error.
 - Background workers use a similar wrapper (`run_async` or raw sessions) to guarantee that database changes are committed or rolled back safely.
 
+### 6.5 Three shapes of a case, three sets of tables
+
+This is the newest structural decision in the schema and the one most likely to be got wrong by someone reading only the older sections. The system now stores three genuinely different claims, and it stores them apart on purpose:
+
+| Object | The claim it makes | Tables | Landed |
+|---|---|---|---|
+| `Episode` | **This happened.** Someone did these steps and this was the outcome | `episodes`, `episode_steps`, `episode_evidence_links` | long-standing |
+| `KnowledgeCase` | **A source says this works.** Nobody here confirmed it | `knowledge_cases`, `knowledge_case_steps` | migration `0072` |
+| `OperationalSituation` | **This is happening now.** Many signals describe one occurrence | `operational_situations` + 3 companions | migration `0074` (schema only) |
+
+**Why a separate table and not `episodes.kind`.** A discriminator column keeps every existing query correct only for as long as everyone remembers to write `AND kind = 'observed'`. One forgotten predicate silently reintroduces exactly the contamination the split exists to prevent — a document's claim counted as an observed outcome, in a pattern's recurrence count, in a playbook's grounding, in the agent's `[ep-N]` citations. A separate table turns that failure into a **missing join**, which is loud, rather than a wrong number, which is not (backend/src/contextedge/models/knowledge_case.py:10-17).
+
+The shape follows the same rule. A `KnowledgeCase` deliberately has **no** outcome, reopen count, duration, `occurred_at` or empirical confidence, and it says `documented_cause` rather than `root_cause` (models/knowledge_case.py:94). A `KnowledgeCaseStep` has **no** `failed_flag` / `successful_flag` / `result_state`, because a document describes an action to take, not one that was taken (models/knowledge_case.py:139-147). One case per source document, enforced by the unique index `uq_knowledge_case_source` — an article reconstructed twice is a duplicate, not a second opinion (models/knowledge_case.py:127-136).
+
+**The evidence ledger, and the constraint that makes it trustworthy.** `pattern_evidence` (models/pattern.py:87-182) records what each contributor is worth to a pattern and on what epistemic footing: `evidence_class` is one of `empirical` / `documented` / `prescriptive` / `conversational` / `inferred`, `support_role` says what the row is offered *for* (including `contradicts_resolution`), and `outcome` is only meaningful for something that actually occurred. A bare `episode_count` cannot tell three KB articles apart from nineteen resolved incidents; this can.
+
+The invariant lives in the database rather than in a service, because this is precisely the kind of rule a later code path forgets:
+
+```sql
+CHECK ( (evidence_class = 'empirical' AND evidence_object_type = 'episode')
+     OR (evidence_class <> 'empirical' AND outcome IS NULL) )
+-- ck_pattern_evidence_empirical_is_episode
+```
+
+Only an episode may be `empirical`, and only an empirical row may carry an outcome (models/pattern.py:177-181). A documented claim cannot become an observed success because some future function set a field.
+
+**The situation tables are schema only.** Migration `0074` creates `operational_situations`, `situation_evidence_memberships`, `situation_entity_impacts` and `situation_change_candidates`, with two more database-enforced invariants: `ck_situation_merged_has_target` makes `state='merged'` and `merged_into_situation_id` inseparable in both directions (models/situation.py:218-222), and `ck_change_after_onset_not_causal` refuses `suspected` / `corroborated` / `confirmed` on a change whose `temporal_relation` is `after_onset` — such a change can still be `remediation` or `rollback`, so the status set narrows rather than the row being rejected (models/situation.py:455-459). `fingerprint` is deliberately **not** unique: it is a lookup and duplicate-suppression key, and the same service can fail twice in one window for unrelated reasons (models/situation.py:187-191).
+
+Nothing writes any of it. Across the whole backend, `OperationalSituation` and its three companions appear in exactly four files: `models/situation.py` (the definitions), `models/__init__.py` (the export), `alembic/versions/0074_operational_situations.py` (the DDL) and `tests/test_situation_model.py` (a schema test). There is no correlation service, no worker, no route, and no code path that writes any of the seven `_SITUATION` graph relations either. The tables are empty and will stay empty until the correlation phase is built. Do not describe blast radius, change candidacy or healthy-control reasoning as capability this deployment has.
+
+The data is a second distance from it. This deployment has **only `zoho_desk` connected**: the evidence types present are `thread_message`, `ticket` and `kb_article`, there are **zero change records, zero monitoring alerts and zero CI or service entities** — all 849 entities are `topic` or `knowledge_category` — and **zero topology edges**. So even a finished correlation service would have no change corpus for `suspected_change` to rank, no CI for `situation_affects` to point at, and no dependency graph for the impact table's blast-radius shape to walk. The ServiceNow, Jira and alert-rollup paths that supply changes, alerts and CMDB topology are written and simply not connected here — a deployment fact, not a code gap, and the two must not be allowed to read alike.
+
 ---
 
 ## 7. AI Architecture
@@ -400,9 +434,9 @@ Prompt caching markers (`cache_control: ephemeral`) are sent only to Anthropic/O
 
 ### 7.2 Embedding Pipeline
 - **Model:** whatever `DEFAULT_EMBEDDING_MODEL` names in your environment. The code default in `config.py:58` is `text-embedding-3-small`, which returns 1,536 dimensions and would be rejected by the 3,072-dimension check — real deployments override it in `.env`. Read this as "the configured 3,072-dimension embedding model", not as a literal fact about the running system.
-- **Parent embedding:** `_ensure_embedding` embeds `title + body[:8000]` inline during normalization (backend/src/contextedge/workers/extraction_tasks.py:65-70). Empty text yields a zero vector rather than an error.
+- **Parent embedding:** `_ensure_embedding` embeds `title + body[:8000]` inline during normalization (backend/src/contextedge/workers/extraction_tasks.py:68-73 → backend/src/contextedge/ai/embeddings.py:19-35). Empty text yields a zero vector rather than an error.
 - **Chunking:** long evidence is also split into `evidence_chunks`, each with its own embedding. `get_chunker(source_type, evidence_type)` picks the chunker — record shape beats source type, so a knowledge-base article routes to the heading-aware **document** chunker even though it arrived from a ticket source (backend/src/contextedge/services/chunkers/registry.py:116-143). Ticket sources get the **ticket** chunker, Gmail/Teams the **thread** chunker, attachments the **attachment** chunker, everything else the **fallback** chunker.
-- **Inline vs async dispatch:** bodies under `INLINE_CHUNK_BUDGET_BYTES = 16 KB` from an allowlisted source are chunked inside the normalize transaction; everything else is handed to `extraction.chunk_evidence` so a big attachment cannot stall ingest (extraction_tasks.py:54-62, 99-119).
+- **Inline vs async dispatch:** bodies under `INLINE_CHUNK_BUDGET_BYTES = 16 KB` from an allowlisted source are chunked inside the normalize transaction; everything else is handed to `extraction.chunk_evidence` so a big attachment cannot stall ingest (constants at extraction_tasks.py:52-65, the branch at extraction_tasks.py:102-122).
 - **Chunk embedding** happens in `extraction.embed_chunks_batch` (backend/src/contextedge/workers/chunk_tasks.py:238), in batches of `EMBED_BATCH_SIZE = 32` (chunk_tasks.py:51), and — unlike the parent embedding — it *is* budget-gated and cost-attributed, because the batch call passes `tenant_id` and `db` (chunk_tasks.py:165-171). A failed batch logs and `break`s out of the loop without raising (chunk_tasks.py:172-181), leaving `embedding IS NULL` rows for the next replay.
 
 ### 7.3 Prompt Registry
@@ -451,9 +485,11 @@ The Context Graph is how ContextEdge understands relationships across different 
 ### 8.1 Node Types and Edge Types
 - **Nodes** are things: `user`, `playbook`, `pattern`, `episode`, `evidence`, `decision`, `entity`, `issue_signature`, and more.
 - **Edges** are relationships: `derived_from`, `belongs_to`, `based_on`, `supported_by`, `affects_ci`, `caused_by_change`, `mentions_identity`, and so on.
-- All edges are stored in a single table called `graph_edges` (backend/src/contextedge/models/pattern.py:174-281). Columns worth knowing: `source_node_type`/`source_node_id`, `target_node_type`/`target_node_id`, `edge_type`, `weight`, `confidence`, `metadata_extra`, `valid_from`, `valid_to`, plus `tenant_id` and `domain_id`.
+- All edges are stored in a single table called `graph_edges` (backend/src/contextedge/models/pattern.py:272-379 — the class moved down the file when `PatternEvidence` landed at :87). Columns worth knowing: `source_node_type`/`source_node_id`, `target_node_type`/`target_node_id`, `edge_type`, `weight`, `confidence`, `metadata_extra`, `valid_from`, `valid_to`, plus `tenant_id` and `domain_id`.
 - **`weight` and `confidence` are different things.** `weight` is traversal importance ("a better match should matter more when walking the graph"); `confidence` is belief ("how sure are we this relationship is true"). Callers pass both when they mean both (backend/src/contextedge/graph/builder.py:63-72).
-- **The vocabulary is closed.** `graph/edge_types.py` declares every writable edge type in five semantic groups, and `require_registered` enforces it inside `add_edge` / `ensure_edge` / `close_edge` / `replace_edge`. Before this, a typo at a write site produced a real, queryable edge that the agent projection silently dropped — the graph knew something nobody could see, and nothing failed (edge_types.py:1-27). Adding a type is deliberately two decisions: register it, then either allowlist it for the agent projection or record why it is excluded.
+- **The vocabulary is closed.** `graph/edge_types.py` declares every writable edge type in **six** semantic groups, and `require_registered` enforces it inside `add_edge` / `ensure_edge` / `close_edge` / `replace_edge`. Before this, a typo at a write site produced a real, queryable edge that the agent projection silently dropped — the graph knew something nobody could see, and nothing failed (edge_types.py:1-27). Adding a type is deliberately two decisions: register it, then either allowlist it for the agent projection or record why it is excluded.
+- **The arithmetic, counted on 2026-08-20.** The groups are `_EVIDENCE` (15), `_TOPOLOGY` (18), `_CAUSALITY` (5), `_LEARNING` (15), `_DECISION` (16) and `_SITUATION` (7) — **76** types (edge_types.py:36-155). `PROJECTION_EXCLUSIONS` holds **19** (edge_types.py:160-217), leaving **57** projected, which is exactly `len(MAF_RELATIONSHIP_TYPES)` (graph/agent/profiles.py:89-189). `tests/test_edge_type_registry.py` asserts that set equality both ways, which is what keeps the two files from drifting.
+- **`_SITUATION` is the sixth group, added 2026-08-20** (edge_types.py:137-151): `part_of_situation`, `situation_affects`, `suspected_change`, `confirmed_change`, `similar_situation`, `recurred_from`, `merged_into`. They are deliberately distinct from `correlates_with`: a correlation edge says two pieces of evidence look related, a situation relation says many signals describe **one occurrence**, which is a stronger claim about a different object. **Registered is not written** — nothing in the backend emits any of the seven yet (see §6.5).
 - **Writing edges:** always use `ensure_edge` (builder.py:50-135). It SELECTs for the active edge, then `INSERT ... ON CONFLICT DO NOTHING` against the partial unique index `uq_graph_edges_active_logical`, then re-SELECTs for the race loser — so two workers racing on the same logical edge cannot abort the enclosing transaction.
 
 ```mermaid
@@ -481,10 +517,11 @@ Two very different read paths exist, and mixing them up causes confusion:
 
 The full graph contains internal metadata an AI agent should not see, and an LLM context window is finite. The Microsoft Agent Framework integration therefore reads through a **projection profile** — `maf.v1` — rather than the raw tables.
 
-- **Budgets** (backend/src/contextedge/graph/agent/contracts.py:26-30): defaults are 24 nodes / 48 relationships / depth 2 / 12,000 characters. The profile's *maximum* is 60 / 120 / 3 / 30,000 (backend/src/contextedge/graph/agent/profiles.py:183-188), and `clamp_budget` takes the smaller of requested and maximum — so quoting only the maximum overstates what a default call returns.
+- **Budgets** (backend/src/contextedge/graph/agent/contracts.py:26-30): defaults are 24 nodes / 48 relationships / depth 2 / 12,000 characters. The profile's *maximum* is 60 / 120 / 3 / 30,000 (backend/src/contextedge/graph/agent/profiles.py:196-201), and `clamp_budget` takes the smaller of requested and maximum — so quoting only the maximum overstates what a default call returns.
 - **Pipeline:** resolve seeds (full-text, semantic, identifier-exact, preceding-change layers) → traverse with `hop_decay = 0.72` per hop (backend/src/contextedge/graph/agent/profiles.py:19) and per-relationship weight boosts → admit nodes by score, dragging each node's ancestor chain in so the projection stays connected → hydrate each node type into bounded "facts".
 - **Visibility is fail-closed per node type** (`node_is_visible`, backend/src/contextedge/graph/agent/hydrators.py:118): wrong tenant is invisible, a playbook must be approved with a current version, unexpired, and inside the caller's risk cap, evidence must pass the knowledge-lifecycle check and must not be legal-hold or pending-redaction, and **a pending AI-authored decision is invisible** — agent output must not launder itself back into agent input.
 - **Unapproved episode drafts *are* visible, and that is deliberate.** `AGENT_VISIBLE_EPISODE_STATES = {"approved", "pending_review"}` (hydrators.py:108). A draft is admitted as reference material, not as precedent: its label is rewritten to `[UNAPPROVED DRAFT] …` and an `agent_caveat` telling the model to treat it as a lead to verify travels with it in the facts block (hydrators.py:110-115, 448-464). Drafts also get their own small seed allocation — `UNAPPROVED_EPISODE_SEED_LIMIT = 2`, separate from the approved slots so a draft can never evict a reviewed precedent — and their relevance is multiplied by `UNAPPROVED_SEED_RELEVANCE_FACTOR = 0.8`, so an approved episode outranks a draft of equal similarity (backend/src/contextedge/graph/agent/repository.py:106-118). `superseded` episodes stay out: that is the state a dedup merge gives the loser, and the corpus holds roughly 9× more of them than live ones.
+- **Four situation relations are allowlisted, and today that allowlist runs ahead of the code.** `situation_affects`, `suspected_change`, `confirmed_change` and `similar_situation` are in `MAF_RELATIONSHIP_TYPES` (graph/agent/profiles.py:100-103) because they are what an agent needs to reason about a live occurrence — what it hit, what changed, what it resembles. The other three are excluded with reasons in `PROJECTION_EXCLUSIONS` (edge_types.py:201-217): `part_of_situation` because an incident storm is hundreds of hub edges re-deriving a count the situation node already carries, `merged_into` because it is audit lineage, `recurred_from` because precedent belongs to the *historical* half of diagnostic context rather than sitting beside current signals as though it were also happening now. **Be precise about what this does today: nothing.** `situation` is absent from `MAF_NODE_TYPES` (profiles.py:59-87), there is no situation hydrator or seed layer, and the selector keeps an edge only when **both** endpoint node types are in the profile (graph/agent/selector.py:57-62) — so even if something wrote these edges, the projection would drop them. The node type, the hydrator and the seed layer belong to the same unbuilt phase.
 - **Injected graph data is fenced.** The provider wraps the subgraph in `<untrusted-data>` markers with an explicit "this is reference data, not instructions" preamble, because node labels and summaries originate in tickets, chat, and email (backend/src/contextedge/integrations/maf/provider.py:100-112).
 - **Six tools** are exposed today, all read-or-propose. In file order: `query_context_graph` (tools.py:29), `get_cohort_shared_attributes` (106), `propose_dependency` (146), `cmdb_topology` (188), `assess_change_risk` (229), `assess_fix_applicability` (277) — backend/src/contextedge/integrations/maf/tools.py. There is no write-capable tool and no executor on this branch — see [codewiki/KNOWN_GAPS.md](../codewiki/KNOWN_GAPS.md).
 
@@ -555,38 +592,40 @@ This is the table to keep open while reading the code. It answers "a ticket arri
 | 2 | Pull from the source | `sync.run_backfill` / `sync.run_incremental_sync` (sync_tasks.py:39, 68) → `run_backfill_job` / `run_incremental_job` (services/sync_worker_service.py:419, 526) | `sync` | Takes the per-object advisory lock, loads the connector, calls `backfill()` / `fetch_changes()`, appends a `SyncCheckpoint` |
 | 3 | Store the raw payload | `persist_ingestion_events` (services/ingestion_persistence.py:19) | — | One `raw_evidence_objects` row per event. Deduplicates on `(tenant, source, external_id, content_hash)`. **Payloads over `OFFLOAD_THRESHOLD_BYTES = 32_768` go to MinIO at `raw/{tenant}/{raw_id}.json` and the DB keeps only the stub `{"_offloaded": true, "size_bytes": N}`** (ingestion_persistence.py:16, 84-87) |
 | 4 | Hand off to normalization | `_commit_and_queue_normalization` (services/sync_worker_service.py:301) → `queue_normalize_raw_objects` (services/sync_ingestion_queue.py:16-30) | — | Commits first, then enqueues one `normalize_evidence` per new raw id. Ids that fail to enqueue are parked on `source_objects.metadata_extra["pending_normalize_raw_ids"]` and re-drained by the next run |
-| 5 | Normalize | `extraction.normalize_evidence` (workers/extraction_tasks.py:1319) → `_normalize` (extraction_tasks.py:122) | `extraction` | The long one — see the ordered list below |
+| 5 | Normalize | `extraction.normalize_evidence` (workers/extraction_tasks.py:1400) → `_normalize` (extraction_tasks.py:125) | `extraction` | The long one — see the ordered list below |
 | 6 | Hydrate the thread | `hydration.hydrate_thread` (workers/hydration_tasks.py:189) | `hydration` | Fetches the whole conversation, strips text already seen earlier in the thread, writes one raw row per message, and loops each back through step 5 |
 | 7 | Parse attachments | `artifact.extract_attachment` (workers/artifact_tasks.py:15) | `extraction` | Deterministic text/log/JSON/PDF/DOCX parsing, merged into the evidence body and **re-redacted** before persist |
 | 8 | Chunk + embed | `extraction.chunk_evidence` (workers/chunk_tasks.py:210), `extraction.embed_chunks_batch` (chunk_tasks.py:238) | `embedding` | Writes `evidence_chunks`, then embeds them in batches of 32 |
 | 9 | Correlate | `extraction.correlate_evidence` (workers/correlation_tasks.py:16) → `correlate_evidence_item` (services/correlation_service.py:197) | `correlation` | Tier 1 deterministic case links at confidence 1.0; tier 2 gated identity co-occurrence |
-| 10 | Synthesize an episode | `extraction.reconstruct_episode` (extraction_tasks.py:1406) → `_reconstruct` (extraction_tasks.py:1008) | `correlation` | Dispatched with a 180s debounce; resolves the evidence cluster, runs the gates, then one LLM call |
+| 10 | Synthesize an episode | `extraction.reconstruct_episode` (extraction_tasks.py:1500) → `_reconstruct` (extraction_tasks.py:1052) | `correlation` | Dispatched with a 180s debounce; resolves the evidence cluster, runs **seven** gates — including the observational-source gate below — then one LLM call |
 | 11 | Review the draft | `evaluation.ai_review_episodes` (workers/evaluation_tasks.py:129) and the human `/episodes/*/approve` routes | `evaluation` | Advisory verdict, or auto-approval when the model verdict **and** deterministic floors both pass |
 | 12 | Fingerprint the problem | `evaluation.extract_issue_signature` (workers/signature_tasks.py:24) | `evaluation` | One generalized `capability\|component\|failure_mode` key per approved episode; a repeat key links the new evidence to the earlier case as a **precedent, never a merge** |
-| 13 | Cluster into a pattern | `pattern.cluster_episodes` (workers/pattern_tasks.py:422) | `pattern` | Approved, embedded episodes join an existing pattern (`PATTERN_MATCH_MAX_DISTANCE = 0.30` plus an LLM adjudication call) or form a new cluster (`CLUSTER_GROUP_MAX_DISTANCE = 0.27`). **Both recalibrated 2026-08-19** against the live corpus — pattern_tasks.py:36-60 records the measurement, and older docs quoting 0.35 / 0.20 are stale |
+| 13 | Cluster into a pattern | `pattern.cluster_episodes` (workers/pattern_tasks.py:422) | `pattern` | Approved, embedded episodes join the **nearest** existing pattern (`ORDER BY`, then `PATTERN_MATCH_MAX_DISTANCE = 0.30` plus an LLM adjudication call) or form a new cluster (`CLUSTER_GROUP_MAX_DISTANCE = 0.27`). **Both recalibrated 2026-08-19** against the live corpus — pattern_tasks.py:36-60 records the measurement, and older docs quoting 0.35 / 0.20 are stale |
 | 14 | Draft a playbook | `pattern.generate_playbook_candidate` (pattern_tasks.py:446) | `pattern` | Retrieves supporting knowledge, generates, validates citations, applies the risk floor, writes `Playbook` + `PlaybookVersion` |
 | 15 | Serve at runtime | `POST /api/v1/runtime/match` → `rank_playbooks` (search/hybrid_ranker.py:213) | — | Hybrid scoring over approved playbooks with a published version |
 
 ### 11.1 Inside `_normalize`, in order
 
-`_normalize` (backend/src/contextedge/workers/extraction_tasks.py:122) is one transaction; every `.delay()` happens in the task wrapper **after** it commits (extraction_tasks.py:1325-1367).
+`_normalize` (backend/src/contextedge/workers/extraction_tasks.py:125) is one transaction; every `.delay()` happens in the task wrapper **after** it commits (extraction_tasks.py:1406-1461).
 
-1. Load the raw row and its payload; an offloaded payload is fetched back from MinIO (extraction_tasks.py:124-131).
-2. **Noise gate** — hydrated thread messages only, deterministic, before any model call. `message_noise_reason` returns `delivery_failure` / `quote_only` / `empty` / `coordination_only`, and a hit ends the flow with **no evidence row created** (extraction_tasks.py:147-160; services/message_filter.py). `coordination_only` means shorter than `MIN_DIAGNOSTIC_CHARS = 150` after markup and signature stripping **and** carrying no technical signal (message_filter.py:52-56). "Any update on the VPN?" dies here; "Restarted IPSec on vpn-gw-east-01, tunnel stable" survives on the hostname signal despite being short. The raw row is kept, so a rule change can re-judge every rejection exactly.
-3. Derive title and body, then the content hash — on the **raw** body (extraction_tasks.py:162-168).
-4. **Redact** title and body (extraction_tasks.py:173-182). Everything downstream reads the redacted text.
-5. Build the identity-extractor blob (title + body + first 2,000 chars of the payload JSON) and re-redact it, because nested custom fields carry PII the field extractors miss (extraction_tasks.py:184-198).
-6. **Deduplicate** on `(tenant_id, content_hash)` (extraction_tasks.py:213-220). A hit *refreshes* the existing row rather than duplicating it — facets, `case_state`, `knowledge_state`, a missing embedding. This is how resolving a ticket or retiring an article lands: neither rewrites the body, so the hash is unchanged.
-7. Insert the `EvidenceItem` with derived `evidence_type`, `knowledge_state`, `case_state`, `source_facets`. A concurrent insert raises `IntegrityError` against the `0026` unique index; the loser rolls back, adopts the winner, and spends no LLM calls (extraction_tasks.py:374-409).
-8. Ensure the `Thread` row and register attachments (extraction_tasks.py:410-418).
-9. **LLM call 1 — relevance** (extraction_tasks.py:427-446). Failure is fail-open: the `except` at extraction_tasks.py:475-482 logs and falls through, so the item continues down the full path. Knowledge applicability is extracted on the same pass (extraction_tasks.py:474).
-10. **The skip gate:** `not_relevant` **and** confidence ≥ 0.75 (extraction_tasks.py:488-492). Skipped items keep their row for audit but get no message-function call, no identity, no decisions, no parent embedding, and no chunking — they are invisible to vector search by construction.
-11. **LLM call 2 — message function**, conversational sources only (extraction_tasks.py:500-518).
-12. **Error signatures** — deterministic regex, runs on **every** item including skipped ones, because a confidently-irrelevant thread can still carry a pasted stack trace (extraction_tasks.py:520-539).
-13. **LLM call 3 — identity resolution** (extraction_tasks.py:546-554). This is where `vpn-gw-east-01` becomes or attaches to a canonical identity.
-14. **LLM call 4 — decision extraction** (extraction_tasks.py:564-572).
-15. **Parent embedding** (extraction_tasks.py:580-584).
-16. **Chunk dispatch**, deliberately after the parent embedding so a chunker bug cannot regress retrieval (extraction_tasks.py:586-598).
+> **Line numbers below were re-checked on 2026-08-20** and shifted by roughly +3 from the previous sweep. Anything inside `_reconstruct` and later moved by about +44, because `_cluster_has_observational_evidence` was inserted above it.
+
+1. Load the raw row and its payload; an offloaded payload is fetched back from MinIO (extraction_tasks.py:127-134).
+2. **Noise gate** — hydrated thread messages only, deterministic, before any model call. `message_noise_reason` returns `delivery_failure` / `quote_only` / `empty` / `coordination_only`, and a hit ends the flow with **no evidence row created** (extraction_tasks.py:150-163; services/message_filter.py). `coordination_only` means shorter than `MIN_DIAGNOSTIC_CHARS = 150` after markup and signature stripping **and** carrying no technical signal — 16 regexes for error codes, paths, versions, hosts, URLs, IPs, emails, identifier shapes, stack traces, SQL and shell (message_filter.py:52, 56-79). "Any update on the VPN?" dies here; "Restarted IPSec on vpn-gw-east-01, tunnel stable" survives on the hostname signal despite being short. The raw row is kept, so a rule change can re-judge every rejection exactly.
+3. Derive title and body, then the content hash — on the **raw** body (extraction_tasks.py:165-171).
+4. **Redact** title and body (extraction_tasks.py:176-185). Everything downstream reads the redacted text.
+5. Build the identity-extractor blob (title + body + first 2,000 chars of the payload JSON) and re-redact it, because nested custom fields carry PII the field extractors miss (extraction_tasks.py:187-201).
+6. **Deduplicate** on `(tenant_id, content_hash)` (extraction_tasks.py:216-223). A hit *refreshes* the existing row rather than duplicating it — facets, `case_state`, `knowledge_state`, a missing embedding. This is how resolving a ticket or retiring an article lands: neither rewrites the body, so the hash is unchanged.
+7. Insert the `EvidenceItem` with derived `evidence_type`, `knowledge_state`, `case_state`, `source_facets`. A concurrent insert raises `IntegrityError` against the `0026` unique index; the loser rolls back, adopts the winner, and spends no LLM calls (extraction_tasks.py:377-412).
+8. Ensure the `Thread` row and register attachments (extraction_tasks.py:413-421).
+9. **LLM call 1 — relevance** (extraction_tasks.py:430-449). Failure is fail-open: the `except` at extraction_tasks.py:478-485 logs and falls through, so the item continues down the full path. Knowledge applicability is extracted on the same pass (extraction_tasks.py:477 → `_extract_applicability` at :704).
+10. **The skip gate:** `not_relevant` **and** confidence ≥ 0.75 (extraction_tasks.py:491-495). Skipped items keep their row for audit but get no message-function call, no identity, no decisions, no parent embedding, and no chunking — they are invisible to vector search by construction.
+11. **LLM call 2 — message function**, conversational sources only (extraction_tasks.py:503-521).
+12. **Error signatures** — deterministic regex, runs on **every** item including skipped ones, because a confidently-irrelevant thread can still carry a pasted stack trace (extraction_tasks.py:523-542).
+13. **LLM call 3 — identity resolution** (extraction_tasks.py:549-557). This is where `vpn-gw-east-01` becomes or attaches to a canonical identity.
+14. **LLM call 4 — decision extraction** (extraction_tasks.py:567-575).
+15. **Parent embedding** (extraction_tasks.py:583-587).
+16. **Chunk dispatch**, deliberately after the parent embedding so a chunker bug cannot regress retrieval (extraction_tasks.py:589-601).
 
 Steps 9 and 11-16 are each individually wrapped in `try/except`: any one failure degrades that enrichment and logs, but the evidence row still lands.
 
@@ -601,6 +640,24 @@ Steps 9 and 11-16 are each individually wrapped in `try/except`: any one failure
 
 Between layers 2 and 3 sits a candidacy gate that rejects facet-shaped and non-name-shaped mentions before they can cost a model call: identity work was 78% of all model spend before it existed.
 
+### 11.3 The knowledge fork — where a KB article stops following the ticket path
+
+Stage 10 in the map above gained a gate on 2026-08-20, and it is worth understanding as an architectural boundary rather than as one more `if`.
+
+**The gate.** `_cluster_has_observational_evidence` (extraction_tasks.py:1014-1049) asks one question: does this cluster contain any evidence type that is **not** knowledge? `KNOWLEDGE_EVIDENCE_TYPES` is the **three**-member frozenset `{kb_article, sop, documentation}` (services/evidence_typing.py:92). If every member is knowledge, `_reconstruct` returns `skipped_knowledge_only_cluster` and no model call is made (extraction_tasks.py:1219-1230). Note that `runbook` is **not** in that set even though an uploader may declare it (evidence_typing.py:104-115) and migration `0073` joins on it (`0073_migrate_knowledge_episodes_to_cases.py:136`) — a runbook-only cluster still synthesizes. See [codewiki/KNOWN_GAPS.md](../codewiki/KNOWN_GAPS.md).
+
+**Why.** An episode is an account of something that occurred. Narrating a cluster of KB articles as one converts "this article claims X resolves it" into "an engineer did X and it worked" — and every downstream consumer reads the second sentence: the playbook prompt treats episode outcomes as empirical evidence that a step works, patterns count them as recurrence, and the agent cites them as `[ep-N]`. Found live at a scale nobody expected: 299 episodes had all-knowledge evidence, 8 of them predating the knowledge backfill, so the bug was old and simply too rare to notice.
+
+**Three properties of the gate that matter to anyone changing it:**
+
+- **It gates synthesis only, not participation.** Knowledge still correlates, still embeds, still reaches the graph and still seeds patterns. Nothing about a KB article's route through §11.1 changed.
+- **It fails open.** An empty id list, a query error, a NULL evidence type, a row set with no real strings — every non-answer reads as "allow" (extraction_tasks.py:1027-1048). Wrongly allowing synthesis costs one reviewable draft; wrongly blocking it costs a real incident that silently never becomes an episode.
+- **It sits late on purpose.** Too-small, unsettled, no-resolution-signal, locked and duplicate-fingerprint all short-circuit above it, so only a cluster that would otherwise go on to spend an LLM call ever pays for the query. (One gate still runs *below* it: the re-synthesis growth check at extraction_tasks.py:1249-1267.)
+
+**What is meant to happen instead — and does not yet.** An all-knowledge cluster's structured content belongs in a `KnowledgeCase` (§6.5), and `services/knowledge_case_service.py` knows what to do with one: `attach_case` finds the **nearest** pattern within `KNOWLEDGE_ATTACH_MAX_DISTANCE = 0.27` — deliberately tighter than clustering's own 0.30, because a wrong attachment puts a document behind a procedure it does not describe and the playbook generator will cite it — validates the match with the same LLM adjudicator clustering uses, and otherwise **seeds** a new pattern at `DOCUMENTED_ONLY_PATTERN_CONFIDENCE = 0.4` with `episode_count = 0` (knowledge_case_service.py:49, 55, 144-243). That 0.4 sits below the `PLAYBOOK_GENERATION_MIN_PATTERN_CONFIDENCE = 0.5` floor (workers/pattern_tasks.py:34), so **a documented-only pattern generates no playbook** until a real incident lifts it.
+
+But `attach_case` and `pattern_support` have **no production caller** — a repo-wide search finds them only in `tests/test_knowledge_case_attachment.py`. No worker, no route and no part of `_normalize` mints a `KnowledgeCase`. The 135 cases in the table were created by migration `0073`, and the 135 → 75 seeded / 60 attached placement run was an operational script. **So the current seam is: an all-knowledge cluster is correctly refused an episode, and nothing is created in its place.** The gate is right; the other half of the pair is not wired.
+
 ---
 
 ## 12. Where to look next
@@ -612,6 +669,8 @@ Between layers 2 and 3 sits a candidacy gate that rejects facet-shaped and non-n
 | Route-by-route HTTP behaviour | [API.md](API.md) |
 | The subsystem-by-subsystem blueprint | [TECHNICAL_BLUEPRINT.md](TECHNICAL_BLUEPRINT.md) |
 | What is deliberately not built yet | [codewiki/KNOWN_GAPS.md](../codewiki/KNOWN_GAPS.md) — check this before claiming any feature works end to end |
+| The migration-by-migration history, including `0072`-`0074` | [MIGRATIONS.md](MIGRATIONS.md) |
+| The observed / documented / now split in narrative form | [03_End_to_End_Project_Flow.md](03_End_to_End_Project_Flow.md) §6.3 and §17 |
 
 ---
-*End of Project Architecture Document — accurate as of 2026-08-19*
+*End of Project Architecture Document — accurate as of 2026-08-20*
