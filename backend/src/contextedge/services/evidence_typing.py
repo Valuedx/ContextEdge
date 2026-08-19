@@ -89,7 +89,27 @@ _SOURCE_DEFAULTS: dict[str, str] = {
 # Evidence types that represent knowledge rather than events. Kept here,
 # next to what produces them, so the memory layer and the authority
 # mapping cannot drift from the producer.
-KNOWLEDGE_EVIDENCE_TYPES = frozenset({"kb_article", "sop", "documentation"})
+#
+# `runbook` joined the set on 2026-08-20. It had always been offered as an
+# upload kind below while being absent here, which was harmless while this
+# set only chose a chunker — and stopped being harmless once episode
+# synthesis started asking it whether a cluster is observational. A
+# runbook is instructions for doing something, never a report that it was
+# done, so a runbook-only cluster could still have been narrated as an
+# episode: "what a document says to do" recorded as "what an engineer
+# did". Migration 0073 already treated runbooks as knowledge; this closes
+# the disagreement in the other direction. No existing rows change — no
+# runbook evidence has ever been ingested.
+#
+# `postmortem` is deliberately NOT here, and the omission is a judgement
+# rather than an oversight. A post-mortem is a document, but it is a
+# document ABOUT something that happened, and it is often the best account
+# of an incident anybody wrote. Classifying it as knowledge would refuse
+# the episode it is most qualified to support. It wants its own epistemic
+# class, not this one.
+KNOWLEDGE_EVIDENCE_TYPES = frozenset(
+    {"kb_article", "sop", "runbook", "documentation"}
+)
 
 # Types an uploader may declare for a batch of files. Uploads are the one
 # ingestion path with a human present at the point of ingest, so the

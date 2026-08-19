@@ -68,6 +68,64 @@ async def test_mixed_cluster_is_allowed():
 
 
 @pytest.mark.asyncio
+async def test_a_runbook_only_cluster_is_refused():
+    """A runbook is instructions for doing something, never a report that
+    it was done. It was offered as an upload kind while missing from
+    KNOWLEDGE_EVIDENCE_TYPES, so a runbook-only cluster could still be
+    narrated as an episode — "what a document says to do" recorded as
+    "what an engineer did". Found by a documentation verifier reading the
+    two lists against each other."""
+    assert (
+        await _cluster_has_observational_evidence(
+            _db(["runbook"]), uuid4(), [uuid4()]
+        )
+        is False
+    )
+
+
+@pytest.mark.asyncio
+async def test_every_knowledge_type_is_refused_alone():
+    """The gate reads one set; anything in it must behave the same way, or
+    the disagreement is exactly the kind that hides for months."""
+    from contextedge.services.evidence_typing import KNOWLEDGE_EVIDENCE_TYPES
+
+    for knowledge_type in sorted(KNOWLEDGE_EVIDENCE_TYPES):
+        assert (
+            await _cluster_has_observational_evidence(
+                _db([knowledge_type]), uuid4(), [uuid4()]
+            )
+            is False
+        ), knowledge_type
+
+
+def test_postmortem_is_deliberately_observational():
+    """A post-mortem is a document about something that HAPPENED, and is
+    often the best account of an incident anybody wrote. Classifying it as
+    knowledge would refuse the episode it is most qualified to support."""
+    from contextedge.services.evidence_typing import (
+        KNOWLEDGE_EVIDENCE_TYPES,
+        UPLOADABLE_EVIDENCE_TYPES,
+    )
+
+    assert "postmortem" in UPLOADABLE_EVIDENCE_TYPES
+    assert "postmortem" not in KNOWLEDGE_EVIDENCE_TYPES
+
+
+def test_uploadable_knowledge_kinds_are_all_classified():
+    """Guards the gap this fix closed: an upload kind that is knowledge
+    but missing from the knowledge set is invisible until something asks
+    it an epistemic question."""
+    from contextedge.services.evidence_typing import (
+        KNOWLEDGE_EVIDENCE_TYPES,
+        UPLOADABLE_EVIDENCE_TYPES,
+    )
+
+    for knowledge_kind in ("kb_article", "sop", "runbook", "documentation"):
+        assert knowledge_kind in UPLOADABLE_EVIDENCE_TYPES
+        assert knowledge_kind in KNOWLEDGE_EVIDENCE_TYPES
+
+
+@pytest.mark.asyncio
 async def test_thread_messages_count_as_observational():
     """A conversation is a record of what people did and saw."""
     assert (
