@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from contextedge.models.evidence import EvidenceItem, RawEvidenceObject
 from contextedge.models.playbook import Playbook
+from contextedge.search.vector_search import _visibility_predicates
 
 
 async def search_evidence_fts(
@@ -61,22 +62,24 @@ async def search_evidence_fts(
     # Title ILIKE fallback for partial matches
     title_match = EvidenceItem.title.ilike(f"%{query}%")
 
+    # The SAME visibility gate the semantic path applies, from the same
+    # helper so the two cannot drift again. This surface used to exclude
+    # role-blocked access policies and nothing else: a document on legal
+    # hold, or one awaiting redaction, was hidden from vector search and
+    # returned by lexical search — and this function also matches on raw
+    # ticket payload and a title ILIKE, so it reaches withheld records by
+    # substring, not just by embedding neighbourhood. Retrieval surfaces
+    # return content, so they answer to the same rules.
     stmt = (
         select(EvidenceItem, rank.label("rank"))
         .where(
             *base_filters,
             or_(fts_match, raw_number_match, title_match),
+            *_visibility_predicates(exclude_policy_ids),
         )
         .order_by(rank.desc())
         .limit(limit)
     )
-    if exclude_policy_ids:
-        stmt = stmt.where(
-            or_(
-                EvidenceItem.access_policy_id.is_(None),
-                EvidenceItem.access_policy_id.notin_(exclude_policy_ids),
-            )
-        )
     result = await db.execute(stmt)
     return result.all()
 
