@@ -1005,6 +1005,44 @@ async def _reconcile_reply_inheritance(
     return counts
 
 
+async def _cluster_has_observational_evidence(
+    db: AsyncSession, tenant_id: uuid.UUID, evidence_ids: list[uuid.UUID]
+) -> bool:
+    """Does this cluster contain anything that actually happened?
+
+    Fail-OPEN on error or on an unclassifiable cluster: the cost of
+    wrongly allowing synthesis is one reviewable draft, and the cost of
+    wrongly blocking it is a real incident that silently never becomes an
+    episode. Only a cluster positively identified as knowledge-only is
+    refused.
+    """
+    from contextedge.services.evidence_typing import KNOWLEDGE_EVIDENCE_TYPES
+
+    if not evidence_ids:
+        return True
+    try:
+        rows = (
+            await db.execute(
+                select(EvidenceItem.evidence_type)
+                .where(
+                    EvidenceItem.tenant_id == tenant_id,
+                    EvidenceItem.id.in_(tuple(evidence_ids)),
+                )
+                .distinct()
+            )
+        ).scalars().all()
+        # Only real type strings count as an answer. Anything else — an
+        # empty result, a row whose type is NULL, a stand-in session in a
+        # test — means we did not learn what this cluster is made of, and
+        # "did not learn" must read as allow, not as knowledge-only.
+        kinds = [row for row in rows if isinstance(row, str)]
+    except Exception:  # noqa: BLE001 — see fail-open note above
+        return True
+    if not kinds:
+        return True
+    return any(kind not in KNOWLEDGE_EVIDENCE_TYPES for kind in kinds)
+
+
 async def _reconstruct(
     db: AsyncSession,
     cluster_id: str,
@@ -1146,6 +1184,43 @@ async def _reconstruct(
             "status": "duplicate_cluster",
             "cluster_fingerprint": cluster.fingerprint,
             "episode_ids": [str(existing_draft)],
+        }
+
+    # An operational episode is an account of something that HAPPENED, so it
+    # needs at least one observational source. A cluster made only of
+    # knowledge — KB articles, SOPs — describes what a document says works,
+    # and narrating it as an episode converts "this article claims X
+    # resolves it" into "an engineer did X and it worked". That invents an
+    # observation, and everything downstream then treats it as one: the
+    # playbook prompt tells the model episode outcomes are empirical
+    # evidence a step works, patterns count them as recurrence, and the
+    # agent cites them as [ep-N].
+    #
+    # Found live after a knowledge backfill took the corpus from 53 articles
+    # to 629: 299 episodes had all-knowledge evidence, 8 of them from before
+    # the backfill, so this predates it and was simply too rare to notice.
+    #
+    # Knowledge still correlates, still embeds, still reaches the graph and
+    # still seeds patterns — this gates episode SYNTHESIS only, not
+    # participation. An all-knowledge cluster's structured content belongs
+    # in a knowledge case, which is a separate object.
+    #
+    # Placed here, immediately before the synthesis this protects, rather
+    # than at the top: every cheaper exit above — too small, unsettled, no
+    # resolution signal, locked, duplicate fingerprint — short-circuits
+    # first, so this query is only paid by a cluster that would otherwise
+    # go on to spend an LLM call.
+    if not await _cluster_has_observational_evidence(
+        db, tenant_id, cluster.evidence_ids
+    ):
+        logger.info(
+            "episode.skipped_knowledge_only_cluster",
+            tenant_id=str(tenant_id),
+            cluster_size=len(cluster.evidence_ids),
+        )
+        return {
+            "status": "skipped_knowledge_only_cluster",
+            "cluster_size": len(cluster.evidence_ids),
         }
 
     # The same guard, for the case the fingerprint cannot see.
