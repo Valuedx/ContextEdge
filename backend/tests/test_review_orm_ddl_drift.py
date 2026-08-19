@@ -209,6 +209,12 @@ _EXPECTED_MARKERS: set[tuple[str, str]] = {
      'UniqueConstraint("tenant_id", "signature_key", name="uq_issue_signature_key"),'),
     ('issue_signature.py',
      'UniqueConstraint( "episode_id", "issue_signature_id", name="uq_episode_issue_signature" ),'),
+    # knowledge_case.py (migration 0072): documented resolutions as their own
+    # object, so a source's claim can never be counted as an observed
+    # outcome. Both markers are on tables the same migration CREATEs, so no
+    # ALTER is owed — nothing existed to tighten.
+    ('knowledge_case.py', 'ForeignKey("knowledge_cases.id", ondelete="CASCADE"),'),
+    ('knowledge_case.py', 'unique=True,'),
     # thread_topic.py (migration 0044): per-thread topic state.
     ('thread_topic.py', 'ForeignKey("threads.id", ondelete="CASCADE"),'),
     ('thread_topic.py', 'UniqueConstraint("thread_id", name="uq_thread_topic"),'),

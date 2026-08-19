@@ -61,6 +61,7 @@ from contextedge.models.fix_applicability import FixApplicabilityRule
 from contextedge.models.fix_cohort import FixCohortStat
 from contextedge.models.fleet_group import FleetGroupSuggestion
 from contextedge.models.issue_signature import EpisodeIssueSignature, IssueSignature
+from contextedge.models.knowledge_case import KnowledgeCase, KnowledgeCaseStep
 from contextedge.models.knowledge_supersession import (
     SUPERSESSION_STATUSES,
     KnowledgeSupersessionProposal,
@@ -70,6 +71,7 @@ from contextedge.models.pattern import (
     GraphEdge,
     NegativeKnowledgeItem,
     Pattern,
+    PatternEvidence,
     PatternEvidenceLink,
 )
 from contextedge.models.playbook import (
@@ -132,7 +134,9 @@ __all__ = [
     "CorrelationSuggestion", "ThreadTopic",
     "IssueSignature", "EpisodeIssueSignature", "FixApplicabilityRule", "FixCohortStat",
     "FleetGroupSuggestion",
-    "Pattern", "PatternEvidenceLink", "NegativeKnowledgeItem", "Contradiction", "GraphEdge",
+    "Pattern", "PatternEvidenceLink", "PatternEvidence", "NegativeKnowledgeItem",
+    "Contradiction", "GraphEdge",
+    "KnowledgeCase", "KnowledgeCaseStep",
     "Playbook", "PlaybookVersion", "PlaybookEvidenceLink", "PlaybookApproval",
     "ResolutionSession", "DecisionTraceEvent", "CaseLink",
     "Decision", "DecisionOption", "DecisionOutcome",

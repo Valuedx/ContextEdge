@@ -45,6 +45,42 @@ _MODELS = _SRC / "models"
 # (model file, column) -> (owner, reason). Owner is an Epic F item where the
 # column is scheduled, or a category when no work is pending.
 EXPECTED_UNWRITTEN: dict[tuple[str, str], tuple[str, str]] = {
+    # --- knowledge_case / pattern_evidence: schema landed in 0072 ahead of
+    # its writers, deliberately. The tables exist so the reconstruction
+    # branch and the 299-episode migration can be reviewed against a real
+    # schema rather than a proposal; the services that populate them are
+    # the next phase. Every entry here should leave this register when that
+    # lands — if any is still here afterwards, it is a column nobody needed.
+    **{
+        ("knowledge_case.py", col): ("phase-3", reason)
+        for col, reason in (
+            ("source_kind", "knowledge reconstruction not yet wired"),
+            ("source_authority", "knowledge reconstruction not yet wired"),
+            ("source_state", "knowledge reconstruction not yet wired"),
+            ("source_published_at", "knowledge reconstruction not yet wired"),
+            ("source_updated_at", "knowledge reconstruction not yet wired"),
+            ("symptom_summary", "knowledge reconstruction not yet wired"),
+            ("documented_cause", "knowledge reconstruction not yet wired"),
+            ("documented_resolution", "knowledge reconstruction not yet wired"),
+            ("validation_guidance", "knowledge reconstruction not yet wired"),
+            ("expected_outcome", "knowledge reconstruction not yet wired"),
+            ("knowledge_case_id", "knowledge reconstruction not yet wired"),
+            (
+                "migrated_from_episode_id",
+                "written by the 0073 data migration of the 299 invalidated episodes",
+            ),
+        )
+    },
+    **{
+        ("pattern.py", col): ("phase-3", reason)
+        for col, reason in (
+            ("evidence_object_type", "pattern evidence ledger not yet populated"),
+            ("evidence_object_id", "pattern evidence ledger not yet populated"),
+            ("evidence_class", "pattern evidence ledger not yet populated"),
+            ("support_role", "pattern evidence ledger not yet populated"),
+            ("strength", "pattern evidence ledger not yet populated"),
+        )
+    },
     # --- action_policies: most columns became writable with F3b's CRUD
     # surface. These three did not.
     **{
