@@ -60,7 +60,8 @@ TABLES = {
         "label": "Change Requests",
         "fields": (
             "number,short_description,description,state,type,assigned_to,"
-            "start_date,end_date,close_code,category,sys_updated_on,cmdb_ci,"
+            "start_date,end_date,work_start,work_end,close_code,category,"
+            "sys_updated_on,cmdb_ci,"
             "cmdb_ci.name,cmdb_ci.sys_class_name,cmdb_ci.manufacturer.name,"
             "cmdb_ci.model_id.name,cmdb_ci.os,cmdb_ci.os_version,"
             "assignment_group,assignment_group.name"
@@ -115,6 +116,32 @@ TABLES = {
             "sys_updated_on"
         ),
     },
+}
+
+# When the thing described actually HAPPENED, per table, most specific first.
+#
+# Evidence timestamps used to be `sys_updated_on` for every record, which is
+# when someone last touched it — an incident opened in January and re-assigned
+# yesterday looked like it happened yesterday. That is harmless for the
+# checkpoint (which must keep using sys_updated_on: it is the only monotonic
+# cursor) and wrong for everything that reasons about time. Situation onset,
+# the change→incident interval, and any "what else was happening around then"
+# question all read this field, and all of them silently collapse when every
+# record from one backfill carries the same timestamp.
+#
+# kb_knowledge is deliberately absent: an article has no occurrence time, and
+# its last update is the most meaningful date it has.
+EVENT_TIME_FIELDS: dict[str, tuple[str, ...]] = {
+    "incident": ("opened_at",),
+    "problem": ("opened_at",),
+    # A change's event is its execution, not its paperwork. work_start is when
+    # someone actually began; start_date is when they were approved to. The
+    # gap between them is itself a signal (a change run outside its window),
+    # so both are fetched and the actual one wins.
+    "change_request": ("work_start", "start_date"),
+    "sc_req_item": ("opened_at",),
+    "sc_task": ("opened_at",),
+    "em_alert": ("initial_event_time",),
 }
 
 # Alerts at or below this severity number are ingested (1=critical …
@@ -317,7 +344,7 @@ class ServiceNowConnector(BaseConnector):
                         object_type=table_name,
                         content=_with_derived_title(record),
                         thread_id=f"{table_name}:{sys_id}",
-                        timestamp=_parse_snow_datetime(record.get("sys_updated_on")),
+                        timestamp=_event_time(table_name, record),
                         metadata={"table": table_name},
                     )
                 )
@@ -436,7 +463,7 @@ class ServiceNowConnector(BaseConnector):
                         object_type=table_name,
                         content=_with_derived_title(record),
                         thread_id=f"{table_name}:{sys_id}",
-                        timestamp=_parse_snow_datetime(ts),
+                        timestamp=_event_time(table_name, record),
                         metadata={"table": table_name},
                     )
                 )
@@ -578,6 +605,20 @@ def _with_derived_title(record: dict) -> dict:
     enriched = dict(record)
     enriched["short_description"] = subject
     return enriched
+
+
+def _event_time(table_name: str, record: dict) -> datetime | None:
+    """When this record's subject occurred, falling back to last update.
+
+    Falls back rather than returning None: a record with no occurrence field
+    still needs to be orderable, and `sys_updated_on` is a worse answer than
+    `opened_at` but a much better one than nothing.
+    """
+    for field_name in EVENT_TIME_FIELDS.get(table_name, ()):
+        parsed = _parse_snow_datetime(record.get(field_name))
+        if parsed is not None:
+            return parsed
+    return _parse_snow_datetime(record.get("sys_updated_on"))
 
 
 def _parse_snow_datetime(value: str | None) -> datetime | None:

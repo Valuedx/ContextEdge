@@ -2,6 +2,31 @@
 
 Short list of implementation gaps and operational caveats called out in the codewiki and root documentation. Use this when the product surface looks more complete in the architecture than it does in the current UI or environment.
 
+## 2026-08-21 H3 shipped: situation correlation, and the occurrence-time defect it exposed
+
+Roadmap H3 is in. `GET /api/v1/graph/situations`, `correlation.correlate_situations`. Design: [SITUATION_CORRELATION](SITUATION_CORRELATION.md). Live: 51 groups considered, 1 situation created (6 members, all authoritative), 50 singletons left alone, 1 hub CI suppressed.
+
+### Closed and corrected
+
+- **Six tickets are now one occurrence [was: H3].** Authoritative `child_of_incident` / `duplicate_of` links merge; same-CI + window + symptom agreement merges weakly. `related_problem` and `affects_ci` are named in `NON_MERGING_EDGE_TYPES` rather than merely omitted — same root cause is not same occurrence, and a shared domain controller is not a shared outage.
+- **The H3 signal audit in the roadmap was inverted, and is corrected.** It was written when Zoho Desk was the only connected source and said issue signature, environment and hub suppression were the signals with data. Measured 2026-08-21: `issue_signatures` = 0, `source_facets` = 0 — neither has any. What ServiceNow supplied is what the plan assumed absent: human-authored duplicate links and CI entities.
+- **Evidence carried last-touch time, not occurrence time — FIXED.** `created_at_source` was `sys_updated_on` for every ServiceNow record, so an incident opened in January and re-assigned yesterday looked like it happened yesterday, and every record from one backfill looked simultaneous. This made H3's window veto inert and would have made H6 impossible. `EVENT_TIME_FIELDS` now derives it per table (`opened_at`; `work_start` then `start_date` for changes; `initial_event_time` for alerts), falling back to `sys_updated_on`. The checkpoint still uses `sys_updated_on` — it is the only monotonic cursor. Verified: the fixture change moved from its ingest minute to 2026-08-10 01:30, the major incident to 02:40.
+- **Situation correlation was not idempotent — FIXED.** Two runs over an unchanged corpus produced two situations and twelve memberships for one six-ticket occurrence; a scheduled run would have minted a new outage every tick. Identity is now overlap with a live situation, not set equality — a set-hash would fragment one occurrence into a new row per arriving ticket.
+
+### Opened — record these before they read as capability
+
+- **The inferred tier is built and barely fires.** It needs symptom agreement, which means `issue_signatures` (0 rows — nothing has reconstructed episodes here) or `error_signatures` (6 rows, all from randomly generated demo records, none matching the authored scenarios). On this corpus every merge came from the authoritative tier. The tier is not dead code, but a reader who assumes it is carrying weight would be wrong.
+
+- **The environment veto is inert.** `source_facets` is empty on every row, so no evidence states an environment to disagree about. `derive_facets` only populates when a source declares `facet_fields` in its config, and the ServiceNow source declares none. The veto is right and the data is missing.
+
+- **Only ServiceNow's occurrence time was fixed.** Zoho Desk, Jira SM, SapphireIMS, Teams, Gmail and ManageEngine were not audited for the same defect. `_normalize` reads `closedTime` before `_source_timestamp`, so at least one connector supplies a close time rather than an open time, which is a third meaning of "when". Nothing measures which connectors are affected.
+
+- **Rows normalized before the timestamp fix keep the old value.** `_normalize` dedups on `content_hash` and its dedup path only fills `created_at_source` when it is NULL, so re-syncing a corrected record does not refresh it. The fixture evidence had to be deleted and rebuilt. Any deployment upgrading past this needs a backfill, and none is written.
+
+- **Overlapping situations are not merged.** If a group overlaps two live situations, the earliest onset wins and the other is left alone. Collapsing them is a merge, merge needs lineage, and lineage is H8's — but until H8 lands a genuinely split occurrence stays split, silently.
+
+- **Hub suppression is not exercised by the fixture that was built for it.** S4 puts four incidents on a shared domain controller; the threshold is 8, so S4 never reaches it and is separated by symptom disagreement instead. Hub suppression is exercised by a real hub the corpus happened to contain (`PolicyAdminService`, 12 incidents in three days). The threshold has not been tuned against anything — 8 is a guess that happens to sit between the two.
+
 ## 2026-08-21 H2 shipped: coverage reporting, and the capability layer under it
 
 Roadmap H2 is in. `GET /api/v1/graph/coverage` reports ten facets, each with one of eight statuses, plus a `blind_spots` list naming the facets where an empty result must NOT be read as a zero. Design: [COVERAGE_AND_CAPABILITY](COVERAGE_AND_CAPABILITY.md).

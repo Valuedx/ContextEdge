@@ -69,3 +69,38 @@ def correlate_evidence(self, evidence_id: str, tenant_id: str):
     except Exception as exc:
         logger.exception("correlation.failed", evidence_id=evidence_id, error=str(exc))
         raise self.retry(exc=exc) from exc
+
+
+@celery_app.task(
+    bind=True,
+    max_retries=2,
+    default_retry_delay=120,
+    name="correlation.correlate_situations",
+)
+def correlate_situations_task(self, tenant_id: str, lookback_days: int = 30):
+    """Assemble recent incident evidence into operational situations (H3).
+
+    Tenant-wide rather than per-evidence: a situation is a claim about a SET
+    of signals, and a per-evidence trigger would have to re-derive the set on
+    every arrival anyway. Idempotent, so a schedule can run it as often as it
+    likes -- a group that has not changed writes nothing.
+    """
+    from datetime import timedelta
+
+    from contextedge.services.situation_correlation_service import (
+        correlate_situations,
+    )
+
+    tid = uuid.UUID(tenant_id)
+
+    async def work(db):
+        result = await correlate_situations(
+            db, tid, lookback=timedelta(days=lookback_days)
+        )
+        await db.commit()
+        return result.as_dict()
+
+    try:
+        return run_async(work)
+    except Exception as exc:
+        raise self.retry(exc=exc) from exc

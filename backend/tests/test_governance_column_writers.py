@@ -45,34 +45,66 @@ _MODELS = _SRC / "models"
 # (model file, column) -> (owner, reason). Owner is an Epic F item where the
 # column is scheduled, or a category when no work is pending.
 EXPECTED_UNWRITTEN: dict[tuple[str, str], tuple[str, str]] = {
-    # --- situations: schema landed in 0074 ahead of the correlation that
-    # populates it, deliberately, so the shape could be reviewed against a
-    # real schema. Every entry here should LEAVE this register when the
-    # situation correlation service lands; any that does not is a column
-    # nobody needed. The ServiceNow/monitoring/CMDB connectors that supply
-    # changes, alerts and topology are not connected in this deployment yet,
-    # which is why the writers are a separate phase rather than an omission.
+    # --- situations: schema landed in 0074 ahead of its writers, deliberately,
+    # so the shape could be reviewed against a real schema. H3
+    # (situation_correlation_service, 2026-08-21) took the first 14 columns off
+    # this register. What remains is grouped by the roadmap item that owes the
+    # writer, because "not yet built" said of everything hides which parts are
+    # scheduled and which are blocked on a connector nobody has.
+    #
+    # H8 — lifecycle, merge and review. A situation currently only ever starts;
+    # nothing moves it to stabilizing/resolved, and merge needs lineage.
     **{
         ("situation.py", col): (
-            "situation-correlation",
-            "written by the situation evaluator, not yet built",
+            "H8-lifecycle",
+            "situation lifecycle, merge and review not yet built",
         )
         for col in (
-            "situation_type", "severity", "situation_confidence",
-            "onset_at", "detected_at", "last_signal_at", "stabilizing_at",
-            "resolved_at", "primary_entity_id", "primary_service_entity_id",
-            "incident_count", "alert_count", "event_count",
-            "change_candidate_count", "affected_entity_count",
-            "correlation_version", "merged_into_situation_id",
-            "situation_id", "evidence_role", "membership_status",
-            "membership_confidence", "correlation_method", "score_breakdown",
-            "source_lineage_group", "first_seen_at", "machine_decision_version",
-            "review_status", "review_reason",
-            "impact_role", "basis", "signal_observed_at", "topology_distance",
-            "correlation_score", "temporal_relation", "minutes_from_onset",
-            "reason_summary", "confirmation_basis",
+            "severity", "stabilizing_at", "resolved_at",
+            "merged_into_situation_id", "review_status", "review_reason",
         )
     },
+    # H4 — topology correlation and blast radius. Needs the CMDB walk to say
+    # which entities a situation reached and how far away they are.
+    **{
+        ("situation.py", col): (
+            "H4-topology",
+            "blast-radius impact rows need the topology walk",
+        )
+        for col in (
+            "primary_entity_id", "primary_service_entity_id",
+            "affected_entity_count", "impact_role", "basis",
+            "signal_observed_at", "topology_distance",
+        )
+    },
+    # H5 — monitoring. Blocked on an instance with Event Management, not on
+    # code: the alert-rollup connector exists and em_alert does not.
+    **{
+        ("situation.py", col): (
+            "H5-monitoring",
+            "no alert evidence exists; em_alert absent on the connected instance",
+        )
+        for col in ("alert_count", "event_count", "source_lineage_group")
+    },
+    # H6 — situation-aware change correlation. Change evidence now exists, so
+    # this is scheduled work rather than a connector gap.
+    **{
+        ("situation.py", col): (
+            "H6-change-correlation",
+            "change candidates not yet ranked against situations",
+        )
+        for col in (
+            "change_candidate_count", "correlation_score", "temporal_relation",
+            "minutes_from_onset", "reason_summary", "confirmation_basis",
+        )
+    },
+    # Written only when the inferred tier fires, which needs symptom agreement
+    # data this corpus does not have yet (issue_signatures is empty and the
+    # error signatures present come from unrelated demo records).
+    ("situation.py", "score_breakdown"): (
+        "H3-inferred-tier",
+        "populated by inferred merges; no symptom-agreement data in this corpus",
+    ),
     # --- knowledge_case / pattern_evidence: schema landed in 0072 ahead of
     # its writers, deliberately. The tables exist so the reconstruction
     # branch and the 299-episode migration can be reviewed against a real

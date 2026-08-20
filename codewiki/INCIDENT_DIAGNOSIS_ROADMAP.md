@@ -222,9 +222,14 @@ Shipped 2026-08-21. Ten facets, each answering with one of eight statuses, and a
 Folded in: a canonical capability declaration (`services/source_capabilities.py`). Record kinds are *derived* from `evidence_typing`; relations are declared and cross-checked against the five reference services by tests in both directions. This is what lets coverage say "this source cannot supply change links" rather than silently reporting none — and it is the layer a new ITSM adapter declares itself into.
 **In code:** `services/coverage_service.py`, `services/source_capabilities.py`, `GET /api/v1/graph/coverage`. Design: [COVERAGE_AND_CAPABILITY](COVERAGE_AND_CAPABILITY.md).
 
-### H3. Deterministic situation correlation — *partially blocked*
+### H3. Deterministic situation correlation ✅
 
-Of the intended signals — major-incident links, duplicate/parent, monitoring lineage, exact CI, exact service, issue signature, environment veto, hub suppression — only **issue signature, environment and hub suppression** have data today. Zoho Desk has no major-incident or parent-child semantics, and there are no CI entities. Buildable now in restricted form; completed when an ITSM connector supplies the rest.
+Shipped 2026-08-21. The signal audit above was written when Zoho Desk was the only connected source, and connecting ServiceNow inverted it. **Measured 2026-08-21:** `issue_signatures` = 0 and `source_facets` = 0, so issue signature and environment — the two the plan counted on — have *no* data. What arrived instead is what the plan assumed absent: `child_of_incident` duplicate links (human-authored), CI entities, and error signatures.
+
+So the correlator merges on authoritative links and on same-CI + window + symptom agreement, and refuses to merge on a shared problem or a shared CI alone. Hub suppression fired on a real hub (`PolicyAdminService`, 12 incidents in three days). Live result: 51 groups considered, 1 situation created, 50 singletons left alone.
+
+Two defects surfaced in review and were fixed: evidence carried `sys_updated_on` rather than occurrence time (making the window veto inert), and the first implementation created a duplicate situation on every run.
+**In code:** `services/situation_correlation_service.py`, `workers/correlation_tasks.py`, `GET /api/v1/graph/situations`. Design: [SITUATION_CORRELATION](SITUATION_CORRELATION.md).
 
 ### H4. Topology correlation and blast radius — *blocked on CMDB*
 
@@ -271,7 +276,7 @@ Revised 2026-08-20. Workstream G shipped out of order because a knowledge backfi
 | ✅ | Epistemic separation (knowledge ≠ observation) | G1–G3 | — | — | shipped; a document's claim was being counted as an observed outcome |
 | ✅ | Situation schema and graph vocabulary | H1 | — | — | shipped ahead of its connectors so the data has somewhere to arrive |
 | ✅ | Coverage / missing-context reporting | H2 | S | — | **shipped 2026-08-21** — eight statuses, ten facets, plus a canonical capability declaration; see [COVERAGE_AND_CAPABILITY](COVERAGE_AND_CAPABILITY.md) |
-| 2 | Restricted situation correlation (signature + environment + hub suppression) | H3 | M | H2 | the only correlation signals with data today |
+| ✅ | Situation correlation | H3 | M | — | **shipped 2026-08-21** — in fuller form than planned: ServiceNow supplied authoritative duplicate links, which the plan assumed absent. See [SITUATION_CORRELATION](SITUATION_CORRELATION.md) |
 | ✅ | `change_request` ingestion | B1 | S | — | **shipped 2026-08-21** — 39 change evidence rows; the change join is data |
 | ✅ | CI entities + `depends_on` topology | C1 | M | — | **largely already wired** — the topology cache warms itself once a real CMDB is connected; 28 CIs, 19 `depends_on` edges |
 | 3 | Criticality / owner / tier on entity facts | C2 | S | C1 | blast radius without criticality cannot be prioritised |

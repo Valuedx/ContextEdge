@@ -136,6 +136,77 @@ async def coverage(db: DbSession, user: AuthUser):
     return report.as_dict()
 
 
+@router.get("/situations")
+async def list_situations(
+    db: DbSession,
+    user: AuthUser,
+    limit: int = Query(50, ge=1, le=200),
+):
+    """Operational situations: what is happening, assembled from many signals.
+
+    Roadmap H3. Each membership says how it got there (`correlation_method`,
+    `membership_status`), because a merge is a factual claim and a claim
+    nobody can inspect is one nobody can retract.
+    """
+    from sqlalchemy import select
+
+    from contextedge.models.situation import (
+        OperationalSituation,
+        SituationEvidenceMembership,
+    )
+
+    rows = await db.execute(
+        select(OperationalSituation)
+        .where(
+            OperationalSituation.tenant_id == user.tenant_id,
+            OperationalSituation.state.not_in(("merged", "invalidated")),
+        )
+        .order_by(OperationalSituation.onset_at.desc().nulls_last())
+        .limit(limit)
+    )
+    situations = list(rows.scalars().all())
+    if not situations:
+        return {"situations": []}
+
+    member_rows = await db.execute(
+        select(SituationEvidenceMembership).where(
+            SituationEvidenceMembership.situation_id.in_([s.id for s in situations])
+        )
+    )
+    by_situation: dict[UUID, list] = {}
+    for m in member_rows.scalars().all():
+        by_situation.setdefault(m.situation_id, []).append(m)
+
+    return {
+        "situations": [
+            {
+                "id": str(s.id),
+                "title": s.title,
+                "state": s.state,
+                "situation_type": s.situation_type,
+                "confidence": s.situation_confidence,
+                "onset_at": s.onset_at.isoformat() if s.onset_at else None,
+                "last_signal_at": (
+                    s.last_signal_at.isoformat() if s.last_signal_at else None
+                ),
+                "incident_count": s.incident_count,
+                "correlation_version": s.correlation_version,
+                "members": [
+                    {
+                        "evidence_id": str(m.evidence_id),
+                        "role": m.evidence_role,
+                        "status": m.membership_status,
+                        "method": m.correlation_method,
+                        "confidence": m.membership_confidence,
+                    }
+                    for m in by_situation.get(s.id, [])
+                ],
+            }
+            for s in situations
+        ]
+    }
+
+
 @router.get("/edge-proposals")
 async def list_edge_proposals_endpoint(
     db: DbSession,
