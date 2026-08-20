@@ -207,6 +207,50 @@ async def list_situations(
     }
 
 
+@router.get("/situations/{situation_id}/change-candidates")
+async def situation_change_candidates(
+    situation_id: UUID,
+    db: DbSession,
+    user: AuthUser,
+    persist: bool = Query(
+        False,
+        description=(
+            "Store the ranked candidates. Idempotent, and never overwrites a "
+            "row a human reviewed or rejected."
+        ),
+    ),
+):
+    """Which change could explain this situation (roadmap H6).
+
+    A RANKED LIST, never a verdict. `correlation_score` is a rank under an
+    explainable additive model — 0.85 means "strong on the factors below",
+    not "85% likely". Only `confirmed` is a claim, and it comes solely from
+    governed evidence such as a ServiceNow `caused_by` a human filled in;
+    no score promotes a candidate to it.
+    """
+    from contextedge.models.situation import OperationalSituation
+    from contextedge.services.change_correlation_service import (
+        correlate_changes_for_situation,
+        persist_candidates,
+    )
+
+    situation = await db.get(OperationalSituation, situation_id)
+    if situation is None or situation.tenant_id != user.tenant_id:
+        raise HTTPException(status_code=404, detail="Situation not found")
+
+    candidates = await correlate_changes_for_situation(db, user.tenant_id, situation)
+    written = None
+    if persist and candidates:
+        written = await persist_candidates(db, user.tenant_id, situation, candidates)
+
+    return {
+        "situation_id": str(situation.id),
+        "onset_at": situation.onset_at.isoformat() if situation.onset_at else None,
+        "candidates": [c.as_dict() for c in candidates],
+        "persisted": written,
+    }
+
+
 @router.get("/edge-proposals")
 async def list_edge_proposals_endpoint(
     db: DbSession,

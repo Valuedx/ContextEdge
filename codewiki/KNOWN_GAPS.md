@@ -2,6 +2,25 @@
 
 Short list of implementation gaps and operational caveats called out in the codewiki and root documentation. Use this when the product surface looks more complete in the architecture than it does in the current UI or environment.
 
+## 2026-08-21 H6 shipped, and a single future-dated row had stopped change ingestion
+
+`GET /api/v1/graph/situations/{id}/change-candidates`, `correlation.correlate_situation_changes`. Design: [CHANGE_CORRELATION](CHANGE_CORRELATION.md).
+
+### Closed and corrected
+
+- **Incidents now arrive with their suspect changes attached [was: H6].** Ranked, explainable, one dependency hop of blast radius. Measured on the canonical incident: the same-CI change at `confirmed` (governed `caused_by`), a change one hop away at `candidate` 0.55, and the coincidental control absent entirely rather than ranked low.
+- **P0 — one record dated 2035 had silently stopped `change_request` ingestion — FIXED.** A stock PDI contains `CHG0000003` ("Roll back Windows SP2 patch") with `sys_updated_on = 2035-05-28`. The keyset is `sys_updated_on > checkpoint`, so once consumed, the cursor pinned nine years ahead and **no change created after that moment could ever arrive**. Every sync since 20:04 returned zero rows and reported `completed`, which is indistinguishable from "nothing new". A future-dated row is now ingested but never becomes the checkpoint. **Operational note: an already-wedged deployment does not self-heal — the stored checkpoint must be reset manually, as was done here.** Any table can be affected; only `change_request` was, on this instance.
+- **Unparseable timestamps are deliberately not treated as future.** Doing so would stall a stream the same way, the next time an upstream format changes.
+
+### Opened — record these before they read as capability
+
+- **Nothing detects a wedged checkpoint.** The fix prevents new occurrences; it does not find existing ones or alert on a stream that has returned zero rows for an implausibly long time. A sync reporting `completed` with 0 items is still indistinguishable from a quiet source. This is the highest-value follow-up here and it is not written.
+- **One hop only.** A two-hop cause is invisible: `esx-host-04 → vpn-gw-east-01 → acme-vpn-service` means a change to the ESX host is one hop from the gateway and two from the service, so a service-level situation would not see it.
+- **Affected CIs are derived from membership, not from `situation_entity_impacts`.** That table is H4's and is empty, so two code paths will compute blast radius until H4 lands, and they can disagree.
+- **A rejected candidate stays rejected.** Reviewed rows are never recomputed — correct, but nothing re-opens one when the evidence underneath it changes.
+- **Thresholds named and untuned**, as everywhere else: `SUSPECTED_SCORE = 0.7`, `CANDIDATE_SCORE = 0.4`, chosen so same-CI plus close-in-time clears the bar while either alone does not.
+- **The governance column register can be satisfied by prose.** It scans source text for an assignment to a column name, comments included. A local variable named after `SituationEntityImpact.basis`, and then a comment quoting that name, each silently retired a gap H4 still owes. Both were renamed rather than the register entry removed — but the scanner will accept the same trick from anyone.
+
 ## 2026-08-21 C2 shipped: criticality and owner, and three ways code looks wired
 
 ### Closed and corrected

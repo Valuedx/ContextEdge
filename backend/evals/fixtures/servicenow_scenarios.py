@@ -66,6 +66,14 @@ Every scenario states the assertion it exists to support:
                      against a calendar -- which is also the only form
                      available on an ITSM source that does not publish its
                      freeze calendar.
+  S9 one-hop change  a change on radius-auth-01 -- the CI vpn-gw-east-01
+                     DEPENDS ON, not the one that broke -- three hours before
+                     onset. S1's change and this one must both be candidates
+                     and must not rank equally: same-CI outranks one-hop. This
+                     is what separates situation-aware change correlation from
+                     a same-CI lookup. Without it the blast-radius traversal is
+                     never exercised, because every other fixture change is
+                     either on the affected CI or on an unrelated one.
   C2 ownership       criticality, owning team and accountable owner on the
                      fixture CIs. A stock PDI populates none of these -- 0 of
                      400 sampled CIs carry business criticality, owner or
@@ -970,6 +978,38 @@ def build(sn: Snow, anchor: datetime) -> dict[str, Any]:
         ),
     )
     created["change_c"] = chg_c
+
+    # ---- S9: a change one dependency hop away -----------------------------
+    # The gateway depends on radius-auth-01. A change there can break the
+    # gateway without ever touching it, which is precisely the case a same-CI
+    # lookup cannot see and a topology walk can.
+    chg_d = note(
+        "change_request",
+        "s9:chg-radius-timeout",
+        sn.upsert(
+            "change_request",
+            "s9:chg-radius-timeout",
+            {
+                "short_description": (
+                    "Reduce RADIUS client timeout from 30s to 5s on radius-auth-01"
+                ),
+                "description": (
+                    "Tuning change to fail over faster when a RADIUS backend is "
+                    "slow. Applied to radius-auth-01, which the east-region VPN "
+                    "gateway authenticates against. Not applied to the gateway "
+                    "itself."
+                ),
+                "category": "Network",
+                "cmdb_ci": ci["radius"],
+                "assignment_group": grp_network,
+                "start_date": _fmt(t0 - timedelta(hours=1)),
+                "end_date": _fmt(t0 - timedelta(minutes=30)),
+                "work_start": _fmt(t0 - timedelta(hours=1)),
+                "work_end": _fmt(t0 - timedelta(minutes=30)),
+            },
+        ),
+    )
+    created["change_d"] = chg_d
 
     created["anchor"] = _fmt(t0)
     created["ci"] = ci

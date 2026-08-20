@@ -246,9 +246,14 @@ Two defects surfaced in review and were fixed: evidence carried `sys_updated_on`
 
 Alert rollups, event grouping, source lineage (an alert, the ticket it opened and the mail it sent are one observation, not three), independent corroboration (three monitoring systems agreeing genuinely is three), recovery evidence, storm velocity. No alert evidence exists today.
 
-### H6. Situation-aware change correlation — *blocked on change records*
+### H6. Situation-aware change correlation ✅
 
-Evidence typing already maps `servicenow/change_request → change`; no change rows exist. Supersedes same-CI-preceding-change lookup (B4) with situation → affected entities → bounded topology → ranked candidates. `correlation_score` is a ranking, never a probability, and `confirmed` is reachable only from governed evidence.
+Shipped 2026-08-21, and it supersedes B4's same-CI lookup as planned: situation → affected entities → one dependency hop → ranked candidates. `correlation_score` stayed a ranking and `confirmed` stayed reachable only from governed evidence — a ServiceNow `caused_by` a human filled in, recorded with what asserted it.
+
+Measured on the canonical incident: two candidates, correctly ordered. The same-CI change at `confirmed`, a change one hop away at `candidate` 0.55, and the deliberately coincidental control on an unrelated CI absent entirely rather than merely ranked low.
+
+Building it surfaced a defect worth more than the feature: one PDI record dated 2035 had pinned the `change_request` keyset checkpoint nine years ahead, so every incremental sync since returned zero rows and reported success.
+**In code:** `services/change_correlation_service.py`, `GET /graph/situations/{id}/change-candidates`. Design: [CHANGE_CORRELATION](CHANGE_CORRELATION.md).
 
 ### H7. Diagnostic context service — *depends on H2–H6*
 
@@ -288,7 +293,7 @@ Revised 2026-08-20. Workstream G shipped out of order because a knowledge backfi
 | ✅ | CI entities + `depends_on` topology | C1 | M | — | **largely already wired** — the topology cache warms itself once a real CMDB is connected; 28 CIs, 19 `depends_on` edges |
 | ✅ | Criticality / owner / tier on entity facts | C2 | S | — | **shipped 2026-08-21** — three defects, each of which looked wired: attributes were write-once, criticality is only on `cmdb_ci_service`, and `owned_by` was captured nowhere. See [SERVICENOW_LIVE_VERIFICATION](SERVICENOW_LIVE_VERIFICATION.md) |
 | — | Monitoring alert/event ingestion | H5 | M | **an instance with ITOM** | blocked on the instance, not the connector: `em_alert` is absent, discovery skips it |
-| 6 | Situation-aware change correlation | H6 | M | 3, 4 | supersedes B4's same-CI lookup |
+| ✅ | Situation-aware change correlation | H6 | M | — | **shipped 2026-08-21** — ranked candidates with one-hop blast radius; building it found a single future-dated row that had silently stopped change ingestion entirely. See [CHANGE_CORRELATION](CHANGE_CORRELATION.md) |
 | 7 | Diagnostic context service | H7 | M–L | 1–6 | the actual product acceptance criterion |
 | 8 | Situation lifecycle, merge, review | H8 | M | 2 | reopen vs recurrence, merge without losing lineage |
 | 9 | Claim-level epistemic status | G4 | M–L | — | source type is not epistemic status |

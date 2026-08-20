@@ -7,7 +7,7 @@ handling, and journal/comment extraction.
 """
 
 import asyncio
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import httpx
@@ -449,7 +449,21 @@ class ServiceNowConnector(BaseConnector):
                 sys_id = record.get("sys_id", "")
                 if (ts, sys_id) <= (cursor_ts, cursor_sys_id):
                     continue  # server returned an already-seen row; skip
-                if (ts, sys_id) > (latest_ts, latest_sys_id):
+                # A future-dated row must never become the checkpoint. The
+                # keyset is `sys_updated_on > checkpoint`, so one row dated
+                # 2035 ends the stream for that table PERMANENTLY — and
+                # silently, because every later sync then reports completed
+                # with zero items, which is indistinguishable from "nothing
+                # new". Measured on a stock PDI: CHG0000003 "Roll back
+                # Windows SP2 patch" carries sys_updated_on 2035-05-28 and had
+                # wedged change_request ingestion entirely; no change created
+                # after that point could ever arrive.
+                #
+                # The row is still ingested — it is a real record someone
+                # made. Only the cursor refuses to follow it. The cost is that
+                # such a row is re-fetched and deduped on every later sync,
+                # which is one wasted row per sync against a dead stream.
+                if (ts, sys_id) > (latest_ts, latest_sys_id) and not _is_future(ts):
                     latest_ts, latest_sys_id = ts, sys_id
                 if table_name == "em_alert":
                     # Alerts roll up after pagination — one event per
@@ -656,6 +670,25 @@ def _with_derived_title(record: dict) -> dict:
     enriched = dict(record)
     enriched["short_description"] = subject
     return enriched
+
+
+# How far ahead of our clock a source timestamp may sit and still be treated
+# as "now". Covers ordinary clock drift between this host and the instance;
+# anything beyond it is bad data, not skew.
+CHECKPOINT_CLOCK_SKEW = timedelta(minutes=5)
+
+
+def _is_future(value: str | None, now: datetime | None = None) -> bool:
+    """Is this source timestamp implausibly ahead of our clock?
+
+    Unparseable is NOT future: a timestamp we cannot read must not be treated
+    as bad data and silently excluded from the checkpoint, or a format change
+    upstream would stall the stream the same way a 2035 row does.
+    """
+    parsed = _parse_snow_datetime(value)
+    if parsed is None:
+        return False
+    return parsed > (now or datetime.now(UTC)) + CHECKPOINT_CLOCK_SKEW
 
 
 def _event_time(table_name: str, record: dict) -> datetime | None:

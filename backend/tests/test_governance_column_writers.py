@@ -74,7 +74,7 @@ EXPECTED_UNWRITTEN: dict[tuple[str, str], tuple[str, str]] = {
         for col in (
             "primary_entity_id", "primary_service_entity_id",
             "affected_entity_count", "impact_role", "basis",
-            "signal_observed_at", "topology_distance",
+            "signal_observed_at",
         )
     },
     # H5 — monitoring. Blocked on an instance with Event Management, not on
@@ -86,25 +86,17 @@ EXPECTED_UNWRITTEN: dict[tuple[str, str], tuple[str, str]] = {
         )
         for col in ("alert_count", "event_count", "source_lineage_group")
     },
-    # H6 — situation-aware change correlation. Change evidence now exists, so
-    # this is scheduled work rather than a connector gap.
-    **{
-        ("situation.py", col): (
-            "H6-change-correlation",
-            "change candidates not yet ranked against situations",
-        )
-        for col in (
-            "change_candidate_count", "correlation_score", "temporal_relation",
-            "minutes_from_onset", "reason_summary", "confirmation_basis",
-        )
-    },
-    # Written only when the inferred tier fires, which needs symptom agreement
-    # data this corpus does not have yet (issue_signatures is empty and the
-    # error signatures present come from unrelated demo records).
-    ("situation.py", "score_breakdown"): (
-        "H3-inferred-tier",
-        "populated by inferred merges; no symptom-agreement data in this corpus",
-    ),
+    # H6 shipped 2026-08-21 (change_correlation_service): change_candidate_count,
+    # correlation_score, temporal_relation, minutes_from_onset,
+    # topology_distance, score_breakdown, reason_summary and confirmation_basis
+    # all left this register when it landed.
+    #
+    # `basis` on SituationEntityImpact stays with H4 above, and nearly did not:
+    # a local variable named after it in the change correlator, and then a
+    # COMMENT quoting that name, each satisfied this scanner's writer regex in
+    # turn. The register reads source text, comments included, so a gap can be
+    # retired by prose alone. Both were renamed rather than the entry removed.
+
     # --- knowledge_case / pattern_evidence: schema landed in 0072 ahead of
     # its writers, deliberately. The tables exist so the reconstruction
     # branch and the 299-episode migration can be reviewed against a real
