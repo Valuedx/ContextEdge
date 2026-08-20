@@ -1,6 +1,6 @@
 # Efficacy: did the fix actually work, and does the documentation still hold?
 
-**Status:** shipped 2026-08-21. Roadmap E1, pulled forward from position 9 in the sequence.
+**Status:** shipped 2026-08-21. Roadmap E1, E2 and E3, pulled forward from position 9 in the sequence.
 **Companion docs:** [INCIDENT_DIAGNOSIS_ROADMAP](INCIDENT_DIAGNOSIS_ROADMAP.md), [07-episodes-patterns-playbooks](07-episodes-patterns-playbooks.md), [SITUATION_CORRELATION](SITUATION_CORRELATION.md), [KNOWN_GAPS](KNOWN_GAPS.md).
 
 ---
@@ -96,6 +96,56 @@ Recorded so it is not re-litigated: on this corpus, documented resolutions hold 
 **Thresholds are named and untuned.**
 `DRIFT_SUCCESS_RATE = 0.5`, `MIN_DRIFT_SAMPLE = 5`. There is no labelled drift set to tune against, and inventing one would make a chosen number look measured. The sensitivity is real and stated: the lowest observed rate is 60.0%, so a threshold of 0.65 would flag one pattern where 0.5 flags none.
 
+## E2 and E3: where the measurement reaches the recommendation
+
+E1 alone measures efficacy that nothing acts on — a report, not a capability. E2 (can it apply here?) and E3 (what is known to go wrong?) are what turn it into a decision, and all three are fused in `remediation_advisory_service`.
+
+### Both items named machinery that holds no rows
+
+Same lesson as E1. `fix_applicability_rules`, `fix_patterns`, `fix_cohort_stats` and `case_outcome_fix_patterns` are all **0 rows**, as are the `invalidated_fix` edges E3 was specified against. What exists instead is better.
+
+**Applicability** lives in the `applicability` JSON on knowledge cases and evidence — 764 rows — and its dimensions are very unevenly filled:
+
+| dimension | populated | of 764 |
+| --- | --- | --- |
+| `deployment` | 764 | 100% |
+| `components` | 719 | 94% |
+| `product_versions` | 148 | 19% |
+| `version_floor` | 57 | 7.5% |
+| `version_ceiling` | 39 | 5% |
+| `environments` | 12 | 1.6% |
+| `platforms` | 0 | 0% |
+
+E2's headline case — "rule out a fix that does not match the incident's product version" — therefore rests on 7.5% coverage. Deployment and component matching carry the weight. The engine handles every dimension and is honest that two of them currently decide anything.
+
+A pattern has no applicability column of its own; the statements live on the knowledge cases that document it, reached through the ledger. That is the right home — "this applies to on-prem 8.2 and above" is a claim a *source* makes, and attaching it to the pattern would lose which source made it.
+
+**Negative knowledge** lives in `episode_steps`, which carries `failed_flag`, `successful_flag` and `result_state` — 970 steps flagged failed, structured rather than the `[did not work]` text markers E3 assumed. Measured: 217 patterns carry 510 failure statements.
+
+### Precedence, because the columns disagree
+
+`result_state` and the booleans conflict on **378 of 24,245** steps: 331 say `result_state='failure'` with `failed_flag=false`, 33 claim `successful_flag=true` *and* `result_state='failure'`, 14 the reverse. `result_state` wins — it is the richer vocabulary and the booleans cannot express `inconclusive` at all, so false-in-both is ambiguous by construction where `result_state` is not. The 33 rows asserting both are dropped rather than resolved: a step claiming both is evidence of neither.
+
+### Exclusion is the conservative direction
+
+An `excluded` verdict suppresses a remediation, and when that is wrong the failure is **silent** — the operator never learns the option existed. So exclusion requires both sides to state a value and to actually conflict. Silence yields `unknown`, which is visible in the output.
+
+Component mismatch deliberately does *not* exclude: those vocabularies are LLM-extracted free text, so absence of overlap is as likely to be a naming difference as a real mismatch.
+
+### Measured: the verdicts move with context
+
+Over 533 patterns on the reference corpus:
+
+| context | recommend | with caution | insufficient | do not recommend |
+| --- | --- | --- | --- | --- |
+| none given | 8 | 78 | 447 | 0 |
+| on-prem, AE 8.2.3 | 8 | 75 | 429 | **21** |
+| cloud | 8 | 58 | 370 | **97** |
+
+A cloud context suppresses 97 patterns documented for on-prem. That is E2 doing the only thing it exists for.
+
+The output is a sentence rather than a score: *"100% success across 15 outcome-bearing episodes; support: MIXED; 5 known failure(s)"*. That pairing is not a contradiction — the **episodes** resolved, while individual **steps within them** failed on the way. Surfacing both is the point of E3: this works, and here is what people tried first that did not.
+
 ## Code map
 
 | Path | Role |
@@ -105,6 +155,9 @@ Recorded so it is not re-litigated: on this corpus, documented resolutions hold 
 | `api/v1/patterns.py::pattern_efficacy` | `GET /api/v1/patterns/efficacy` |
 | `api/v1/patterns.py::knowledge_drift` | `GET /api/v1/patterns/knowledge-drift` |
 | `tests/test_efficacy_and_outcomes.py` | the ordering trap, the arithmetic, the drift guards |
+| `services/remediation_advisory_service.py` | E2 applicability, E3 negative knowledge, fused verdict |
+| `api/v1/patterns.py::advise` | `POST /api/v1/patterns/advise` |
+| `tests/test_remediation_advisory.py` | mostly: the exclusions that must not happen |
 
 ## Acme VPN incident (this layer)
 

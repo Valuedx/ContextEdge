@@ -2,6 +2,25 @@
 
 Short list of implementation gaps and operational caveats called out in the codewiki and root documentation. Use this when the product surface looks more complete in the architecture than it does in the current UI or environment.
 
+## 2026-08-21 E2 + E3 shipped: the measurement reaches the recommendation
+
+`POST /api/v1/patterns/advise`. E1 alone was a report; this is where it changes what gets recommended. Design: [EFFICACY_AND_KNOWLEDGE_DRIFT](EFFICACY_AND_KNOWLEDGE_DRIFT.md).
+
+### Closed and corrected
+
+- **E2's and E3's stated substrates are empty, like E1's [correction].** `fix_applicability_rules`, `fix_patterns`, `fix_cohort_stats`, `case_outcome_fix_patterns` and `invalidated_fix` are all 0 rows on the reference corpus. Applicability actually lives in the `applicability` JSON on knowledge cases (764 rows), and negative knowledge in `episode_steps.result_state` (970 failed steps). Roadmap corrected.
+- **Remediations are now ranked by whether they are defensible.** Measured over 533 patterns: a cloud context suppresses 97 patterns documented for on-prem, an on-prem context 21, no context 0. Each result carries its own rationale rather than a score.
+- **`episode_steps` has three columns that disagree.** 378 of 24,245 rows conflict between `result_state` and the booleans. Precedence is now explicit — `result_state` wins, and the 33 rows asserting both success and failure are dropped rather than resolved.
+
+### Opened — record these before they read as capability
+
+- **E2 can barely rule out on version, which was its headline use.** `version_floor` is populated on 7.5% of applicability payloads and `version_ceiling` on 5%; `platforms` on 0%. Deployment (100%) and components (94%) carry every exclusion the engine actually makes. "Rule out a fix that does not match the product version" is implemented and almost never fires.
+- **Component mismatch deliberately never excludes.** Those vocabularies are LLM-extracted free text, so absence of overlap is as likely to be a naming difference as a real mismatch. The consequence is that a fix for a completely unrelated component is not suppressed on that basis alone.
+- **Evidence-level applicability is not merged in.** 629 `evidence_items` carry payloads that are ignored: an incident's stated environment describes where the *problem* happened, not where the *remedy* applies, and conflating them would exclude fixes on the strength of where they were last needed. Reaching them needs an episode-link hop nobody has written.
+- **`trigger_change` write-back is still open.** E3 specified writing confirmed `preceded_by` suspicions back into the signature's `trigger_change`; that half depends on H6's change correlation and is not done.
+- **Thresholds remain named and untuned.** `CAUTION_SUCCESS_RATE = 0.6`, `MIN_RATE_SAMPLE = 3`, alongside E1's drift constants. No labelled set exists to tune any of them against.
+- **Mojibake observed in episode step text.** Failure statements returned by the advisory contain sequences like `â€"` where an em-dash should be — UTF-8 read as latin-1 somewhere on the ingest path. Observed, not investigated; it affects display of negative knowledge and probably other free text.
+
 ## 2026-08-21 E1 shipped: efficacy measurement, pulled forward
 
 E1 was position 9 in the sequence. A competitive review found that no vendor in the landscape — ServiceNow, incident.io, PagerDuty, Rootly, Glean — verifiably tracks whether a remediation *worked*, so it was pulled forward. Design: [EFFICACY_AND_KNOWLEDGE_DRIFT](EFFICACY_AND_KNOWLEDGE_DRIFT.md).

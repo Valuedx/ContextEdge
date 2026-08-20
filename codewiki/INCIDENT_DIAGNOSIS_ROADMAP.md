@@ -155,11 +155,11 @@ So E1 became: normalize the text deterministically, write it into the ledger, ag
 Knowledge drift returns **zero** there, and that is a negative result rather than a broken rule: 15 patterns cleared the sample threshold and none fell below the success threshold. Recorded so it is not re-litigated.
 **In code:** `services/outcome_classification.py`, `services/efficacy_service.py`, `GET /api/v1/patterns/efficacy`, `GET /api/v1/patterns/knowledge-drift`. Design: [EFFICACY_AND_KNOWLEDGE_DRIFT](EFFICACY_AND_KNOWLEDGE_DRIFT.md).
 
-### E2. Applicability constraints on edges, not buried in text
+### E2. Applicability constraints on edges, not buried in text ✅ *(shipped 2026-08-21 — see [EFFICACY_AND_KNOWLEDGE_DRIFT](EFFICACY_AND_KNOWLEDGE_DRIFT.md). `fix_applicability_rules` holds 0 rows; the real payload is on knowledge cases, and only `deployment` (100%) and `components` (94%) are populated enough to decide anything — version bounds sit at 7.5%.)*
 
 The applicability machinery exists (`version_floor`/ceiling extraction, `fix_applicability`). Project the constraints onto `recommends`/`addresses` edges so the agent can structurally *rule out* a fix that does not match the incident's product version or environment — mis-applied remediation being the classic agent failure.
 
-### E3. Negative knowledge as a first-class projection
+### E3. Negative knowledge as a first-class projection ✅ *(shipped 2026-08-21. `invalidated_fix` holds 0 rows; the real signal is `episode_steps.result_state` — 970 failed steps, 217 patterns carrying 510 failure statements. Writing confirmed `preceded_by` suspicions back into `trigger_change` remains open and belongs with H6.)*
 
 `[did not work]` step markers and `invalidated_fix` edges exist; surface them *with* every recommendation ("known to fail when X"), and write confirmed `preceded_by` suspicions back into `trigger_change` (closing B4's loop). An agent that repeats a documented-bad fix destroys trust faster than one that abstains.
 
@@ -272,7 +272,7 @@ One bounded, security-filtered, provenance-aware bundle: case, situation, signal
 | 6 | Event layer + `preceded_by` seed layer | B2, B4 | M | B1 | the diagnose-time correlation capability |
 | 7 | Inventory-diff detector | B3 | M | B2 | first high-yield event source |
 | 8 | `cmdb_rel_ci` topology + criticality facts | C1, C2 | M | — | blast radius |
-| ✅/3 | Efficacy rollups (E1) shipped 2026-08-21; applicability (E2) and negative knowledge (E3) open | E1–E3 | M | — | **pulled forward** — the one capability no competitor ships; see [EFFICACY_AND_KNOWLEDGE_DRIFT](EFFICACY_AND_KNOWLEDGE_DRIFT.md) |
+| ✅ | Efficacy rollups + applicability + negative knowledge | E1–E3 | M | — | **shipped 2026-08-21, pulled forward** — the one capability no competitor ships; see [EFFICACY_AND_KNOWLEDGE_DRIFT](EFFICACY_AND_KNOWLEDGE_DRIFT.md) |
 | 10 | Agent decision write-back | F1 | M–L | — | the compounding loop |
 | 11 | Claims population | A4 | M–L | A2 | granular assertions, once summaries prove out |
 

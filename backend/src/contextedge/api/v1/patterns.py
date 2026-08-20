@@ -141,6 +141,55 @@ async def knowledge_drift(
     return {"drifting": await find_drifting_knowledge(db, user.tenant_id, limit=limit)}
 
 
+class RemediationContext(BaseModel):
+    """The incident's stated situation, for ruling remediations in or out.
+
+    Every field is optional and an omitted one never excludes anything —
+    silence yields `unknown` applicability, not `excluded`, because
+    suppressing a fix that would have worked is a failure nobody sees.
+    """
+
+    deployment: str | None = None
+    version: str | None = None
+    components: list[str] = []
+    environments: list[str] = []
+
+
+@router.post("/advise")
+async def advise(
+    body: RemediationContext,
+    db: DbSession,
+    user: AuthUser,
+    limit: int = Query(20, ge=1, le=100),
+    classify_live: bool = Query(
+        False,
+        description=(
+            "Read outcomes from episodes rather than the ledger column. Use on "
+            "a deployment whose ledger backfill has not run, which otherwise "
+            "reports insufficient_evidence for every pattern."
+        ),
+    ),
+):
+    """Rank remediations by whether they are defensible (roadmap E1+E2+E3).
+
+    Each result carries its own rationale — success rate over outcome-bearing
+    episodes, epistemic support class, applicability verdict, and what is known
+    to have failed. A verdict nobody can inspect is one nobody can overrule.
+
+    Declared before `/{pattern_id}`: FastAPI matches in definition order.
+    """
+    from contextedge.services.remediation_advisory_service import advise_remediations
+
+    advice = await advise_remediations(
+        db,
+        user.tenant_id,
+        context=body.model_dump(exclude_none=True),
+        limit=limit,
+        classify_live=classify_live,
+    )
+    return {"advice": [a.as_dict() for a in advice]}
+
+
 @router.get("/{pattern_id}", response_model=PatternResponse)
 async def get_pattern(pattern_id: UUID, db: DbSession, user: AuthUser):
     result = await db.execute(
