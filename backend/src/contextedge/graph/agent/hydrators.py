@@ -563,7 +563,16 @@ def hydrate_node(node_type: str, obj: Any) -> HydratedGraphNode:
         # enrichment). Selected keys only — the raw attributes blob is
         # unbounded and carries snapshot internals the agent must not see.
         attrs = getattr(obj, "attributes", None) or {}
-        for key in ("criticality", "support_group", "ci_class", "monitoring_sources"):
+        for key in (
+            "criticality",
+            "support_group",
+            # The escalation target. A team says who is on call; an owner says
+            # who is accountable, and an agent recommending a restart on a
+            # Tier-1 service should be able to name both.
+            "owner",
+            "ci_class",
+            "monitoring_sources",
+        ):
             if attrs.get(key):
                 facts[key] = _value(attrs[key])
         confidence = _float(obj.confidence)

@@ -66,6 +66,18 @@ Every scenario states the assertion it exists to support:
                      against a calendar -- which is also the only form
                      available on an ITSM source that does not publish its
                      freeze calendar.
+  C2 ownership       criticality, owning team and accountable owner on the
+                     fixture CIs. A stock PDI populates none of these -- 0 of
+                     400 sampled CIs carry business criticality, owner or
+                     environment -- so blast radius has nothing to prioritise
+                     by. Note where criticality sits: ServiceNow defines
+                     `busines_criticality` [sic, one 's'] on cmdb_ci_service
+                     ONLY, not on the cmdb_ci base table. That is semantically
+                     right -- a business service is critical, a switch is
+                     critical because of what depends on it -- so the fixture
+                     sets it on acme-vpn-service and lets the gateway inherit
+                     it through the dependency edge rather than stamping it
+                     everywhere.
 
 Instance constraint (measured, 2026-08-21). ServiceNow guards the change and
 problem lifecycles with model business rules -- "Change Model: Check State
@@ -330,6 +342,8 @@ def build(sn: Snow, anchor: datetime) -> dict[str, Any]:
             "cmdb_ci_netgear",
             "vpn-gw-east-01",
             {
+                "owned_by": assignee,
+                "support_group": grp_network,
                 "short_description": "Acme east-region VPN concentrator",
                 "operational_status": "1",
                 "install_status": "1",
@@ -343,6 +357,8 @@ def build(sn: Snow, anchor: datetime) -> dict[str, Any]:
             "cmdb_ci_server",
             "radius-auth-01",
             {
+                "owned_by": assignee,
+                "support_group": grp_network,
                 "short_description": "RADIUS authentication server (VPN back end)",
                 "operational_status": "1",
                 "install_status": "1",
@@ -356,6 +372,8 @@ def build(sn: Snow, anchor: datetime) -> dict[str, Any]:
             "cmdb_ci_server",
             "esx-host-04",
             {
+                "owned_by": assignee,
+                "support_group": grp_network,
                 "short_description": "ESX host carrying the east-region network VMs",
                 "operational_status": "1",
                 "install_status": "1",
@@ -372,6 +390,12 @@ def build(sn: Snow, anchor: datetime) -> dict[str, Any]:
                 "short_description": "Remote access VPN business service",
                 "operational_status": "1",
                 "install_status": "1",
+                # `busines_criticality` is ServiceNow's own spelling, single
+                # 's'. It exists on cmdb_ci_service and not on cmdb_ci, so
+                # this is the only fixture CI that can carry it.
+                "busines_criticality": "1 - most critical",
+                "owned_by": assignee,
+                "support_group": grp_network,
             },
         ),
     )
@@ -382,6 +406,8 @@ def build(sn: Snow, anchor: datetime) -> dict[str, Any]:
             "cmdb_ci_server",
             "print-srv-02",
             {
+                "owned_by": assignee,
+                "support_group": grp_servicedesk,
                 "short_description": "Floor-2 print server (S2 control CI)",
                 "operational_status": "1",
                 "install_status": "1",
@@ -395,6 +421,8 @@ def build(sn: Snow, anchor: datetime) -> dict[str, Any]:
             "cmdb_ci_server",
             "acme-ad-dc-01",
             {
+                "owned_by": assignee,
+                "support_group": grp_servicedesk,
                 "short_description": "Active Directory domain controller (S4 hub CI)",
                 "operational_status": "1",
                 "install_status": "1",

@@ -2,6 +2,21 @@
 
 Short list of implementation gaps and operational caveats called out in the codewiki and root documentation. Use this when the product surface looks more complete in the architecture than it does in the current UI or environment.
 
+## 2026-08-21 C2 shipped: criticality and owner, and three ways code looks wired
+
+### Closed and corrected
+
+- **Entity `attributes` were write-once — FIXED.** `_ensure_entity` refreshed the display name and B2 traits on an existing row but wrote `attributes` only on INSERT, so criticality, owning team and owner could land only on a CI nobody had seen before. Once a CMDB has been synced once, that is none of them: the fields would be re-fetched on every warm and stored never, with no error anywhere. Attributes now merge key-by-key on the same terms as traits. Shared with the Jira and SapphireIMS reference services, so attribute refresh is fixed there too.
+- **Criticality was requested from a table that does not have it — FIXED.** `busines_criticality` [sic] is defined on `cmdb_ci_service`, not on the `cmdb_ci` base table the neighborhood fetch queries, and asking the base table for it returns rows without the key rather than an error. Verified live on one sys_id both ways. The fetch now makes a second targeted call, and only when the neighborhood contains a service.
+- **`owned_by` was captured nowhere — FIXED.** A team is who is on call, an owner is who is accountable; both are carried and projected.
+
+### Opened — record these before they read as capability
+
+- **Criticality exists for services only, by construction.** Infrastructure CIs carry owner and team but no criticality of their own, and inherit importance through the dependency edge. Any consumer that reads `criticality` directly off a switch will find nothing and must walk to the service — nothing enforces that today, and nothing warns when a consumer does not.
+- **Tier is not modelled on this instance.** `u_tier` is 0 of 400 and is not a base ServiceNow field. C2's "tier" is delivered as criticality plus the topology walk; a deployment with a real tier field would need a mapping nobody has written.
+- **The instance's own CMDB is effectively unpopulated for this.** 0 of 400 sampled CIs carry criticality, owner or environment. Every C2 measurement here rests on fixture CIs populated deliberately; the capability is proven, its coverage on real ServiceNow data is not.
+- **Environment is still absent everywhere.** 0 of 400 CIs and 0 evidence rows state one, so the situation correlator's environment veto and the advisory's environment exclusion both remain inert for a second, independent reason.
+
 ## 2026-08-21 E2 + E3 shipped: the measurement reaches the recommendation
 
 `POST /api/v1/patterns/advise`. E1 alone was a report; this is where it changes what gets recommended. Design: [EFFICACY_AND_KNOWLEDGE_DRIFT](EFFICACY_AND_KNOWLEDGE_DRIFT.md).

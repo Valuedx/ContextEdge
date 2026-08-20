@@ -112,7 +112,7 @@ Allowlist `trigger_of` / `causes` (with their node types, or preferably project 
 
 Without `depends_on`/`runs_on` edges between CIs, the agent cannot walk "checkout depends on payment; payment calls this DB." ServiceNow's `cmdb_rel_ci` table holds exactly these relationships: add it to the connector registry, map rows to entity↔entity `depends_on` edges via the existing `graph/builder.ensure_edge` path, allowlist in `maf.v1`.
 
-### C2. Criticality / owner / tier on entity facts
+### C2. Criticality / owner / tier on entity facts ✅ *(shipped 2026-08-21. Criticality is defined on `cmdb_ci_service` only, so it reaches infrastructure through the dependency edge rather than being stamped on every CI — which is semantically right: a switch is critical because a critical service depends on it. Tier is not modelled on this instance at all.)*
 
 Blast radius without criticality cannot be prioritized, and remediation risk ("restart a Tier-1 service?") cannot be assessed. Sync these attributes from the CMDB during C1 and project them as entity facts. Owner also gives the agent an escalation target.
 
@@ -286,7 +286,7 @@ Revised 2026-08-20. Workstream G shipped out of order because a knowledge backfi
 | ✅ | Situation correlation | H3 | M | — | **shipped 2026-08-21** — in fuller form than planned: ServiceNow supplied authoritative duplicate links, which the plan assumed absent. See [SITUATION_CORRELATION](SITUATION_CORRELATION.md) |
 | ✅ | `change_request` ingestion | B1 | S | — | **shipped 2026-08-21** — 39 change evidence rows; the change join is data |
 | ✅ | CI entities + `depends_on` topology | C1 | M | — | **largely already wired** — the topology cache warms itself once a real CMDB is connected; 28 CIs, 19 `depends_on` edges |
-| 3 | Criticality / owner / tier on entity facts | C2 | S | C1 | blast radius without criticality cannot be prioritised |
+| ✅ | Criticality / owner / tier on entity facts | C2 | S | — | **shipped 2026-08-21** — three defects, each of which looked wired: attributes were write-once, criticality is only on `cmdb_ci_service`, and `owned_by` was captured nowhere. See [SERVICENOW_LIVE_VERIFICATION](SERVICENOW_LIVE_VERIFICATION.md) |
 | — | Monitoring alert/event ingestion | H5 | M | **an instance with ITOM** | blocked on the instance, not the connector: `em_alert` is absent, discovery skips it |
 | 6 | Situation-aware change correlation | H6 | M | 3, 4 | supersedes B4's same-CI lookup |
 | 7 | Diagnostic context service | H7 | M–L | 1–6 | the actual product acceptance criterion |

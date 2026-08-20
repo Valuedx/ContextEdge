@@ -112,6 +112,62 @@ Four ServiceNow guardrails shaped the fixtures, and each one reads as a permissi
 - **An unknown field in `sysparm_query` is dropped, not rejected.** The query runs without that term and matches everything. Keying `kb_knowledge` on `correlation_id` — a field that table does not have — selected an arbitrary demo article and the upsert tried to overwrite it. Only an ACL stopped the write. The fixture client now reads its key back and compares; a response missing the field is an error, not a miss.
 - **`cmn_schedule_span` writes are refused** (`Schedule Item validate`), which is why change windows live on the change record.
 
+## C2: criticality, owner, and three ways to look wired
+
+Blast radius without criticality is a list with no order. C2 adds the
+attributes that give it one — and every part of it was already written, which
+is why it returned nothing for so long.
+
+**The instance has almost none of the data.** Sampled 400 CIs: `owned_by` 0,
+`business_criticality` 0, `environment` 0, `u_tier` 0; `support_group` 9,
+`operational_status` 357. The fixture CIs are populated deliberately so the
+capability is testable, leaving the 2,804 random CIs as the unknown-criticality
+control.
+
+**Criticality is a property of services, not of every CI.** ServiceNow defines
+`busines_criticality` — its own spelling, one `s` — on `cmdb_ci_service` and
+not on the `cmdb_ci` base table the neighborhood fetch queries. Requesting it
+from the base table does not error: the column is simply absent from every row.
+Verified live, same sys_id both ways — `/table/cmdb_ci_service` returns the
+field, `/table/cmdb_ci` omits the key entirely. The fetch now makes a second,
+targeted call against the service table, and only when the neighborhood
+actually contains a service.
+
+That constraint is semantically right rather than an obstacle. A switch is not
+critical on its own; it is critical because a critical service depends on it.
+So criticality reaches infrastructure through the dependency edge:
+
+| entity | criticality | team | owner |
+| --- | --- | --- | --- |
+| `acme-vpn-service` (business_service) | **1 - most critical** | Network | System Administrator |
+| `vpn-gw-east-01` | — | Network | System Administrator |
+| `radius-auth-01` | — | Network | System Administrator |
+| `print-srv-02` | — | Service Desk | System Administrator |
+
+**Entity attributes were write-once.** `_ensure_entity` refreshed the display
+name and the B2 traits on an existing row and wrote `attributes` only on
+INSERT. Criticality could therefore land only on a CI nobody had seen before —
+which, once a CMDB has been synced once, is none of them. A deployment that
+later populated those fields upstream would re-fetch them on every warm and
+store them never, with no error anywhere. Same shape as the `source_type`
+defect: a field written on exactly one path that nothing revisits.
+
+Attributes now merge key-by-key on the existing path, on the same terms as
+traits — a present upstream value wins, an absent one never clears what an
+earlier sync captured. Merged rather than replaced because `attributes` is
+shared with other writers (`ci_class` from the class taxonomy,
+`monitoring_sources` from alert rollups), and the merged dict is *reassigned*
+rather than mutated: SQLAlchemy does not track in-place changes to a JSONB
+dict, so mutating it would update the object and never the row.
+
+`_ensure_entity` is shared with the Jira and SapphireIMS reference services, so
+attribute refresh is fixed for those connectors too.
+
+**`owned_by` was captured nowhere.** A team says who is on call; an owner says
+who is accountable. Both are now carried and neither substitutes for the other
+— escalating to a named individual who has left is worse than escalating to a
+queue.
+
 ## Code map
 
 | Path | Role |

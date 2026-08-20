@@ -572,13 +572,64 @@ class ServiceNowConnector(BaseConnector):
                     # spelling] + support_group feed the C2 criticality/
                     # owner facts; absent on a class -> absent, never
                     # guessed.
+                    #
+                    # owned_by is a PERSON and support_group is a TEAM, and
+                    # they answer different questions at 3am: who is
+                    # accountable versus who is on call. Escalating to a
+                    # named individual who left the company is worse than
+                    # escalating to a queue, so both are carried and neither
+                    # substitutes for the other.
+                    #
+                    # busines_criticality exists only on cmdb_ci_service, not
+                    # on the cmdb_ci base table this queries. ServiceNow
+                    # returns it empty for every other class rather than
+                    # erroring, which is why criticality reaches a switch
+                    # through the service that depends on it rather than
+                    # being stamped on the switch.
                     "manufacturer.name,model_id.name,os,os_version,"
-                    "busines_criticality,support_group.name"
+                    "support_group.name,owned_by.name"
                 ),
                 "sysparm_limit": "200",
             },
         )
-        return data.get("result", [])
+        rows = data.get("result", [])
+
+        # Criticality needs a second call against the SERVICE table.
+        #
+        # `busines_criticality` is defined on cmdb_ci_service, not on the
+        # cmdb_ci base table queried above. Asking the base table for it does
+        # not error — the column is simply absent from every row — so the
+        # request looked correct and returned nothing, permanently. Verified
+        # live: the same sys_id returns `busines_criticality` from
+        # /table/cmdb_ci_service and omits the key entirely from /table/cmdb_ci.
+        #
+        # Only fires when the neighborhood actually contains a service, so a
+        # pure-infrastructure walk still costs two calls.
+        service_ids = [
+            r.get("sys_id")
+            for r in rows
+            if str(r.get("sys_class_name") or "").startswith("cmdb_ci_service")
+            and r.get("sys_id")
+        ]
+        if service_ids:
+            service_data = await self._snow_get(
+                "/api/now/table/cmdb_ci_service",
+                {
+                    "sysparm_query": "sys_idIN" + ",".join(service_ids[:200]),
+                    "sysparm_fields": "sys_id,busines_criticality",
+                    "sysparm_limit": "200",
+                },
+            )
+            criticality_by_id = {
+                r.get("sys_id"): r.get("busines_criticality")
+                for r in service_data.get("result", [])
+                if r.get("busines_criticality")
+            }
+            for row in rows:
+                value = criticality_by_id.get(row.get("sys_id"))
+                if value:
+                    row["busines_criticality"] = value
+        return rows
 
     def rate_limit_config(self) -> RateLimitConfig:
         return RateLimitConfig(requests_per_second=10.0, burst_size=20)

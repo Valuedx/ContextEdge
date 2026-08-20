@@ -286,6 +286,29 @@ async def _ensure_entity(
         for trait, value in ref.traits.items():
             if value and getattr(existing, trait, None) != value:
                 setattr(existing, trait, value)
+        # Attributes refresh on the same terms (C2). They used to be written
+        # ONLY on insert, so criticality, owning team and owner could land
+        # only on a CI nobody had seen before — which, once a CMDB has been
+        # synced once, is none of them. A deployment that later populates
+        # those fields upstream would re-fetch them on every warm and store
+        # them never, with no error anywhere.
+        #
+        # Merged key-by-key rather than replaced: `attributes` is shared with
+        # other writers (ci_class from the class taxonomy, monitoring_sources
+        # from alert rollups), and assigning ref.attributes wholesale would
+        # drop whatever this particular caller did not happen to know.
+        if ref.attributes:
+            merged = dict(existing.attributes or {})
+            changed = False
+            for key, value in ref.attributes.items():
+                if value and merged.get(key) != value:
+                    merged[key] = value
+                    changed = True
+            if changed:
+                # Reassigned, not mutated in place: SQLAlchemy does not track
+                # in-place changes to a JSONB dict, so mutating it would
+                # update the object and never the row.
+                existing.attributes = merged
         return existing
 
     entity = Entity(
