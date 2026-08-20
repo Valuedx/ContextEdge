@@ -64,3 +64,11 @@ celerybeat-schedule*
 backend/*.log
 frontend/*.log
 backend/backfill_fresh.py
+
+# Environment backups taken when switching databases — these are copies of
+# .env and carry the same secrets.
+.env.backup*
+
+# Fixture manifest: sys_ids from one ServiceNow instance. Environment state,
+# not source. Rebuild with `python -m evals.fixtures.servicenow_scenarios --build`.
+backend/evals/fixtures/servicenow_manifest.json

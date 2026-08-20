@@ -83,11 +83,14 @@ async def _dispatch_chunking(
 ) -> None:
     """Chunk the evidence inline or hand it off to the async task.
 
-    Side-effect-only — caller wraps in try/except. Stamps
-    ``ev.source_type`` from the parent ``Source`` row when missing so
-    the chunker registry has a connector key to dispatch on (the
-    column was added by migration ``0029_ae_ops_concept_alignment``
-    but no other code path stamps it yet).
+    Side-effect-only — caller wraps in try/except.
+
+    The ``ev.source_type`` stamp below is now a **backstop**, not the
+    primary write: ``_normalize`` sets the column at construction. It is
+    kept for rows normalized before that fix, which reach chunking with
+    the column still NULL and would otherwise never match the chunker
+    registry. Do not restore this as the only stamp — it lives behind
+    the extraction gate, so it never runs for irrelevant evidence.
 
     Inline path embeds chunks via the batch task (one Celery message
     per evidence). Async path defers chunking entirely so big
@@ -353,6 +356,18 @@ async def _normalize(db: AsyncSession, raw_object_id: str, tenant_id: uuid.UUID)
             if len(source_domain_ids) == 1
             else None
         ),
+        # Which connector this came through. Stamped HERE, at construction,
+        # from the Source row already loaded above — not later and not
+        # conditionally. It used to be set only as a side effect of the
+        # chunking dispatch, which sits behind the `not_relevant >= 0.75`
+        # extraction gate, so every confidently-irrelevant row kept
+        # source_type NULL forever. Measured on the first live ServiceNow
+        # ingest: 11 of 106 rows, and the split was exact — every
+        # not_relevant row NULL, every other row stamped. That silently
+        # removes the discarded evidence from any grouping or filter over
+        # source, which is precisely the population a reviewer auditing
+        # "what did this connector throw away" is looking for.
+        source_type=getattr(src, "source_type", None),
         # Derived from what the connector actually fetched, not read off
         # the payload with a "message" default — no connector but
         # zoho_desk ever set the field, so a ServiceNow KB article and a

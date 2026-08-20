@@ -269,16 +269,19 @@ Revised 2026-08-20. Workstream G shipped out of order because a knowledge backfi
 | ✅ | Situation schema and graph vocabulary | H1 | — | — | shipped ahead of its connectors so the data has somewhere to arrive |
 | 1 | Coverage / missing-context reporting | H2 | S | — | **unblocked and highest value now** — the agent currently cannot tell "no changes occurred" from "no change connector" |
 | 2 | Restricted situation correlation (signature + environment + hub suppression) | H3 | M | H2 | the only correlation signals with data today |
-| 3 | `change_request` ingestion | B1 | S | ITSM connector | unlocks H6 and the change join |
-| 4 | `cmdb_rel_ci` topology + criticality facts | C1, C2 | M | CMDB connector | unlocks H4 blast radius |
-| 5 | Monitoring alert/event ingestion | H5 | M | monitoring connector | unlocks corroboration and lineage |
+| ✅ | `change_request` ingestion | B1 | S | — | **shipped 2026-08-21** — 39 change evidence rows; the change join is data |
+| ✅ | CI entities + `depends_on` topology | C1 | M | — | **largely already wired** — the topology cache warms itself once a real CMDB is connected; 28 CIs, 19 `depends_on` edges |
+| 3 | Criticality / owner / tier on entity facts | C2 | S | C1 | blast radius without criticality cannot be prioritised |
+| — | Monitoring alert/event ingestion | H5 | M | **an instance with ITOM** | blocked on the instance, not the connector: `em_alert` is absent, discovery skips it |
 | 6 | Situation-aware change correlation | H6 | M | 3, 4 | supersedes B4's same-CI lookup |
 | 7 | Diagnostic context service | H7 | M–L | 1–6 | the actual product acceptance criterion |
 | 8 | Situation lifecycle, merge, review | H8 | M | 2 | reopen vs recurrence, merge without losing lineage |
 | 9 | Claim-level epistemic status | G4 | M–L | — | source type is not epistemic status |
 | 10 | Prescriptive knowledge as its own object | G5 | M | G4 | an SOP and a known-error article are not the same claim |
 
-**Items 3–6 are blocked on connectors, not on engineering.** The vocabulary, evidence typing and connector classes already exist for changes, alerts and topology; what is absent is a connected source. Building their correlation logic before data exists means testing against synthetic fixtures that prove the code runs, not that it works — and the adversarial cases that matter (generic-word merges, same-engineer merges, monitoring floods) are only meaningful against a real corpus.
+**Revised again 2026-08-21: the connector block is mostly lifted.** A live ServiceNow instance supplies changes, CIs, CI relationships and problems, so B1 and the bulk of C1 are shipped and H6 has data to rank. Only monitoring remains absent, and for a narrower reason — the alert connector exists, the instance lacks the ITOM plugin. See [SERVICENOW_LIVE_VERIFICATION](SERVICENOW_LIVE_VERIFICATION.md).
+
+The warning that motivated the block still stands for everything built on top. Correlation logic validated against a PDI's randomly generated records proves the code runs, not that it works: those records encode no causality — no change precedes the incident it caused, no CI depends on another, no incident duplicates its neighbour. The scenarios in `evals/fixtures/servicenow_scenarios.py` supply the causality, each with a stated assertion, including two (S2, S4) that exist to make sure a correlator does **not** fire. The instance's ~600 random records stay in the corpus as the adversarial noise those two are measured against.
 
 Every item that changes model-facing prompts or projection composition follows the measurement discipline established for thinking budgets and projection caps ([18](18-cost-observability-and-containment.md)): measure before, A/B on real data, ship only what the numbers support, record negative results.
 
