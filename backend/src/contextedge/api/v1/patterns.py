@@ -92,6 +92,55 @@ async def list_patterns(
     return response_list
 
 
+@router.get("/efficacy")
+async def pattern_efficacy(
+    db: DbSession,
+    user: AuthUser,
+    limit: int = Query(100, ge=1, le=500),
+):
+    """How well each pattern's remediation actually works (roadmap E1).
+
+    Declared BEFORE `/{pattern_id}`: FastAPI matches in definition order, so
+    a literal route added after a path parameter is shadowed by it and
+    `/efficacy` would be parsed as a pattern UUID.
+
+    `success_rate` is `None`, never 0.0, when nothing is rate-bearing — "we
+    have no outcome data" and "it never works" are different claims.
+    """
+    from contextedge.services.efficacy_service import compute_pattern_efficacy
+
+    efficacy = await compute_pattern_efficacy(db, user.tenant_id)
+    ranked = sorted(
+        efficacy.values(),
+        key=lambda e: (e.success_rate if e.success_rate is not None else 2.0, -e.rate_base),
+    )
+    by_class: dict[str, int] = {}
+    for e in efficacy.values():
+        by_class[e.confidence_class] = by_class.get(e.confidence_class, 0) + 1
+    return {
+        "confidence_classes": by_class,
+        "patterns": [e.as_dict() for e in ranked[:limit]],
+    }
+
+
+@router.get("/knowledge-drift")
+async def knowledge_drift(
+    db: DbSession,
+    user: AuthUser,
+    limit: int = Query(50, ge=1, le=200),
+):
+    """Documented resolutions the observed record contradicts.
+
+    The stale-KB query: patterns carrying documented support whose outcomes
+    fall below the drift threshold, worst first. An empty list is a real
+    answer — measured on the reference corpus, 15 patterns cleared the
+    minimum sample and none fell below the threshold.
+    """
+    from contextedge.services.efficacy_service import find_drifting_knowledge
+
+    return {"drifting": await find_drifting_knowledge(db, user.tenant_id, limit=limit)}
+
+
 @router.get("/{pattern_id}", response_model=PatternResponse)
 async def get_pattern(pattern_id: UUID, db: DbSession, user: AuthUser):
     result = await db.execute(

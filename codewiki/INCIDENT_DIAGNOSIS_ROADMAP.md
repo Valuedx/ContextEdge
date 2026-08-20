@@ -144,9 +144,16 @@ The 53 `issue_signatures` rows are the best diagnostic index in the graph and th
 
 *Fixes F10. What separates an agent that suggests from one you would let act.*
 
-### E1. Efficacy rollups on the remediation path
+### E1. Efficacy rollups on the remediation path ✅
 
-Aggregate `validated_fix`/`invalidated_fix` outcomes into playbook node facts or `recommends` edge metadata: `success_count`, `failure_count`, `last_validated_at`, notable failure contexts. The agent chooses remediations by evidence-weighted success rate, and can say *why*: "resolved 8 of 9 matching incidents; failed twice on version ≥ 6.2."
+Shipped 2026-08-21, **pulled forward from position 9** after a competitive review found this the one capability no vendor in the landscape ships.
+
+The design above assumed the wrong substrate. **Measured 2026-08-21: `validated_fix` = 0, `invalidated_fix` = 0 and `case_outcomes` = 0 — in both databases, including the 15,260-episode reference corpus.** Those edges have no producer, so aggregating them would aggregate nothing. The outcome signal actually lives in `episodes.final_outcome`, which 10,247 episodes carry as free text in **9,014 distinct phrasings**, and in the `PatternEvidence` ledger, whose `outcome` column was NULL on all 1,551 rows.
+
+So E1 became: normalize the text deterministically, write it into the ledger, aggregate per pattern. Result on the reference corpus — 1,416 empirical rows classified (697 success / 66 partial / 132 failure / 521 unknown), 533 patterns split 429 `EMPIRICAL` / 75 `DOCUMENTED_ONLY` / 29 `MIXED`, mean success rate 76.9%.
+
+Knowledge drift returns **zero** there, and that is a negative result rather than a broken rule: 15 patterns cleared the sample threshold and none fell below the success threshold. Recorded so it is not re-litigated.
+**In code:** `services/outcome_classification.py`, `services/efficacy_service.py`, `GET /api/v1/patterns/efficacy`, `GET /api/v1/patterns/knowledge-drift`. Design: [EFFICACY_AND_KNOWLEDGE_DRIFT](EFFICACY_AND_KNOWLEDGE_DRIFT.md).
 
 ### E2. Applicability constraints on edges, not buried in text
 
@@ -265,7 +272,7 @@ One bounded, security-filtered, provenance-aware bundle: case, situation, signal
 | 6 | Event layer + `preceded_by` seed layer | B2, B4 | M | B1 | the diagnose-time correlation capability |
 | 7 | Inventory-diff detector | B3 | M | B2 | first high-yield event source |
 | 8 | `cmdb_rel_ci` topology + criticality facts | C1, C2 | M | — | blast radius |
-| 9 | Efficacy rollups + applicability + negative knowledge | E1–E3 | M | — | trustworthy remediation choice |
+| ✅/3 | Efficacy rollups (E1) shipped 2026-08-21; applicability (E2) and negative knowledge (E3) open | E1–E3 | M | — | **pulled forward** — the one capability no competitor ships; see [EFFICACY_AND_KNOWLEDGE_DRIFT](EFFICACY_AND_KNOWLEDGE_DRIFT.md) |
 | 10 | Agent decision write-back | F1 | M–L | — | the compounding loop |
 | 11 | Claims population | A4 | M–L | A2 | granular assertions, once summaries prove out |
 

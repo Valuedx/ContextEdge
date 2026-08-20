@@ -2,6 +2,33 @@
 
 Short list of implementation gaps and operational caveats called out in the codewiki and root documentation. Use this when the product surface looks more complete in the architecture than it does in the current UI or environment.
 
+## 2026-08-21 E1 shipped: efficacy measurement, pulled forward
+
+E1 was position 9 in the sequence. A competitive review found that no vendor in the landscape — ServiceNow, incident.io, PagerDuty, Rootly, Glean — verifiably tracks whether a remediation *worked*, so it was pulled forward. Design: [EFFICACY_AND_KNOWLEDGE_DRIFT](EFFICACY_AND_KNOWLEDGE_DRIFT.md).
+
+### Closed and corrected
+
+- **E1's stated substrate does not exist [correction].** The roadmap said to aggregate `validated_fix` / `invalidated_fix`. Measured: **both are 0 rows, and `case_outcomes` is 0, in both databases including the 15,260-episode reference corpus.** The `case_outcome_service` writers exist but fire on governed session open/close, and this corpus has no governed sessions. Aggregating those edges would have aggregated nothing, and the roadmap is corrected rather than worked around.
+- **`PatternEvidence.outcome` was NULL on all 1,551 rows — FIXED.** Not for want of data: 10,247 of 15,260 episodes carry a `final_outcome`, in **9,014 distinct phrasings**. That single unnormalized column was what stood between the ledger G3 built and the question it exists to answer. `outcome_classification` normalizes deterministically; `backfill_ledger_outcomes` writes it, with `dry_run=True` as the default.
+- **Failures now record as `contradicts_resolution`.** The value existed in the vocabulary and had never been used, so a pattern had no way to accumulate evidence against itself.
+- **Confidence class and drift are computable.** 533 patterns: 429 `EMPIRICAL`, 75 `DOCUMENTED_ONLY` (the cold-start population), 29 `MIXED`. Mean success rate 76.9% over the 330 with a computable one.
+
+### Negative result, recorded so it is not re-run
+
+- **Knowledge drift finds nothing on the reference corpus, and the rule is not broken.** 15 of the 29 `MIXED` patterns clear the ≥5 rate-bearing sample bar and were all evaluated; none fell below the 50% success threshold. Lowest observed rates: 60.0%, 61.1%, 66.7%. On this corpus documented resolutions hold up.
+
+### Opened — record these before they read as capability
+
+- **32.1% of outcome text is unrecognised.** 67.9% is recognised by some rule (4,442 success / 471 partial / 1,099 failure / 950 deliberately declined). The remainder is dominated by *process states* — "meeting scheduled to discuss the issue", "fix identified and planned for AE 8.2.5", "guidance provided" — which are honestly neither success nor failure. Further rule-writing would over-fit this corpus's idioms; classifying them properly needs a different mechanism, not more regexes.
+
+- **The drift thresholds are named and untuned.** `DRIFT_SUCCESS_RATE = 0.5`, `MIN_DRIFT_SAMPLE = 5`. There is no labelled drift set to tune against. The sensitivity is real: the lowest observed rate is 60.0%, so a threshold of 0.65 flags one pattern where 0.5 flags none. Any tuning needs a labelled set first, or the number will look measured when it was chosen.
+
+- **The ledger backfill has never run against the reference corpus.** It is exercised only against the isolated database (30 rows, plus a CHECK-constraint probe confirming a documented row still refuses an outcome). The 1,416-row figure is a `dry_run` preview and a `classify_live` computation, both read-only. A real deployment upgrading past this needs the backfill run, and nothing schedules it.
+
+- **Rollups are computed on read.** Fine at 1,551 ledger rows, not at a million. This will need a materialized view rather than scaling as written.
+
+- **Efficacy does not yet reach ranking.** The rollups exist and are readable over the API; nothing consumes them when choosing a remediation. That is E2/E3 territory and the loop is not closed until it happens — measuring efficacy that nothing acts on is a report, not a capability.
+
 ## 2026-08-21 H3 shipped: situation correlation, and the occurrence-time defect it exposed
 
 Roadmap H3 is in. `GET /api/v1/graph/situations`, `correlation.correlate_situations`. Design: [SITUATION_CORRELATION](SITUATION_CORRELATION.md). Live: 51 groups considered, 1 situation created (6 members, all authoritative), 50 singletons left alone, 1 hub CI suppressed.
