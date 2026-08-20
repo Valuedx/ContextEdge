@@ -215,9 +215,12 @@ An `OperationalSituation` is a bounded real-world occurrence assembled from many
 `operational_situations`, `situation_evidence_memberships`, `situation_entity_impacts`, `situation_change_candidates`, plus seven registered graph relations (four MAF-traversable, three excluded with reasons). Three invariants live in the database: a change after onset cannot be a cause, a merged situation must name its survivor, and membership/impact are unique so a retry cannot invent a second occurrence.
 **In code:** `models/situation.py`, `graph/edge_types.py`, migration 0074.
 
-### H2. Coverage and missing-context reporting — *next, and unblocked*
+### H2. Coverage and missing-context reporting ✅
 
-The highest-value item in this workstream **because** so much is missing. Today an agent silently reasons as though absent change data means no changes occurred. The contract is that ContextEdge reports what it knows *and what it does not*: no monitoring connector, CMDB not present, topology last synced N hours ago. Implementable now against the current corpus; every other item below is not.
+Shipped 2026-08-21. Ten facets, each answering with one of eight statuses, and a `blind_spots` list naming where an empty result must not be read as a zero. The discrimination that repays the work is `unavailable` vs `not_selected`: ServiceNow's `em_alert` needs ITOM, which a stock instance does not activate, so reporting it as "not approved for sync" sends an operator to a checkbox that does not exist.
+
+Folded in: a canonical capability declaration (`services/source_capabilities.py`). Record kinds are *derived* from `evidence_typing`; relations are declared and cross-checked against the five reference services by tests in both directions. This is what lets coverage say "this source cannot supply change links" rather than silently reporting none — and it is the layer a new ITSM adapter declares itself into.
+**In code:** `services/coverage_service.py`, `services/source_capabilities.py`, `GET /api/v1/graph/coverage`. Design: [COVERAGE_AND_CAPABILITY](COVERAGE_AND_CAPABILITY.md).
 
 ### H3. Deterministic situation correlation — *partially blocked*
 
@@ -267,7 +270,7 @@ Revised 2026-08-20. Workstream G shipped out of order because a knowledge backfi
 | --- | --- | --- | --- | --- | --- |
 | ✅ | Epistemic separation (knowledge ≠ observation) | G1–G3 | — | — | shipped; a document's claim was being counted as an observed outcome |
 | ✅ | Situation schema and graph vocabulary | H1 | — | — | shipped ahead of its connectors so the data has somewhere to arrive |
-| 1 | Coverage / missing-context reporting | H2 | S | — | **unblocked and highest value now** — the agent currently cannot tell "no changes occurred" from "no change connector" |
+| ✅ | Coverage / missing-context reporting | H2 | S | — | **shipped 2026-08-21** — eight statuses, ten facets, plus a canonical capability declaration; see [COVERAGE_AND_CAPABILITY](COVERAGE_AND_CAPABILITY.md) |
 | 2 | Restricted situation correlation (signature + environment + hub suppression) | H3 | M | H2 | the only correlation signals with data today |
 | ✅ | `change_request` ingestion | B1 | S | — | **shipped 2026-08-21** — 39 change evidence rows; the change join is data |
 | ✅ | CI entities + `depends_on` topology | C1 | M | — | **largely already wired** — the topology cache warms itself once a real CMDB is connected; 28 CIs, 19 `depends_on` edges |

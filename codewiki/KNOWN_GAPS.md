@@ -2,9 +2,26 @@
 
 Short list of implementation gaps and operational caveats called out in the codewiki and root documentation. Use this when the product surface looks more complete in the architecture than it does in the current UI or environment.
 
+## 2026-08-21 H2 shipped: coverage reporting, and the capability layer under it
+
+Roadmap H2 is in. `GET /api/v1/graph/coverage` reports ten facets, each with one of eight statuses, plus a `blind_spots` list naming the facets where an empty result must NOT be read as a zero. Design: [COVERAGE_AND_CAPABILITY](COVERAGE_AND_CAPABILITY.md).
+
+### Closed
+
+- **"No changes occurred" and "no change connector" are now different answers [was: H2].** Only `empty`, `stale` and `available` are answerable; `unsupported`, `unavailable`, `not_selected`, `pending` and `not_configured` are blind spots. Measured live: 9 facets available, `monitoring` correctly reported `unavailable` — attributed to the missing ITOM module rather than to a missing connector or an unticked box, which are three different fixes.
+- **Connector capability is declared once [Gap].** `services/source_capabilities.py`. Record kinds are derived from `evidence_typing._OBJECT_TYPE_MAP` rather than restated; relations are declared and cross-checked against each reference service's own string literals, in both directions, by `tests/test_source_capabilities.py`. A connector that gains a relation without declaring it fails the suite, and so does a declaration the code cannot deliver. This is the layer a new ITSM adapter declares itself into — the answer to "do we have a canonical schema so we can keep adding adaptors".
+
+### Opened — record these before they read as capability
+
+- **Coverage is precise on ServiceNow and coarse everywhere else.** Only ServiceNow names its source objects after its object types (discovery writes one per *table*, so `external_id` is `incident`, `change_request`). Teams uses `team:channel`, Gmail a mailbox, Zoho `tickets:<department>`, Jira a project key. Narrowing the sync lookup by object type is therefore meaningful only on ServiceNow; elsewhere the facet falls back to source-level sync state and cannot say "this particular channel is not synced". The fallback is deliberate — narrowing regardless would report every facet on a Teams or Jira deployment as `unavailable`, which is the false-blind-spot failure H2 exists to prevent. Making it precise on the others needs a per-connector statement of which source objects feed which object types, which no connector currently exposes.
+
+- **Coverage counts are tenant-wide, not domain-scoped**, unlike most read paths which honour `allowed_domain_ids`. Deliberate: coverage answers "what can this deployment see at all", and a blind spot that varies by who is asking is a permissions artefact rather than a blind spot. The consequence is that a domain-limited reader sees counts larger than the records they could retrieve. Counts are evidence a facet is populated, never a result set.
+
+- **`local_file` and `manageengine` have no entries in the evidence-type map**, so `record_kinds_for` returns empty for both and every record facet reports `unsupported` on a deployment using only those. For `manageengine` that is roughly honest (no reference service exists). For `local_file` it is wrong — uploaded documents do produce evidence — and it means an upload-only tenant is told it has no incidents when it may have plenty.
+
 ## 2026-08-21 ServiceNow connected: four capabilities measured, two ingest defects found
 
-A live ServiceNow instance is connected for the first time on any deployment (`dev283634`, 325 incidents / 237 changes / 2,804 CIs / 250 CI relationships / 43 problems / 57 articles). Four Phase 1-4 sections below carry a deployment note saying *code only on this deployment, zero rows*. Three of them are now measured; the fourth is blocked for a more specific reason than before. Full write-up: [SERVICENOW_LIVE_VERIFICATION](SERVICENOW_LIVE_VERIFICATION.md).
+A live ServiceNow instance is connected for the first time on any deployment (a ServiceNow developer instance: 325 incidents / 237 changes / 2,804 CIs / 250 CI relationships / 43 problems / 57 articles). Four Phase 1-4 sections below carry a deployment note saying *code only on this deployment, zero rows*. Three of them are now measured; the fourth is blocked for a more specific reason than before. Full write-up: [SERVICENOW_LIVE_VERIFICATION](SERVICENOW_LIVE_VERIFICATION.md).
 
 ### Closed and corrected
 

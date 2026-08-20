@@ -117,6 +117,25 @@ async def change_risk(
     return await assess_change_risk(db, user.tenant_id, ci, window_days=window_days)
 
 
+@router.get("/coverage")
+async def coverage(db: DbSession, user: AuthUser):
+    """What this deployment can and cannot answer, per facet.
+
+    Roadmap H2. Every facet reports one of `available`, `stale`, `empty`,
+    `pending`, `not_selected`, `unavailable`, `unsupported` or
+    `not_configured`, and `blind_spots` lists the facets where an empty
+    result must NOT be read as a zero.
+
+    The distinction this exists for: without it, "no change caused this
+    incident" and "nothing here can see changes" are the same empty list,
+    and an agent cannot tell a finding from a missing connector.
+    """
+    from contextedge.services.coverage_service import build_coverage_report
+
+    report = await build_coverage_report(db, user.tenant_id)
+    return report.as_dict()
+
+
 @router.get("/edge-proposals")
 async def list_edge_proposals_endpoint(
     db: DbSession,

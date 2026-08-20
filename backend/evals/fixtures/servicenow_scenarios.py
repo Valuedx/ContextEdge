@@ -112,7 +112,7 @@ TAG = "ce-fix"
 
 # Anchor T0: the change window. Everything else is expressed relative to it so
 # the whole scenario always lands inside the 365-day backfill window. S5 walks
-# 21 days backwards from T0; S3 reaches 6 days forward of it. The anchor has to
+# 21 days backwards from t0; S3 reaches 6 days forward of it. The anchor has to
 # leave room on the forward side or S3 lands in the future -- which it did on
 # the first build, producing incidents opened two days from now.
 MAX_FORWARD_DAYS = 7
@@ -309,7 +309,7 @@ def build(sn: Snow, anchor: datetime) -> dict[str, Any]:
         created["records"].append({"table": table, "key": key, "sys_id": sys_id})
         return sys_id
 
-    T0 = anchor  # the change lands
+    t0 = anchor  # the change lands
     # Problem records need a real assignee (see the Data Policy note below).
     assignee = sn.default_assignee()
     grp_network = sn.lookup("sys_user_group", "name=Network")
@@ -448,10 +448,10 @@ def build(sn: Snow, anchor: datetime) -> dict[str, Any]:
                 "cmdb_ci": ci["vpn_gw"],
                 # See the instance-constraint note in the module docstring:
                 # state and close_code are not settable over REST here.
-                "start_date": _fmt(T0 - timedelta(minutes=30)),
-                "end_date": _fmt(T0),
-                "work_start": _fmt(T0 - timedelta(minutes=30)),
-                "work_end": _fmt(T0),
+                "start_date": _fmt(t0 - timedelta(minutes=30)),
+                "end_date": _fmt(t0),
+                "work_start": _fmt(t0 - timedelta(minutes=30)),
+                "work_end": _fmt(t0),
             },
         ),
     )
@@ -476,10 +476,10 @@ def build(sn: Snow, anchor: datetime) -> dict[str, Any]:
                 # the discriminator is the CI, not the change class.
                 "category": "Hardware",
                 "cmdb_ci": ci["print"],
-                "start_date": _fmt(T0 - timedelta(minutes=10)),
-                "end_date": _fmt(T0 + timedelta(minutes=15)),
-                "work_start": _fmt(T0 - timedelta(minutes=10)),
-                "work_end": _fmt(T0 + timedelta(minutes=15)),
+                "start_date": _fmt(t0 - timedelta(minutes=10)),
+                "end_date": _fmt(t0 + timedelta(minutes=15)),
+                "work_start": _fmt(t0 - timedelta(minutes=10)),
+                "work_end": _fmt(t0 + timedelta(minutes=15)),
             },
         ),
     )
@@ -553,8 +553,8 @@ def build(sn: Snow, anchor: datetime) -> dict[str, Any]:
                     "considered and rejected -- it reintroduces the security exposure "
                     "the update closes."
                 ),
-                "opened_at": _fmt(T0 + timedelta(minutes=40)),
-                "resolved_at": _fmt(T0 + timedelta(hours=5)),
+                "opened_at": _fmt(t0 + timedelta(minutes=40)),
+                "resolved_at": _fmt(t0 + timedelta(hours=5)),
             },
         ),
     )
@@ -618,8 +618,8 @@ def build(sn: Snow, anchor: datetime) -> dict[str, Any]:
                     "close_notes": (
                         "Duplicate of the AUTH_CERT_EXPIRED gateway incident."
                     ),
-                    "opened_at": _fmt(T0 + timedelta(minutes=offset_min)),
-                    "resolved_at": _fmt(T0 + timedelta(hours=5, minutes=10)),
+                    "opened_at": _fmt(t0 + timedelta(minutes=offset_min)),
+                    "resolved_at": _fmt(t0 + timedelta(hours=5, minutes=10)),
                 },
             ),
         )
@@ -643,7 +643,7 @@ def build(sn: Snow, anchor: datetime) -> dict[str, Any]:
                 "category": "Network",
                 "priority": "2",
                 "state": "2",
-                "opened_at": _fmt(T0 + timedelta(days=6, hours=2)),
+                "opened_at": _fmt(t0 + timedelta(days=6, hours=2)),
             },
         ),
     )
@@ -664,7 +664,7 @@ def build(sn: Snow, anchor: datetime) -> dict[str, Any]:
                 "category": "Network",
                 "priority": "2",
                 "state": "2",
-                "opened_at": _fmt(T0 + timedelta(days=6, hours=2, minutes=25)),
+                "opened_at": _fmt(t0 + timedelta(days=6, hours=2, minutes=25)),
             },
         ),
     )
@@ -707,7 +707,7 @@ def build(sn: Snow, anchor: datetime) -> dict[str, Any]:
                     "category": "Inquiry / Help",
                     "priority": "4",
                     "state": "2",
-                    "opened_at": _fmt(T0 + timedelta(days=2, hours=idx * 5)),
+                    "opened_at": _fmt(t0 + timedelta(days=2, hours=idx * 5)),
                 },
             ),
         )
@@ -777,9 +777,9 @@ def build(sn: Snow, anchor: datetime) -> dict[str, Any]:
                         "queue drained, logins recovered within two minutes. "
                         "Underlying known error remains open."
                     ),
-                    "opened_at": _fmt(T0 - timedelta(days=days_before, hours=-3)),
+                    "opened_at": _fmt(t0 - timedelta(days=days_before, hours=-3)),
                     "resolved_at": _fmt(
-                        T0 - timedelta(days=days_before, hours=-3) + timedelta(hours=1)
+                        t0 - timedelta(days=days_before, hours=-3) + timedelta(hours=1)
                     ),
                 },
             ),
@@ -804,7 +804,7 @@ def build(sn: Snow, anchor: datetime) -> dict[str, Any]:
                 "cat_item": cat_laptop,
                 "assignment_group": grp_servicedesk,
                 "priority": "3",
-                "opened_at": _fmt(T0 + timedelta(days=1, hours=3)),
+                "opened_at": _fmt(t0 + timedelta(days=1, hours=3)),
             },
         ),
     )
@@ -823,7 +823,7 @@ def build(sn: Snow, anchor: datetime) -> dict[str, Any]:
                 "request_item": ritm,
                 "assignment_group": grp_servicedesk,
                 "priority": "3",
-                "opened_at": _fmt(T0 + timedelta(days=1, hours=4)),
+                "opened_at": _fmt(t0 + timedelta(days=1, hours=4)),
             },
         ),
     )
@@ -907,12 +907,12 @@ def build(sn: Snow, anchor: datetime) -> dict[str, Any]:
                 "cmdb_ci": ci["vpn_gw"],
                 "assignment_group": grp_network,
                 # Approved window: the Saturday slot.
-                "start_date": _fmt(T0 - timedelta(days=2, hours=4)),
-                "end_date": _fmt(T0 - timedelta(days=2)),
+                "start_date": _fmt(t0 - timedelta(days=2, hours=4)),
+                "end_date": _fmt(t0 - timedelta(days=2)),
                 # Actual execution: a Thursday morning, four days later and
                 # entirely outside the approved window.
-                "work_start": _fmt(T0 + timedelta(days=3, hours=7)),
-                "work_end": _fmt(T0 + timedelta(days=3, hours=7, minutes=40)),
+                "work_start": _fmt(t0 + timedelta(days=3, hours=7)),
+                "work_end": _fmt(t0 + timedelta(days=3, hours=7, minutes=40)),
             },
         ),
     )
@@ -937,13 +937,13 @@ def build(sn: Snow, anchor: datetime) -> dict[str, Any]:
                 "category": "Network",
                 "priority": "2",
                 "state": "2",
-                "opened_at": _fmt(T0 + timedelta(days=3, hours=8, minutes=15)),
+                "opened_at": _fmt(t0 + timedelta(days=3, hours=8, minutes=15)),
             },
         ),
     )
     created["change_c"] = chg_c
 
-    created["anchor"] = _fmt(T0)
+    created["anchor"] = _fmt(t0)
     created["ci"] = ci
     created["change_a"] = chg_a
     created["change_b"] = chg_b
@@ -1014,7 +1014,7 @@ def main() -> int:
         )
     created = build(sn, anchor)
     MANIFEST.write_text(json.dumps(created, indent=2), encoding="utf-8")
-    print(f"anchor T0 = {created['anchor']}")
+    print(f"anchor t0 = {created['anchor']}")
     print(f"records   = {len(created['records'])}")
     print(f"relations = {len(created['relationships'])}")
     print(f"manifest  -> {MANIFEST}")

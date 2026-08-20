@@ -1,6 +1,6 @@
 # ServiceNow, live: what a connected ITSM source turns on, and what it exposed
 
-**Status:** connected and ingesting 2026-08-21 against `dev283634.service-now.com`. First ServiceNow connection on any ContextEdge deployment.
+**Status:** connected and ingesting 2026-08-21 against a ServiceNow developer instance. First ServiceNow connection on any ContextEdge deployment.
 **Companion docs:** [03-ingestion-connectors-and-sync](03-ingestion-connectors-and-sync.md), [09-graph-and-correlation](09-graph-and-correlation.md), [INCIDENT_DIAGNOSIS_ROADMAP](INCIDENT_DIAGNOSIS_ROADMAP.md), [ZOHO_DESK_CONNECTOR](ZOHO_DESK_CONNECTOR.md), [KNOWN_GAPS](KNOWN_GAPS.md).
 
 ---
