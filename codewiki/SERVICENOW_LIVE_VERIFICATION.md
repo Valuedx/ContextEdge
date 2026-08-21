@@ -168,6 +168,53 @@ who is accountable. Both are now carried and neither substitutes for the other
 — escalating to a named individual who has left is worse than escalating to a
 queue.
 
+## Standing the scenarios up on another instance
+
+An **update set is the wrong tool** and it is worth saying why, because it is
+the obvious first thought. Update sets capture *configuration* — business
+rules, ACLs, dictionary entries, script includes. Everything the fixtures
+create is *data*: incidents, problems, changes, CIs, CI relationships, KB
+articles. Verified on this instance by sampling 392 captured updates across 39
+types — **not one is a data-record type**, and none ever will be.
+
+The portable artifact is the builder itself. Nothing in it hardcodes a sys_id:
+every user, group, knowledge base, catalog item and relationship type is
+resolved by name at run time, so it rebuilds the whole set anywhere. Three
+commands:
+
+```bash
+export SERVICENOW_INSTANCE_URL=https://<instance>.service-now.com
+export SERVICENOW_USERNAME=... SERVICENOW_PASSWORD=...
+
+python -m evals.fixtures.servicenow_scenarios --preflight   # read-only
+python -m evals.fixtures.servicenow_scenarios --build       # idempotent
+python -m evals.fixtures.servicenow_scenarios --verify      # -> READY
+```
+
+**`--preflight`** resolves every prerequisite and reports. It is read-only —
+it reports a missing role rather than granting one, because a check that
+quietly changes the thing it checks is not a check, and this has to be safe to
+point at an instance somebody else owns. Critical prerequisites abort: without
+the two `cmdb_rel_type` rows, S3 and S9 have no dependency edge and the
+one-hop blast radius they exist to prove is untestable *while the run still
+reports success*. Optional ones warn and name what they cost.
+
+**`--build`** is idempotent — keyed on `correlation_id`, so re-running updates
+in place. It grants the problem roles, which `--preflight` only reports:
+problem creation is refused outright without one, as a 403 that reads like a
+permissions misconfiguration and is a missing grant.
+
+**`--verify`** is what makes validating a new instance quick. It checks the
+references that carry the meaning — `caused_by`, `parent_incident`,
+`problem_id`, `rfc`, `cmdb_ci`, the three CI relationships, and the B3 OS
+baseline — rather than counting rows. That distinction is the whole point:
+ServiceNow stores an unresolvable reference as **empty** rather than rejecting
+it, so a fixture can build clean and mean nothing. It exits non-zero on any
+gap, so it can gate a pipeline.
+
+`--teardown` removes exactly what the manifest records, relationships first
+(a CI with a live relationship will not delete), and nothing else.
+
 ## Code map
 
 | Path | Role |

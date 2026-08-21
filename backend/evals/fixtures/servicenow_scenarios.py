@@ -109,9 +109,29 @@ Idempotent: every record is keyed by ``correlation_id`` (``ce-fix:<key>``), so
 re-running updates in place rather than duplicating. ``--teardown`` deletes
 exactly what the manifest records, and nothing else.
 
+Portability. Nothing here hardcodes a sys_id: every user, group, knowledge
+base, catalog item and relationship type is resolved by name at run time, so
+the same script rebuilds the whole scenario set on any instance. What differs
+between instances is which of those prerequisites EXIST, and a missing one used
+to degrade silently -- a lookup returned None, the field was omitted, and the
+record landed without an assignment group or without a topology edge, which is
+a fixture that looks built and tests nothing.
+
+``--preflight`` resolves everything first and says what it found. Critical
+prerequisites abort the run; optional ones warn and continue with the
+scenarios they affect named explicitly.
+
+``--verify`` re-reads the manifest and checks the references that carry the
+meaning -- caused_by, parent_incident, problem_id, rfc, cmdb_ci and the CI
+relationships. ServiceNow stores an unresolvable reference as empty rather than
+rejecting it, so a fixture can build clean and mean nothing; this is what makes
+validating a new instance quick rather than a manual read-through.
+
 Usage::
 
+    python -m evals.fixtures.servicenow_scenarios --preflight
     python -m evals.fixtures.servicenow_scenarios --build
+    python -m evals.fixtures.servicenow_scenarios --verify
     python -m evals.fixtures.servicenow_scenarios --teardown
 """
 
@@ -295,6 +315,37 @@ class Snow:
         """
         return self._first(table, query)
 
+    def holds_role(self, user_sys_id: str, role_name: str) -> bool:
+        """Read-only counterpart to ensure_role, for preflight."""
+        role = self._first("sys_user_role", f"name={role_name}")
+        if not role:
+            return False
+        return bool(self._first("sys_user_has_role", f"user={user_sys_id}^role={role}"))
+
+    def ensure_role(self, user_sys_id: str, role_name: str) -> str:
+        """Grant a role if the account lacks it. Returns granted|already|absent.
+
+        Problem creation is refused outright without a problem role -- a 403
+        that reads as a permissions misconfiguration and is actually a missing
+        grant. Folded in here because it is a prerequisite of the fixture, not
+        a property of the instance somebody should have to discover.
+        """
+        role = self._first("sys_user_role", f"name={role_name}")
+        if not role:
+            return "absent"
+        held = self._first(
+            "sys_user_has_role", f"user={user_sys_id}^role={role}"
+        )
+        if held:
+            return "already"
+        r = self.client.post(
+            self._url("sys_user_has_role"),
+            auth=self.auth,
+            json={"user": user_sys_id, "role": role},
+        )
+        self._check(r, f"grant {role_name}")
+        return "granted"
+
     def rel_type(self, name: str) -> str | None:
         return self._first("cmdb_rel_type", f"name={name}")
 
@@ -322,6 +373,79 @@ class Snow:
         return False
 
 
+
+# What the fixture needs from the target instance, and how badly.
+#
+# CRITICAL entries abort: without them a scenario silently loses the thing it
+# exists to test. Without the relationship types S3 and S9 have no dependency
+# edge, so the one-hop blast radius they were built to prove is untestable and
+# the run would still report success.
+PREREQUISITES: tuple[tuple[str, str, str, bool], ...] = (
+    ("assignee", "sys_user", "user_name=admin", True),
+    ("rel_depends_on", "cmdb_rel_type", "name=Depends on::Used by", True),
+    ("rel_runs_on", "cmdb_rel_type", "name=Runs on::Runs", True),
+    ("grp_network", "sys_user_group", "name=Network", False),
+    ("grp_servicedesk", "sys_user_group", "name=Service Desk", False),
+    ("kb_it", "kb_knowledge_base", "title=IT", False),
+    ("kb_known_error", "kb_knowledge_base", "title=Known Error", False),
+    ("cat_laptop", "sc_cat_item", "name=Standard Laptop", False),
+)
+
+# Which scenarios quietly lose meaning when an optional prerequisite is absent.
+AFFECTED_BY = {
+    "grp_network": "assignment groups on S1/S8/S9",
+    "grp_servicedesk": "assignment groups on S1 children, S4, S6",
+    "kb_it": "S7 knowledge article documenting the S1 fix",
+    "kb_known_error": "S7 stale-workaround article (knowledge drift)",
+    "cat_laptop": "S6 requested item lands untitled without a catalog item",
+}
+
+
+REQUIRED_ROLES = ("problem_admin", "problem_manager", "problem_coordinator")
+
+
+def preflight(sn: Snow, *, grant_roles: bool = False) -> dict[str, str | None]:
+    """Resolve every prerequisite and report. Raises on a missing critical one.
+
+    Read-only unless ``grant_roles`` is set, which only ``--build`` does. A
+    check that quietly changes the thing it is checking is not a check, and
+    `--preflight` has to be safe to point at an instance somebody else owns.
+    """
+    resolved: dict[str, str | None] = {}
+    missing_critical: list[str] = []
+    print("prerequisites:")
+    for key, table, query, critical in PREREQUISITES:
+        found = sn.lookup(table, query)
+        resolved[key] = found
+        mark = "ok " if found else ("MISSING" if critical else "absent ")
+        if found:
+            note = ""
+        elif critical:
+            note = "  <- CRITICAL"
+        else:
+            note = f"  <- {AFFECTED_BY.get(key, '')}"
+        print(f"  {mark} {key:<16} {table}.{query}{note}")
+        if critical and not found:
+            missing_critical.append(f"{table} ({query})")
+
+    if resolved.get("assignee"):
+        for role in REQUIRED_ROLES:
+            if grant_roles:
+                state = sn.ensure_role(resolved["assignee"], role)
+            else:
+                state = "held" if sn.holds_role(resolved["assignee"], role) else "NOT HELD"
+            mark = "ok " if state in ("granted", "already", "held") else "warn"
+            print(f"  {mark} role {role:<22} {state}")
+
+    if missing_critical:
+        raise RuntimeError(
+            "missing critical prerequisite(s): "
+            + "; ".join(missing_critical)
+            + ". The fixture would build and silently test nothing."
+        )
+    return resolved
+
+
 def build(sn: Snow, anchor: datetime) -> dict[str, Any]:
     created: dict[str, Any] = {"records": [], "relationships": []}
 
@@ -331,12 +455,15 @@ def build(sn: Snow, anchor: datetime) -> dict[str, Any]:
 
     t0 = anchor  # the change lands
     # Problem records need a real assignee (see the Data Policy note below).
-    assignee = sn.default_assignee()
-    grp_network = sn.lookup("sys_user_group", "name=Network")
-    grp_servicedesk = sn.lookup("sys_user_group", "name=Service Desk")
-    kb_known_error = sn.lookup("kb_knowledge_base", "title=Known Error")
-    kb_it = sn.lookup("kb_knowledge_base", "title=IT")
-    cat_laptop = sn.lookup("sc_cat_item", "name=Standard Laptop")
+    # Resolved and reported up front rather than inline, so a fresh instance
+    # fails on the prerequisite rather than on the twentieth record.
+    prereq = preflight(sn, grant_roles=True)
+    assignee = prereq["assignee"]
+    grp_network = prereq["grp_network"]
+    grp_servicedesk = prereq["grp_servicedesk"]
+    kb_known_error = prereq["kb_known_error"]
+    kb_it = prereq["kb_it"]
+    cat_laptop = prereq["cat_laptop"]
 
     # ---- CIs -------------------------------------------------------------
     # A chain deep enough that blast radius needs more than a same-CI match:
@@ -367,6 +494,15 @@ def build(sn: Snow, anchor: datetime) -> dict[str, Any]:
             {
                 "owned_by": assignee,
                 "support_group": grp_network,
+                # B3 baseline. The inventory-diff detector needs a PRIOR value
+                # to diff against -- a first observation is deliberately not a
+                # change -- so the scenario only becomes testable once this CI
+                # carries an OS. Bump os_version on a built instance and the
+                # next topology warm emits os_version_changed, which is the
+                # unrecorded-change case (a machine patching itself) that no
+                # change calendar would ever show.
+                "os": "Linux Red Hat",
+                "os_version": "8.6",
                 "short_description": "RADIUS authentication server (VPN back end)",
                 "operational_status": "1",
                 "install_status": "1",
@@ -439,8 +575,11 @@ def build(sn: Snow, anchor: datetime) -> dict[str, Any]:
     )
 
     # ---- CI relationships ------------------------------------------------
-    depends_on = sn.rel_type("Depends on::Used by")
-    runs_on = sn.rel_type("Runs on::Runs")
+    # From preflight, which already declared these CRITICAL: without them S3
+    # and S9 lose their dependency edge and the one-hop blast radius they
+    # exist to prove is untestable, while the run still reports success.
+    depends_on = prereq["rel_depends_on"]
+    runs_on = prereq["rel_runs_on"]
     if depends_on:
         for parent, child in (
             (ci["vpn_service"], ci["vpn_gw"]),
@@ -1036,18 +1175,122 @@ def teardown(sn: Snow, manifest: dict[str, Any]) -> int:
     return deleted
 
 
+
+def verify(sn: Snow, manifest: dict[str, Any]) -> int:
+    """Check the fixture still means what it was built to mean.
+
+    Presence is not the test. ServiceNow stores an unresolvable reference as
+    EMPTY rather than rejecting it, so every record can exist while the joins
+    that carry the scenarios -- caused_by, parent_incident, problem_id, rfc,
+    cmdb_ci -- are silently blank. That is a fixture that builds clean and
+    tests nothing, which is the failure this whole module exists to avoid.
+
+    Returns the number of problems found; 0 means the instance is ready.
+    """
+    problems = 0
+
+    by_key = {r["key"]: r for r in manifest.get("records", [])}
+    print(f"records in manifest: {len(by_key)}")
+
+    def ref(value: Any) -> str:
+        if isinstance(value, dict):
+            return str(value.get("value") or "")
+        return str(value or "")
+
+    # The joins each scenario rests on: (key, table, field, what it must point at)
+    checks = (
+        (
+            "s1:inc-major", "incident", "caused_by",
+            "change_a", "S1 change->incident causality",
+        ),
+        ("s1:inc-major", "incident", "problem_id", "problem", "S1 incident->problem"),
+        ("s1:inc-major", "incident", "cmdb_ci", None, "S1 affected CI"),
+        (
+            "s1:inc-child-1", "incident", "parent_incident",
+            "incident_major", "S1 duplicate grouping",
+        ),
+        ("s1:prb-cert-chain", "problem", "rfc", "change_a", "S1 problem->change"),
+        ("s5:inc-recur-1", "incident", "problem_id", "problem_known_error", "S5 recurrence"),
+        ("s8:chg-acl-out-of-window", "change_request", "work_start", None, "S8 actual execution"),
+        ("s9:chg-radius-timeout", "change_request", "cmdb_ci", None, "S9 one-hop CI"),
+    )
+    for key, table, field, expect_manifest_key, label in checks:
+        record = by_key.get(key)
+        if record is None:
+            print(f"  MISSING record {key}  ({label})")
+            problems += 1
+            continue
+        r = sn.client.get(
+            sn._url(table, record["sys_id"]),
+            auth=sn.auth,
+            params={"sysparm_fields": f"number,{field}"},
+        )
+        sn._check(r, f"verify {key}")
+        row = r.json().get("result", {})
+        value = ref(row.get(field))
+        if not value:
+            print(f"  EMPTY {key}.{field}  ({label})")
+            problems += 1
+            continue
+        if expect_manifest_key and value != manifest.get(expect_manifest_key):
+            print(f"  WRONG TARGET {key}.{field}  ({label})")
+            problems += 1
+            continue
+        print(f"  ok    {key}.{field:<16} {label}")
+
+    # Topology: S3 and S9 are meaningless without the dependency edges.
+    rels = manifest.get("relationships", [])
+    print(f"CI relationships in manifest: {len(rels)}")
+    if len(rels) < 3:
+        print("  INCOMPLETE topology: expected 3 (service->gw, gw->radius, gw runs_on esx)")
+        problems += 1
+
+    # B3 needs a prior OS value on radius-auth-01 to diff against.
+    radius = by_key.get("ci:radius-auth-01")
+    if radius:
+        r = sn.client.get(
+            sn._url("cmdb_ci_server", radius["sys_id"]),
+            auth=sn.auth,
+            params={"sysparm_fields": "name,os,os_version"},
+        )
+        sn._check(r, "verify radius os")
+        row = r.json().get("result", {})
+        if row.get("os_version"):
+            print(f"  ok    B3 baseline           os_version={row['os_version']}")
+        else:
+            print("  EMPTY B3 baseline: radius-auth-01 has no os_version to diff against")
+            problems += 1
+
+    print()
+    print("READY" if problems == 0 else f"{problems} problem(s) found")
+    return problems
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="ServiceNow roadmap fixtures")
     ap.add_argument("--build", action="store_true")
     ap.add_argument("--teardown", action="store_true")
+    ap.add_argument(
+        "--preflight",
+        action="store_true",
+        help=(
+            "Resolve prerequisites on the target instance and report. "
+            "Read-only: reports missing roles rather than granting them."
+        ),
+    )
+    ap.add_argument(
+        "--verify",
+        action="store_true",
+        help="Check the built fixture's references are intact, not merely present.",
+    )
     ap.add_argument("--anchor-days-ago", type=int, default=DEFAULT_ANCHOR_DAYS_AGO)
     ap.add_argument("--instance", default=os.environ.get("SERVICENOW_INSTANCE_URL", ""))
     ap.add_argument("--username", default=os.environ.get("SERVICENOW_USERNAME", ""))
     ap.add_argument("--password", default=os.environ.get("SERVICENOW_PASSWORD", ""))
     args = ap.parse_args()
 
-    if not (args.build or args.teardown):
-        ap.error("pass --build or --teardown")
+    if not (args.build or args.teardown or args.preflight or args.verify):
+        ap.error("pass --preflight, --build, --verify or --teardown")
     if not (args.instance and args.username and args.password):
         ap.error(
             "instance/username/password required via flags or "
@@ -1055,6 +1298,23 @@ def main() -> int:
         )
 
     sn = Snow(args.instance, args.username, args.password)
+
+    if args.preflight:
+        try:
+            preflight(sn)
+        except RuntimeError as exc:
+            # A clean line, not a traceback: this is the first thing anyone
+            # runs against a new instance and the message IS the output.
+            print(f"\nNOT READY: {exc}")
+            return 1
+        print("\nprerequisites satisfied; --build will not degrade silently")
+        return 0
+
+    if args.verify:
+        if not MANIFEST.exists():
+            print("no manifest; run --build first")
+            return 1
+        return 1 if verify(sn, json.loads(MANIFEST.read_text(encoding="utf-8"))) else 0
 
     if args.teardown:
         if not MANIFEST.exists():
@@ -1080,7 +1340,11 @@ def main() -> int:
             f"record at {_fmt(latest)}, which is in the future. Use at least "
             f"{MAX_FORWARD_DAYS + 1}."
         )
-    created = build(sn, anchor)
+    try:
+        created = build(sn, anchor)
+    except RuntimeError as exc:
+        print(f"NOT READY: {exc}")
+        return 1
     MANIFEST.write_text(json.dumps(created, indent=2), encoding="utf-8")
     print(f"anchor t0 = {created['anchor']}")
     print(f"records   = {len(created['records'])}")

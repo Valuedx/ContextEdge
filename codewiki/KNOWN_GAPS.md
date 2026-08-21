@@ -2,6 +2,21 @@
 
 Short list of implementation gaps and operational caveats called out in the codewiki and root documentation. Use this when the product surface looks more complete in the architecture than it does in the current UI or environment.
 
+## 2026-08-21 The scenario fixtures are portable, and an update set cannot carry them
+
+### Recorded
+
+- **An update set is the wrong tool for the scenario data, permanently.** Update sets capture configuration; everything the fixtures create is data. Verified by sampling 392 captured updates on this instance across 39 types — Access Control, System Property, Dictionary, Business Rule and so on — and **not one is a data-record type**. Anyone reaching for an update set to move the scenarios will get an empty one.
+- **The builder is the portable artifact**, and now says so out loud: `--preflight` (read-only), `--build` (idempotent), `--verify`, `--teardown`. Nothing hardcodes a sys_id; every prerequisite resolves by name.
+- **Silent degradation on an unprepared instance is closed.** A missing lookup used to return None, the field was omitted, and the record landed without its assignment group or topology edge — a fixture that builds clean and tests nothing. Critical prerequisites now abort with a reason; optional ones name the scenario they cost.
+- **Two things I had created outside the builder are now in it**: the B3 OS baseline on `radius-auth-01` (without a prior value the detector has nothing to diff, since a first observation is deliberately not a change) and the problem-role grant.
+
+### Opened
+
+- **`--verify` checks eight references, not all of them.** It covers the joins each scenario rests on and the topology count; it does not check every field of every record, so a fixture could drift in a way it does not see.
+- **`--preflight` cannot check write permission.** It resolves reads and reports role state. An account that can read everything and write nothing passes preflight and fails on the first POST — which is roughly how the first build here went, four guardrails deep.
+- **The anchor moves on every build.** Timestamps are relative to run time, so rebuilding shifts the whole scenario forward and any evidence already ingested keeps the old times. Harmless within one instance, confusing across two.
+
 ## 2026-08-21 B3 shipped: the changes nobody records — and a third field family lost the same way
 
 Design: [INVENTORY_DIFF_DETECTOR](INVENTORY_DIFF_DETECTOR.md).
