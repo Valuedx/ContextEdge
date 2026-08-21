@@ -2,6 +2,7 @@ from datetime import datetime
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Query
+from pydantic import BaseModel
 
 from contextedge.deps import AuthUser, DbSession
 from contextedge.graph.agent.contracts import AgentGraphRequest, AgentGraphSubset
@@ -281,6 +282,71 @@ async def diagnostic_context(
     if context is None:
         raise HTTPException(status_code=404, detail="Incident not found")
     return context.as_dict()
+
+
+@router.post("/situations/lifecycle")
+async def evaluate_situation_lifecycle(
+    db: DbSession,
+    user: AuthUser,
+    apply: bool = Query(
+        False,
+        description=(
+            "Write the transitions. Defaults to a dry assessment, because this "
+            "moves states other things read."
+        ),
+    ),
+):
+    """Move situations along their lifecycle on evidence (roadmap H8).
+
+    A situation is only ever moved toward `resolved` by member incidents
+    carrying a resolution in the source system. **Absence of signal is never
+    recovery** — going quiet happens when a thing is fixed, when everyone gave
+    up, and when a connector broke, and the silence does not distinguish them.
+    """
+    from contextedge.services.situation_lifecycle_service import (
+        evaluate_all_situations,
+    )
+
+    return await evaluate_all_situations(db, user.tenant_id, apply=apply)
+
+
+class SituationMergeRequest(BaseModel):
+    survivor_situation_id: UUID
+    reason: str
+
+
+@router.post("/situations/{situation_id}/merge")
+async def merge_situation(
+    situation_id: UUID,
+    body: SituationMergeRequest,
+    db: DbSession,
+    user: AuthUser,
+):
+    """Fold this situation into another, keeping the lineage.
+
+    A governed action: merging rewrites what somebody may already have acted
+    on, so it needs authority rather than a score. The loser keeps pointing at
+    its survivor, and the database refuses a merged row that names none.
+
+    Splitting is deliberately absent. One situation that turns out to be two is
+    a real case and an unsafe automation — a proposal is safe, an automatic
+    split silently rewrites history with no way to tell afterwards which half a
+    reader saw.
+    """
+    user.require_role("knowledge_manager")
+    from contextedge.services.situation_lifecycle_service import merge_situations
+
+    result = await merge_situations(
+        db,
+        user.tenant_id,
+        situation_id,
+        body.survivor_situation_id,
+        reason=body.reason,
+        reviewed_by=user.user_id,
+    )
+    if "error" in result:
+        raise HTTPException(status_code=400, detail=result["error"])
+    return result
 
 
 @router.get("/edge-proposals")

@@ -60,8 +60,16 @@ EXPECTED_UNWRITTEN: dict[tuple[str, str], tuple[str, str]] = {
             "situation lifecycle, merge and review not yet built",
         )
         for col in (
-            "severity", "stabilizing_at", "resolved_at",
-            "merged_into_situation_id", "review_status", "review_reason",
+            # H8 shipped 2026-08-21 (situation_lifecycle_service): stabilizing_at,
+            # resolved_at, merged_into_situation_id and review_reason left this
+            # register when it landed.
+            #
+            # `severity` stays: nothing grades a situation's severity, and
+            # inferring it from member priority would launder a ticket field
+            # into an operational judgement. `review_status` stays: situations
+            # have no review queue yet -- merge is governed by a role, not by a
+            # queue somebody works through.
+            "severity", "review_status",
         )
     },
     # H4 — topology correlation and blast radius. Needs the CMDB walk to say
@@ -182,7 +190,15 @@ EXPECTED_UNWRITTEN: dict[tuple[str, str], tuple[str, str]] = {
             "the resolve flow is an operator action with no surface yet; raising "
             "and acknowledging an escalation are wired, closing one is not",
         )
-        for col in ("resolved_at", "resolution_note")
+        # "resolved_at" WAS in this tuple and had to be removed -- not because
+        # it gained a writer, but because this scanner cannot tell two models'
+        # same-named columns apart. It matches assignments by column NAME
+        # across the whole source tree, so `situation.resolved_at = now` in the
+        # H8 lifecycle service satisfies the entry for
+        # RemediationAction.resolved_at, which still has no writer at all.
+        # The gap is real and is recorded in KNOWN_GAPS; this register can no
+        # longer see it. Making the scanner model-aware is the fix if it recurs.
+        for col in ("resolution_note",)
     },
     ("execution.py", "rolls_back_run_id"): (
         "executor",

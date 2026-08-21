@@ -2,6 +2,31 @@
 
 Short list of implementation gaps and operational caveats called out in the codewiki and root documentation. Use this when the product surface looks more complete in the architecture than it does in the current UI or environment.
 
+## 2026-08-21 H8 shipped: lifecycle, and a governance register that cannot tell two models apart
+
+`POST /api/v1/graph/situations/lifecycle`, `POST /api/v1/graph/situations/{id}/merge`. Design: [SITUATION_LIFECYCLE](SITUATION_LIFECYCLE.md).
+
+### Closed
+
+- **Situations now finish [was: H8].** Verified live: the canonical situation moved `active → resolved` because all six members carry a resolution in ServiceNow, then `resolved → reopened` when one stopped, with `resolved_at` and `stabilizing_at` cleared — they described a recovery that did not hold, and leaving them makes the next MTTR read from a moment the situation was not over.
+- **Absence of signal is never recovery.** Only positive resolution evidence moves a situation toward resolved. `cancelled` is deliberately not a resolved state: a withdrawn report is not a fixed problem.
+- **Merge preserves lineage.** Memberships move; duplicates already in the survivor are *retired* rather than deleted. The DB CHECK refusing a `merged` row with no survivor was exercised and held (`IntegrityError`).
+- **Reopen and recurrence stay distinct.** `recurred_from` and `merged_into` needed no migration — H1 registered both.
+
+### Opened — record these before they read as capability
+
+- **The governance column register cannot tell two models' same-named columns apart, and a real gap has now become invisible to it.** It matches assignments by column NAME across the whole source tree, so `situation.resolved_at = now` in the lifecycle service satisfies the register entry for `RemediationAction.resolved_at` — which still has no writer at all. That entry had to be removed for the suite to pass. **The gap is real: nothing closes a remediation escalation.** Recorded here because the automated check can no longer see it. Making the scanner model-aware is the fix; this is the second false positive of the day, after a local variable and then a *comment* each satisfied the entry for `SituationEntityImpact.basis`.
+
+- **Situations pile up in `active` on any source that does not populate `case_state`.** The backlog will look like a bug and is the honest reading. Only ServiceNow populates it here.
+
+- **The duration of a recovery that did not hold is lost.** Reopen clears the timestamps rather than recording them. Preserving the history needs a transition table, which H8 did not ask for and nothing has.
+
+- **Retired memberships accumulate and every consumer must remember to exclude them.** Every query in this service does; nothing enforces that the next one will, and forgetting double-counts.
+
+- **A situation merged in error stays merged.** Terminal states are never recomputed — correct — and no unwind exists.
+
+- **`severity` and `review_status` on situations still have no writer.** Nothing grades a situation's severity, and inferring it from member priority would launder a ticket field into an operational judgement. Situations have no review queue; merge is governed by a role rather than a queue somebody works through.
+
 ## 2026-08-21 H7 shipped: the acceptance criterion is met
 
 `GET /api/v1/graph/diagnostic-context/{incident_evidence_id}`. Design: [DIAGNOSTIC_CONTEXT](DIAGNOSTIC_CONTEXT.md).

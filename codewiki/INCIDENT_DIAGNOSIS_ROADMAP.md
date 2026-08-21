@@ -266,9 +266,14 @@ Two defects found in review, both of the same family the rest of this roadmap ke
 Monitoring (H5) remains the one facet this deployment cannot answer, and the bundle says so rather than returning silence.
 **In code:** `services/diagnostic_context_service.py`, `GET /graph/diagnostic-context/{id}`. Design: [DIAGNOSTIC_CONTEXT](DIAGNOSTIC_CONTEXT.md).
 
-### H8. Lifecycle, merge and review — *depends on H3*
+### H8. Lifecycle, merge and review ✅
 
-`emerging → active → stabilizing → resolved`, plus reopen, recurrence and merge. Absence of signal is never recovery. Automatic split is deliberately out of scope for v1: a split proposal is safe, an automatic split is not.
+Shipped 2026-08-21. `emerging → active → stabilizing → resolved`, plus reopen, recurrence and merge — and the rule held: **absence of signal is never recovery**. Only member incidents carrying a resolution in the source system move a situation toward resolved, so a quiet situation with no resolved members stays `active`, which looks wrong on a wallboard and is the only honest reading.
+
+Reopen and recurrence stayed distinct, which is the S1/S5 distinction one level up. A reopen keeps the situation's identity and clears its recovery stamps; a recurrence is a *new* situation linked by `recurred_from`. Merge moves memberships and retires rather than deletes the duplicates, because which situation a signal was first filed under is the lineage; the database refuses a `merged` row that names no survivor, verified live.
+
+Automatic split remains out of scope, as specified.
+**In code:** `services/situation_lifecycle_service.py`, `POST /graph/situations/lifecycle`, `POST /graph/situations/{id}/merge`. Design: [SITUATION_LIFECYCLE](SITUATION_LIFECYCLE.md).
 
 ---
 
@@ -302,7 +307,7 @@ Revised 2026-08-20. Workstream G shipped out of order because a knowledge backfi
 | — | Monitoring alert/event ingestion | H5 | M | **an instance with ITOM** | blocked on the instance, not the connector: `em_alert` is absent, discovery skips it |
 | ✅ | Situation-aware change correlation | H6 | M | — | **shipped 2026-08-21** — ranked candidates with one-hop blast radius; building it found a single future-dated row that had silently stopped change ingestion entirely. See [CHANGE_CORRELATION](CHANGE_CORRELATION.md) |
 | ✅ | Diagnostic context service | H7 | M–L | — | **shipped 2026-08-21** — the acceptance criterion is met: one incident identifier returns seven provenanced facets and an honest blind-spot list. See [DIAGNOSTIC_CONTEXT](DIAGNOSTIC_CONTEXT.md) |
-| 8 | Situation lifecycle, merge, review | H8 | M | 2 | reopen vs recurrence, merge without losing lineage |
+| ✅ | Situation lifecycle, merge, review | H8 | M | — | **shipped 2026-08-21** — recovery is evidenced, never inferred from silence; reopen and recurrence stay distinct. See [SITUATION_LIFECYCLE](SITUATION_LIFECYCLE.md) |
 | 9 | Claim-level epistemic status | G4 | M–L | — | source type is not epistemic status |
 | 10 | Prescriptive knowledge as its own object | G5 | M | G4 | an SOP and a known-error article are not the same claim |
 

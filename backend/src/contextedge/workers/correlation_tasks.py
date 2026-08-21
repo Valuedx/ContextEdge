@@ -134,3 +134,33 @@ def correlate_situation_changes_task(self, tenant_id: str, limit: int = 100):
         return run_async(work)
     except Exception as exc:
         raise self.retry(exc=exc) from exc
+
+
+@celery_app.task(
+    bind=True,
+    max_retries=2,
+    default_retry_delay=300,
+    name="correlation.evaluate_situation_lifecycle",
+)
+def evaluate_situation_lifecycle_task(self, tenant_id: str, apply: bool = True):
+    """Move situations along their lifecycle on evidence (H8).
+
+    Safe to schedule: a situation is only moved toward `resolved` by members
+    carrying a resolution, never by having gone quiet, so running this more
+    often does not resolve anything faster.
+    """
+    from contextedge.services.situation_lifecycle_service import (
+        evaluate_all_situations,
+    )
+
+    tid = uuid.UUID(tenant_id)
+
+    async def work(db):
+        result = await evaluate_all_situations(db, tid, apply=apply)
+        await db.commit()
+        return result
+
+    try:
+        return run_async(work)
+    except Exception as exc:
+        raise self.retry(exc=exc) from exc
