@@ -2,6 +2,30 @@
 
 Short list of implementation gaps and operational caveats called out in the codewiki and root documentation. Use this when the product surface looks more complete in the architecture than it does in the current UI or environment.
 
+## 2026-08-21 B3 shipped: the changes nobody records — and a third field family lost the same way
+
+Design: [INVENTORY_DIFF_DETECTOR](INVENTORY_DIFF_DETECTOR.md).
+
+### Closed and corrected
+
+- **Unrecorded state changes are now observed [was: B3].** Verified live: `radius-auth-01` OS 8.6 → 8.8 with nothing filed produced `radius-auth-01: os_version_changed 8.6 -> 8.8`, linked to its CI, `source_type='inventory_diff'`, and idempotent — a re-warm with no further change produced no second event. B2's `record_state_event` existed and had never been called; B3 is its producer.
+- **The detector is one hook, not a sweep.** `_ensure_entity` already compared each incoming trait against the stored one, overwrote it and said nothing. A separate scanner would need a snapshot table, a migration and a retention policy to learn something already known for free at that line.
+- **os / os_version had NEVER been captured by topology warm — FIXED, and this is the third field family lost the same way.** They live on `cmdb_ci_computer`, not on the `cmdb_ci` base table the neighbourhood fetch queries, and asking the base table for a subclass column returns rows *without the column* rather than an error. The connector's own comment misdiagnosed it — "ServiceNow returns them empty for other classes" — which is why it survived; it does not return them empty, it does not return them at all.
+
+  **Dot-walking is what hid it:** an incident asking for `cmdb_ci.os` does get a value, because dot-walking resolves against the referenced record's real class. So traits arrived via incident enrichment and never via topology warm, and the gap read as sparse data — 16 of 140 entities had an `os_name` and every one came from an incident. The one-off service lookup added for C2 is now `SUBCLASS_DETAIL_FIELDS`, covering both families and any third.
+
+### G4 is blocked, and sequenced before its own prerequisite
+
+- **`claims` is 0 rows in every database**, so G4 (epistemic status on claims) would add a column to a table nothing has written to. G4 is sequence item 9; A4, which populates claims, is item 11.
+- **A4 is blocked behind a measured negative result**, already recorded in `ai/prompts/relevance.py`: relevance v3 emits claims from the gate call, and doing both *"moved half the borderline possibly_relevant verdicts"* (8 tickets, 2026-08-07). v3 is registered and deliberately not default, so the claim pipeline — fully wired into `_normalize` — ships dormant behind v2. The remedy is written there: separate the claims pass from the gate, or A/B a reworded v3 against a labeled set. **Neither is G4.**
+
+### Opened
+
+- **The detector observes the working set, not the estate.** It fires only when something warms a CI, so a CI nobody touches is never diffed. That matches the topology cache's scope and means silence is not evidence of stability.
+- **Event timestamps are observation time, not change time.** An event can be stamped days after the change it describes, which weakens the change→incident interval H6 computes. Nothing marks the uncertainty.
+- **Nothing counts failed emissions.** The emitter is fail-soft by design and logs on failure; a persistently broken event layer is invisible outside the logs.
+- **Only ServiceNow CI traits are diffed.** The roadmap's B3 intent — agent version, plugin versions, browser/driver versions, config hashes — needs an agent-side source that does not exist here. What ships covers manufacturer, model, os_name and os_version, which is the CMDB's answer to the same question and a narrower one.
+
 ## 2026-08-21 D2/D3 were already shipped, and are now measured
 
 No code was written for this. Investigating the next roadmap item found both already implemented, with the sequencing table stale — recorded because a roadmap that disagrees with the code is worse than no roadmap, being trusted.

@@ -221,9 +221,17 @@ Not an `episodes.kind` discriminator: with a kind column every query that counts
 
 This is what makes two capabilities possible: **cold start**, where a pattern exists on documentation alone and *graduates* as incidents arrive (measured: ~55% of knowledge cases match no existing pattern — most of the KB documents failure modes the incident history has never seen), and **knowledge drift**, where a documented resolution accumulating contradictions from recent episodes becomes a query rather than an impossibility.
 
-### G4. Claim-level epistemic status — *not started*
+### G4. Claim-level epistemic status — ⛔ *blocked, and sequenced before its own prerequisite*
 
-Source type is not epistemic status. A Teams message saying "I think restarting IIS might help" is hypothesis; "restarted at 14:32, recovered at 14:34" is observation. The target taxonomy is prescriptive → documented → empirical → conversational → inferred, carried on claims rather than inferred from the connector. `claim` already has `claim_type` / `validation_status`; this extends rather than replaces it.
+**Blocked, and the sequencing is wrong.** `claims` holds **0 rows in every database**, so carrying epistemic status on claims means adding a column to a table nothing has ever written to. G4 is item 9 in the sequence and A4 — the item that would populate claims — is item 11, so this is scheduled before its own prerequisite.
+
+A4 is itself blocked behind a **measured negative result**, recorded in `ai/prompts/relevance.py`: relevance v3 emits claims from the same call, and asking the gate to do both *"moved half the borderline possibly_relevant verdicts"* on 8 tickets (2026-08-07). v3 stays registered and is **not** the default, so the claim parsing and persistence pipeline — which is fully wired into `_normalize` — ships dormant behind v2 with an empty claims list.
+
+The remedy is already written down there: separate the claims pass from the gate, or A/B a reworded v3 against a labeled set before flipping the default. Neither is G4.
+
+Note also that the epistemic axis is not absent meanwhile: `PatternEvidence.evidence_class` carries empirical / documented / prescriptive over 1,551 rows. What it cannot do is distinguish *within* a source — which is precisely G4's point, and precisely what needs claims.
+
+Original text: Source type is not epistemic status. A Teams message saying "I think restarting IIS might help" is hypothesis; "restarted at 14:32, recovered at 14:34" is observation. The target taxonomy is prescriptive → documented → empirical → conversational → inferred, carried on claims rather than inferred from the connector. `claim` already has `claim_type` / `validation_status`; this extends rather than replaces it.
 
 ### G5. Prescriptive knowledge as its own object — *not started*
 
@@ -309,7 +317,7 @@ Automatic split remains out of scope, as specified.
 | 4 | `change_request` + causal-vocabulary projection | B1, B5 | S | — | near-free; unlocks the change join |
 | ✅ | Signature seeding/projection + major-incident grouping | D2, D3 | S–M | — | **already shipped; measured 2026-08-21 for the first time.** D3 landed as `child_of_incident`, not `aggregated_by` — see the correction below |
 | 6 | Event layer + `preceded_by` seed layer | B2, B4 | M | B1 | the diagnose-time correlation capability |
-| 7 | Inventory-diff detector | B3 | M | B2 | first high-yield event source |
+| ✅ | Inventory-diff detector | B3 | M | — | **shipped 2026-08-21** — one hook at the point the change was already noticed and discarded. See [INVENTORY_DIFF_DETECTOR](INVENTORY_DIFF_DETECTOR.md) |
 | 8 | `cmdb_rel_ci` topology + criticality facts | C1, C2 | M | — | blast radius |
 | ✅ | Efficacy rollups + applicability + negative knowledge | E1–E3 | M | — | **shipped 2026-08-21, pulled forward** — the one capability no competitor ships; see [EFFICACY_AND_KNOWLEDGE_DRIFT](EFFICACY_AND_KNOWLEDGE_DRIFT.md) |
 | ✅ | Agent decision write-back | F1 | M–L | — | **shipped 2026-08-21** — the compounding loop, with the self-training hazard contained in three places. See [AGENT_DECISION_WRITEBACK](AGENT_DECISION_WRITEBACK.md) |
@@ -330,7 +338,7 @@ Revised 2026-08-20. Workstream G shipped out of order because a knowledge backfi
 | ✅ | Situation-aware change correlation | H6 | M | — | **shipped 2026-08-21** — ranked candidates with one-hop blast radius; building it found a single future-dated row that had silently stopped change ingestion entirely. See [CHANGE_CORRELATION](CHANGE_CORRELATION.md) |
 | ✅ | Diagnostic context service | H7 | M–L | — | **shipped 2026-08-21** — the acceptance criterion is met: one incident identifier returns seven provenanced facets and an honest blind-spot list. See [DIAGNOSTIC_CONTEXT](DIAGNOSTIC_CONTEXT.md) |
 | ✅ | Situation lifecycle, merge, review | H8 | M | — | **shipped 2026-08-21** — recovery is evidenced, never inferred from silence; reopen and recurrence stay distinct. See [SITUATION_LIFECYCLE](SITUATION_LIFECYCLE.md) |
-| 9 | Claim-level epistemic status | G4 | M–L | — | source type is not epistemic status |
+| ⛔ | Claim-level epistemic status | G4 | M–L | **A4, which is blocked on a measured negative result** | `claims` is 0 rows in every database. See the correction below — this item is sequenced before its own prerequisite |
 | 10 | Prescriptive knowledge as its own object | G5 | M | G4 | an SOP and a known-error article are not the same claim |
 
 **Revised again 2026-08-21: the connector block is mostly lifted.** A live ServiceNow instance supplies changes, CIs, CI relationships and problems, so B1 and the bulk of C1 are shipped and H6 has data to rank. Only monitoring remains absent, and for a narrower reason — the alert connector exists, the instance lacks the ITOM plugin. See [SERVICENOW_LIVE_VERIFICATION](SERVICENOW_LIVE_VERIFICATION.md).

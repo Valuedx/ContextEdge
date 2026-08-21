@@ -144,6 +144,33 @@ EVENT_TIME_FIELDS: dict[str, tuple[str, ...]] = {
     "em_alert": ("initial_event_time",),
 }
 
+# Fields that live on a SUBCLASS of cmdb_ci, not on cmdb_ci itself.
+#
+# Querying the base table for one of these does not error and does not warn:
+# the column is simply absent from every row returned, so the request looks
+# correct and yields nothing, permanently. It has now bitten three separate
+# field families — busines_criticality (C2) and os/os_version (B2 traits) —
+# each discovered only by noticing that a value which should have been there
+# never was.
+#
+# Verified live on one sys_id, both ways: /table/cmdb_ci returns name and
+# sys_class_name alone, while /table/cmdb_ci_server returns os and os_version.
+#
+# Each entry costs one extra call per neighborhood fetch and is queried for
+# EVERY sys_id rather than only the matching classes: ServiceNow returns only
+# the rows that exist in that table, so the filtering is free and correct,
+# where class-prefix matching would be neither (cmdb_ci_server,
+# cmdb_ci_esx_server and cmdb_ci_pc_hardware share no usable prefix).
+#
+# Dot-walking is the exception that hid this for so long: an incident asking
+# for `cmdb_ci.os` DOES get a value, because dot-walking resolves against the
+# referenced record's real class. So traits arrived via incident enrichment
+# and never via topology warm, and the gap looked like sparse data.
+SUBCLASS_DETAIL_FIELDS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("cmdb_ci_service", ("busines_criticality",)),
+    ("cmdb_ci_computer", ("os", "os_version")),
+)
+
 # Alerts at or below this severity number are ingested (1=critical …
 # 5=info). Overridable per source via source_config["alert_severity_max"].
 DEFAULT_ALERT_SEVERITY_MAX = 3
@@ -579,9 +606,10 @@ class ServiceNowConnector(BaseConnector):
                 "sysparm_query": "sys_idIN" + ",".join(sys_ids[:200]),
                 "sysparm_fields": (
                     "sys_id,name,sys_class_name,operational_status,"
-                    # B2 traits. os/os_version exist only on computer
-                    # subclasses — ServiceNow returns them empty for
-                    # other classes, which lands as absent traits.
+                    # B2 traits. os/os_version are NOT on this table -- see
+                    # SUBCLASS_DETAIL_FIELDS below. They are requested here
+                    # only so the field list documents what the caller wants;
+                    # the values arrive from the subclass pass.
                     # busines_criticality [sic — ServiceNow's own field
                     # spelling] + support_group feed the C2 criticality/
                     # owner facts; absent on a class -> absent, never
@@ -608,41 +636,27 @@ class ServiceNowConnector(BaseConnector):
         )
         rows = data.get("result", [])
 
-        # Criticality needs a second call against the SERVICE table.
-        #
-        # `busines_criticality` is defined on cmdb_ci_service, not on the
-        # cmdb_ci base table queried above. Asking the base table for it does
-        # not error — the column is simply absent from every row — so the
-        # request looked correct and returned nothing, permanently. Verified
-        # live: the same sys_id returns `busines_criticality` from
-        # /table/cmdb_ci_service and omits the key entirely from /table/cmdb_ci.
-        #
-        # Only fires when the neighborhood actually contains a service, so a
-        # pure-infrastructure walk still costs two calls.
-        service_ids = [
-            r.get("sys_id")
-            for r in rows
-            if str(r.get("sys_class_name") or "").startswith("cmdb_ci_service")
-            and r.get("sys_id")
-        ]
-        if service_ids:
-            service_data = await self._snow_get(
-                "/api/now/table/cmdb_ci_service",
-                {
-                    "sysparm_query": "sys_idIN" + ",".join(service_ids[:200]),
-                    "sysparm_fields": "sys_id,busines_criticality",
-                    "sysparm_limit": "200",
-                },
-            )
-            criticality_by_id = {
-                r.get("sys_id"): r.get("busines_criticality")
-                for r in service_data.get("result", [])
-                if r.get("busines_criticality")
-            }
-            for row in rows:
-                value = criticality_by_id.get(row.get("sys_id"))
-                if value:
-                    row["busines_criticality"] = value
+        # Subclass fields need their own calls. See SUBCLASS_DETAIL_FIELDS.
+        by_sys_id = {r.get("sys_id"): r for r in rows if r.get("sys_id")}
+        if by_sys_id:
+            ids = list(by_sys_id)[:200]
+            for table, fields in SUBCLASS_DETAIL_FIELDS:
+                extra = await self._snow_get(
+                    f"/api/now/table/{table}",
+                    {
+                        "sysparm_query": "sys_idIN" + ",".join(ids),
+                        "sysparm_fields": "sys_id," + ",".join(fields),
+                        "sysparm_limit": "200",
+                    },
+                )
+                for found in extra.get("result", []):
+                    target = by_sys_id.get(found.get("sys_id"))
+                    if target is None:
+                        continue
+                    for field_name in fields:
+                        value = found.get(field_name)
+                        if value:
+                            target[field_name] = value
         return rows
 
     def rate_limit_config(self) -> RateLimitConfig:

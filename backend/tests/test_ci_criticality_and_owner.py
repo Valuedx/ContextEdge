@@ -64,18 +64,28 @@ def test_the_merged_dict_is_reassigned_rather_than_mutated():
 
 def test_criticality_is_fetched_from_the_service_table():
     """It does not exist on cmdb_ci. Requesting it there returns rows without
-    the key and no error, which is why this looked wired for so long."""
+    the key and no error, which is why this looked wired for so long.
+
+    Asserted against the declaration rather than the call site: B3 generalised
+    the one-off service lookup into SUBCLASS_DETAIL_FIELDS when os/os_version
+    turned out to have the same problem. The behaviour is what matters —
+    criticality is read from cmdb_ci_service and not from the base table.
+    """
+    from contextedge.connectors.servicenow.connector import SUBCLASS_DETAIL_FIELDS
+
+    by_table = dict(SUBCLASS_DETAIL_FIELDS)
+    assert "busines_criticality" in by_table["cmdb_ci_service"]
+
     source = inspect.getsource(ServiceNowConnector.fetch_ci_details)
-
-    assert "/api/now/table/cmdb_ci_service" in source
-    assert "busines_criticality" in source
+    assert "SUBCLASS_DETAIL_FIELDS" in source
 
 
-def test_the_service_lookup_is_skipped_when_no_service_is_present():
-    """A pure-infrastructure neighborhood must still cost two calls."""
+def test_criticality_is_not_requested_from_the_base_table():
+    """Requesting it there is not an error, it is a permanent silence — so
+    the base-table field list must not imply it will arrive."""
     source = inspect.getsource(ServiceNowConnector.fetch_ci_details)
-
-    assert "if service_ids:" in source
+    base_query = source.split("SUBCLASS_DETAIL_FIELDS")[0]
+    assert "busines_criticality" not in base_query
 
 
 def test_owner_and_support_group_are_both_carried():

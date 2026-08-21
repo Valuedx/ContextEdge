@@ -53,6 +53,7 @@ from __future__ import annotations
 import re
 import uuid
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 
 import structlog
 from sqlalchemy import select
@@ -253,6 +254,56 @@ async def _resolve_evidence_for_sys_id(
     ).scalar_one_or_none()
 
 
+async def _emit_inventory_events(
+    db,
+    tenant_id: uuid.UUID,
+    entity,
+    transitions: list[tuple[str, str, str]],
+) -> None:
+    """Record observed CI state transitions as event evidence (B3).
+
+    Fail-soft on purpose: an entity upsert sits on the ingest critical path
+    and must not break because the event layer had a bad day. A missed event
+    costs a diagnostic hint; a raised exception costs the sync.
+
+    ``occurred_at`` is the OBSERVATION time, not the change time. Nothing here
+    knows when the browser actually upgraded — only when we next looked and
+    found it different. That is a real limitation and it is better recorded
+    honestly than papered over with the CI's update stamp, which tracks the
+    record rather than the machine.
+    """
+    from contextedge.services.event_evidence_service import record_state_event
+
+    now = datetime.now(UTC)
+    for trait, previous, current in transitions:
+        try:
+            await record_state_event(
+                db,
+                tenant_id,
+                ci_name=entity.name,
+                event_kind=f"{trait}_changed",
+                from_value=previous,
+                to_value=current,
+                occurred_at=now,
+                source_label="inventory_diff",
+                domain_id=getattr(entity, "domain_id", None),
+                detail=(
+                    "Observed by comparing the CMDB record against the value "
+                    "captured at the previous sync. No change record is "
+                    "implied — this is a state difference, not an authorised "
+                    "change."
+                ),
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "inventory_event_failed",
+                tenant_id=str(tenant_id),
+                entity=getattr(entity, "name", None),
+                trait=trait,
+                error=str(exc),
+            )
+
+
 async def _ensure_entity(
     db: AsyncSession,
     tenant_id: uuid.UUID,
@@ -283,9 +334,28 @@ async def _ensure_entity(
             existing.name = ref.name
         # Traits refresh in place (B2): a present upstream value wins;
         # an absent one never clears what an earlier sync captured.
+        #
+        # B3, the inventory-diff detector. This loop already NOTICED every
+        # trait change and threw it away — it overwrote the old value and
+        # said nothing. That discarded fact is the whole point of the event
+        # layer: most incident-causing changes never get a change record
+        # (a browser auto-upgrades, an agent self-patches, an OS rolls
+        # forward), and the only way to know is to observe the state and
+        # diff it. The canonical case is a browser auto-upgrade breaking a
+        # web driver, which no change calendar would ever have shown.
+        #
+        # A FIRST observation is not a change. Emitting one would announce a
+        # transition on every CI the first time it is seen, which is noise
+        # that teaches people to ignore the feed.
+        transitions: list[tuple[str, str, str]] = []
         for trait, value in ref.traits.items():
-            if value and getattr(existing, trait, None) != value:
+            previous = getattr(existing, trait, None)
+            if value and previous != value:
                 setattr(existing, trait, value)
+                if previous:
+                    transitions.append((trait, str(previous), str(value)))
+        if transitions:
+            await _emit_inventory_events(db, tenant_id, existing, transitions)
         # Attributes refresh on the same terms (C2). They used to be written
         # ONLY on insert, so criticality, owning team and owner could land
         # only on a CI nobody had seen before — which, once a CMDB has been
