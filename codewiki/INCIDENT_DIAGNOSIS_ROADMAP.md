@@ -129,14 +129,30 @@ Blast radius without criticality cannot be prioritized, and remediation risk ("r
 Populate the empty `error_signatures` table at ingestion with normalized fingerprints (error code + component + variable-stripped message) from logs and tickets, edged to evidence and episodes. An exact fingerprint match beats embedding similarity every time and gives the agent an O(1) answer to "is this exact failure known?" with full history one hop away.
 **Priority: first item in the whole roadmap** — cheapest, sharpest diagnostic gain.
 
-### D2. Make issue signatures seedable and projectable
+### D2. Make issue signatures seedable and projectable ✅
 
-The 53 `issue_signatures` rows are the best diagnostic index in the graph and the agent cannot see them (F5). Add: `issue_signature` to `MAF_NODE_TYPES` with facts (`failing_component`, `failure_mode`, `trigger_change`, `episode_count`); a seed layer matching incident symptom text against signatures (FTS over the structured fields; embeddings if needed later). Signature-first entry — symptom → signature → episodes → playbook — is how an experienced engineer thinks.
+**Shipped, and measured 2026-08-21 for the first time.** The agent can see them: `issue_signature` is in `MAF_NODE_TYPES`, hydrated with its structured facts, and reached by a dedicated seed layer (`repository.py`, "Layer A2") that de-slugs the underscore-joined fields before the tsvector match — without which no query word could ever match. `has_signature` is traversable, so a matched signature reaches its episode history in one hop.
 
-### D3. Populate `aggregated_by` from connector references
+The corpus has grown from the 53 rows this item was written against to **1,411**. Measured against four symptom queries, three landed sharply and one did not:
 
-`parent_incident` / `problem_id` are already fetched by reference enrichment. Wiring them to `aggregated_by` edges lets the agent recognize "this is the 6th ticket of one ongoing event" — preventing six parallel diagnoses and giving true impact scale.
-**Effort:** small.
+| query | top signature | relevance |
+| --- | --- | --- |
+| VPN authentication failing with certificate error | `tls_certificate / invalid_certificate_in_use` | 0.82 |
+| agent will not start after upgrade | `agent_software / stuck_in_upgrade_state_due_to_permissions` | 0.90 |
+| chrome driver version mismatch | `chrome_driver / version_mismatch` | 0.90 |
+| oracle deadlock on the claims database | `database_backup_format / restore_failure...` | 0.76 |
+
+The last is a miss: it matched on the word *database* and lost the failure mode. Signature matching is strong where the query shares vocabulary with the structured fields and drifts to generic component matches where it does not — the relevance ordering reflects it, which is the useful half.
+
+Original text: The 53 `issue_signatures` rows are the best diagnostic index in the graph and the agent cannot see them (F5). Add: `issue_signature` to `MAF_NODE_TYPES` with facts (`failing_component`, `failure_mode`, `trigger_change`, `episode_count`); a seed layer matching incident symptom text against signatures (FTS over the structured fields; embeddings if needed later). Signature-first entry — symptom → signature → episodes → playbook — is how an experienced engineer thinks.
+
+### D3. Major-incident grouping from connector references ✅ *(this item's title was wrong)*
+
+**Shipped, under different edge types than this item named.** `parent_incident` and `problem_id` became `child_of_incident` and `related_problem`, both written by ServiceNow reference enrichment and both in the `maf.v1` allowlist — measured on the live corpus, 5 and 18 edges respectively.
+
+`aggregated_by` was the wrong name for it: in `graph/edge_types.py` that relation means **signature → pattern**, not incident → incident, and it remains 0 rows in every database. Wiring incident grouping to it would have overloaded one edge type with two unrelated meanings. The capability this item asked for — recognising "this is the 6th ticket of one ongoing event" — is delivered, and delivered twice over: by `child_of_incident` and by H3's situations, which group the same six tickets into one occurrence with a stated onset.
+
+Original text: `parent_incident` / `problem_id` are already fetched by reference enrichment. Wiring them to `aggregated_by` edges lets the agent recognize "this is the 6th ticket of one ongoing event" — preventing six parallel diagnoses and giving true impact scale.
 
 ---
 
@@ -291,7 +307,7 @@ Automatic split remains out of scope, as specified.
 | 2 | Salient slicing + summary distillation | A1, A2 | S–M | — | fixes a proven knowledge-loss bug (F4); improves every LLM call |
 | 3 | Thread backfill | A3 | S | A1 | recovers known-lost knowledge |
 | 4 | `change_request` + causal-vocabulary projection | B1, B5 | S | — | near-free; unlocks the change join |
-| 5 | Signature seeding/projection + `aggregated_by` | D2, D3 | S–M | — | signature-first entry |
+| ✅ | Signature seeding/projection + major-incident grouping | D2, D3 | S–M | — | **already shipped; measured 2026-08-21 for the first time.** D3 landed as `child_of_incident`, not `aggregated_by` — see the correction below |
 | 6 | Event layer + `preceded_by` seed layer | B2, B4 | M | B1 | the diagnose-time correlation capability |
 | 7 | Inventory-diff detector | B3 | M | B2 | first high-yield event source |
 | 8 | `cmdb_rel_ci` topology + criticality facts | C1, C2 | M | — | blast radius |

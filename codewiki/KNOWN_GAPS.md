@@ -2,6 +2,26 @@
 
 Short list of implementation gaps and operational caveats called out in the codewiki and root documentation. Use this when the product surface looks more complete in the architecture than it does in the current UI or environment.
 
+## 2026-08-21 D2/D3 were already shipped, and are now measured
+
+No code was written for this. Investigating the next roadmap item found both already implemented, with the sequencing table stale — recorded because a roadmap that disagrees with the code is worse than no roadmap, being trusted.
+
+### Corrected
+
+- **D2 (signature-first entry) shipped, and has now been measured for the first time.** `issue_signature` is projectable and hydrated; a dedicated seed layer de-slugs the underscore-joined structured fields before the tsvector match, without which no query word could match at all. The corpus has grown from the 53 rows the item was written against to **1,411**.
+
+  Four symptom queries, three sharp and one miss: `VPN authentication failing with certificate error` → `tls_certificate / invalid_certificate_in_use` (0.82); `agent will not start after upgrade` → `agent_software / stuck_in_upgrade_state_due_to_permissions` (0.90); `chrome driver version mismatch` → `chrome_driver / version_mismatch` (0.90); and `oracle deadlock on the claims database` → `database_backup_format / restore_failure...` (0.76), which matched on the word *database* and lost the failure mode.
+
+- **D3 shipped under different edge types than the roadmap named.** `parent_incident` and `problem_id` became `child_of_incident` and `related_problem`, both in the `maf.v1` allowlist. **`aggregated_by` was the wrong name**: in the edge vocabulary it means *signature → pattern*, not incident → incident, and wiring incident grouping to it would have overloaded one relation with two unrelated meanings. It is 0 rows in every database and correctly so.
+
+### Opened
+
+- **Signature matching degrades to component-level matches on unfamiliar vocabulary.** The oracle-deadlock query is the demonstration: nothing in it shares wording with a deadlock signature's structured fields, so the match fell back to the component token and returned backup-related signatures at a visibly lower relevance. The score exposes it and nothing acts on it — there is no floor below which a signature seed is dropped rather than offered.
+
+- **`aggregated_by` (signature → pattern) has no writer.** It is allowlisted for the agent to traverse and 0 rows exist, so a relation the projection advertises can never be followed. Unrelated to D3 despite the shared name, and now the only situation-adjacent edge type in that position.
+
+- **Signature-first entry has no regression test.** It was measured by hand against a corpus the test suite cannot reach; nothing would catch a de-slugging change that silently returns zero signatures for every query.
+
 ## 2026-08-21 F1 shipped: the compounding loop, with the self-training hazard contained
 
 `GET /api/v1/decisions/prior-hypotheses`, plus two MAF tools. Design: [AGENT_DECISION_WRITEBACK](AGENT_DECISION_WRITEBACK.md).
