@@ -2,6 +2,23 @@
 
 Short list of implementation gaps and operational caveats called out in the codewiki and root documentation. Use this when the product surface looks more complete in the architecture than it does in the current UI or environment.
 
+## 2026-08-21 H7 shipped: the acceptance criterion is met
+
+`GET /api/v1/graph/diagnostic-context/{incident_evidence_id}`. Design: [DIAGNOSTIC_CONTEXT](DIAGNOSTIC_CONTEXT.md).
+
+### Closed and corrected
+
+- **One incident identifier now returns the operational context around it [was: H7].** Seven facets, each independently provenanced and each able to say "no data, and here is why". Live on the canonical incident: situation (1 of 6 signals), impact (4 entities, highest criticality `1 - most critical` reached one hop away), duplicates (5), changes (2 ranked, 1 confirmed), recurrence (empty, explained), remediation (1, with known failures), coverage (monitoring unanswerable).
+- **`blind_spots` reported `[]` on a deployment with a known blind spot — FIXED.** Facet-level absences and deployment-level ones were tracked separately, and the coverage facet had answered *successfully* about being unable to answer. The field a reader checks for reassurance gave it falsely. The two lists are now one, because they differ in cause and are identical in consequence. This is the confusion H2 exists to remove, reintroduced one layer up.
+- **Domain scoping was applied at the door only — FIXED.** The incident lookup honoured `allowed_domain_ids`; duplicates, recurrence and change candidates did not, so a restricted reader would have seen titles, timestamps and ranked changes from outside their scope. Scoping now runs through every record-bearing facet, and domain-NULL evidence is deliberately excluded from restricted views. Verified live: a reader limited to a foreign domain receives no bundle at all.
+
+### Opened — record these before they read as capability
+
+- **The bundle recomputes on every call.** Change correlation in particular re-runs per request. Caching needs invalidation across six upstream tables, which is worse than the latency until something measures the latency — and nothing has.
+- **A restricted reader cannot see tenant-global knowledge either.** Excluding domain-NULL is the safe direction and a real loss: reviewed tenant-wide knowledge is domain-NULL by convention, so a scoped reader loses it along with the unassigned ingest the exclusion is aimed at.
+- **Facets the roadmap named are absent.** H7 was specified with case, signals, topology, knowledge, patterns and decisions among its facets. Knowledge has no facet (this deployment holds zero knowledge cases), and decisions has none (nothing writes agent decisions back — that is F1, unstarted). Their absence is silent: the bundle does not list facets it never attempted, so a reader cannot tell "no knowledge here" from "no knowledge facet exists".
+- **`impact` reports one hop.** Same bound as H6, same consequence: a two-hop dependency is invisible.
+
 ## 2026-08-21 H6 shipped, and a single future-dated row had stopped change ingestion
 
 `GET /api/v1/graph/situations/{id}/change-candidates`, `correlation.correlate_situation_changes`. Design: [CHANGE_CORRELATION](CHANGE_CORRELATION.md).

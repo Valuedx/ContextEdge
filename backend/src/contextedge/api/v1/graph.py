@@ -251,6 +251,38 @@ async def situation_change_candidates(
     }
 
 
+@router.get("/diagnostic-context/{incident_evidence_id}")
+async def diagnostic_context(
+    incident_evidence_id: UUID,
+    db: DbSession,
+    user: AuthUser,
+):
+    """Everything known around one incident, as facets (roadmap H7).
+
+    The acceptance criterion the roadmap was written for: an agent handed a
+    single incident identifier obtains the operational context around it
+    rather than reasoning from the description alone.
+
+    Read `blind_spots` before concluding anything from an empty facet. It
+    merges two different absences with the same consequence — a facet that
+    could not answer for this incident, and a dimension this deployment
+    cannot answer at all.
+    """
+    from contextedge.services.diagnostic_context_service import (
+        build_diagnostic_context,
+    )
+
+    context = await build_diagnostic_context(
+        db,
+        user.tenant_id,
+        incident_evidence_id,
+        allowed_domain_ids=user.allowed_domain_ids,
+    )
+    if context is None:
+        raise HTTPException(status_code=404, detail="Incident not found")
+    return context.as_dict()
+
+
 @router.get("/edge-proposals")
 async def list_edge_proposals_endpoint(
     db: DbSession,

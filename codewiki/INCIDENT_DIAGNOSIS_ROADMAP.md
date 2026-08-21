@@ -255,9 +255,16 @@ Measured on the canonical incident: two candidates, correctly ordered. The same-
 Building it surfaced a defect worth more than the feature: one PDI record dated 2035 had pinned the `change_request` keyset checkpoint nine years ahead, so every incremental sync since returned zero rows and reported success.
 **In code:** `services/change_correlation_service.py`, `GET /graph/situations/{id}/change-candidates`. Design: [CHANGE_CORRELATION](CHANGE_CORRELATION.md).
 
-### H7. Diagnostic context service — *depends on H2–H6*
+### H7. Diagnostic context service ✅
 
-One bounded, security-filtered, provenance-aware bundle: case, situation, signals, impact, topology, changes, history, knowledge, patterns, decisions, coverage. The acceptance test is that an agent given one incident identifier obtains the operational context around it rather than reasoning from the description alone.
+Shipped 2026-08-21, and **the acceptance test passes**: an agent given one incident identifier obtains the operational context around it rather than reasoning from the description alone.
+
+Seven facets — situation, impact, duplicates, changes, recurrence, remediation, coverage — each with its own status, provenance, count and truncation flag, plus a `blind_spots` list naming what must not be read as a zero. Bounded per facet, and security-filtered on every record-bearing facet rather than only at the entry point.
+
+Two defects found in review, both of the same family the rest of this roadmap keeps producing: `blind_spots` reported `[]` on a deployment with no monitoring connector, because facet-level and deployment-level absences were tracked separately and coverage had "successfully" reported its own inability; and domain scoping was applied to the incident lookup alone, so a restricted reader would have seen duplicates, recurrence and change candidates from outside their scope.
+
+Monitoring (H5) remains the one facet this deployment cannot answer, and the bundle says so rather than returning silence.
+**In code:** `services/diagnostic_context_service.py`, `GET /graph/diagnostic-context/{id}`. Design: [DIAGNOSTIC_CONTEXT](DIAGNOSTIC_CONTEXT.md).
 
 ### H8. Lifecycle, merge and review — *depends on H3*
 
@@ -294,7 +301,7 @@ Revised 2026-08-20. Workstream G shipped out of order because a knowledge backfi
 | ✅ | Criticality / owner / tier on entity facts | C2 | S | — | **shipped 2026-08-21** — three defects, each of which looked wired: attributes were write-once, criticality is only on `cmdb_ci_service`, and `owned_by` was captured nowhere. See [SERVICENOW_LIVE_VERIFICATION](SERVICENOW_LIVE_VERIFICATION.md) |
 | — | Monitoring alert/event ingestion | H5 | M | **an instance with ITOM** | blocked on the instance, not the connector: `em_alert` is absent, discovery skips it |
 | ✅ | Situation-aware change correlation | H6 | M | — | **shipped 2026-08-21** — ranked candidates with one-hop blast radius; building it found a single future-dated row that had silently stopped change ingestion entirely. See [CHANGE_CORRELATION](CHANGE_CORRELATION.md) |
-| 7 | Diagnostic context service | H7 | M–L | 1–6 | the actual product acceptance criterion |
+| ✅ | Diagnostic context service | H7 | M–L | — | **shipped 2026-08-21** — the acceptance criterion is met: one incident identifier returns seven provenanced facets and an honest blind-spot list. See [DIAGNOSTIC_CONTEXT](DIAGNOSTIC_CONTEXT.md) |
 | 8 | Situation lifecycle, merge, review | H8 | M | 2 | reopen vs recurrence, merge without losing lineage |
 | 9 | Claim-level epistemic status | G4 | M–L | — | source type is not epistemic status |
 | 10 | Prescriptive knowledge as its own object | G5 | M | G4 | an SOP and a known-error article are not the same claim |
