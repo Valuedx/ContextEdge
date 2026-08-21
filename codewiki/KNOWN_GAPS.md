@@ -2,6 +2,20 @@
 
 Short list of implementation gaps and operational caveats called out in the codewiki and root documentation. Use this when the product surface looks more complete in the architecture than it does in the current UI or environment.
 
+## 2026-08-21 A tracked `.env` backup put live secrets in the repo; keys rotated
+
+### Closed
+
+- **`.env.backup-contextedge` was tracked**, added by commit `861c5f9`, and carried a populated `FERNET_KEY` (44 chars), `JWT_SECRET_KEY` (64), `MINIO_ROOT_PASSWORD` (18) and `POSTGRES_PASSWORD` (4). The `.gitignore` rule `.env.backup*` was already present and did nothing, because **ignore rules do not apply to files already in the index** — which is also why `git check-ignore` reported the path as *not* ignored and made the rule look absent. Now `git rm --cached`; the file stays on disk.
+- **`FERNET_KEY` and `JWT_SECRET_KEY` are rotated**, in that order relative to the untracking: rotate first, then untrack. Untracking alone closes nothing — the blob is still reachable in history — so the value has to be made inert before the commit that removes it. The historical secrets are now dead keys.
+- **Rotating `FERNET_KEY` naively destroys every stored source credential.** `source_credentials.encrypted_credentials` is Fernet ciphertext; a new key cannot read it, the plaintext is gone, and the failure surfaces as a connector that stopped syncing rather than as a key problem. So rotation ran as a value-preserving re-encryption — decrypt under old, encrypt under new, same plaintext — across both databases (`contextedge_sn`, `AEProdSupport`), 1 credential each, with a `pg_dump` of the table taken first. Verified after: both decrypt, and the ServiceNow credential returns **HTTP 200** against the live instance.
+
+### Opened
+
+- **The secrets remain in git history.** `git rm --cached` stops future exposure; it does not rewrite `861c5f9`. Rotation is what makes that acceptable — anyone reading the history now holds keys that open nothing. `MINIO_ROOT_PASSWORD` and `POSTGRES_PASSWORD` were **not** rotated: both are local-only dev services, and changing them means reconfiguring the containers. They are still live in history.
+- **Nothing prevents the next backup from being committed.** The ignore rule only helps someone who has not already run `git add -f` or `git add` on a path before the rule existed. A pre-commit secret scan is the actual control, and there isn't one — CLAUDE.md asks a human to "scan every staged diff before commit", which is a discipline, not a mechanism.
+- **Rotating `JWT_SECRET_KEY` invalidates every issued token.** Intended, and harmless on a single-developer deployment; on anything shared it logs everyone out with no warning and no migration path, because tokens are not re-signed the way credentials are re-encrypted.
+
 ## 2026-08-21 The scenario fixtures are portable, and an update set cannot carry them
 
 ### Recorded
