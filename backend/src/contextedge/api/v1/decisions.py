@@ -225,6 +225,39 @@ async def create_decision(
     return await svc_get_decision(db, tenant_id=user.tenant_id, decision_id=decision.id)
 
 
+@router.get("/prior-hypotheses")
+async def prior_hypotheses_endpoint(
+    db: DbSession,
+    user: AuthUser,
+    situation_id: UUID | None = Query(
+        None, description="Scope to one situation; omit for tenant-wide."
+    ),
+    limit: int = Query(20, ge=1, le=100),
+    include_unreviewed: bool = Query(
+        False,
+        description=(
+            "Include unreviewed AI diagnoses. For human review surfaces only — "
+            "an agent reading another agent's pending conclusion as prior "
+            "knowledge is the laundering the projection refuses."
+        ),
+    ),
+):
+    """What earlier investigations ruled out, and what they concluded (F1).
+
+    Declared before `/{decision_id}`: FastAPI matches in definition order, and
+    a literal route after a path parameter is shadowed by it.
+    """
+    from contextedge.services.agent_diagnosis_service import prior_hypotheses
+
+    return await prior_hypotheses(
+        db,
+        user.tenant_id,
+        situation_id=situation_id,
+        limit=limit,
+        include_unreviewed=include_unreviewed,
+    )
+
+
 @router.get("/{decision_id}", response_model=DecisionResponse)
 async def get_decision(
     decision_id: UUID,

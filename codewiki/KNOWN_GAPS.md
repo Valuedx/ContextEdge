@@ -2,6 +2,24 @@
 
 Short list of implementation gaps and operational caveats called out in the codewiki and root documentation. Use this when the product surface looks more complete in the architecture than it does in the current UI or environment.
 
+## 2026-08-21 F1 shipped: the compounding loop, with the self-training hazard contained
+
+`GET /api/v1/decisions/prior-hypotheses`, plus two MAF tools. Design: [AGENT_DECISION_WRITEBACK](AGENT_DECISION_WRITEBACK.md).
+
+### Closed
+
+- **Agent diagnoses now flow back [was: F1].** Hypotheses considered, which was chosen, and why the others were rejected — through the existing decision machinery, so review, audit and supersession apply to agent-authored records exactly as to human ones. `decision_trace_service` already did all of it and nothing called it.
+- **The self-training hazard is contained in three places, deliberately not one.** The projection drops pending AI decisions (pre-existing); `prior_hypotheses` filters them explicitly, because it is a different code path the projection does not cover; and the agent's client port exposes no `include_unreviewed` argument at all. A guarantee an agent cannot reach beats one it is asked to respect.
+- **An outcome, not age, promotes a diagnosis.** Verified live: two rejected hypotheses were invisible while pending, visible to a review surface, and inherited only after the fix was recorded successful.
+
+### Opened — record these before they read as capability
+
+- **Nothing validates that a rejection reason is any good.** "Seemed unlikely" satisfies the schema and teaches the next reader nothing. Only the tool description discourages it, and a tool description is advice rather than a constraint.
+- **In a deployment where nobody records outcomes, F1 writes a great deal and returns nothing, forever.** That is the honest failure mode — silence rather than unearned confidence — but it will look like the feature is broken, and nothing surfaces "you have N diagnoses stuck pending".
+- **Agent diagnoses share a table with human decisions.** Every query here filters on `actor_type`; nothing forces the next one to, and forgetting mixes an agent's guess with a person's judgement.
+- **No agent runs here.** The write-back path, the tools and the retrieval are exercised by a synthetic trail, not by a live MAF agent — this deployment has none. The plumbing is proven; the loop has never turned under its own power.
+- **A review surface for pending agent diagnoses does not exist.** `include_unreviewed=True` is implemented and has no UI, so in practice nothing moves a diagnosis off pending except an outcome.
+
 ## 2026-08-21 H8 shipped: lifecycle, and a governance register that cannot tell two models apart
 
 `POST /api/v1/graph/situations/lifecycle`, `POST /api/v1/graph/situations/{id}/merge`. Design: [SITUATION_LIFECYCLE](SITUATION_LIFECYCLE.md).

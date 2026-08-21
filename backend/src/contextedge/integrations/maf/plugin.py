@@ -18,6 +18,7 @@ from contextedge.integrations.maf.tools import (
     CmdbTopologyTools,
     CohortTools,
     ContextGraphTools,
+    DiagnosisTools,
     EdgeProposalTools,
     FixApplicabilityTools,
 )
@@ -35,6 +36,7 @@ class ContextGraphMAFPlugin:
         fix_applicability_client: FixApplicabilityClient | None = None,
         cohort_client: CohortClient | None = None,
         edge_proposal_client: EdgeProposalClient | None = None,
+        diagnosis_client: Any | None = None,
         writeback: Any | None = None,
     ):
         # F1 write-back reaches the provider through the bundle — before
@@ -67,10 +69,20 @@ class ContextGraphMAFPlugin:
             if edge_proposal_client is not None
             else None
         )
+        # F1. Two tools, and the ORDER they are registered in is the hint:
+        # prior_hypotheses before record_diagnosis, because inheriting what was
+        # already ruled out is the half that saves work, and the half an agent
+        # will skip if it reads the write tool first.
+        self.diagnosis_toolset = (
+            DiagnosisTools(diagnosis_client) if diagnosis_client is not None else None
+        )
         self.context_providers = [self.provider] if self.provider is not None else []
         self.tools = (
             [self.toolset.query_context_graph] if self.toolset is not None else []
         )
+        if self.diagnosis_toolset is not None:
+            self.tools.append(self.diagnosis_toolset.prior_hypotheses)
+            self.tools.append(self.diagnosis_toolset.record_diagnosis)
         if self.cmdb_toolset is not None:
             self.tools.append(self.cmdb_toolset.cmdb_topology)
         if self.change_risk_toolset is not None:

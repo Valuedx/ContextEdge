@@ -171,9 +171,15 @@ The applicability machinery exists (`version_floor`/ceiling extraction, `fix_app
 
 *The biggest structural omission. Everything above is inventory; this is the flywheel.*
 
-### F1. Agent decision write-back
+### F1. Agent decision write-back ✅
 
-The `session` / `decision` / `chose` / `resulted_in` machinery exists, but nothing makes the MAF agent's own diagnostic trail flow back into the graph. Each diagnosis should write back: hypotheses considered, which was chosen, outcome. The next agent facing the same signature then inherits "the connection-leak hypothesis was checked and disproven for this signature; it was the pool size." Without write-back, every diagnosis starts from zero and the graph learns only from human tickets, never from agent runs.
+Shipped 2026-08-21. The machinery existed and nothing called it; `DecisionOption` already carried `selected`, `rejection_reason` and `rejection_code`, which is exactly "hypotheses considered, which was chosen, and why the others were not".
+
+The hazard that kept it unbuilt — an agent reading its own unreviewed conclusions as evidence — was already closed upstream: the projection drops any decision that is AI-authored and still `pending`. F1 relies on that and adds two more layers, because one guard on a path nobody re-reads is a guard with a short life: `prior_hypotheses` filters explicitly, and the agent's client port exposes no argument that could request unreviewed work.
+
+An **outcome**, not age, promotes a diagnosis. Verified live: a diagnosis with two rejected hypotheses was invisible while pending, visible to a review surface, and inherited by the next reader only once the fix was recorded as successful.
+
+Original text: The `session` / `decision` / `chose` / `resulted_in` machinery exists, but nothing makes the MAF agent's own diagnostic trail flow back into the graph. Each diagnosis should write back: hypotheses considered, which was chosen, outcome. The next agent facing the same signature then inherits "the connection-leak hypothesis was checked and disproven for this signature; it was the pool size." Without write-back, every diagnosis starts from zero and the graph learns only from human tickets, never from agent runs.
 **In code:** the MAF adapter (`integrations/maf`) currently reads; write-back goes through the existing decisions/sessions API so governance (review, audit) applies to agent-authored records exactly as to human ones.
 
 ---
@@ -290,7 +296,7 @@ Automatic split remains out of scope, as specified.
 | 7 | Inventory-diff detector | B3 | M | B2 | first high-yield event source |
 | 8 | `cmdb_rel_ci` topology + criticality facts | C1, C2 | M | — | blast radius |
 | ✅ | Efficacy rollups + applicability + negative knowledge | E1–E3 | M | — | **shipped 2026-08-21, pulled forward** — the one capability no competitor ships; see [EFFICACY_AND_KNOWLEDGE_DRIFT](EFFICACY_AND_KNOWLEDGE_DRIFT.md) |
-| 10 | Agent decision write-back | F1 | M–L | — | the compounding loop |
+| ✅ | Agent decision write-back | F1 | M–L | — | **shipped 2026-08-21** — the compounding loop, with the self-training hazard contained in three places. See [AGENT_DECISION_WRITEBACK](AGENT_DECISION_WRITEBACK.md) |
 | 11 | Claims population | A4 | M–L | A2 | granular assertions, once summaries prove out |
 
 Revised 2026-08-20. Workstream G shipped out of order because a knowledge backfill exposed the contamination as a live defect rather than a planned improvement; the sequence below reflects what the corpus can now support.

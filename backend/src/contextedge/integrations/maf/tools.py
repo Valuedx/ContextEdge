@@ -312,3 +312,98 @@ class FixApplicabilityTools:
                     "message": f"Fix-applicability assessment failed ({type(exc).__name__}).",
                 }
             }
+
+
+class DiagnosisTools:
+    """F1: the agent writes its reasoning back, and inherits the last one's."""
+
+    def __init__(self, client: Any):
+        self.client = client
+
+    @tool(
+        name="prior_hypotheses",
+        description=(
+            "What earlier investigations already RULED OUT for this situation, "
+            "and what they concluded. Call this BEFORE forming hypotheses: a "
+            "hypothesis somebody already disproved on evidence costs you the "
+            "same tools and time it cost them. Returns only diagnoses that were "
+            "reviewed or that carry a recorded outcome — never another agent's "
+            "unverified guess."
+        ),
+    )
+    async def prior_hypotheses(
+        self,
+        situation_id: Annotated[
+            str | None,
+            Field(description="Situation UUID to scope to; omit for tenant-wide."),
+        ] = None,
+        context: FunctionInvocationContext | None = None,
+    ) -> dict[str, Any]:
+        del context
+        try:
+            return await self.client.prior(situation_id)
+        except Exception as exc:
+            return {
+                "error": {
+                    "code": "prior_lookup_failed",
+                    "message": f"Prior hypotheses unavailable ({type(exc).__name__}).",
+                }
+            }
+
+    @tool(
+        name="record_diagnosis",
+        description=(
+            "Record what you considered and why you ruled things out, so the "
+            "next investigation of this failure does not repeat your dead ends. "
+            "Give EVERY hypothesis you weighed, not only the one you chose, and "
+            "a concrete evidence-based reason for each rejection — 'seemed "
+            "unlikely' teaches nobody anything. This is stored as a pending, "
+            "reviewable record and does not become context-graph knowledge "
+            "until a human reviews it or an outcome is recorded."
+        ),
+    )
+    async def record_diagnosis(
+        self,
+        rationale: Annotated[
+            str, Field(description="One or two sentences: what you concluded and why.")
+        ],
+        hypotheses: Annotated[
+            list[dict],
+            Field(
+                description=(
+                    "Each: {hypothesis, selected (bool), rejection_reason, "
+                    "rejection_code, confidence}. Include the rejected ones."
+                )
+            ),
+        ],
+        evidence_ids: Annotated[
+            list[str] | None,
+            Field(description="Evidence UUIDs your reasoning rests on (max 20)."),
+        ] = None,
+        situation_id: Annotated[
+            str | None, Field(description="Situation UUID this diagnoses.")
+        ] = None,
+        context: FunctionInvocationContext | None = None,
+    ) -> dict[str, Any]:
+        del context
+        if not str(rationale or "").strip():
+            return {
+                "error": {
+                    "code": "no_rationale",
+                    "message": "A diagnosis needs a stated rationale.",
+                }
+            }
+        try:
+            return await self.client.record(
+                str(rationale)[:2000],
+                list(hypotheses or [])[:12],
+                list(evidence_ids or [])[:20],
+                situation_id,
+            )
+        except Exception as exc:
+            return {
+                "error": {
+                    "code": "write_back_failed",
+                    "message": f"Diagnosis write-back failed ({type(exc).__name__}).",
+                }
+            }
