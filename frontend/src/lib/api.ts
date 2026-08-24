@@ -1,10 +1,25 @@
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8001";
+function getApiBase(): string {
+  if (typeof window !== "undefined" && window.location.hostname) {
+    const protocol = window.location.protocol || "http:";
+    const host = window.location.hostname;
+    // If NEXT_PUBLIC_API_URL is explicitly set and not localhost, use it
+    if (process.env.NEXT_PUBLIC_API_URL && !process.env.NEXT_PUBLIC_API_URL.includes("localhost")) {
+      return process.env.NEXT_PUBLIC_API_URL;
+    }
+    return `${protocol}//${host}:8001`;
+  }
+  return process.env.NEXT_PUBLIC_API_URL || "http://localhost:8001";
+}
 
 class ApiClient {
-  private baseUrl: string;
+  private baseUrl?: string;
 
-  constructor(baseUrl: string) {
+  constructor(baseUrl?: string) {
     this.baseUrl = baseUrl;
+  }
+
+  private getBaseUrl(): string {
+    return this.baseUrl || getApiBase();
   }
 
   private getToken(): string | null {
@@ -28,7 +43,7 @@ class ApiClient {
       headers["X-Request-ID"] = crypto.randomUUID();
     }
 
-    const res = await fetch(`${this.baseUrl}${path}`, {
+    const res = await fetch(`${this.getBaseUrl()}${path}`, {
       ...options,
       headers,
     });
@@ -102,4 +117,4 @@ class ApiClient {
   }
 }
 
-export const api = new ApiClient(API_BASE);
+export const api = new ApiClient();
