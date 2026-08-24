@@ -82,14 +82,12 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
-      target: dev
+      target: production
     ports:
       - "${FRONTEND_PORT:-3000}:3000"
-    volumes:
-      - ./frontend/src:/app/src
-      - ./frontend/public:/app/public
     environment:
       NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:${BACKEND_PORT:-8001}}
+      NODE_ENV: production
     depends_on:
       - backend
 
