@@ -95,7 +95,7 @@ def main() -> int:
             "src",
             "--reload",
             "--port",
-            "8000",
+            os.environ.get("BACKEND_PORT", os.environ.get("PORT", "8001")),
             *extra_args,
         ],
         "seed": [sys.executable, "-m", "contextedge.seed", *extra_args],

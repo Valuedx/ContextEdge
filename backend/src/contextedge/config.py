@@ -202,7 +202,7 @@ class Settings(BaseSettings):
     app_debug: bool = True
     app_log_level: str = "INFO"
     app_cors_origins: str = "http://localhost:3000"
-    backend_port: int = 8000
+    backend_port: int = 8001
     frontend_url: str = "http://localhost:3000"
 
     # JSON map: token string ->

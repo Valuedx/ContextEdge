@@ -71,7 +71,7 @@ def _service_principal(token: str) -> CurrentUser | None:
 
 async def get_current_user(
     credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(security)],
-    x_service_token: Annotated[str | None, Header(alias="X-Service-Token")] = None,
+    x_service_token: str | None = Header(default=None, alias="X-Service-Token"),
 ) -> CurrentUser:
     if x_service_token:
         principal = _service_principal(x_service_token.strip())

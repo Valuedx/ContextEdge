@@ -14,6 +14,7 @@ COPY alembic.ini .
 COPY alembic/ alembic/
 
 ENV PYTHONPATH=/app/src
-EXPOSE 8000
+ENV PORT=8001
+EXPOSE 8001
 
-CMD ["uvicorn", "contextedge.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["sh", "-c", "uvicorn contextedge.main:app --host 0.0.0.0 --port ${PORT:-8001}"]
