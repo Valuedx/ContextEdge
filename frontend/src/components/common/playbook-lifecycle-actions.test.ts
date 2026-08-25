@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { Playbook } from "@/lib/types";
 import {
+  bulkTransitionTarget,
   lifecycleStateLabel,
   primaryTransition,
   transitionPayload,
@@ -48,5 +49,31 @@ describe("playbook lifecycle actions", () => {
 
   it("formats lifecycle labels for people", () => {
     expect(lifecycleStateLabel("under_review")).toBe("Under review");
+  });
+
+  it("advances a homogeneous candidate selection one review step", () => {
+    expect(
+      bulkTransitionTarget([
+        playbook("candidate", ["under_review"]),
+        { ...playbook("candidate", ["under_review"]), id: "pb-2" },
+      ]),
+    ).toBe("under_review");
+  });
+
+  it("approves a homogeneous under-review selection", () => {
+    expect(
+      bulkTransitionTarget([
+        playbook("under_review", ["candidate", "approved"]),
+      ]),
+    ).toBe("approved");
+  });
+
+  it("does not skip lifecycle states for a mixed selection", () => {
+    expect(
+      bulkTransitionTarget([
+        playbook("candidate", ["under_review"]),
+        playbook("under_review", ["approved"]),
+      ]),
+    ).toBeNull();
   });
 });

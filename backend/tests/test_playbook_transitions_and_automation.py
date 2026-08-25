@@ -20,7 +20,11 @@ import uuid
 
 import pytest
 
-from contextedge.schemas.playbook import PlaybookResponse, PlaybookUpdate
+from contextedge.schemas.playbook import (
+    PlaybookBulkTransition,
+    PlaybookResponse,
+    PlaybookUpdate,
+)
 from contextedge.services.approval_policy_service import (
     ApprovalPolicy,
     ApprovalPolicyViolation,
@@ -89,6 +93,18 @@ def test_a_terminal_state_offers_nothing():
 
 def test_an_unrecognised_state_offers_nothing_rather_than_guessing():
     assert _playbook("something_new").allowed_transitions == []
+
+
+def test_bulk_transition_requires_ids_and_deduplicates_them():
+    playbook_id = uuid.uuid4()
+    body = PlaybookBulkTransition(
+        ids=[playbook_id, playbook_id],
+        new_state="approved",
+    )
+    assert body.ids == [playbook_id]
+
+    with pytest.raises(Exception):
+        PlaybookBulkTransition(ids=[], new_state="approved")
 
 
 # --- automation mode ----------------------------------------------------------

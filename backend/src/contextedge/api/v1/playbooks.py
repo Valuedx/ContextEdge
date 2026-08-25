@@ -15,6 +15,7 @@ from contextedge.deps import AuthUser, DbSession
 from contextedge.middleware.audit import log_audit_event
 from contextedge.models.playbook import Playbook, PlaybookVersion
 from contextedge.schemas.playbook import (
+    PlaybookBulkTransition,
     PlaybookCreate,
     PlaybookResponse,
     PlaybookRollbackRequest,
@@ -500,6 +501,82 @@ async def transition(
         details={"comments": body.comments},
     )
     return playbook
+
+
+@router.post("/bulk-transition")
+async def bulk_transition(
+    body: PlaybookBulkTransition,
+    request: Request,
+    db: DbSession,
+    user: AuthUser,
+):
+    """Move a selected review queue through one lifecycle step."""
+    user.require_role("playbook_reviewer")
+    result = await db.execute(
+        select(Playbook).where(
+            Playbook.id.in_(body.ids),
+            Playbook.tenant_id == user.tenant_id,
+        )
+    )
+    playbooks = list(result.scalars().all())
+    found_ids = {playbook.id for playbook in playbooks}
+    missing_ids = [str(playbook_id) for playbook_id in body.ids if playbook_id not in found_ids]
+    if missing_ids:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Playbooks not found: {', '.join(missing_ids)}",
+        )
+
+    from contextedge.services.playbook_service import VALID_TRANSITIONS
+
+    invalid = [
+        playbook
+        for playbook in playbooks
+        if body.new_state not in VALID_TRANSITIONS.get(playbook.lifecycle_state, set())
+    ]
+    if invalid:
+        states = ", ".join(
+            f"{playbook.id} ({playbook.lifecycle_state})" for playbook in invalid
+        )
+        raise HTTPException(
+            status_code=400,
+            detail=f"Selected playbooks cannot transition to '{body.new_state}': {states}",
+        )
+
+    redis = getattr(request.app.state, "redis", None)
+    try:
+        for playbook in playbooks:
+            previous_state = playbook.lifecycle_state
+            await transition_playbook(
+                db,
+                playbook,
+                body.new_state,
+                user.user_id,
+                body.comments,
+                redis=redis,
+            )
+            await log_audit_event(
+                db,
+                tenant_id=user.tenant_id,
+                actor_id=user.user_id,
+                actor_email=user.email,
+                action=f"playbook.{body.new_state}",
+                resource_type="playbook",
+                resource_id=str(playbook.id),
+                details={
+                    "comments": body.comments,
+                    "bulk": True,
+                    "from_state": previous_state,
+                },
+            )
+    except InvalidTransitionError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return {
+        "transitioned_count": len(playbooks),
+        "new_state": body.new_state,
+        "ids": [str(playbook.id) for playbook in playbooks],
+    }
 
 
 @router.get("/{playbook_id}/versions", response_model=list[PlaybookVersionResponse])

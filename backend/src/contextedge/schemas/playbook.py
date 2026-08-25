@@ -243,6 +243,17 @@ class PlaybookTransition(BaseModel):
     comments: str | None = None
 
 
+class PlaybookBulkTransition(BaseModel):
+    ids: list[UUID] = Field(..., min_length=1, max_length=200)
+    new_state: str
+    comments: str | None = None
+
+    @field_validator("ids")
+    @classmethod
+    def _deduplicate_ids(cls, value: list[UUID]) -> list[UUID]:
+        return list(dict.fromkeys(value))
+
+
 class PlaybookVersionCreate(BaseModel):
     semantic_version: str | None = Field(
         None,

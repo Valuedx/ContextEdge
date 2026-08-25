@@ -52,6 +52,18 @@ export function primaryTransition(playbook: Playbook): string {
   return available[0] ?? "";
 }
 
+export function bulkTransitionTarget(playbooks: Playbook[]): string | null {
+  if (playbooks.length === 0) return null;
+  const states = new Set(playbooks.map((playbook) => playbook.lifecycle_state));
+  if (states.size !== 1) return null;
+  const state = playbooks[0].lifecycle_state;
+  const target = state === "candidate" ? "under_review" : state === "under_review" ? "approved" : null;
+  if (!target) return null;
+  return playbooks.every((playbook) => playbook.allowed_transitions?.includes(target))
+    ? target
+    : null;
+}
+
 export function transitionPayload(newState: string, comment: string) {
   return {
     new_state: newState,
@@ -141,28 +153,37 @@ export function PlaybookLifecycleActions({
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>{presentation.label} playbook</DialogTitle>
+            <DialogTitle>{presentation.label}</DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
             <div className="rounded-md border bg-muted/40 px-3 py-2 text-sm">
-              <span className="text-muted-foreground">Current state:</span>{" "}
               <span className="font-medium">{lifecycleStateLabel(playbook.lifecycle_state)}</span>
+              <span className="mx-2 text-muted-foreground">to</span>
+              <span className="font-medium">{lifecycleStateLabel(newState)}</span>
             </div>
-            <div>
-              <Label htmlFor={`state-${playbook.id}`}>New state</Label>
-              <Select value={newState} onValueChange={(value) => setNewState(value ?? "")}>
-                <SelectTrigger id={`state-${playbook.id}`} className="mt-1">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {available.map((state) => (
-                    <SelectItem key={state} value={state}>
-                      {lifecycleStateLabel(state)}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
+            {available.length > 1 && (
+              <div>
+                <Label htmlFor={`state-${playbook.id}`}>New state</Label>
+                <Select value={newState} onValueChange={(value) => setNewState(value ?? "")}>
+                  <SelectTrigger id={`state-${playbook.id}`} className="mt-1">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {available.map((state) => (
+                      <SelectItem key={state} value={state}>
+                        {lifecycleStateLabel(state)}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+            {playbook.lifecycle_state === "candidate" && (
+              <p className="text-sm text-muted-foreground">
+                This submits the candidate for review. After it moves to Under review, the
+                Approve action becomes available.
+              </p>
+            )}
             <div>
               <Label htmlFor={`review-comments-${playbook.id}`}>Review note (optional)</Label>
               <Textarea
