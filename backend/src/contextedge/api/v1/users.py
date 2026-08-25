@@ -72,6 +72,18 @@ def _assert_can_assign(actor: AuthUser, role: str) -> None:
         )
 
 
+async def _is_platform_super_admin_account(db, user_id: UUID) -> bool:
+    binding = (
+        await db.execute(
+            select(RoleBinding.id).where(
+                RoleBinding.user_id == user_id,
+                RoleBinding.role == "platform_super_admin",
+            )
+        )
+    ).scalar_one_or_none()
+    return binding is not None
+
+
 async def _managed_user(db: DbSession, actor: AuthUser, user_id: UUID) -> User:
     target = (
         await db.execute(
@@ -79,6 +91,10 @@ async def _managed_user(db: DbSession, actor: AuthUser, user_id: UUID) -> User:
         )
     ).scalar_one_or_none()
     if not target:
+        raise HTTPException(status_code=404, detail="User not found")
+    if not actor.has_exact_role("platform_super_admin") and await _is_platform_super_admin_account(
+        db, target.id
+    ):
         raise HTTPException(status_code=404, detail="User not found")
     return target
 
@@ -102,6 +118,12 @@ async def list_users(
                 detail="Only the platform super admin can list another tenant",
             )
     stmt = select(User).where(User.tenant_id == scope_id)
+    if not user.has_exact_role("platform_super_admin"):
+        hidden = select(RoleBinding.user_id).where(
+            RoleBinding.tenant_id == scope_id,
+            RoleBinding.role == "platform_super_admin",
+        )
+        stmt = stmt.where(User.id.notin_(hidden))
     result = await db.execute(
         stmt.limit(limit).offset(offset).order_by(User.created_at.desc())
     )

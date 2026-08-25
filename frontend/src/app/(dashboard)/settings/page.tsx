@@ -739,10 +739,13 @@ export default function SettingsPage() {
     enabled: !!tenantId && admin,
   });
 
-  const filteredUsers = useMemo(() => {
+  const visibleUsers = useMemo(() => {
+    const scoped = superAdmin
+      ? users
+      : users.filter((row) => !(row.roles ?? []).includes("platform_super_admin"));
     const q = userSearch.trim().toLowerCase();
-    if (!q) return users;
-    return users.filter((row) => {
+    if (!q) return scoped;
+    return scoped.filter((row) => {
       const haystack = [
         row.username,
         row.display_name,
@@ -754,7 +757,7 @@ export default function SettingsPage() {
         .toLowerCase();
       return haystack.includes(q);
     });
-  }, [users, userSearch]);
+  }, [users, userSearch, superAdmin]);
 
   useEffect(() => {
     if (tenant?.name) setTenantName(tenant.name);
@@ -978,12 +981,12 @@ export default function SettingsPage() {
             <DataTableSkeleton columns={6} />
           ) : usersError ? (
             <p className="text-sm text-destructive">Failed to load users.</p>
-          ) : filteredUsers.length === 0 ? (
+          ) : visibleUsers.length === 0 ? (
             <p className="text-sm text-muted-foreground">
               {users.length === 0 ? "No users returned." : "No users match that search."}
             </p>
           ) : (
-            <DataTable columns={userColumns(setRoleUser)} data={filteredUsers} />
+            <DataTable columns={userColumns(setRoleUser)} data={visibleUsers} />
           )}
           <Dialog open={!!roleUser} onOpenChange={(open) => { if (!open) setRoleUser(null); }}>
             {roleUser && (
