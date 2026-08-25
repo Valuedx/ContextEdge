@@ -199,7 +199,7 @@ export function GraphNodePicker({
               onNodeTypeChange?.(event.target.value);
               onNodeIdChange("");
             }}
-            className="h-8 rounded-lg border border-white/15 bg-white/[0.06] px-2.5 text-sm outline-none backdrop-blur-md"
+            className="h-8 rounded-md border border-input bg-background px-2.5 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
             {nodeTypes.map((type) => (
               <option key={type} value={type}>

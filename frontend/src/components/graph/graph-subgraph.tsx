@@ -179,39 +179,39 @@ function FlowCanvas({
       onNodeMouseEnter={handleNodeMouseEnter}
       onNodeMouseLeave={handleNodeMouseLeave}
       fitView
-      colorMode="dark"
+      colorMode="system"
     >
-      <Background color="#1e293b" gap={20} />
+      <Background color="#cbd5e1" gap={20} />
       <Controls
         showInteractive={false}
-        className="bg-slate-900 border-slate-700 fill-slate-200"
+        className="border border-input bg-card fill-foreground text-foreground shadow-sm"
       />
 
       {/* Top Left: Interactive Node Details & Inspector Overlay */}
       <Panel
         position="top-left"
-        className="bg-slate-900/95 border border-indigo-500/40 p-4 rounded-xl max-w-md backdrop-blur-md shadow-2xl transition-all duration-200"
+        className="max-w-md rounded-lg border bg-card p-4 text-foreground shadow-lg transition-all duration-200"
       >
         {selectedNodeData && activeInfo ? (
           <div className="space-y-2">
             <div className="flex items-center justify-between gap-2">
-              <div className="flex items-center gap-2 text-indigo-400 font-bold text-xs uppercase tracking-wider">
+              <div className="flex items-center gap-2 text-primary font-bold text-xs uppercase tracking-wider">
                 <span>{activeInfo.icon}</span>
                 <span>{activeInfo.label}</span>
               </div>
               <button
                 type="button"
                 onClick={() => setSelectedNodeData(null)}
-                className="text-slate-400 hover:text-slate-200 p-0.5 rounded"
+                className="rounded p-0.5 text-muted-foreground hover:text-foreground"
                 title="Close Selection"
               >
                 <X className="h-3.5 w-3.5" />
               </button>
             </div>
-            <h4 className="text-sm font-semibold text-slate-100 leading-snug">
+            <h4 className="text-sm font-semibold leading-snug">
               &ldquo;{activeNodeLabel}&rdquo;
             </h4>
-            <p className="text-xs text-slate-300 leading-relaxed">
+            <p className="text-xs text-muted-foreground leading-relaxed">
               {activeInfo.desc}
             </p>
             <div className="flex flex-wrap items-center gap-2 pt-1">
@@ -219,7 +219,7 @@ function FlowCanvas({
                 <button
                   type="button"
                   onClick={() => router.push(redirectRoute)}
-                  className="inline-flex items-center gap-1.5 rounded-md bg-indigo-600 hover:bg-indigo-500 px-3 py-1.5 text-xs font-medium text-white transition-colors"
+                  className="inline-flex items-center gap-1.5 rounded-md bg-action px-3 py-1.5 text-xs font-medium text-action-foreground transition-colors hover:bg-action/90"
                 >
                   <span>View Details & Redirect</span>
                   <ExternalLink className="h-3.5 w-3.5" />
@@ -228,7 +228,7 @@ function FlowCanvas({
               <button
                 type="button"
                 onClick={handleRecenter}
-                className="inline-flex items-center gap-1.5 rounded-md border border-slate-700 bg-slate-800 hover:bg-slate-700 px-2.5 py-1.5 text-xs font-medium text-slate-200 transition-colors"
+                className="inline-flex items-center gap-1.5 rounded-md border border-input bg-card px-2.5 py-1.5 text-xs font-medium transition-colors hover:bg-accent hover:text-accent-foreground"
               >
                 <span>Re-center Graph Here 🎯</span>
               </button>
@@ -236,20 +236,20 @@ function FlowCanvas({
           </div>
         ) : hoveredInfo ? (
           <div className="space-y-1.5">
-            <div className="flex items-center gap-2 text-indigo-400 font-bold text-xs">
+            <div className="flex items-center gap-2 text-primary font-bold text-xs">
               <span>{hoveredInfo.icon}</span>
               <span>{hoveredInfo.label}</span>
             </div>
-            <p className="text-xs text-slate-200 font-medium line-clamp-1">
+            <p className="text-xs font-medium line-clamp-1">
               &ldquo;{hoveredNodeLabel}&rdquo;
             </p>
-            <p className="text-[11px] text-slate-400 leading-snug">
+            <p className="text-[11px] text-muted-foreground leading-snug">
               {hoveredInfo.desc}
             </p>
           </div>
         ) : (
-          <div className="flex items-center gap-2 text-xs text-slate-300">
-            <HelpCircle className="h-4 w-4 text-indigo-400 shrink-0" />
+          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            <HelpCircle className="h-4 w-4 text-primary shrink-0" />
             <span>Click any node on the graph to inspect details and open its direct record.</span>
           </div>
         )}
@@ -258,9 +258,9 @@ function FlowCanvas({
       {/* Top Right: Node & Edge counts */}
       <Panel
         position="top-right"
-        className="bg-slate-900/90 border border-slate-700 p-2 rounded-lg text-xs backdrop-blur-sm shadow-xl"
+        className="rounded-lg border bg-card p-2 text-xs shadow-lg"
       >
-        <div className="flex items-center gap-2 text-slate-300 font-mono text-[11px]">
+        <div className="flex items-center gap-2 font-mono text-[11px] text-muted-foreground">
           <Badge variant="secondary" className="px-2 py-0.5">{nodeCount} nodes</Badge>
           <Badge variant="secondary" className="px-2 py-0.5">{edgeCount} edges</Badge>
         </div>
@@ -269,12 +269,12 @@ function FlowCanvas({
       {/* Bottom Panel: Interactive Node Legend */}
       <Panel
         position="bottom-center"
-        className="bg-slate-900/90 border border-slate-800 px-3.5 py-1.5 rounded-full text-[11px] backdrop-blur-sm shadow-lg flex flex-wrap items-center gap-4 text-slate-300"
+        className="flex flex-wrap items-center gap-4 rounded-lg border bg-card px-3.5 py-2 text-[11px] text-muted-foreground shadow-lg"
       >
         {Object.entries(nodeColors).map(([type, c]) => (
           <div key={type} className="flex items-center gap-1.5">
             <span className={`h-2 w-2 rounded-full ${c.dot}`}></span>
-            <span className="font-semibold text-slate-200 capitalize">{type.replace(/_/g, " ")}</span>
+            <span className="font-semibold capitalize text-foreground">{type.replace(/_/g, " ")}</span>
           </div>
         ))}
       </Panel>
@@ -414,7 +414,7 @@ export function GraphSubgraph({
               <select
                 value={maxDepth}
                 onChange={(e) => setMaxDepth(Number(e.target.value))}
-                className="h-8 rounded-lg border border-white/15 bg-white/[0.06] px-2.5 text-sm outline-none backdrop-blur-md"
+                className="h-8 rounded-md border border-input bg-background px-2.5 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
               >
                 <option value={1}>1 hop</option>
                 <option value={2}>2 hops</option>
@@ -434,21 +434,21 @@ export function GraphSubgraph({
         </CardContent>
       </Card>
 
-      {isLoading && <Skeleton className="h-[500px] rounded-xl" />}
+      {isLoading && <Skeleton className="h-[500px] rounded-lg" />}
 
       {error && (
-        <div className="text-destructive p-4 border rounded-xl bg-destructive/10">
+        <div className="text-destructive p-4 border rounded-lg bg-destructive/10">
           {(error as Error).message || "Failed to load subgraph"}
         </div>
       )}
 
       {data && !isLoading && (
-        <div className="relative w-full h-[600px] border rounded-xl bg-[#020617] overflow-hidden">
+        <div className="relative w-full h-[600px] overflow-hidden rounded-lg border bg-card">
           {data.nodes.length === 0 ? (
             <div className="absolute inset-0 flex items-center justify-center">
               <div className="text-center space-y-3">
-                <Network className="h-12 w-12 text-slate-600 mx-auto" />
-                <p className="text-slate-400 text-sm">No graph data found for this entity.</p>
+                <Network className="h-12 w-12 text-muted-foreground mx-auto" />
+                <p className="text-muted-foreground text-sm">No graph data found for this entity.</p>
               </div>
             </div>
           ) : (

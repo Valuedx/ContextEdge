@@ -144,11 +144,11 @@ export default function EpisodeDetailPage() {
         <div className="space-y-3">
           <Skeleton className="h-6 w-28" />
           <div className="space-y-3">
-            <div className="rounded-lg border border-black/10 bg-white/40 p-4 dark:border-white/10 dark:bg-white/[0.04]">
+            <div className="rounded-lg border bg-card p-4 shadow-sm">
               <Skeleton className="h-4 w-3/4" />
               <Skeleton className="mt-3 h-16 w-full" />
             </div>
-            <div className="rounded-lg border border-black/10 bg-white/40 p-4 dark:border-white/10 dark:bg-white/[0.04]">
+            <div className="rounded-lg border bg-card p-4 shadow-sm">
               <Skeleton className="h-4 w-3/4" />
               <Skeleton className="mt-3 h-16 w-full" />
             </div>
@@ -222,8 +222,8 @@ export default function EpisodeDetailPage() {
         <div className="flex items-start gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm">
           <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" />
           <div>
-            <p className="font-medium text-amber-200">This reconstruction was superseded</p>
-            <p className="text-xs text-amber-200/80">
+            <p className="font-medium text-foreground">This reconstruction was superseded</p>
+            <p className="text-xs text-muted-foreground">
               A later reconstruction replaced it as more of the thread arrived. It is
               kept for audit; the current narrative for this incident is another
               episode.

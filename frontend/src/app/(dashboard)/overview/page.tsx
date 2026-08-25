@@ -96,7 +96,7 @@ function OverviewSkeleton() {
       <div className="glass-panel space-y-4 p-5">
         <Skeleton className="h-5 w-56" />
         <Skeleton className="h-4 w-full" />
-        <Skeleton className="h-24 w-full rounded-xl" />
+        <Skeleton className="h-24 w-full rounded-lg" />
       </div>
     </div>
   );
@@ -217,7 +217,7 @@ export default function OverviewPage() {
                 drift jobs can extend this with feedback-driven alerts.
               </p>
               {driftRows.length === 0 ? (
-                <p className="rounded-xl border border-white/5 bg-white/[0.02] py-8 text-center text-sm text-muted-foreground">
+                <p className="rounded-lg border bg-card py-8 text-center text-sm text-muted-foreground shadow-sm">
                   No playbooks flagged right now.
                 </p>
               ) : (
@@ -225,7 +225,7 @@ export default function OverviewPage() {
                   {driftRows.map(({ pb, reason }) => (
                     <li
                       key={pb.id}
-                      className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-white/10 bg-white/[0.04] px-4 py-3 backdrop-blur-sm"
+                      className="flex flex-wrap items-center justify-between gap-3 rounded-lg border bg-card px-4 py-3 shadow-sm"
                     >
                       <div className="min-w-0">
                         <Link
@@ -241,7 +241,7 @@ export default function OverviewPage() {
                           </span>
                         </div>
                       </div>
-                      <span className="text-sm text-amber-800 dark:text-amber-200/90">{reason}</span>
+                      <span className="text-sm text-muted-foreground">{reason}</span>
                     </li>
                   ))}
                 </ul>

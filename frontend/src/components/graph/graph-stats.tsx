@@ -20,8 +20,8 @@ function StatCard({
   return (
     <Card>
       <CardContent className="flex items-center gap-4 pt-1">
-        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-indigo-500/10">
-          <Icon className="h-5 w-5 text-indigo-400" />
+        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-muted">
+          <Icon className="h-5 w-5 text-primary" />
         </div>
         <div>
           <p className="text-2xl font-bold tabular-nums">{value.toLocaleString()}</p>
@@ -44,7 +44,7 @@ function DistributionBar({
 
   return (
     <div className="space-y-3">
-      <div className="flex h-3 w-full overflow-hidden rounded-full bg-slate-800">
+      <div className="flex h-3 w-full overflow-hidden rounded-full bg-muted">
         {items.map(([name, count]) => {
           const pct = (count / total) * 100;
           const c = colorMap[name];
@@ -64,7 +64,7 @@ function DistributionBar({
           return (
             <div key={name} className="flex items-center gap-2 text-sm">
               <div className={`h-2.5 w-2.5 shrink-0 rounded-sm ${c?.dot ?? "bg-slate-500"}`} />
-              <span className="truncate text-slate-300">{name.replace(/_/g, " ")}</span>
+              <span className="truncate text-foreground">{name.replace(/_/g, " ")}</span>
               <span className="ml-auto tabular-nums text-muted-foreground">{count}</span>
             </div>
           );
@@ -85,18 +85,18 @@ export function GraphStats({ scope }: { scope: GraphScope }) {
       <div className="space-y-6">
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
           {[1, 2, 3].map((i) => (
-            <Skeleton key={i} className="h-24 rounded-xl" />
+            <Skeleton key={i} className="h-24 rounded-lg" />
           ))}
         </div>
-        <Skeleton className="h-48 rounded-xl" />
-        <Skeleton className="h-48 rounded-xl" />
+        <Skeleton className="h-48 rounded-lg" />
+        <Skeleton className="h-48 rounded-lg" />
       </div>
     );
   }
 
   if (error) {
     return (
-      <div className="text-destructive p-4 border rounded-xl bg-destructive/10">
+      <div className="text-destructive p-4 border rounded-lg bg-destructive/10">
         Failed to load graph statistics
       </div>
     );
@@ -144,11 +144,11 @@ export function GraphStats({ scope }: { scope: GraphScope }) {
 
 function colorToDot(hex: string): string {
   const map: Record<string, string> = {
-    "#818cf8": "bg-indigo-400",
+    "#818cf8": "bg-sky-400",
     "#fbbf24": "bg-amber-400",
     "#34d399": "bg-emerald-400",
     "#fb7185": "bg-rose-400",
-    "#fb923c": "bg-orange-400",
+    "#fb923c": "bg-amber-400",
     "#38bdf8": "bg-sky-400",
     "#a78bfa": "bg-violet-400",
     "#2dd4bf": "bg-teal-400",

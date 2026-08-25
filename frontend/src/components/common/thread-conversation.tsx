@@ -69,13 +69,13 @@ export function ThreadConversation({
   const shown = ordered.length;
 
   return (
-    <Card className="bg-slate-900/90 border-slate-800 shadow-2xl">
-      <CardHeader className="border-b border-slate-800/80 pb-3 flex flex-row items-center justify-between gap-3">
-        <CardTitle className="text-base font-bold text-slate-100 flex items-center gap-2">
-          <MessageSquare className="h-4 w-4 text-indigo-400" />
+    <Card>
+      <CardHeader className="flex flex-row items-center justify-between gap-3 border-b pb-3">
+        <CardTitle className="flex items-center gap-2 text-base font-bold text-foreground">
+          <MessageSquare className="h-4 w-4 text-primary" />
           Conversation
           {shown > 0 && (
-            <span className="text-xs font-normal text-slate-400">
+            <span className="text-xs font-normal text-muted-foreground">
               {shown} message{shown === 1 ? "" : "s"}
               {claimed > shown && ` of ${claimed} · ${claimed - shown} not yet processed`}
             </span>
@@ -84,7 +84,7 @@ export function ThreadConversation({
 
         <div className="flex items-center gap-3">
           {typeof thread?.participant_count === "number" && thread.participant_count > 0 && (
-            <span className="text-xs text-slate-400 flex items-center gap-1">
+            <span className="flex items-center gap-1 text-xs text-muted-foreground">
               <Users className="h-3.5 w-3.5" />
               {thread.participant_count}
             </span>
@@ -109,12 +109,12 @@ export function ThreadConversation({
 
       <CardContent className="pt-4">
         {isLoading ? (
-          <div className="flex items-center gap-2 text-sm text-slate-400">
+          <div className="flex items-center gap-2 text-sm text-muted-foreground">
             <Loader2 className="h-4 w-4 animate-spin" />
             Loading conversation…
           </div>
         ) : ordered.length === 0 ? (
-          <p className="text-sm text-slate-400">
+          <p className="text-sm text-muted-foreground">
             {hydrated
               ? "This thread has no messages."
               : "This thread has not been hydrated yet, so its messages have not been fetched."}
@@ -128,32 +128,32 @@ export function ThreadConversation({
                   className={cn(
                     "flex items-start gap-3 rounded-lg border p-3 transition-colors",
                     isCurrent
-                      ? "border-indigo-500/60 bg-indigo-950/30"
-                      : "border-slate-800 bg-slate-900/50 hover:border-slate-700",
+                      ? "border-sky-300 bg-sky-50 dark:border-sky-500/50 dark:bg-sky-500/10"
+                      : "bg-card hover:bg-muted/60",
                   )}
                 >
-                  <span className="mt-0.5 w-6 shrink-0 text-right font-mono text-xs text-slate-500">
+                  <span className="mt-0.5 w-6 shrink-0 text-right font-mono text-xs text-muted-foreground">
                     {index + 1}
                   </span>
                   <div className="min-w-0 flex-1">
                     <p
                       className={cn(
                         "text-sm font-medium",
-                        isCurrent ? "font-semibold text-indigo-300" : "text-slate-200",
+                        isCurrent ? "font-semibold text-primary" : "text-foreground",
                       )}
                     >
                       {message.title || "Untitled message"}
                     </p>
                     {(message.body_text || message.body_summary) && (
-                      <p className="mt-1.5 text-xs text-slate-300 line-clamp-4 whitespace-pre-wrap bg-slate-950/60 p-2.5 rounded-md border border-slate-800/80 font-sans">
+                      <p className="mt-1.5 line-clamp-4 rounded-md border bg-muted p-2.5 font-sans text-xs text-muted-foreground whitespace-pre-wrap">
                         {message.body_text || message.body_summary}
                       </p>
                     )}
-                    <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-slate-500">
+                    <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                       <span>{timeLabel(message)}</span>
                       <StatusBadge status={message.relevance_state} />
                       {isCurrent && (
-                        <span className="text-indigo-400 font-semibold">· currently viewing</span>
+                        <span className="font-semibold text-primary">· currently viewing</span>
                       )}
                     </div>
                   </div>

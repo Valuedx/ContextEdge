@@ -198,7 +198,7 @@ export default function DiscoveryPage() {
     // Auth is broken — can't discover
     if (authStatus === "failed") {
       return (
-        <div className="flex flex-col items-center gap-4 rounded-xl border border-destructive/30 bg-destructive/5 px-8 py-10 text-center">
+        <div className="flex flex-col items-center gap-4 rounded-lg border border-destructive/30 bg-destructive/5 px-8 py-10 text-center">
           <AlertTriangle className="h-10 w-10 text-destructive" />
           <div>
             <p className="text-sm font-semibold text-destructive">
@@ -222,7 +222,7 @@ export default function DiscoveryPage() {
     // Discovery ran but connector returned 0 objects
     if (discoveryStatus === "completed") {
       return (
-        <div className="flex flex-col items-center gap-4 rounded-xl border border-border bg-muted/40 px-8 py-10 text-center">
+        <div className="flex flex-col items-center gap-4 rounded-lg border bg-card px-8 py-10 text-center shadow-sm">
           <CheckCircle2 className="h-10 w-10 text-muted-foreground" />
           <div>
             <p className="text-sm font-semibold">Discovery already ran — no objects found</p>
@@ -251,7 +251,7 @@ export default function DiscoveryPage() {
 
     // Not yet run — prompt the user to kick it off
     return (
-      <div className="flex flex-col items-center gap-4 rounded-xl border border-border bg-muted/40 px-8 py-10 text-center">
+      <div className="flex flex-col items-center gap-4 rounded-lg border bg-card px-8 py-10 text-center shadow-sm">
         <SearchX className="h-10 w-10 text-muted-foreground" />
         <div>
           <p className="text-sm font-semibold">No discovered objects yet</p>
@@ -293,7 +293,6 @@ export default function DiscoveryPage() {
               <Button
                 variant="default"
                 size="sm"
-                className="bg-indigo-600 hover:bg-indigo-700 text-white"
                 onClick={() => setBackfillDialogOpen(true)}
               >
                 <History className="mr-2 h-4 w-4" />
@@ -385,7 +384,6 @@ export default function DiscoveryPage() {
             <Button 
                 onClick={handleStartBackfill} 
                 disabled={backfillMut.isPending}
-                className="bg-indigo-600 hover:bg-indigo-700"
             >
               {backfillMut.isPending ? (
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />

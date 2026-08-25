@@ -94,13 +94,13 @@ function AgentFlow({
       onEdgesChange={onEdgesChange}
       onNodeClick={(_, node) => onNodeClick(node)}
       onEdgeClick={(_, edge) => onEdgeClick(edge)}
-      colorMode="dark"
+      colorMode="system"
       fitView
     >
-      <Background color="#1e293b" gap={20} />
+      <Background color="#cbd5e1" gap={20} />
       <Controls
         showInteractive={false}
-        className="border-slate-700 bg-slate-900 fill-slate-200"
+        className="border border-input bg-card fill-foreground text-foreground shadow-sm"
       />
     </ReactFlow>
   );
@@ -446,18 +446,18 @@ export function AgentContextPreview({ scope }: { scope: GraphScope }) {
           {mutation.data.warnings.map((warning) => (
             <div
               key={warning}
-              className="border-l-2 border-amber-400 bg-amber-500/5 px-3 py-2 text-xs text-amber-200"
+              className="border-l-2 border-amber-400 bg-amber-500/10 px-3 py-2 text-xs text-foreground"
             >
               {warning}
             </div>
           ))}
 
           {mutation.data.nodes.length === 0 ? (
-            <div className="flex min-h-72 items-center justify-center border text-sm text-muted-foreground">
+            <div className="flex min-h-72 items-center justify-center rounded-lg border text-sm text-muted-foreground">
               No authorized context matched this request.
             </div>
           ) : (
-            <div className="grid min-h-[620px] overflow-hidden border bg-[#020617] lg:grid-cols-[minmax(0,1fr)_300px]">
+            <div className="grid min-h-[620px] overflow-hidden rounded-lg border bg-card lg:grid-cols-[minmax(0,1fr)_300px]">
               <div className="h-[620px] min-w-0">
                 <ReactFlowProvider>
                   <AgentFlow
@@ -470,7 +470,7 @@ export function AgentContextPreview({ scope }: { scope: GraphScope }) {
                   />
                 </ReactFlowProvider>
               </div>
-              <aside className="hidden overflow-y-auto border-l bg-background/95 lg:block">
+              <aside className="hidden overflow-y-auto border-l bg-background lg:block">
                 <Inspector selection={selection} />
               </aside>
             </div>

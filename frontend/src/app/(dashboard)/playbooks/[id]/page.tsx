@@ -19,8 +19,7 @@ import { Button, buttonVariants } from "@/components/ui/button";
 import { PlaybookSteps } from "@/components/common/playbook-steps";
 import { PlaybookLifecycleActions } from "@/components/common/playbook-lifecycle-actions";
 import { cn } from "@/lib/utils";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Separator } from "@/components/ui/separator";
+import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Dialog,
   DialogContent,
@@ -47,6 +46,85 @@ import type {
 import { useAuthStore } from "@/lib/stores/auth-store";
 import { canEditAutomationMode, canTransitionPlaybook } from "@/lib/roles";
 import { GitCompare, RotateCcw, GitFork, Sparkles, ListChecks, FileText, ChevronDown, ChevronUp, Search } from "lucide-react";
+
+function formatTriggerLabel(key: string): string {
+  return key
+    .replace(/_/g, " ")
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+function formatTriggerValue(value: unknown): string {
+  if (value === null || value === undefined) return "";
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  if (Array.isArray(value)) {
+    return value.map(formatTriggerValue).filter(Boolean).join(", ");
+  }
+  if (typeof value === "object") {
+    return Object.entries(value as Record<string, unknown>)
+      .map(([key, item]) => {
+        const formatted = formatTriggerValue(item);
+        return formatted ? `${formatTriggerLabel(key)}: ${formatted}` : "";
+      })
+      .filter(Boolean)
+      .join("; ");
+  }
+  return String(value);
+}
+
+function triggerItems(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value.map(formatTriggerValue).filter(Boolean);
+  }
+  const formatted = formatTriggerValue(value);
+  return formatted ? [formatted] : [];
+}
+
+function TriggerConditionsSummary({
+  triggerConditions,
+}: {
+  triggerConditions: Record<string, unknown>;
+}) {
+  const preferred = ["symptoms", "conditions", "entities"];
+  const keys = [
+    ...preferred.filter((key) => key in triggerConditions),
+    ...Object.keys(triggerConditions).filter((key) => !preferred.includes(key)),
+  ];
+  const sections = keys
+    .map((key) => ({ key, items: triggerItems(triggerConditions[key]) }))
+    .filter((section) => section.items.length > 0);
+
+  if (sections.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className="rounded-lg border bg-muted/35 p-4">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <h3 className="text-sm font-semibold text-foreground">Trigger conditions</h3>
+        <span className="text-xs text-muted-foreground">Issue signals before execution</span>
+      </div>
+      <div className="grid gap-4 lg:grid-cols-[minmax(0,1.4fr)_minmax(220px,0.8fr)]">
+        {sections.map((section) => (
+          <div key={section.key} className="space-y-2">
+            <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+              {formatTriggerLabel(section.key)}
+            </p>
+            <ul className="space-y-1.5">
+              {section.items.map((item, index) => (
+                <li key={`${section.key}-${index}`} className="flex gap-2 text-sm leading-6">
+                  <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-primary" />
+                  <span>{item}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
 
 function PlaybookLineageReferencesPanel({ playbookId }: { playbookId: string }) {
   const [showAllEpisodes, setShowAllEpisodes] = useState(false);
@@ -89,11 +167,11 @@ function PlaybookLineageReferencesPanel({ playbookId }: { playbookId: string }) 
   const totalItems = (data.episodes?.length ?? 0) + (data.evidence_items?.length ?? 0);
 
   return (
-    <Card className="border-indigo-500/20 bg-indigo-500/5 dark:bg-indigo-950/20 shadow-sm">
+    <Card>
       <CardHeader className="pb-3">
         <CardTitle className="text-base font-semibold flex flex-wrap items-center justify-between gap-2">
           <span className="flex items-center gap-2">
-            <GitFork className="h-4 w-4 text-indigo-500" />
+            <GitFork className="h-4 w-4 text-primary" />
             Playbook Grounding & Lineage Trace
           </span>
           <div className="flex items-center gap-3">
@@ -105,7 +183,7 @@ function PlaybookLineageReferencesPanel({ playbookId }: { playbookId: string }) 
                   placeholder="Filter references…"
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  className="h-8 w-44 rounded-md border border-black/10 bg-background pl-8 pr-3 text-xs focus:border-indigo-500 focus:outline-none dark:border-white/10"
+                  className="h-8 w-44 rounded-md border border-input bg-background pl-8 pr-3 text-xs focus:border-primary focus:outline-none"
                 />
               </div>
             )}
@@ -124,11 +202,11 @@ function PlaybookLineageReferencesPanel({ playbookId }: { playbookId: string }) 
             </span>
             <Link
               href={`/patterns/${data.pattern.id}`}
-              className="inline-flex items-center gap-2 rounded-md border border-indigo-500/30 bg-background px-3 py-1.5 font-medium text-indigo-600 dark:text-indigo-400 hover:bg-indigo-500/10 hover:underline transition-colors"
+              className="inline-flex items-center gap-2 rounded-md border bg-background px-3 py-1.5 font-medium text-primary transition-colors hover:bg-accent hover:text-accent-foreground hover:underline"
             >
-              <Sparkles className="h-4 w-4 text-indigo-500" />
+              <Sparkles className="h-4 w-4 text-primary" />
               <span>{data.pattern.title}</span>
-              <span className="rounded bg-indigo-500/20 px-1.5 py-0.5 text-[11px] text-indigo-600 dark:text-indigo-300 font-normal">
+              <span className="rounded bg-muted px-1.5 py-0.5 text-[11px] font-normal text-muted-foreground">
                 {(data.pattern.confidence * 100).toFixed(0)}% confidence
               </span>
             </Link>
@@ -146,7 +224,7 @@ function PlaybookLineageReferencesPanel({ playbookId }: { playbookId: string }) 
                 <button
                   type="button"
                   onClick={() => setShowAllEpisodes(!showAllEpisodes)}
-                  className="text-xs text-indigo-500 hover:underline font-medium flex items-center gap-1"
+                  className="flex items-center gap-1 text-xs font-medium text-primary hover:underline"
                 >
                   {showAllEpisodes ? (
                     <>Show Less <ChevronUp className="h-3 w-3" /></>
@@ -183,7 +261,7 @@ function PlaybookLineageReferencesPanel({ playbookId }: { playbookId: string }) 
                 <button
                   type="button"
                   onClick={() => setShowAllEvidence(!showAllEvidence)}
-                  className="text-xs text-indigo-500 hover:underline font-medium flex items-center gap-1"
+                  className="flex items-center gap-1 text-xs font-medium text-primary hover:underline"
                 >
                   {showAllEvidence ? (
                     <>Show Less <ChevronUp className="h-3 w-3" /></>
@@ -832,6 +910,7 @@ export default function PlaybookDetailPage() {
   const roles = useAuthStore((s) => s.roles);
   const [transitionOpen, setTransitionOpen] = useState(false);
   const [diffVersion, setDiffVersion] = useState<string | null>(null);
+  const [selectedVersionId, setSelectedVersionId] = useState<string | null>(null);
   const qc = useQueryClient();
 
   const { data: playbook, isLoading, error } = useQuery({
@@ -886,6 +965,10 @@ export default function PlaybookDetailPage() {
   }
 
   const latest = versions[0];
+  const selectedVersion = versions.find((v) => v.id === selectedVersionId) ?? latest;
+  const selectedVersionIndex = selectedVersion
+    ? versions.findIndex((v) => v.id === selectedVersion.id)
+    : -1;
   const hasTransitions = (playbook.allowed_transitions ?? []).length > 0;
 
   return (
@@ -895,10 +978,10 @@ export default function PlaybookDetailPage() {
         description={`Stable key ${playbook.stable_key} · ${playbook.automation_mode}`}
         actions={
           <div className="flex items-center gap-2">
-            {(latest?.playbook_confidence !== undefined || playbook.confidence !== undefined) && (
+            {((selectedVersion ?? latest)?.playbook_confidence !== undefined || playbook.confidence !== undefined) && (
               <div className="flex items-center gap-1.5 rounded-md bg-emerald-500/10 border border-emerald-500/20 px-3 py-1.5 text-xs font-semibold text-emerald-600 dark:text-emerald-400">
                 <Sparkles className="h-3.5 w-3.5" />
-                Score: {(((latest?.playbook_confidence ?? playbook.confidence ?? 0.8)) * 100).toFixed(0)}%
+                Score: {((((selectedVersion ?? latest)?.playbook_confidence ?? playbook.confidence ?? 0.8)) * 100).toFixed(0)}%
               </div>
             )}
             {hasTransitions && (
@@ -932,6 +1015,81 @@ export default function PlaybookDetailPage() {
         <span className="rounded-md border px-2 py-0.5 text-xs capitalize">{playbook.risk_tier} risk</span>
       </div>
 
+      {selectedVersion ? (
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-base">
+              Procedure steps
+            </CardTitle>
+            <CardAction className="flex flex-wrap items-center justify-end gap-2">
+              <Select
+                value={selectedVersion.id}
+                onValueChange={(value) => setSelectedVersionId(value)}
+              >
+                <SelectTrigger className="h-8 w-[150px]">
+                  <span className="truncate">
+                    v{selectedVersion.semantic_version}{selectedVersionIndex === 0 ? " latest" : ""}
+                  </span>
+                </SelectTrigger>
+                <SelectContent>
+                  {versions.map((version, index) => (
+                    <SelectItem key={version.id} value={version.id}>
+                      v{version.semantic_version}{index === 0 ? " latest" : ""}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-8"
+                onClick={() => setDiffVersion(selectedVersion.id)}
+              >
+                <GitCompare className="mr-1 h-3.5 w-3.5" />
+                Diff
+              </Button>
+              {selectedVersionIndex > 0 && canTransitionPlaybook(roles) && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-8"
+                  disabled={rollbackMut.isPending}
+                  onClick={() => rollbackMut.mutate(selectedVersion.id)}
+                >
+                  <RotateCcw className="mr-1 h-3.5 w-3.5" />
+                  Rollback
+                </Button>
+              )}
+              <span className="basis-full text-right text-xs font-normal text-muted-foreground">
+                v{selectedVersion.semantic_version} - {Array.isArray(selectedVersion.steps) ? selectedVersion.steps.length : 0} steps
+              </span>
+            </CardAction>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <TriggerConditionsSummary triggerConditions={selectedVersion.trigger_conditions} />
+            <PlaybookSteps steps={selectedVersion.steps} />
+            <div className="border-t pt-4 text-xs text-muted-foreground">
+              <div className="space-y-2">
+                <p>
+                  <span className="font-medium text-foreground">Confidence</span>{" "}
+                  {(selectedVersion.playbook_confidence * 100).toFixed(0)}%
+                </p>
+                {selectedVersion.execution_confidence_guidance && (
+                  <p>{selectedVersion.execution_confidence_guidance}</p>
+                )}
+                <p>{new Date(selectedVersion.created_at).toLocaleString()}</p>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      ) : (
+        <Card>
+          <CardContent className="text-sm text-muted-foreground">
+            No published versions yet.
+          </CardContent>
+        </Card>
+      )}
+
       {playbook.description && (
         <p className="text-sm text-muted-foreground whitespace-pre-wrap">{playbook.description}</p>
       )}
@@ -957,92 +1115,8 @@ export default function PlaybookDetailPage() {
 
       <PlaybookLineageReferencesPanel playbookId={playbook.id} />
       <GovernancePanel playbook={playbook} />
-      {latest && <KnowledgeSourcesPanel version={latest} />}
-      {latest && <ConflictsPanel version={latest} />}
-
-      <Separator />
-
-      <div className="space-y-4">
-        <h3 className="text-lg font-semibold">Versions</h3>
-        {versions.length === 0 ? (
-          <p className="text-sm text-muted-foreground">No published versions yet.</p>
-        ) : (
-          <div className="space-y-4">
-            {versions.map((v, idx) => (
-              <Card key={v.id}>
-                <CardHeader className="pb-2">
-                  <CardTitle className="text-base flex items-center justify-between gap-2">
-                    <div className="flex items-center gap-2">
-                      <span>v{v.semantic_version}</span>
-                      {idx === 0 && (
-                        <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] text-primary font-medium">latest</span>
-                      )}
-                    </div>
-                    <div className="flex items-center gap-1">
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="h-7 px-2 text-xs"
-                        onClick={() => setDiffVersion(v.id)}
-                      >
-                        <GitCompare className="mr-1 h-3 w-3" />
-                        Diff
-                      </Button>
-                      {idx > 0 && canTransitionPlaybook(roles) && (
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="h-7 px-2 text-xs"
-                          disabled={rollbackMut.isPending}
-                          onClick={() => rollbackMut.mutate(v.id)}
-                        >
-                          <RotateCcw className="mr-1 h-3 w-3" />
-                          Rollback
-                        </Button>
-                      )}
-                      <span className="text-xs font-normal text-muted-foreground">
-                        {new Date(v.created_at).toLocaleString()}
-                      </span>
-                    </div>
-                  </CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-3 text-sm">
-                  <div>
-                    <p className="text-xs text-muted-foreground mb-1">Playbook confidence</p>
-                    <p>{(v.playbook_confidence * 100).toFixed(0)}%</p>
-                  </div>
-                  {v.execution_confidence_guidance && (
-                    <p className="text-muted-foreground">{v.execution_confidence_guidance}</p>
-                  )}
-                  <div>
-                    <p className="text-xs text-muted-foreground mb-1">Trigger conditions</p>
-                    <pre className="max-h-40 overflow-auto rounded-md bg-muted p-2 text-xs">
-                      {JSON.stringify(v.trigger_conditions, null, 2)}
-                    </pre>
-                  </div>
-                  <div>
-                    <p className="text-xs text-muted-foreground mb-2">
-                      Steps ({Array.isArray(v.steps) ? v.steps.length : 0})
-                    </p>
-                    {/* Rendered as a procedure, not as JSON. A reviewer
-                        approving this needs the instruction, what it
-                        expects to happen, what to do when it does not,
-                        and which incident it came from — all of which a
-                        stringify buries. */}
-                    <PlaybookSteps steps={v.steps} />
-                  </div>
-                </CardContent>
-              </Card>
-            ))}
-          </div>
-        )}
-      </div>
-
-      {latest && (
-        <p className="text-xs text-muted-foreground">
-          Showing {versions.length} version(s). Latest is v{latest.semantic_version}.
-        </p>
-      )}
+      {selectedVersion && <KnowledgeSourcesPanel version={selectedVersion} />}
+      {selectedVersion && <ConflictsPanel version={selectedVersion} />}
     </div>
   );
 }

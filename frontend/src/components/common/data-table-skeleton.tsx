@@ -25,13 +25,13 @@ export function DataTableSkeleton({
   return (
     <div
       className={cn(
-        "overflow-hidden rounded-xl border border-black/10 bg-white/50 shadow-[inset_0_1px_0_rgba(255,255,255,0.9)] backdrop-blur-md dark:border-white/10 dark:bg-white/[0.04] dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]",
+        "overflow-hidden rounded-lg border bg-card shadow-sm",
         className
       )}
     >
       <Table>
         <TableHeader>
-          <TableRow className="border-b border-black/5 hover:bg-transparent dark:border-white/5">
+          <TableRow className="border-b hover:bg-transparent">
             {Array.from({ length: columns }).map((_, i) => (
               <TableHead key={i}>
                 <Skeleton className="h-3.5 w-16 max-w-full" />
@@ -43,7 +43,7 @@ export function DataTableSkeleton({
           {Array.from({ length: rows }).map((_, ri) => (
             <TableRow
               key={ri}
-              className="border-b border-black/5 hover:bg-transparent dark:border-white/5"
+              className="border-b hover:bg-transparent"
             >
               {Array.from({ length: columns }).map((_, ci) => (
                 <TableCell key={ci}>

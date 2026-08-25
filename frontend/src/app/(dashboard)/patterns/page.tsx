@@ -99,7 +99,7 @@ function PatternActions({ pattern }: { pattern: Pattern }) {
         <Button
           variant="ghost"
           size="sm"
-          className="text-muted-foreground hover:text-indigo-500 gap-1 font-normal text-xs"
+          className="gap-1 text-xs font-normal text-muted-foreground hover:text-primary"
           title="Generate Playbook from this pattern"
           onClick={() => generateMutation.mutate()}
           disabled={generateMutation.isPending}
@@ -215,7 +215,7 @@ export default function PatternsPage() {
         <Button
           variant="outline"
           size="sm"
-          className="gap-2 text-xs border-indigo-500/30 text-indigo-400 hover:bg-indigo-500/10"
+          className="gap-2 text-xs"
           onClick={() => dedupMutation.mutate()}
           disabled={dedupMutation.isPending}
         >
@@ -263,8 +263,8 @@ export default function PatternsPage() {
               {data.map((pattern) => (
                 <div key={pattern.id} className="space-y-3">
                   <div className="flex items-center justify-between">
-                    <h3 className="text-lg font-semibold text-slate-200">{pattern.title}</h3>
-                    <div className="flex items-center gap-4 text-sm text-slate-400">
+                    <h3 className="text-lg font-semibold text-foreground">{pattern.title}</h3>
+                    <div className="flex items-center gap-4 text-sm text-muted-foreground">
                       <span>{pattern.episode_count} Episodes</span>
                       <span>{((pattern.confidence) * 100).toFixed(0)}% Confidence</span>
                     </div>
@@ -274,9 +274,9 @@ export default function PatternsPage() {
               ))}
             </div>
           ) : (
-             <div className="flex flex-col items-center justify-center p-12 border rounded-xl bg-slate-900/50">
-                <Network className="h-12 w-12 text-slate-600 mb-4" />
-                <p className="text-slate-400">Analyze an episode first to discover a pattern graph.</p>
+             <div className="flex flex-col items-center justify-center rounded-lg border bg-card p-12 shadow-sm">
+                <Network className="mb-4 h-12 w-12 text-muted-foreground" />
+                <p className="text-muted-foreground">Analyze an episode first to discover a pattern graph.</p>
              </div>
           )}
         </TabsContent>

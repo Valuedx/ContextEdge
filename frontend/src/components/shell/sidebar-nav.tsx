@@ -69,7 +69,7 @@ const navItems: NavItem[] = [
   { label: "Settings", href: "/settings", icon: Settings },
 ];
 
-export function SidebarNav() {
+export function SidebarNav({ collapsed = false }: { collapsed?: boolean }) {
   const pathname = usePathname();
   const roles = useAuthStore((s) => s.roles);
 
@@ -78,7 +78,7 @@ export function SidebarNav() {
   );
 
   return (
-    <nav className="flex flex-col gap-1 px-3 py-4">
+    <nav className={cn("flex flex-col gap-1.5 py-4", collapsed ? "px-2" : "px-3")}>
       {visibleItems.map((item) => {
         const isActive =
           pathname === item.href || pathname.startsWith(item.href + "/");
@@ -87,13 +87,18 @@ export function SidebarNav() {
           <Link
             key={item.href}
             href={item.href}
+            title={collapsed ? item.label : undefined}
+            aria-label={collapsed ? item.label : undefined}
             className={cn(
-              "flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium",
-              isActive ? "glass-nav-item-active text-foreground" : "glass-nav-item rounded-xl"
+              "flex items-center rounded-md py-2.5 text-sm font-medium",
+              collapsed ? "justify-center px-2" : "gap-3 px-3",
+              isActive ? "glass-nav-item-active" : "glass-nav-item"
             )}
           >
             <Icon className="h-4 w-4 shrink-0" />
-            {item.label}
+            <span className={cn("truncate", collapsed && "sr-only")}>
+              {item.label}
+            </span>
           </Link>
         );
       })}

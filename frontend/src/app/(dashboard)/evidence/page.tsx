@@ -229,7 +229,7 @@ export default function EvidencePage() {
       <PageHeader title="Evidence Explorer" description="Search and browse operational evidence across all sources." />
       
       {/* Header Controls & Filters Bar */}
-      <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-black/10 bg-white/50 p-4 shadow-sm backdrop-blur-md dark:border-white/10 dark:bg-white/[0.04]">
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border bg-card p-4 shadow-sm">
         <div className="flex flex-wrap items-center gap-3 flex-1 min-w-[280px]">
           {/* Search Input */}
           <div className="w-full sm:w-64">

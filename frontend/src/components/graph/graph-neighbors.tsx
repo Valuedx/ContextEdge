@@ -142,7 +142,7 @@ export function GraphNeighbors({ scope }: { scope: GraphScope }) {
               <select
                 value={maxDepth}
                 onChange={(e) => setMaxDepth(Number(e.target.value))}
-                className="h-8 rounded-lg border border-white/15 bg-white/[0.06] px-2.5 text-sm outline-none backdrop-blur-md"
+                className="h-8 rounded-md border border-input bg-background px-2.5 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
               >
                 <option value={1}>1 hop</option>
                 <option value={2}>2 hops</option>
@@ -165,13 +165,13 @@ export function GraphNeighbors({ scope }: { scope: GraphScope }) {
       {isLoading && (
         <div className="space-y-3">
           {[1, 2, 3].map((i) => (
-            <Skeleton key={i} className="h-16 rounded-xl" />
+            <Skeleton key={i} className="h-16 rounded-lg" />
           ))}
         </div>
       )}
 
       {error && (
-        <div className="text-destructive p-4 border rounded-xl bg-destructive/10">
+        <div className="text-destructive p-4 border rounded-lg bg-destructive/10">
           {(error as Error).message || "Failed to load neighbors"}
         </div>
       )}
@@ -180,8 +180,8 @@ export function GraphNeighbors({ scope }: { scope: GraphScope }) {
         <Card>
           <CardContent className="py-8">
             <div className="text-center space-y-3">
-              <GitBranch className="h-12 w-12 text-slate-600 mx-auto" />
-              <p className="text-slate-400 text-sm">No neighbors found for this node.</p>
+              <GitBranch className="h-12 w-12 text-muted-foreground mx-auto" />
+              <p className="text-muted-foreground text-sm">No neighbors found for this node.</p>
             </div>
           </CardContent>
         </Card>
@@ -204,7 +204,7 @@ export function GraphNeighbors({ scope }: { scope: GraphScope }) {
                   </CardTitle>
                 </CardHeader>
                 <CardContent>
-                  <div className="divide-y divide-white/5">
+                  <div className="divide-y">
                     {neighbors.map((n, i) => {
                       const c = nodeColors[n.node_type];
                       const option = labelMap.get(`${n.node_type}:${n.node_id}`);

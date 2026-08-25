@@ -37,7 +37,7 @@ function PopoverContent({
         <PopoverPrimitive.Popup
           data-slot="popover-content"
           className={cn(
-            "z-50 flex w-72 origin-(--transform-origin) flex-col gap-2.5 rounded-xl border border-black/10 bg-white/88 p-2.5 text-sm text-popover-foreground shadow-[0_16px_48px_rgba(15,23,42,0.12)] ring-0 backdrop-blur-2xl backdrop-saturate-150 outline-hidden duration-100 data-[side=bottom]:slide-in-from-top-2 data-[side=inline-end]:slide-in-from-left-2 data-[side=inline-start]:slide-in-from-right-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95 dark:border-white/12 dark:bg-white/[0.1] dark:shadow-md dark:ring-1 dark:ring-foreground/10",
+            "z-50 flex w-72 origin-(--transform-origin) flex-col gap-2.5 rounded-lg border bg-popover p-2.5 text-sm text-popover-foreground shadow-lg ring-0 outline-hidden duration-100 data-[side=bottom]:slide-in-from-top-2 data-[side=inline-end]:slide-in-from-left-2 data-[side=inline-start]:slide-in-from-right-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
             className
           )}
           {...props}

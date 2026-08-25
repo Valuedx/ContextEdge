@@ -193,73 +193,73 @@ function FlowCanvas({
       onNodeMouseEnter={handleNodeMouseEnter}
       onNodeMouseLeave={handleNodeMouseLeave}
       fitView
-      colorMode="dark"
+      colorMode="system"
     >
-      <Background color="#1e293b" gap={20} />
+      <Background color="#cbd5e1" gap={20} />
       <Controls
         showInteractive={false}
-        className="bg-slate-900 border-slate-700 fill-slate-200"
+        className="border border-input bg-card fill-foreground text-foreground shadow-sm"
       />
 
       {/* Top Left: Interactive Node Details & Guidance Panel */}
       {hasData && (
         <Panel
           position="top-left"
-          className="bg-slate-900/95 border border-indigo-500/40 p-4 rounded-xl max-w-md backdrop-blur-md shadow-2xl transition-all duration-200"
+          className="max-w-md rounded-lg border bg-card p-4 text-foreground shadow-lg transition-all duration-200"
         >
           {selectedNodeData && activeInfo ? (
             <div className="space-y-2">
               <div className="flex items-center justify-between gap-2">
-                <div className="flex items-center gap-2 text-indigo-400 font-bold text-xs uppercase tracking-wider">
+                <div className="flex items-center gap-2 text-primary font-bold text-xs uppercase tracking-wider">
                   <span>{activeInfo.icon}</span>
                   <span>{activeInfo.label}</span>
                 </div>
                 <button
                   type="button"
                   onClick={() => setSelectedNodeData(null)}
-                  className="text-slate-400 hover:text-slate-200 p-0.5 rounded"
+                  className="rounded p-0.5 text-muted-foreground hover:text-foreground"
                   title="Close Selection"
                 >
                   <X className="h-3.5 w-3.5" />
                 </button>
               </div>
-              <h4 className="text-sm font-semibold text-slate-100 leading-snug">
+              <h4 className="text-sm font-semibold leading-snug">
                 &ldquo;{activeNodeLabel}&rdquo;
               </h4>
-              <p className="text-xs text-slate-300 leading-relaxed">
+              <p className="text-xs text-muted-foreground leading-relaxed">
                 {activeInfo.desc}
               </p>
               {redirectRoute ? (
                 <button
                   type="button"
                   onClick={() => router.push(redirectRoute)}
-                  className="mt-2 inline-flex items-center gap-1.5 rounded-md bg-indigo-600 hover:bg-indigo-500 px-3 py-1.5 text-xs font-medium text-white transition-colors"
+                  className="mt-2 inline-flex items-center gap-1.5 rounded-md bg-action px-3 py-1.5 text-xs font-medium text-action-foreground transition-colors hover:bg-action/90"
                 >
                   <span>View Details & Redirect</span>
                   <ExternalLink className="h-3.5 w-3.5" />
                 </button>
               ) : (
-                <p className="text-[11px] text-amber-400/90 italic pt-1">
+                <p className="text-[11px] text-muted-foreground italic pt-1">
                   Enrichment concept node — inspect connected Episodes or Patterns for deep details.
                 </p>
               )}
             </div>
           ) : hoveredInfo ? (
             <div className="space-y-1.5">
-              <div className="flex items-center gap-2 text-indigo-400 font-bold text-xs">
+              <div className="flex items-center gap-2 text-primary font-bold text-xs">
                 <span>{hoveredInfo.icon}</span>
                 <span>{hoveredInfo.label}</span>
               </div>
-              <p className="text-xs text-slate-200 font-medium line-clamp-1">
+              <p className="text-xs font-medium line-clamp-1">
                 &ldquo;{hoveredNodeLabel}&rdquo;
               </p>
-              <p className="text-[11px] text-slate-400 leading-snug">
+              <p className="text-[11px] text-muted-foreground leading-snug">
                 {hoveredInfo.desc}
               </p>
             </div>
           ) : (
-            <div className="flex items-center gap-2 text-xs text-slate-300">
-              <HelpCircle className="h-4 w-4 text-indigo-400 shrink-0" />
+            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+              <HelpCircle className="h-4 w-4 text-primary shrink-0" />
               <span>Click any node on the graph to inspect details and open its direct record.</span>
             </div>
           )}
@@ -270,27 +270,27 @@ function FlowCanvas({
       {hasData && (
         <Panel
           position="bottom-center"
-          className="bg-slate-900/90 border border-slate-800 px-3.5 py-1.5 rounded-full text-[11px] backdrop-blur-sm shadow-lg flex flex-wrap items-center gap-4 text-slate-300"
+          className="flex flex-wrap items-center gap-4 rounded-lg border bg-card px-3.5 py-2 text-[11px] text-muted-foreground shadow-lg"
         >
           <div className="flex items-center gap-1.5">
             <span className="h-2 w-2 rounded-full bg-blue-500"></span>
-            <span className="font-semibold text-blue-400">Playbook:</span> Fix Guide
+            <span className="font-semibold text-foreground">Playbook:</span> Fix Guide
           </div>
           <div className="flex items-center gap-1.5">
-            <span className="h-2 w-2 rounded-full bg-indigo-500"></span>
-            <span className="font-semibold text-indigo-400">Pattern:</span> Recurring Issue
+            <span className="h-2 w-2 rounded-full bg-sky-500"></span>
+            <span className="font-semibold text-foreground">Pattern:</span> Recurring Issue
           </div>
           <div className="flex items-center gap-1.5">
             <span className="h-2 w-2 rounded-full bg-emerald-500"></span>
-            <span className="font-semibold text-emerald-400">Episode:</span> Incident Summary
+            <span className="font-semibold text-foreground">Episode:</span> Incident Summary
           </div>
           <div className="flex items-center gap-1.5">
             <span className="h-2 w-2 rounded-full bg-purple-400"></span>
-            <span className="font-semibold text-purple-300">Identity:</span> User / Host
+            <span className="font-semibold text-foreground">Identity:</span> User / Host
           </div>
           <div className="flex items-center gap-1.5">
             <span className="h-2 w-2 rounded-full bg-slate-400"></span>
-            <span className="font-semibold text-slate-300">Evidence:</span> Raw Ticket
+            <span className="font-semibold text-foreground">Evidence:</span> Raw Ticket
           </div>
         </Panel>
       )}
@@ -299,9 +299,9 @@ function FlowCanvas({
       {hasData && (
         <Panel
           position="top-right"
-          className="bg-slate-900/90 border border-slate-700 p-2.5 rounded-lg text-xs backdrop-blur-sm shadow-xl"
+          className="rounded-lg border bg-card p-2.5 text-xs text-muted-foreground shadow-lg"
         >
-          <div className="flex items-center gap-1.5 text-slate-400">
+          <div className="flex items-center gap-1.5">
             <Info className="h-3 w-3" /> Click a node to open details
           </div>
         </Panel>
@@ -310,18 +310,18 @@ function FlowCanvas({
       {/* Empty state overlay */}
       {!hasData && (
         <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-10">
-          <div className="bg-slate-900/95 border border-slate-700 p-6 rounded-2xl text-center max-w-sm shadow-2xl animate-in fade-in zoom-in duration-300">
+          <div className="max-w-sm rounded-lg border bg-card p-6 text-center shadow-lg animate-in fade-in zoom-in duration-300">
             <div className="relative mx-auto h-16 w-16 mb-4">
-              <Network className="h-16 w-16 text-indigo-400 opacity-20 animate-pulse" />
-              <Info className="absolute inset-0 m-auto h-8 w-8 text-indigo-400" />
+              <Network className="h-16 w-16 text-primary opacity-20 animate-pulse" />
+              <Info className="absolute inset-0 m-auto h-8 w-8 text-primary" />
             </div>
-            <h3 className="text-lg font-bold text-slate-100">Pattern Seed Identified</h3>
-            <p className="text-sm text-slate-400 mt-2 leading-relaxed">
+            <h3 className="text-lg font-bold text-foreground">Pattern Seed Identified</h3>
+            <p className="text-sm text-muted-foreground mt-2 leading-relaxed">
               This operational pattern has been successfully discovered.
               Cluster more episodes to reveal the full knowledge graph.
             </p>
             <div className="mt-4 flex justify-center">
-              <span className="px-2 py-1 bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 rounded text-[10px] font-mono uppercase tracking-wider">
+              <span className="rounded border bg-muted px-2 py-1 text-[10px] font-mono uppercase tracking-wider text-muted-foreground">
                 Awaiting Context
               </span>
             </div>
@@ -412,14 +412,14 @@ export function PatternGraph({ patternId }: { patternId: string }) {
   if (isLoading) {
     return (
       <div className="flex justify-center p-12">
-        <Loader2 className="animate-spin h-8 w-8 text-indigo-500" />
+        <Loader2 className="animate-spin h-8 w-8 text-primary" />
       </div>
     );
   }
 
   if (error) {
     return (
-      <div className="text-destructive p-4 border rounded-xl bg-destructive/10">
+      <div className="text-destructive p-4 border rounded-lg bg-destructive/10">
         Failed to load graph
       </div>
     );
@@ -428,7 +428,7 @@ export function PatternGraph({ patternId }: { patternId: string }) {
   const hasData = nodes.length > 1;
 
   return (
-    <div className="relative w-full h-[600px] border rounded-xl bg-[#020617] overflow-hidden">
+    <div className="relative w-full h-[600px] overflow-hidden rounded-lg border bg-card">
       {data?.truncated && (
         <div className="absolute top-2 left-1/2 -translate-x-1/2 z-10 px-3 py-1 rounded-full bg-amber-500/15 border border-amber-500/30 text-amber-300 text-xs font-medium pointer-events-none">
           Large graph — showing the strongest connections only

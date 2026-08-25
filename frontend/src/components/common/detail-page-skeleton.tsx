@@ -54,7 +54,7 @@ export function DetailCardGridSkeleton({
       {Array.from({ length: count }).map((_, i) => (
         <div
           key={i}
-          className="rounded-xl border border-black/10 bg-white/40 p-4 dark:border-white/10 dark:bg-white/[0.04]"
+          className="rounded-lg border bg-card p-4 shadow-sm"
         >
           <Skeleton className="h-5 w-28" />
           <div className="mt-3 space-y-2">
@@ -74,7 +74,7 @@ export function DetailStatCardsSkeleton({ count = 3 }: { count?: number }) {
       {Array.from({ length: count }).map((_, i) => (
         <div
           key={i}
-          className="rounded-xl border border-black/10 bg-white/40 p-4 dark:border-white/10 dark:bg-white/[0.04]"
+          className="rounded-lg border bg-card p-4 shadow-sm"
         >
           <Skeleton className="mb-4 h-3 w-24" />
           <Skeleton className="h-8 w-14" />
@@ -86,7 +86,7 @@ export function DetailStatCardsSkeleton({ count = 3 }: { count?: number }) {
 
 export function DetailWideCardSkeleton({ lines = 4 }: { lines?: number }) {
   return (
-    <div className="rounded-xl border border-black/10 bg-white/40 p-4 dark:border-white/10 dark:bg-white/[0.04]">
+    <div className="rounded-lg border bg-card p-4 shadow-sm">
       <Skeleton className="h-5 w-36" />
       <div className="mt-3 space-y-2">
         {Array.from({ length: lines }).map((_, i) => (

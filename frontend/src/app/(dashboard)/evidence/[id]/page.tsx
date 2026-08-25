@@ -186,10 +186,10 @@ export default function EvidenceDetailPage() {
       {/* Primary Grid: Ticket Provenance & Linked Knowledge Context */}
       <div className="grid gap-6 md:grid-cols-2">
         {/* Card 1: Ticket Details & Provenance */}
-        <Card className="bg-slate-900/80 border-slate-800 backdrop-blur-sm shadow-xl">
-          <CardHeader className="pb-3 border-b border-slate-800/80">
-            <CardTitle className="text-sm font-bold uppercase tracking-wider text-slate-300 flex items-center gap-2">
-              <FileText className="h-4 w-4 text-indigo-400" />
+        <Card>
+          <CardHeader className="border-b pb-3">
+            <CardTitle className="flex items-center gap-2 text-sm font-bold uppercase tracking-wider text-muted-foreground">
+              <FileText className="h-4 w-4 text-primary" />
               Ticket Metadata & Provenance
             </CardTitle>
           </CardHeader>
@@ -200,19 +200,19 @@ export default function EvidenceDetailPage() {
                 anyone. */}
             {item.source_reference?.display_id && (
               <div className="flex items-center justify-between">
-                <span className="text-slate-400">Source Record:</span>
+                <span className="text-muted-foreground">Source Record:</span>
                 {item.source_reference.url ? (
                   <a
                     href={item.source_reference.url}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="font-mono font-medium text-indigo-400 hover:underline flex items-center gap-1"
+                    className="flex items-center gap-1 font-mono font-medium text-primary hover:underline"
                   >
                     #{item.source_reference.display_id}
                     <ExternalLink className="h-3.5 w-3.5" />
                   </a>
                 ) : (
-                  <span className="font-mono font-medium text-slate-200">
+                  <span className="font-mono font-medium text-foreground">
                     #{item.source_reference.display_id}
                   </span>
                 )}
@@ -220,10 +220,10 @@ export default function EvidenceDetailPage() {
             )}
 
             <div className="flex items-center justify-between">
-              <span className="text-slate-400">Ingested Source:</span>
+              <span className="text-muted-foreground">Ingested Source:</span>
               <Link
                 href={`/sources/${item.source_id}`}
-                className="font-medium text-indigo-400 hover:underline flex items-center gap-1"
+                className="flex items-center gap-1 font-medium text-primary hover:underline"
               >
                 <Database className="h-3.5 w-3.5" />
                 {contextData?.source_name || "SupportFlo Enterprise Connector"}
@@ -231,27 +231,27 @@ export default function EvidenceDetailPage() {
             </div>
 
             <div className="flex items-center justify-between">
-              <span className="text-slate-400">Target Domain:</span>
-              <span className="font-medium text-slate-200">
+              <span className="text-muted-foreground">Target Domain:</span>
+              <span className="font-medium text-foreground">
                 {contextData?.domain_name || "General IT Operations"}
               </span>
             </div>
 
             <div className="flex items-center justify-between">
-              <span className="text-slate-400">Evidence Type:</span>
-              <span className="px-2 py-0.5 rounded text-xs font-mono bg-slate-800 text-slate-300 border border-slate-700">
+              <span className="text-muted-foreground">Evidence Type:</span>
+              <span className="rounded border bg-muted px-2 py-0.5 font-mono text-xs text-muted-foreground">
                 {item.evidence_type}
               </span>
             </div>
 
             <div className="flex items-center justify-between">
-              <span className="text-slate-400">Relevance State:</span>
+              <span className="text-muted-foreground">Relevance State:</span>
               <StatusBadge status={item.relevance_state} />
             </div>
 
             {item.sensitivity_label && (
               <div className="flex items-center justify-between">
-                <span className="text-slate-400">Sensitivity Label:</span>
+                <span className="text-muted-foreground">Sensitivity Label:</span>
                 <span className="rounded-md border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-xs text-amber-400">
                   {item.sensitivity_label}
                 </span>
@@ -261,10 +261,10 @@ export default function EvidenceDetailPage() {
         </Card>
 
         {/* Card 2: Linked Knowledge Graph Context (Episode & Pattern) */}
-        <Card className="bg-indigo-950/20 border-indigo-500/30 backdrop-blur-sm shadow-xl flex flex-col justify-between">
-          <CardHeader className="pb-3 border-b border-indigo-500/20">
-            <CardTitle className="text-sm font-bold uppercase tracking-wider text-indigo-300 flex items-center gap-2">
-              <Sparkles className="h-4 w-4 text-indigo-400" />
+        <Card className="flex flex-col justify-between">
+          <CardHeader className="border-b pb-3">
+            <CardTitle className="flex items-center gap-2 text-sm font-bold uppercase tracking-wider text-muted-foreground">
+              <Sparkles className="h-4 w-4 text-primary" />
               Linked Knowledge Graph Context
             </CardTitle>
           </CardHeader>
@@ -274,19 +274,19 @@ export default function EvidenceDetailPage() {
                 <Link
                   key={ep.id}
                   href={`/episodes/${ep.id}`}
-                  className="p-3 rounded-xl border border-emerald-500/30 bg-emerald-950/30 hover:border-emerald-500 transition-all block group"
+                  className="block rounded-lg border border-emerald-200 bg-emerald-50 p-3 transition-colors hover:border-emerald-400 dark:border-emerald-500/30 dark:bg-emerald-500/10 dark:hover:border-emerald-400"
                 >
                   <div className="flex items-center justify-between mb-1">
-                    <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-400 flex items-center gap-1">
+                    <span className="flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider text-emerald-700 dark:text-emerald-300">
                       🟢 Connected Episode
                     </span>
-                    <ArrowRight className="h-3.5 w-3.5 text-emerald-400 group-hover:translate-x-1 transition-transform" />
+                    <ArrowRight className="h-3.5 w-3.5 text-emerald-700 transition-transform group-hover:translate-x-1 dark:text-emerald-300" />
                   </div>
-                  <p className="text-sm font-semibold text-slate-100 line-clamp-1">{ep.title}</p>
+                  <p className="line-clamp-1 text-sm font-semibold text-foreground">{ep.title}</p>
                 </Link>
               ))
             ) : (
-              <div className="p-3 rounded-xl border border-slate-800 bg-slate-900/50 text-xs text-slate-400">
+              <div className="rounded-lg border bg-muted p-3 text-xs text-muted-foreground">
                 Awaiting episode extraction cluster...
               </div>
             )}
@@ -296,19 +296,19 @@ export default function EvidenceDetailPage() {
                 <Link
                   key={pat.id}
                   href={`/patterns/${pat.id}`}
-                  className="p-3 rounded-xl border border-indigo-500/30 bg-indigo-950/30 hover:border-indigo-500 transition-all block group"
+                  className="block rounded-lg border border-sky-200 bg-sky-50 p-3 transition-colors hover:border-sky-400 dark:border-sky-500/30 dark:bg-sky-500/10 dark:hover:border-sky-400"
                 >
                   <div className="flex items-center justify-between mb-1">
-                    <span className="text-[10px] font-bold uppercase tracking-wider text-indigo-400 flex items-center gap-1">
+                    <span className="flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider text-sky-700 dark:text-sky-300">
                       🟣 Connected Pattern
                     </span>
-                    <ArrowRight className="h-3.5 w-3.5 text-indigo-400 group-hover:translate-x-1 transition-transform" />
+                    <ArrowRight className="h-3.5 w-3.5 text-sky-700 transition-transform group-hover:translate-x-1 dark:text-sky-300" />
                   </div>
-                  <p className="text-sm font-semibold text-slate-100 line-clamp-1">{pat.title}</p>
+                  <p className="line-clamp-1 text-sm font-semibold text-foreground">{pat.title}</p>
                 </Link>
               ))
             ) : (
-              <div className="p-3 rounded-xl border border-slate-800 bg-slate-900/50 text-xs text-slate-400">
+              <div className="rounded-lg border bg-muted p-3 text-xs text-muted-foreground">
                 No recurring pattern linked yet.
               </div>
             )}
@@ -321,15 +321,15 @@ export default function EvidenceDetailPage() {
       {KNOWLEDGE_EVIDENCE_TYPES.has(item.evidence_type) && (
         <ApplicabilityPanel
           applicability={item.applicability}
-          className="rounded-xl border border-slate-800 bg-slate-900/80 p-4 text-slate-200"
+          className="rounded-lg border bg-card p-4 text-card-foreground"
         />
       )}
 
       {/* Main Ticket Body / Raw Payload Container */}
-      <Card className="bg-slate-900/90 border-slate-800 shadow-2xl">
-        <CardHeader className="border-b border-slate-800/80 pb-3 flex flex-row items-center justify-between">
-          <CardTitle className="text-base font-bold text-slate-100 flex items-center gap-2">
-            <FileText className="h-4 w-4 text-indigo-400" />
+      <Card>
+        <CardHeader className="flex flex-row items-center justify-between border-b pb-3">
+          <CardTitle className="flex items-center gap-2 text-base font-bold text-foreground">
+            <FileText className="h-4 w-4 text-primary" />
             {/* Naming this "Ticket Content" on a hydrated message is how a
                 single reply reads as the whole ticket. Every message in a
                 thread is its own evidence row, and `evidence_type` cannot
@@ -343,7 +343,7 @@ export default function EvidenceDetailPage() {
               back to its external id, which for file sources is a long
               slug rather than a ticket number. */}
           <span
-            className="text-xs text-slate-400 font-mono truncate max-w-[28rem]"
+            className="max-w-[28rem] truncate font-mono text-xs text-muted-foreground"
             title={item.id}
           >
             {item.source_reference?.display_id
@@ -353,15 +353,15 @@ export default function EvidenceDetailPage() {
         </CardHeader>
         <CardContent className="pt-4">
           {item.body_summary && (
-            <div className="mb-4 p-3.5 rounded-xl border border-indigo-500/20 bg-indigo-950/20">
-              <span className="text-xs font-bold uppercase tracking-wider text-indigo-400 block mb-1">
+            <div className="mb-4 rounded-lg border border-sky-200 bg-sky-50 p-3.5 dark:border-sky-500/30 dark:bg-sky-500/10">
+              <span className="mb-1 block text-xs font-bold uppercase tracking-wider text-sky-700 dark:text-sky-300">
                 Ticket Summary
               </span>
-              <p className="text-sm text-slate-200 leading-relaxed">{item.body_summary}</p>
+              <p className="text-sm leading-relaxed text-foreground">{item.body_summary}</p>
             </div>
           )}
 
-          <div className="p-4 rounded-xl border border-slate-800 bg-[#020617] font-mono text-xs text-slate-300 whitespace-pre-wrap leading-relaxed">
+          <div className="rounded-lg border bg-muted p-4 font-mono text-xs leading-relaxed text-foreground whitespace-pre-wrap">
             {item.body_text || "No body text stored for this evidence item."}
           </div>
         </CardContent>
@@ -381,26 +381,26 @@ export default function EvidenceDetailPage() {
 
       {/* Attachments Section */}
       {attachments.length > 0 && (
-        <Card className="bg-slate-900/80 border-slate-800">
+        <Card>
           <CardHeader>
-            <CardTitle className="text-base flex items-center gap-2 text-slate-200">
-              <Paperclip className="h-4 w-4 text-indigo-400" />
+            <CardTitle className="flex items-center gap-2 text-base text-foreground">
+              <Paperclip className="h-4 w-4 text-primary" />
               Attachments ({attachments.length})
             </CardTitle>
           </CardHeader>
           <CardContent>
             <ul className="space-y-2">
               {attachments.map((a) => (
-                <li key={a.id} className="flex flex-wrap items-center gap-3 rounded-lg border border-slate-800 bg-slate-900 p-3 text-sm">
-                  <span className="font-medium text-slate-200 truncate max-w-xs">{a.file_name ?? "Unnamed file"}</span>
-                  <span className="text-xs text-slate-400">{a.mime_type ?? "—"}</span>
+                <li key={a.id} className="flex flex-wrap items-center gap-3 rounded-lg border bg-muted p-3 text-sm">
+                  <span className="max-w-xs truncate font-medium text-foreground">{a.file_name ?? "Unnamed file"}</span>
+                  <span className="text-xs text-muted-foreground">{a.mime_type ?? "—"}</span>
                   <StatusBadge status={a.extraction_status} />
                   {a.extracted_text && (
                     <details className="w-full mt-2">
-                      <summary className="cursor-pointer text-xs text-indigo-400 hover:underline">
+                      <summary className="cursor-pointer text-xs text-primary hover:underline">
                         View extracted text
                       </summary>
-                      <pre className="mt-2 max-h-40 overflow-auto rounded-lg bg-[#020617] p-3 text-xs text-slate-300 font-mono whitespace-pre-wrap">
+                      <pre className="mt-2 max-h-40 overflow-auto rounded-lg border bg-card p-3 font-mono text-xs text-foreground whitespace-pre-wrap">
                         {a.extracted_text}
                       </pre>
                     </details>
@@ -414,23 +414,23 @@ export default function EvidenceDetailPage() {
 
       {/* Bottom Accordion: Access Policy Governance (Moved to Secondary Control) */}
       {showAccessCard && (
-        <Card className="bg-slate-900/50 border-slate-800">
+        <Card>
           <CardHeader className="pb-3">
-            <CardTitle className="text-sm font-semibold text-slate-400 flex items-center gap-2">
-              <ShieldCheck className="h-4 w-4 text-slate-400" />
+            <CardTitle className="flex items-center gap-2 text-sm font-semibold text-muted-foreground">
+              <ShieldCheck className="h-4 w-4 text-muted-foreground" />
               Access Control & Retrieval Policy (Governance)
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-4 pt-1">
             {!policyListOk ? (
-              <div className="text-sm text-slate-400">
+              <div className="text-sm text-muted-foreground">
                 <span>Assigned Policy ID:</span>{" "}
-                <span className="font-mono text-xs text-slate-300">{item.access_policy_id ?? "None"}</span>
+                <span className="font-mono text-xs text-foreground">{item.access_policy_id ?? "None"}</span>
               </div>
             ) : (
               <div className="flex flex-col sm:flex-row sm:items-center gap-4">
                 <div className="space-y-1 flex-1 max-w-md">
-                  <Label htmlFor="evidence-access-policy" className="text-xs text-slate-300">
+                  <Label htmlFor="evidence-access-policy" className="text-xs text-muted-foreground">
                     Select Access Retrieval Policy
                   </Label>
                   <Select
@@ -438,7 +438,7 @@ export default function EvidenceDetailPage() {
                     onValueChange={(v) => setDraftAccess(v === POLICY_NONE ? null : (v ?? null))}
                     disabled={!canEditPolicy}
                   >
-                    <SelectTrigger id="evidence-access-policy" className="bg-slate-900 border-slate-700">
+                    <SelectTrigger id="evidence-access-policy">
                       <SelectValue placeholder="None" />
                     </SelectTrigger>
                     <SelectContent>

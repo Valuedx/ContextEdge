@@ -8,6 +8,7 @@ import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { login } from "@/lib/auth";
 import { useAuthStore } from "@/lib/stores/auth-store";
+import { BrandLockup } from "@/components/brand/brand";
 
 export default function LoginPage() {
   const [email, setEmail] = useState("");
@@ -33,27 +34,26 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="relative flex min-h-screen items-center justify-center px-4 py-12">
-      <div
-        className="pointer-events-none absolute inset-0 opacity-40 blur-3xl"
-        aria-hidden
-      >
-        <div className="absolute left-1/4 top-1/4 h-64 w-64 rounded-full bg-violet-500/30" />
-        <div className="absolute bottom-1/4 right-1/4 h-72 w-72 rounded-full bg-cyan-500/25" />
-      </div>
-      <Card className="glass-panel-strong relative w-full max-w-md border-white/20">
+    <div className="flex min-h-screen items-center justify-center bg-background px-4 py-10">
+      <Card className="relative w-full max-w-md border-t-4 border-t-action bg-card shadow-lg">
         <CardHeader className="space-y-2 text-center">
-          <CardTitle className="bg-gradient-to-br from-slate-900 via-violet-800 to-cyan-700 bg-clip-text text-3xl font-semibold tracking-tight text-transparent dark:from-white dark:via-violet-100 dark:to-cyan-200">
-            ContextEdge
+          <div className="flex justify-center">
+            <BrandLockup />
+          </div>
+          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-muted-foreground">
+            ContextGraph Console
+          </p>
+          <CardTitle className="text-xl font-semibold text-foreground">
+            Sign in to ContextEdge
           </CardTitle>
           <p className="text-sm text-muted-foreground">
-            Sign in to your workspace
+            Use your workspace credentials to continue.
           </p>
         </CardHeader>
         <CardContent>
           <form onSubmit={handleSubmit} className="space-y-4">
             {error && (
-              <div className="rounded-md bg-red-50 p-3 text-sm text-red-700 dark:bg-red-900/20 dark:text-red-400">
+              <div className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-300">
                 {error}
               </div>
             )}
@@ -78,7 +78,11 @@ export default function LoginPage() {
                 required
               />
             </div>
-            <Button type="submit" className="w-full" disabled={loading}>
+            <Button
+              type="submit"
+              className="w-full dark:bg-slate-100 dark:text-slate-950 dark:hover:bg-white"
+              disabled={loading}
+            >
               {loading ? "Signing in..." : "Sign in"}
             </Button>
           </form>

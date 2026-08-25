@@ -36,7 +36,7 @@ export function GraphQueryControls({
           value={domainId}
           onChange={(event) => onDomainChange(event.target.value)}
           disabled={isLoading}
-          className="h-8 w-full rounded-lg border border-white/15 bg-white/[0.06] px-2.5 text-sm outline-none"
+          className="h-8 w-full rounded-md border border-input bg-background px-2.5 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
           <option value="">All visible domains</option>
           {domains

@@ -50,29 +50,29 @@ export const nodeColors: Record<
   string,
   { bg: string; border: string; text: string; dot: string }
 > = {
-  pattern:    { bg: "bg-indigo-900",  border: "border-indigo-500",  text: "text-white",       dot: "bg-indigo-500" },
-  episode:    { bg: "bg-purple-900",  border: "border-purple-500",  text: "text-slate-100",   dot: "bg-purple-500" },
-  playbook:   { bg: "bg-sky-900",     border: "border-sky-500",     text: "text-sky-100",     dot: "bg-sky-500" },
-  identity:   { bg: "bg-teal-900",    border: "border-teal-500",    text: "text-teal-100",    dot: "bg-teal-500" },
-  evidence:   { bg: "bg-slate-800",   border: "border-slate-500",   text: "text-slate-100",   dot: "bg-slate-500" },
-  trigger:    { bg: "bg-amber-900",   border: "border-amber-500",   text: "text-amber-100",   dot: "bg-amber-500" },
-  entity:     { bg: "bg-emerald-900", border: "border-emerald-500", text: "text-emerald-100", dot: "bg-emerald-500" },
-  error:      { bg: "bg-rose-900",    border: "border-rose-500",    text: "text-rose-100",    dot: "bg-rose-500" },
-  root_cause:        { bg: "bg-orange-900",  border: "border-orange-500",  text: "text-orange-100",  dot: "bg-orange-500" },
-  session:           { bg: "bg-cyan-900",    border: "border-cyan-500",    text: "text-cyan-100",    dot: "bg-cyan-500" },
-  execution_run:     { bg: "bg-lime-900",    border: "border-lime-500",    text: "text-lime-100",    dot: "bg-lime-500" },
-  approval_request:  { bg: "bg-yellow-900",  border: "border-yellow-500",  text: "text-yellow-100",  dot: "bg-yellow-500" },
-  user:              { bg: "bg-fuchsia-900", border: "border-fuchsia-500", text: "text-fuchsia-100", dot: "bg-fuchsia-500" },
-  decision:          { bg: "bg-amber-900",   border: "border-amber-400",   text: "text-amber-100",   dot: "bg-amber-400" },
-  decision_option:   { bg: "bg-yellow-900",  border: "border-yellow-400",  text: "text-yellow-100",  dot: "bg-yellow-400" },
-  decision_outcome:  { bg: "bg-orange-900",  border: "border-orange-400",  text: "text-orange-100",  dot: "bg-orange-400" },
-  tenant_policy:     { bg: "bg-violet-900",  border: "border-violet-500",  text: "text-violet-100",  dot: "bg-violet-500" },
-  action_policy:     { bg: "bg-blue-900",    border: "border-blue-400",    text: "text-blue-100",    dot: "bg-blue-400" },
-  claim:             { bg: "bg-pink-900",    border: "border-pink-400",    text: "text-pink-100",    dot: "bg-pink-400" },
-  error_signature:   { bg: "bg-red-950",     border: "border-red-500",     text: "text-red-100",     dot: "bg-red-500" },
-  fix_pattern:       { bg: "bg-green-950",   border: "border-green-400",   text: "text-green-100",   dot: "bg-green-400" },
-  case_outcome:      { bg: "bg-stone-800",   border: "border-stone-400",   text: "text-stone-100",   dot: "bg-stone-400" },
-  entity_term:       { bg: "bg-zinc-800",    border: "border-zinc-500",    text: "text-zinc-100",    dot: "bg-zinc-500" },
+  pattern:           { bg: "bg-card", border: "border-sky-500",      text: "text-foreground", dot: "bg-sky-500" },
+  episode:           { bg: "bg-card", border: "border-emerald-500",  text: "text-foreground", dot: "bg-emerald-500" },
+  playbook:          { bg: "bg-card", border: "border-cyan-500",     text: "text-foreground", dot: "bg-cyan-500" },
+  identity:          { bg: "bg-card", border: "border-teal-500",     text: "text-foreground", dot: "bg-teal-500" },
+  evidence:          { bg: "bg-card", border: "border-slate-500",    text: "text-foreground", dot: "bg-slate-500" },
+  trigger:           { bg: "bg-card", border: "border-amber-500",    text: "text-foreground", dot: "bg-amber-500" },
+  entity:            { bg: "bg-card", border: "border-lime-500",     text: "text-foreground", dot: "bg-lime-500" },
+  error:             { bg: "bg-card", border: "border-rose-500",     text: "text-foreground", dot: "bg-rose-500" },
+  root_cause:        { bg: "bg-card", border: "border-yellow-500",   text: "text-foreground", dot: "bg-yellow-500" },
+  session:           { bg: "bg-card", border: "border-cyan-500",     text: "text-foreground", dot: "bg-cyan-500" },
+  execution_run:     { bg: "bg-card", border: "border-green-500",    text: "text-foreground", dot: "bg-green-500" },
+  approval_request:  { bg: "bg-card", border: "border-amber-500",    text: "text-foreground", dot: "bg-amber-500" },
+  user:              { bg: "bg-card", border: "border-pink-500",     text: "text-foreground", dot: "bg-pink-500" },
+  decision:          { bg: "bg-card", border: "border-amber-500",    text: "text-foreground", dot: "bg-amber-500" },
+  decision_option:   { bg: "bg-card", border: "border-yellow-500",   text: "text-foreground", dot: "bg-yellow-500" },
+  decision_outcome:  { bg: "bg-card", border: "border-rose-500",     text: "text-foreground", dot: "bg-rose-500" },
+  tenant_policy:     { bg: "bg-card", border: "border-violet-500",   text: "text-foreground", dot: "bg-violet-500" },
+  action_policy:     { bg: "bg-card", border: "border-blue-500",     text: "text-foreground", dot: "bg-blue-500" },
+  claim:             { bg: "bg-card", border: "border-pink-500",     text: "text-foreground", dot: "bg-pink-500" },
+  error_signature:   { bg: "bg-card", border: "border-red-500",      text: "text-foreground", dot: "bg-red-500" },
+  fix_pattern:       { bg: "bg-card", border: "border-green-500",    text: "text-foreground", dot: "bg-green-500" },
+  case_outcome:      { bg: "bg-card", border: "border-stone-500",    text: "text-foreground", dot: "bg-stone-500" },
+  entity_term:       { bg: "bg-card", border: "border-zinc-500",     text: "text-foreground", dot: "bg-zinc-500" },
 };
 
 export const edgeColors: Record<string, { stroke: string; dasharray?: string }> = {
@@ -124,6 +124,6 @@ export const edgeColors: Record<string, { stroke: string; dasharray?: string }> 
 
 export function getNodeClassName(nodeType: string): string {
   const c = nodeColors[nodeType];
-  if (!c) return "bg-slate-800 border-slate-600 text-slate-100";
-  return `${c.bg} ${c.border} ${c.text}`;
+  if (!c) return "bg-card border-border text-foreground";
+  return `${c.bg} ${c.border} ${c.text} shadow-sm`;
 }

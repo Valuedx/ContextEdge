@@ -238,7 +238,70 @@ export function RotateCredentialsDialog({
             </div>
           )}
 
-          {source.source_type !== "zoho_desk" && source.source_type !== "servicenow" && (
+          {source.source_type === "jira_sm" && (
+            <div className="space-y-3">
+              <div className="space-y-1.5">
+                <Label htmlFor="rot_jira_url">Base URL</Label>
+                <Input
+                  id="rot_jira_url"
+                  placeholder="https://your-domain.atlassian.net"
+                  value={serviceUrl}
+                  onChange={(e) => setServiceUrl(e.target.value)}
+                />
+              </div>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="space-y-1.5">
+                  <Label htmlFor="rot_jira_email">Email</Label>
+                  <Input
+                    id="rot_jira_email"
+                    type="email"
+                    value={username}
+                    onChange={(e) => setUsername(e.target.value)}
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="rot_jira_token">API Token</Label>
+                  <Input
+                    id="rot_jira_token"
+                    type="password"
+                    autoComplete="off"
+                    value={apiToken}
+                    onChange={(e) => setApiToken(e.target.value)}
+                  />
+                </div>
+              </div>
+            </div>
+          )}
+
+          {(source.source_type === "manageengine" || source.source_type === "sapphireims") && (
+            <div className="space-y-3">
+              <div className="space-y-1.5">
+                <Label htmlFor="rot_api_url">Base URL</Label>
+                <Input
+                  id="rot_api_url"
+                  placeholder="https://service.example.com"
+                  value={serviceUrl}
+                  onChange={(e) => setServiceUrl(e.target.value)}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="rot_api_key">API Key</Label>
+                <Input
+                  id="rot_api_key"
+                  type="password"
+                  autoComplete="off"
+                  value={apiToken}
+                  onChange={(e) => setApiToken(e.target.value)}
+                />
+              </div>
+            </div>
+          )}
+
+          {source.source_type !== "zoho_desk" &&
+            source.source_type !== "servicenow" &&
+            source.source_type !== "jira_sm" &&
+            source.source_type !== "manageengine" &&
+            source.source_type !== "sapphireims" && (
             <div className="space-y-1.5">
               <Label htmlFor="rot_custom_json">Credentials JSON</Label>
               <Textarea

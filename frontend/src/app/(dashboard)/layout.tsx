@@ -1,11 +1,13 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { isAuthenticated } from "@/lib/auth";
 import { SidebarNav } from "@/components/shell/sidebar-nav";
 import { AppHeader } from "@/components/shell/app-header";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { BrandLockup } from "@/components/brand/brand";
+import { cn } from "@/lib/utils";
 
 export default function DashboardLayout({
   children,
@@ -13,6 +15,7 @@ export default function DashboardLayout({
   children: React.ReactNode;
 }) {
   const router = useRouter();
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
   useEffect(() => {
     if (!isAuthenticated()) {
@@ -21,22 +24,36 @@ export default function DashboardLayout({
   }, [router]);
 
   return (
-    <div className="relative flex h-screen overflow-hidden">
-      <aside className="glass-sidebar hidden w-64 shrink-0 border-r md:block">
-        <div className="flex h-14 items-center border-b border-white/10 px-5">
-          <span className="bg-gradient-to-r from-violet-700 via-indigo-600 to-cyan-600 bg-clip-text text-sm font-semibold tracking-tight text-transparent dark:from-violet-200 dark:via-white dark:to-cyan-200">
-            ContextEdge
-          </span>
+    <div className="relative flex h-screen overflow-hidden bg-background">
+      <aside
+        className={cn(
+          "glass-sidebar hidden shrink-0 border-r text-sidebar-foreground transition-[width] duration-200 md:block",
+          sidebarCollapsed ? "w-16" : "w-64"
+        )}
+      >
+        <div
+          className={cn(
+            "flex h-16 items-center border-b border-sidebar-border",
+            sidebarCollapsed ? "justify-center px-2" : "px-5"
+          )}
+        >
+          <BrandLockup
+            surface="dark"
+            variant={sidebarCollapsed ? "mark" : "full"}
+          />
         </div>
-        <ScrollArea className="h-[calc(100vh-3.5rem)]">
-          <SidebarNav />
+        <ScrollArea className="h-[calc(100vh-4rem)]">
+          <SidebarNav collapsed={sidebarCollapsed} />
         </ScrollArea>
       </aside>
 
       <div className="relative flex min-w-0 flex-1 flex-col overflow-hidden">
-        <AppHeader />
-        <main className="relative flex-1 overflow-y-auto p-5 md:p-8">
-          <div className="mx-auto flex w-full max-w-[1600px] flex-col gap-8">
+        <AppHeader
+          sidebarCollapsed={sidebarCollapsed}
+          onToggleSidebar={() => setSidebarCollapsed((value) => !value)}
+        />
+        <main className="relative flex-1 overflow-y-auto p-5 md:p-7">
+          <div className="mx-auto flex w-full max-w-[1440px] flex-col gap-6">
             {children}
           </div>
         </main>

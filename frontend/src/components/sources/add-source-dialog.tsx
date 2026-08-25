@@ -559,7 +559,7 @@ export function AddSourceDialog({ open, onOpenChange }: AddSourceDialogProps) {
             </div>
 
             {sourceType === "gmail" && (
-              <div className="space-y-4 p-4 border rounded-lg bg-slate-900/50">
+              <div className="space-y-4 rounded-lg border bg-muted/50 p-4">
                 <div className="space-y-2">
                   <Label>Authentication Method</Label>
                   <Select
@@ -570,7 +570,7 @@ export function AddSourceDialog({ open, onOpenChange }: AddSourceDialogProps) {
                       }
                     }}
                   >
-                    <SelectTrigger className="w-full bg-slate-950/30">
+                    <SelectTrigger className="w-full">
                       <SelectValue placeholder="Select auth method" />
                     </SelectTrigger>
                     <SelectContent>
@@ -610,7 +610,7 @@ export function AddSourceDialog({ open, onOpenChange }: AddSourceDialogProps) {
                     <Label htmlFor="service_account_json">Service Account JSON</Label>
                     <Textarea
                       id="service_account_json"
-                      className="font-mono text-[10px] min-h-[180px] bg-slate-950/50"
+                      className="min-h-[180px] font-mono text-[10px]"
                       placeholder='Paste the content of your Google Service Account JSON key here...'
                       {...register("service_account_json")}
                     />
@@ -623,7 +623,7 @@ export function AddSourceDialog({ open, onOpenChange }: AddSourceDialogProps) {
                     <Label htmlFor="token_json">Authorized User JSON (token.json)</Label>
                     <Textarea
                       id="token_json"
-                      className="font-mono text-[10px] min-h-[220px] bg-slate-950/50"
+                      className="min-h-[220px] font-mono text-[10px]"
                       placeholder='Paste the content of your token.json here...'
                       {...register("token_json")}
                     />
@@ -636,7 +636,7 @@ export function AddSourceDialog({ open, onOpenChange }: AddSourceDialogProps) {
             )}
 
             {sourceType === "servicenow" && (
-              <div className="space-y-4 p-4 border rounded-lg bg-slate-900/50">
+              <div className="space-y-4 rounded-lg border bg-muted/50 p-4">
                 <div className="space-y-2">
                   <Label htmlFor="servicenow_instance_url">Instance URL</Label>
                   <Input
@@ -684,7 +684,7 @@ export function AddSourceDialog({ open, onOpenChange }: AddSourceDialogProps) {
                   <Label htmlFor="servicenow_table_filters">Table Filters JSON</Label>
                   <Textarea
                     id="servicenow_table_filters"
-                    className="font-mono text-xs min-h-28 bg-slate-950/50"
+                    className="min-h-28 font-mono text-xs"
                     placeholder='{"incident":"priority<=2","change_request":"state=3"}'
                     {...register("servicenow_table_filters")}
                   />
@@ -693,7 +693,7 @@ export function AddSourceDialog({ open, onOpenChange }: AddSourceDialogProps) {
             )}
 
             {sourceType === "zoho_desk" && (
-              <div className="space-y-4 p-4 border rounded-lg bg-slate-900/50">
+              <div className="space-y-4 rounded-lg border bg-muted/50 p-4">
                 <p className="text-xs text-muted-foreground">
                   Scopes are fixed when the refresh token is issued and cannot be
                   added later. Grant <code>Desk.tickets.READ</code> for tickets and{" "}
@@ -842,7 +842,7 @@ export function AddSourceDialog({ open, onOpenChange }: AddSourceDialogProps) {
             )}
 
             {sourceType === "sapphireims" && (
-              <div className="space-y-4 p-4 border rounded-lg bg-slate-900/50">
+              <div className="space-y-4 rounded-lg border bg-muted/50 p-4">
                 <p className="text-xs text-muted-foreground">
                   SapphireIMS endpoint paths and payload field names are
                   instance-specific. The defaults are a starting point — verify
@@ -898,7 +898,7 @@ export function AddSourceDialog({ open, onOpenChange }: AddSourceDialogProps) {
             )}
 
             {sourceType === "manageengine" && (
-              <div className="space-y-4 p-4 border rounded-lg bg-slate-900/50">
+              <div className="space-y-4 rounded-lg border bg-muted/50 p-4">
                 <p className="text-xs text-muted-foreground">
                   ManageEngine ServiceDesk Plus V3 API connector. Ingests service desk tickets, requests, and KB articles.
                 </p>
@@ -933,7 +933,7 @@ export function AddSourceDialog({ open, onOpenChange }: AddSourceDialogProps) {
                   <Label htmlFor="manageengine_table_filters">Table Filters (optional)</Label>
                   <Textarea
                     id="manageengine_table_filters"
-                    className="font-mono text-xs min-h-24 bg-slate-950/50"
+                    className="min-h-24 font-mono text-xs"
                     placeholder='{"requests":"priority<=2"}'
                     {...register("manageengine_table_filters")}
                   />
@@ -1016,7 +1016,7 @@ export function AddSourceDialog({ open, onOpenChange }: AddSourceDialogProps) {
             </div>
           </div>
           
-          <DialogFooter className="p-6 border-t bg-slate-900/10">
+          <DialogFooter className="border-t bg-muted/50 p-6">
             <Button
               type="button"
               variant="outline"

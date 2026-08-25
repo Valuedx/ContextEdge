@@ -11,16 +11,16 @@ export function PageHeader({ title, description, actions, className }: PageHeade
   return (
     <div
       className={cn(
-        "glass-panel flex flex-col gap-4 p-5 sm:flex-row sm:items-start sm:justify-between",
+        "rounded-lg border bg-card px-5 py-5 text-card-foreground shadow-sm sm:flex sm:items-start sm:justify-between sm:gap-4",
         className
       )}
     >
       <div className="min-w-0 space-y-1">
-        <h2 className="text-balance bg-gradient-to-br from-slate-900 via-indigo-800 to-violet-700 bg-clip-text text-2xl font-semibold tracking-tight text-transparent dark:from-white dark:via-white dark:to-white/70">
+        <h2 className="text-balance text-2xl font-semibold tracking-tight text-foreground">
           {title}
         </h2>
         {description && (
-          <p className="text-sm text-muted-foreground text-pretty leading-relaxed">
+          <p className="max-w-3xl text-pretty text-sm leading-relaxed text-muted-foreground">
             {description}
           </p>
         )}

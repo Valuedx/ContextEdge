@@ -74,7 +74,7 @@ function DriftSkeleton() {
       {Array.from({ length: 4 }).map((_, i) => (
         <div
           key={i}
-          className="rounded-xl border border-black/10 bg-white/40 p-4 dark:border-white/10 dark:bg-white/[0.04]"
+          className="rounded-lg border bg-card p-4 shadow-sm"
         >
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div className="min-w-0 flex-1 space-y-2">
@@ -134,7 +134,7 @@ export default function DriftPage() {
               {alerts.map((a) => (
                 <li
                   key={a.playbook_id}
-                  className="flex flex-wrap items-center justify-between gap-4 rounded-xl border border-black/10 bg-white/40 p-4 backdrop-blur-sm dark:border-white/10 dark:bg-white/[0.04]"
+                  className="flex flex-wrap items-center justify-between gap-4 rounded-lg border bg-card p-4 shadow-sm"
                 >
                   <div className="min-w-0 space-y-1.5">
                     <div className="flex items-center gap-2">

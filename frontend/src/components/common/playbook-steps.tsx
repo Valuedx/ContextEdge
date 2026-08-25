@@ -50,17 +50,17 @@ export interface PlaybookStep {
 // system; a diagnostic one only looks at it, and colouring them alike
 // hides the distinction a reviewer is actually assessing.
 const TYPE_STYLES: Record<string, string> = {
-  diagnostic: "bg-sky-500/10 text-sky-300 border-sky-500/30",
-  remediation: "bg-amber-500/10 text-amber-300 border-amber-500/30",
-  verification: "bg-emerald-500/10 text-emerald-300 border-emerald-500/30",
-  escalation: "bg-fuchsia-500/10 text-fuchsia-300 border-fuchsia-500/30",
-  communication: "bg-slate-500/10 text-slate-300 border-slate-500/30",
+  diagnostic: "border-sky-200 bg-sky-50 text-sky-700 dark:border-sky-500/30 dark:bg-sky-500/10 dark:text-sky-300",
+  remediation: "border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-300",
+  verification: "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-500/30 dark:bg-emerald-500/10 dark:text-emerald-300",
+  escalation: "border-fuchsia-200 bg-fuchsia-50 text-fuchsia-700 dark:border-fuchsia-500/30 dark:bg-fuchsia-500/10 dark:text-fuchsia-300",
+  communication: "border-slate-200 bg-slate-50 text-slate-700 dark:border-slate-500/30 dark:bg-slate-500/10 dark:text-slate-300",
 };
 
 const QUALITY_STYLES: Record<string, string> = {
-  high: "text-emerald-400",
-  medium: "text-amber-400",
-  low: "text-rose-400",
+  high: "text-emerald-700 dark:text-emerald-400",
+  medium: "text-amber-700 dark:text-amber-400",
+  low: "text-rose-700 dark:text-rose-400",
 };
 
 /** By declared order, not array position — the two disagree in stored data. */
@@ -100,7 +100,7 @@ export function PlaybookSteps({
   return (
     <div className={className}>
       {bestPracticeCount > 0 && (
-        <label className="mb-2 flex items-center gap-2 text-xs text-slate-400">
+        <label className="mb-2 flex items-center gap-2 text-xs text-muted-foreground">
           <input
             type="checkbox"
             checked={hideBestPractice}
@@ -118,10 +118,10 @@ export function PlaybookSteps({
         return (
           <li
             key={`${step.order ?? index}-${(step.text || "").slice(0, 24)}`}
-            className="rounded-lg border border-slate-800 bg-slate-900/50 p-3"
+            className="rounded-lg border bg-card p-4 shadow-sm"
           >
             <div className="flex items-start gap-3">
-              <span className="mt-0.5 w-6 shrink-0 text-right font-mono text-xs text-slate-500">
+              <span className="mt-0.5 w-6 shrink-0 text-right font-mono text-xs text-muted-foreground">
                 {step.order ?? index + 1}
               </span>
               <div className="min-w-0 flex-1 space-y-2">
@@ -131,7 +131,7 @@ export function PlaybookSteps({
                       className={cn(
                         "rounded border px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide",
                         TYPE_STYLES[type] ??
-                          "bg-slate-500/10 text-slate-300 border-slate-500/30",
+                          "border-slate-200 bg-slate-50 text-slate-700 dark:border-slate-500/30 dark:bg-slate-500/10 dark:text-slate-300",
                       )}
                     >
                       {step.type}
@@ -139,7 +139,7 @@ export function PlaybookSteps({
                   )}
                   {step.grounding_status === "non_grounded" && (
                     <span
-                      className="inline-flex items-center gap-1 rounded border border-violet-500/40 bg-violet-500/10 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-violet-300"
+                      className="inline-flex items-center gap-1 rounded border border-violet-200 bg-violet-50 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-violet-700 dark:border-violet-500/40 dark:bg-violet-500/10 dark:text-violet-300"
                       title={
                         step.reason ||
                         "Expert recommendation — not explicitly present in the source material."
@@ -154,7 +154,7 @@ export function PlaybookSteps({
                       className={cn(
                         "text-[10px] uppercase tracking-wide",
                         QUALITY_STYLES[step.evidence_quality.toLowerCase()] ??
-                          "text-slate-400",
+                          "text-muted-foreground",
                       )}
                       title="How well the source evidence supports this step"
                     >
@@ -163,17 +163,17 @@ export function PlaybookSteps({
                   )}
                 </div>
 
-                <p className="text-sm text-slate-100">{step.text || "(no instruction text)"}</p>
+                <p className="text-sm font-medium leading-6 text-foreground">{step.text || "(no instruction text)"}</p>
 
                 {step.expected_outcome && (
-                  <p className="flex items-start gap-1.5 text-xs text-slate-400">
-                    <ArrowRight className="mt-0.5 h-3 w-3 shrink-0 text-emerald-400" />
+                  <p className="flex items-start gap-1.5 text-xs text-muted-foreground">
+                    <ArrowRight className="mt-0.5 h-3 w-3 shrink-0 text-emerald-600 dark:text-emerald-400" />
                     <span>{step.expected_outcome}</span>
                   </p>
                 )}
 
                 {step.on_failure && (
-                  <p className="flex items-start gap-1.5 text-xs text-amber-300/90">
+                  <p className="flex items-start gap-1.5 text-xs text-amber-700 dark:text-amber-300/90">
                     <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
                     <span>{step.on_failure}</span>
                   </p>
@@ -185,7 +185,7 @@ export function PlaybookSteps({
                     {refs.map((ref, i) => (
                       <span
                         key={ref.id || `${ref.label}-${i}`}
-                        className="inline-flex items-center gap-1 rounded border border-slate-700 bg-slate-800/60 px-1.5 py-0.5 text-[10px] text-slate-300"
+                        className="inline-flex items-center gap-1 rounded border bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground"
                         title={ref.title || undefined}
                       >
                         {ref.kind === "knowledge" ? (
@@ -195,7 +195,7 @@ export function PlaybookSteps({
                         )}
                         {ref.label || ref.kind || "source"}
                         {ref.title && (
-                          <span className="max-w-[16rem] truncate text-slate-400">
+                          <span className="max-w-[16rem] truncate text-muted-foreground">
                             · {ref.title}
                           </span>
                         )}

@@ -23,7 +23,7 @@
  */
 
 import { useQuery } from "@tanstack/react-query";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useSyncExternalStore } from "react";
 import {
   Activity,
   AlertTriangle,
@@ -101,30 +101,55 @@ function formatDuration(seconds: number): string {
  * has ≥60s of samples the ETA reads "estimating". A non-positive rate is
  * reported as such (backlog growing), never as a fake ETA.
  */
-function useDrainRate(remaining: number | undefined): {
+type DrainRate = {
   perMinute: number | null;
   warmedUp: boolean;
-} {
-  const samples = useRef<{ t: number; remaining: number }[]>([]);
-  const [rate, setRate] = useState<{ perMinute: number | null; warmedUp: boolean }>({
-    perMinute: null,
-    warmedUp: false,
-  });
+};
+
+type DrainSample = { t: number; remaining: number };
+
+const COLD_DRAIN_RATE: DrainRate = { perMinute: null, warmedUp: false };
+
+function calculateDrainRate(samples: DrainSample[]): DrainRate {
+  if (samples.length === 0) return COLD_DRAIN_RATE;
+  const first = samples[0];
+  const last = samples[samples.length - 1];
+  const spanSeconds = (last.t - first.t) / 1000;
+  if (spanSeconds < 60) return COLD_DRAIN_RATE;
+  const drained = first.remaining - last.remaining;
+  return { perMinute: (drained / spanSeconds) * 60, warmedUp: true };
+}
+
+function createDrainRateStore() {
+  let samples: DrainSample[] = [];
+  let snapshot = COLD_DRAIN_RATE;
+  const listeners = new Set<() => void>();
+
+  return {
+    addSample(remaining: number) {
+      const now = Date.now();
+      samples = [...samples, { t: now, remaining }].filter((s) => now - s.t <= 120_000);
+      snapshot = calculateDrainRate(samples);
+      listeners.forEach((listener) => listener());
+    },
+    getSnapshot() {
+      return snapshot;
+    },
+    subscribe(listener: () => void) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+  };
+}
+
+function useDrainRate(remaining: number | undefined): DrainRate {
+  const store = useMemo(() => createDrainRateStore(), []);
+  const rate = useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot);
 
   useEffect(() => {
     if (remaining === undefined) return;
-    const now = Date.now();
-    samples.current.push({ t: now, remaining });
-    samples.current = samples.current.filter((s) => now - s.t <= 120_000);
-    const first = samples.current[0];
-    const spanSeconds = (now - first.t) / 1000;
-    if (spanSeconds < 60) {
-      setRate({ perMinute: null, warmedUp: false });
-      return;
-    }
-    const drained = first.remaining - remaining;
-    setRate({ perMinute: (drained / spanSeconds) * 60, warmedUp: true });
-  }, [remaining]);
+    store.addSample(remaining);
+  }, [remaining, store]);
 
   return rate;
 }

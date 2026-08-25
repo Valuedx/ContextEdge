@@ -329,7 +329,6 @@ export default function EpisodesPage() {
               onClick={handleConstructPattern}
               disabled={isClustering}
               variant="outline"
-              className="border-indigo-500/50 text-indigo-400 hover:bg-indigo-500/10 hover:text-indigo-300"
             >
               {isClustering ? (
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -341,7 +340,6 @@ export default function EpisodesPage() {
             <Button 
               onClick={handleReconstruct} 
               disabled={isReconstructing}
-              className="bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700"
             >
               {isReconstructing ? (
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />

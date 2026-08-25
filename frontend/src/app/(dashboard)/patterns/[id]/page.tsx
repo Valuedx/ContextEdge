@@ -192,7 +192,6 @@ export default function PatternDetailPage() {
               variant="default"
               disabled={generatePbMut.isPending}
               onClick={() => generatePbMut.mutate()}
-              className="bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700"
             >
               {generatePbMut.isPending ? (
                 <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
@@ -210,43 +209,43 @@ export default function PatternDetailPage() {
       />
 
       <div className="grid gap-4 md:grid-cols-4">
-        <Card className="bg-slate-900/40 border-slate-800">
+        <Card>
           <CardHeader className="pb-2">
-            <CardTitle className="text-xs font-semibold text-slate-400 uppercase tracking-wider flex items-center gap-2">
-              <Activity className="h-3 w-3 text-indigo-400" /> Confidence
+            <CardTitle className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+              <Activity className="h-3 w-3 text-primary" /> Confidence
             </CardTitle>
           </CardHeader>
-          <CardContent className="text-2xl font-bold text-slate-100">
+          <CardContent className="text-2xl font-bold text-foreground">
             {(pattern.confidence * 100).toFixed(0)}%
           </CardContent>
         </Card>
-        <Card className="bg-slate-900/40 border-slate-800">
+        <Card>
           <CardHeader className="pb-2">
-            <CardTitle className="text-xs font-semibold text-slate-400 uppercase tracking-wider flex items-center gap-2">
+            <CardTitle className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
               <AlertCircle className="h-3 w-3 text-rose-400" /> Contradiction
             </CardTitle>
           </CardHeader>
-          <CardContent className="text-2xl font-bold text-slate-100">
+          <CardContent className="text-2xl font-bold text-foreground">
             {(pattern.contradiction_score * 100).toFixed(0)}%
           </CardContent>
         </Card>
-        <Card className="bg-slate-900/40 border-slate-800">
+        <Card>
           <CardHeader className="pb-2">
-            <CardTitle className="text-xs font-semibold text-slate-400 uppercase tracking-wider flex items-center gap-2">
+            <CardTitle className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
               <Zap className="h-3 w-3 text-amber-400" /> Freshness
             </CardTitle>
           </CardHeader>
-          <CardContent className="text-2xl font-bold text-slate-100">
+          <CardContent className="text-2xl font-bold text-foreground">
             {(pattern.freshness_score * 100).toFixed(0)}%
           </CardContent>
         </Card>
-        <Card className="bg-slate-900/40 border-slate-800">
+        <Card>
           <CardHeader className="pb-2">
-            <CardTitle className="text-xs font-semibold text-slate-400 uppercase tracking-wider flex items-center gap-2">
+            <CardTitle className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
               <Shield className="h-3 w-3 text-emerald-400" /> Episode Count
             </CardTitle>
           </CardHeader>
-          <CardContent className="text-2xl font-bold text-slate-100">
+          <CardContent className="text-2xl font-bold text-foreground">
             {pattern.episode_count}
           </CardContent>
         </Card>
@@ -254,9 +253,9 @@ export default function PatternDetailPage() {
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2 space-y-6">
-          <Card className="bg-slate-900/40 border-slate-800">
+          <Card>
             <CardHeader>
-              <CardTitle className="text-base font-semibold text-slate-200">Knowledge Graph Visualization</CardTitle>
+              <CardTitle className="text-base font-semibold text-foreground">Knowledge Graph Visualization</CardTitle>
             </CardHeader>
             <CardContent className="p-0">
               <PatternGraph patternId={patternId} />
@@ -264,20 +263,20 @@ export default function PatternDetailPage() {
           </Card>
 
           {pattern.resolution_steps && pattern.resolution_steps.length > 0 && (
-            <Card className="bg-slate-900/40 border-slate-800 border-l-4 border-l-indigo-500">
+            <Card className="border-l-4 border-l-primary">
               <CardHeader>
-                <CardTitle className="text-base font-semibold text-slate-200 flex items-center gap-2">
-                   <StepForward className="h-4 w-4 text-indigo-400" /> Synthesized Resolution Path
+                <CardTitle className="flex items-center gap-2 text-base font-semibold text-foreground">
+                   <StepForward className="h-4 w-4 text-primary" /> Synthesized Resolution Path
                 </CardTitle>
               </CardHeader>
               <CardContent>
                 <div className="space-y-4">
                    {pattern.resolution_steps.map((step, i) => (
                      <div key={i} className="flex gap-4">
-                        <div className="flex-none w-6 h-6 rounded-full bg-indigo-500/20 text-indigo-400 flex items-center justify-center text-xs font-bold border border-indigo-500/30">
+                        <div className="flex h-6 w-6 flex-none items-center justify-center rounded-full border bg-muted text-xs font-bold text-foreground">
                            {i + 1}
                         </div>
-                        <p className="text-sm text-slate-300 leading-relaxed pt-0.5">{step}</p>
+                        <p className="pt-0.5 text-sm leading-relaxed text-foreground">{step}</p>
                      </div>
                    ))}
                 </div>
@@ -287,21 +286,21 @@ export default function PatternDetailPage() {
         </div>
 
         <div className="space-y-6">
-          <Card className="bg-slate-900/40 border-slate-800">
+          <Card>
             <CardHeader>
-              <CardTitle className="text-base font-semibold text-slate-200">Pattern Summary</CardTitle>
+              <CardTitle className="text-base font-semibold text-foreground">Pattern Summary</CardTitle>
             </CardHeader>
             <CardContent>
-              <p className="text-sm text-slate-400 leading-relaxed">{pattern.description}</p>
+              <p className="text-sm leading-relaxed text-muted-foreground">{pattern.description}</p>
               
               {pattern.evidence_summary && (
-                 <div className="mt-4 pt-4 border-t border-slate-800 grid grid-cols-2 gap-2">
+                 <div className="mt-4 grid grid-cols-2 gap-2 border-t pt-4">
                     {Object.entries(pattern.evidence_summary)
                       .filter(([key, val]) => key !== "memory_promotion" && (typeof val === "string" || typeof val === "number"))
                       .map(([key, val]) => (
-                        <div key={key} className="bg-slate-950/50 p-2 rounded border border-slate-800/50 flex flex-col">
-                           <span className="text-[10px] text-slate-500 uppercase tracking-tighter font-semibold">{key.replace("_", " ")}</span>
-                           <span className="text-lg font-bold text-slate-300">{String(val)}</span>
+                        <div key={key} className="flex flex-col rounded border bg-muted p-2">
+                           <span className="text-[10px] font-semibold uppercase tracking-tighter text-muted-foreground">{key.replace("_", " ")}</span>
+                           <span className="text-lg font-bold text-foreground">{String(val)}</span>
                         </div>
                       ))}
                  </div>
@@ -310,16 +309,16 @@ export default function PatternDetailPage() {
           </Card>
 
           {pattern.trigger_conditions && pattern.trigger_conditions.length > 0 && (
-            <Card className="bg-slate-900/40 border-slate-800">
+            <Card>
               <CardHeader className="pb-2">
-                <CardTitle className="text-sm font-semibold text-slate-200 flex items-center gap-2">
+                <CardTitle className="flex items-center gap-2 text-sm font-semibold text-foreground">
                   <Zap className="h-3 w-3 text-amber-500" /> Trigger Conditions
                 </CardTitle>
               </CardHeader>
               <CardContent>
                 <ul className="space-y-2">
                   {pattern.trigger_conditions.map((item, i) => (
-                    <li key={i} className="text-xs text-slate-400 flex items-start gap-2">
+                    <li key={i} className="flex items-start gap-2 text-xs text-muted-foreground">
                       <div className="mt-1 w-1.5 h-1.5 rounded-full bg-amber-500/50" /> {item}
                     </li>
                   ))}
@@ -329,15 +328,15 @@ export default function PatternDetailPage() {
           )}
 
           {pattern.core_entities && pattern.core_entities.length > 0 && (
-            <Card className="bg-slate-900/40 border-slate-800">
+            <Card>
               <CardHeader className="pb-2">
-                <CardTitle className="text-sm font-semibold text-slate-200 flex items-center gap-2">
+                <CardTitle className="flex items-center gap-2 text-sm font-semibold text-foreground">
                   <Shield className="h-3 w-3 text-emerald-500" /> Core Entities
                 </CardTitle>
               </CardHeader>
               <CardContent className="flex flex-wrap gap-2">
                 {pattern.core_entities.map((entity, i) => (
-                  <Badge key={i} variant="secondary" className="bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 border-emerald-500/20">
+                  <Badge key={i} variant="secondary" className="border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 dark:border-emerald-500/30 dark:bg-emerald-500/10 dark:text-emerald-300">
                     {entity}
                   </Badge>
                 ))}
@@ -346,15 +345,15 @@ export default function PatternDetailPage() {
           )}
 
           {pattern.observed_errors && pattern.observed_errors.length > 0 && (
-            <Card className="bg-slate-900/40 border-slate-800">
+            <Card>
               <CardHeader className="pb-2">
-                <CardTitle className="text-sm font-semibold text-slate-200 flex items-center gap-2">
+                <CardTitle className="flex items-center gap-2 text-sm font-semibold text-foreground">
                   <Bug className="h-3 w-3 text-rose-500" /> Observed Errors
                 </CardTitle>
               </CardHeader>
               <CardContent className="space-y-2">
                 {pattern.observed_errors.map((error, i) => (
-                  <div key={i} className="text-xs font-mono bg-rose-500/5 border border-rose-500/20 p-2 rounded text-rose-300 break-all">
+                  <div key={i} className="break-all rounded border border-rose-200 bg-rose-50 p-2 font-mono text-xs text-rose-700 dark:border-rose-500/30 dark:bg-rose-500/10 dark:text-rose-300">
                     {error}
                   </div>
                 ))}
@@ -363,17 +362,17 @@ export default function PatternDetailPage() {
           )}
 
           {pattern.root_causes && pattern.root_causes.length > 0 && (
-            <Card className="bg-slate-900/40 border-slate-800">
+            <Card>
               <CardHeader className="pb-2">
-                <CardTitle className="text-sm font-semibold text-slate-200 flex items-center gap-2">
-                  <Lightbulb className="h-3 w-3 text-orange-500" /> Identified Root Causes
+                <CardTitle className="flex items-center gap-2 text-sm font-semibold text-foreground">
+                  <Lightbulb className="h-3 w-3 text-amber-500" /> Identified Root Causes
                 </CardTitle>
               </CardHeader>
               <CardContent>
                  <ul className="space-y-2">
                   {pattern.root_causes.map((item, i) => (
-                    <li key={i} className="text-xs text-slate-400 flex items-start gap-2">
-                      <div className="mt-1 w-1.5 h-1.5 rounded-full bg-orange-500/50" /> {item}
+                    <li key={i} className="flex items-start gap-2 text-xs text-muted-foreground">
+                      <div className="mt-1 w-1.5 h-1.5 rounded-full bg-amber-500/50" /> {item}
                     </li>
                   ))}
                 </ul>
