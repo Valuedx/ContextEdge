@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, func
+from sqlalchemy import DateTime, ForeignKey, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -19,9 +19,23 @@ class TimestampMixin:
     )
 
 
-class TenantScopedMixin(TimestampMixin):
-    """Every tenant-scoped table must include tenant_id."""
+class TenantOwnedMixin:
+    """Denormalized tenant_id on child rows (enforced by FK + RLS)."""
 
     tenant_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), nullable=False, index=True
+        UUID(as_uuid=True),
+        ForeignKey("tenants.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+
+
+class TenantScopedMixin(TimestampMixin):
+    """Every tenant-scoped table must include tenant_id (FK + RLS)."""
+
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("tenants.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
     )

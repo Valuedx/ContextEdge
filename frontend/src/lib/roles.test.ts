@@ -5,8 +5,18 @@ import {
   canEditAutomationMode,
   canSeeNav,
   canTransitionPlaybook,
+  hasRole,
 } from "./roles";
-import { canSeeSidebarItem, NAV_ITEMS } from "./nav";
+import { canSeeSidebarItem, canAccessDashboardPath, NAV_ITEMS } from "./nav";
+
+describe("hasRole", () => {
+  it("does not treat tenant admin as platform super admin", () => {
+    expect(hasRole(["tenant_admin"], "platform_super_admin")).toBe(false);
+    expect(hasRole(["tenant_admin"], "knowledge_manager")).toBe(true);
+    expect(hasRole(["platform_super_admin"], "analyst")).toBe(true);
+    expect(hasRole(["analyst"], "domain_admin")).toBe(false);
+  });
+});
 
 describe("canEditAutomationMode", () => {
   it("is narrower than editing the playbook", () => {
@@ -53,5 +63,13 @@ describe("canEditAutomationMode", () => {
     expect(canTransitionPlaybook(["tenant_admin"])).toBe(true);
     expect(canTransitionPlaybook(["admin"])).toBe(true);
     expect(canEditAutomationMode(["playbook_reviewer"])).toBe(false);
+  });
+
+  it("blocks analysts from admin dashboard routes", () => {
+    expect(canAccessDashboardPath(["analyst"], "/sources")).toBe(false);
+    expect(canAccessDashboardPath(["analyst"], "/settings")).toBe(false);
+    expect(canAccessDashboardPath(["analyst"], "/overview")).toBe(true);
+    expect(canAccessDashboardPath(["domain_admin"], "/sources/abc")).toBe(true);
+    expect(canAccessDashboardPath(["tenant_admin"], "/settings")).toBe(true);
   });
 });

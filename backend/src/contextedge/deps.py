@@ -9,8 +9,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from contextedge.config import settings
 from contextedge.database import get_db
-from contextedge.models.tenant import Tenant
+from contextedge.models.tenant import RoleBinding, Tenant, User
 from contextedge.security_tokens import service_token_context
+from contextedge.tenant_rls import bind_session_tenant
 
 security = HTTPBearer(auto_error=False)
 
@@ -40,11 +41,11 @@ class CurrentUser:
         return role in self.roles
 
     def has_role(self, role: str) -> bool:
-        if (
-            "platform_super_admin" in self.roles
-            or "tenant_admin" in self.roles
-            or "admin" in self.roles
-        ):
+        if "platform_super_admin" in self.roles:
+            return True
+        if role == "platform_super_admin":
+            return False
+        if "tenant_admin" in self.roles or "admin" in self.roles:
             return True
         return role in self.roles
 
@@ -58,6 +59,20 @@ class CurrentUser:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=f"Role '{role}' required",
+            )
+
+    def require_exact_role(self, role: str) -> None:
+        if not self.has_exact_role(role):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Role '{role}' required",
+            )
+
+    def require_any_role(self, *roles: str) -> None:
+        if not any(self.has_role(role) for role in roles):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"One of roles {list(roles)} required",
             )
 
 
@@ -88,6 +103,7 @@ async def get_current_user(
     if x_service_token:
         principal = _service_principal(x_service_token.strip())
         if principal:
+            await bind_session_tenant(db, principal.tenant_id, bypass=False)
             return principal
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -106,18 +122,44 @@ async def get_current_user(
             settings.jwt_secret_key,
             algorithms=[settings.jwt_algorithm],
         )
-        jwt_domains = payload.get("allowed_domain_ids")
-        allowed_jwt: list[UUID] | None = None
-        if isinstance(jwt_domains, list):
-            allowed_jwt = [UUID(str(x)) for x in jwt_domains]
+        user_id = UUID(payload["sub"])
+        token_tenant_id = UUID(payload["tenant_id"])
+        await bind_session_tenant(db, token_tenant_id, bypass=False)
+        account = (
+            await db.execute(select(User).where(User.id == user_id))
+        ).scalar_one_or_none()
+        if account is None or account.status != "active":
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid or expired token",
+            )
+        if account.tenant_id != token_tenant_id:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid or expired token",
+            )
+        bindings = (
+            await db.execute(select(RoleBinding).where(RoleBinding.user_id == account.id))
+        ).scalars().all()
+        roles = [b.role for b in bindings]
+        workspace_ids = [
+            b.scope_id
+            for b in bindings
+            if b.scope_type == "workspace" and b.scope_id is not None
+        ]
+        allowed_from_bindings = [
+            b.scope_id
+            for b in bindings
+            if b.scope_type == "domain" and b.scope_id is not None
+        ]
         principal = CurrentUser(
-            user_id=UUID(payload["sub"]),
-            tenant_id=UUID(payload["tenant_id"]),
-            email=payload.get("username") or payload.get("email", ""),
-            roles=payload.get("roles", []),
-            workspace_ids=[UUID(w) for w in payload.get("workspace_ids", [])],
+            user_id=account.id,
+            tenant_id=account.tenant_id,
+            email=account.username,
+            roles=roles,
+            workspace_ids=workspace_ids,
             principal_type="user",
-            allowed_domain_ids=allowed_jwt,
+            allowed_domain_ids=allowed_from_bindings or None,
         )
         if x_tenant_id and principal.has_exact_role("platform_super_admin"):
             try:
@@ -133,6 +175,7 @@ async def get_current_user(
             if tenant is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
             principal.tenant_id = tenant.id
+            await bind_session_tenant(db, principal.tenant_id, bypass=False)
         return principal
     except HTTPException:
         raise

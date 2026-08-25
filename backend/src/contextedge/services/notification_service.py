@@ -57,7 +57,7 @@ async def send_notification(
         elif channel == NotificationChannel.EMAIL:
             await _send_email(db, tenant_id, user_id, title, body)
         elif channel == NotificationChannel.WEBHOOK:
-            await _send_webhook(tenant_id, title, body, metadata)
+            await _send_webhook(db, tenant_id, title, body, metadata)
 
 
 async def _send_in_app(
@@ -170,15 +170,25 @@ async def _send_email(
 
 
 async def _send_webhook(
+    db: AsyncSession | None,
     tenant_id: uuid.UUID,
     title: str,
     body: str,
     metadata: dict | None,
 ):
-    """POST to the configured Teams/Slack-compatible webhook with one retry.
+    """POST to a tenant-specific webhook when configured, else the global URL."""
+    url = ""
+    if db is not None:
+        from contextedge.models.tenant import Tenant
 
-    Best-effort like email: failures are logged, never raised."""
-    if not settings.notification_webhook_url:
+        tenant = await db.get(Tenant, tenant_id)
+        if tenant is not None and isinstance(tenant.config, dict):
+            configured = tenant.config.get("notification_webhook_url")
+            if isinstance(configured, str):
+                url = configured.strip()
+    if not url:
+        url = settings.notification_webhook_url
+    if not url:
         logger.info(
             "notification.webhook_skipped_unconfigured",
             tenant_id=str(tenant_id),
@@ -199,9 +209,7 @@ async def _send_webhook(
     for attempt in (1, 2):
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
-                response = await client.post(
-                    settings.notification_webhook_url, json=payload
-                )
+                response = await client.post(url, json=payload)
                 response.raise_for_status()
             logger.info(
                 "notification.webhook_sent",

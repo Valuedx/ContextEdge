@@ -233,6 +233,7 @@ async def create_pattern_evidence_link(
         raise HTTPException(status_code=400, detail="episode_id or evidence_id is required")
 
     link = PatternEvidenceLink(
+        tenant_id=pattern.tenant_id,
         pattern_id=pattern_id,
         episode_id=body.episode_id,
         evidence_id=body.evidence_id,

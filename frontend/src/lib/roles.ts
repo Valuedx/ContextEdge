@@ -36,12 +36,16 @@ export function assignableRoles(actorRoles: string[]) {
 }
 
 export function hasRole(roles: string[], role: string): boolean {
-  return (
-    roles.includes(role) ||
-    roles.includes("platform_super_admin") ||
-    roles.includes("tenant_admin") ||
-    roles.includes("admin")
-  );
+  if (roles.includes("platform_super_admin")) {
+    return true;
+  }
+  if (role === "platform_super_admin") {
+    return false;
+  }
+  if (roles.includes("tenant_admin") || roles.includes("admin")) {
+    return true;
+  }
+  return roles.includes(role);
 }
 
 export const isPlatformSuperAdmin = (roles: string[]) =>

@@ -156,6 +156,7 @@ def _materialize_evidence_links(
         seen.add(("e", str(parsed)))
         db.add(
             PlaybookEvidenceLink(
+                tenant_id=version.tenant_id,
                 playbook_version_id=version.id,
                 evidence_id=parsed,
                 link_type=EVIDENCE_LINK_TYPE,
@@ -170,6 +171,7 @@ def _materialize_evidence_links(
         seen.add(("p", str(parsed)))
         db.add(
             PlaybookEvidenceLink(
+                tenant_id=version.tenant_id,
                 playbook_version_id=version.id,
                 episode_id=parsed,
                 link_type=EPISODE_LINK_TYPE,
@@ -188,6 +190,7 @@ def _materialize_evidence_links(
         seen.add(("e", str(parsed)))
         db.add(
             PlaybookEvidenceLink(
+                tenant_id=version.tenant_id,
                 playbook_version_id=version.id,
                 evidence_id=parsed,
                 link_type=KNOWLEDGE_LINK_TYPE,
@@ -272,6 +275,7 @@ async def transition_playbook(
             version.published_by = actor_id
 
     approval = PlaybookApproval(
+        tenant_id=playbook.tenant_id,
         playbook_id=playbook.id,
         playbook_version_id=playbook.current_version_id,
         approver_id=actor_id,
@@ -387,6 +391,7 @@ async def create_playbook_version(
         try:
             async with db.begin_nested():
                 version = PlaybookVersion(
+                    tenant_id=playbook.tenant_id,
                     playbook_id=playbook.id,
                     semantic_version=semantic_version,
                     trigger_conditions=version_data.get("trigger_conditions", {}),

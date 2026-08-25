@@ -17,7 +17,7 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from contextedge.models.base import Base, TenantScopedMixin
+from contextedge.models.base import Base, TenantOwnedMixin, TenantScopedMixin
 
 
 class Pattern(Base, TenantScopedMixin):
@@ -26,7 +26,7 @@ class Pattern(Base, TenantScopedMixin):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     tenant_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("tenants.id"),
+        ForeignKey("tenants.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
@@ -57,7 +57,7 @@ class Pattern(Base, TenantScopedMixin):
     evidence_links: Mapped[list["PatternEvidenceLink"]] = relationship(back_populates="pattern")
 
 
-class PatternEvidenceLink(Base):
+class PatternEvidenceLink(Base, TenantOwnedMixin):
     __tablename__ = "pattern_evidence_links"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -72,7 +72,11 @@ class PatternEvidenceLink(Base):
         ForeignKey("episodes.id"),
         nullable=True,
     )
-    evidence_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    evidence_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("evidence_items.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     link_type: Mapped[str] = mapped_column(String(50), nullable=False)
     weight: Mapped[float] = mapped_column(Float, default=1.0, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
@@ -121,7 +125,7 @@ class PatternEvidence(Base, TenantScopedMixin):
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
     tenant_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=False, index=True
+        UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True
     )
     pattern_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("patterns.id"), nullable=False, index=True
@@ -188,7 +192,7 @@ class NegativeKnowledgeItem(Base, TenantScopedMixin):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     tenant_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("tenants.id"),
+        ForeignKey("tenants.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
@@ -206,7 +210,7 @@ class Contradiction(Base, TenantScopedMixin):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     tenant_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("tenants.id"),
+        ForeignKey("tenants.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
@@ -241,7 +245,7 @@ class ContradictionScanState(Base, TenantScopedMixin):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     tenant_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("tenants.id"),
+        ForeignKey("tenants.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )

@@ -19,6 +19,7 @@ async def list_all_sync_runs(
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
 ):
+    user.require_role("domain_admin")
     q = select(SyncRun).where(SyncRun.tenant_id == user.tenant_id)
     if status_filter:
         q = q.where(SyncRun.status == status_filter)
@@ -31,6 +32,7 @@ async def list_all_sync_runs(
 
 @router.get("/{run_id}", response_model=SyncRunResponse)
 async def get_sync_run(run_id: UUID, db: DbSession, user: AuthUser):
+    user.require_role("domain_admin")
     result = await db.execute(
         select(SyncRun).where(SyncRun.id == run_id, SyncRun.tenant_id == user.tenant_id)
     )

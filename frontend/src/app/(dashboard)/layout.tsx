@@ -1,8 +1,9 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
-import { isAuthenticated } from "@/lib/auth";
+import { usePathname, useRouter } from "next/navigation";
+import { isAuthenticated, parseToken } from "@/lib/auth";
+import { canAccessDashboardPath } from "@/lib/nav";
 import { SidebarNav } from "@/components/shell/sidebar-nav";
 import { AppHeader } from "@/components/shell/app-header";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -15,13 +16,30 @@ export default function DashboardLayout({
   children: React.ReactNode;
 }) {
   const router = useRouter();
+  const pathname = usePathname();
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [gate, setGate] = useState<"pending" | "allow" | "login" | "forbidden">(
+    "pending",
+  );
 
   useEffect(() => {
     if (!isAuthenticated()) {
+      setGate("login");
       router.replace("/login");
+      return;
     }
-  }, [router]);
+    const payload = parseToken();
+    if (payload && !canAccessDashboardPath(payload.roles || [], pathname)) {
+      setGate("forbidden");
+      router.replace("/overview");
+      return;
+    }
+    setGate("allow");
+  }, [router, pathname]);
+
+  if (gate !== "allow") {
+    return null;
+  }
 
   return (
     <div className="relative flex h-screen overflow-hidden bg-background">

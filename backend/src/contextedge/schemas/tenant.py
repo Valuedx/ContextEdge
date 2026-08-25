@@ -179,6 +179,7 @@ class RoleBindingResponse(BaseModel):
 class LoginRequest(BaseModel):
     username: Username
     password: str
+    tenant_slug: str | None = Field(None, min_length=1, max_length=100)
 
 
 class TokenResponse(BaseModel):

@@ -22,7 +22,7 @@ class FleetGroupSuggestion(Base):
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
     tenant_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=False, index=True
+        UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True
     )
     change_ref: Mapped[str] = mapped_column(String(120), nullable=False)
     change_evidence_id: Mapped[uuid.UUID | None] = mapped_column(

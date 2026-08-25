@@ -33,11 +33,14 @@ def _user(username="ops-acme", password="pw", status="active", tenant_id=None):
 def _db(users, roles=("analyst",)):
     captured = []
 
-    async def _execute(stmt):
+    async def _execute(stmt, *args, **kwargs):
         captured.append(stmt)
-        if len(captured) == 1:
+        s = str(stmt)
+        if "users" in s:
             return _ScalarsResult(users)
-        return _ScalarsResult(list(roles))
+        if "role_bindings" in s:
+            return _ScalarsResult([SimpleNamespace(role=r, scope_type="tenant", scope_id=None) for r in roles])
+        return _ScalarsResult([])
 
     return SimpleNamespace(execute=_execute), captured
 
@@ -51,7 +54,7 @@ async def test_login_success_returns_token():
 
     assert response.access_token
     # The user query must filter on active status at the SQL layer.
-    assert "users.status" in str(captured[0])
+    assert any("users.status" in str(s) for s in captured)
 
 
 @pytest.mark.asyncio

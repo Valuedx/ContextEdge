@@ -6,7 +6,7 @@ from sqlalchemy import Computed, DateTime, Float, ForeignKey, String, Text, Uniq
 from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from contextedge.models.base import Base, TenantScopedMixin
+from contextedge.models.base import Base, TenantOwnedMixin, TenantScopedMixin
 
 # The operating modes a playbook can run under. Kept in order of
 # increasing permissiveness so code can reason about "more automation"
@@ -62,7 +62,7 @@ class Playbook(Base, TenantScopedMixin):
     )
     tenant_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("tenants.id"),
+        ForeignKey("tenants.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
@@ -122,7 +122,7 @@ class Playbook(Base, TenantScopedMixin):
     approvals: Mapped[list["PlaybookApproval"]] = relationship(back_populates="playbook")
 
 
-class PlaybookVersion(Base):
+class PlaybookVersion(Base, TenantOwnedMixin):
     __tablename__ = "playbook_versions"
     __table_args__ = (
         UniqueConstraint(
@@ -174,7 +174,7 @@ class PlaybookVersion(Base):
     evidence_links: Mapped[list["PlaybookEvidenceLink"]] = relationship(back_populates="version")
 
 
-class PlaybookEvidenceLink(Base):
+class PlaybookEvidenceLink(Base, TenantOwnedMixin):
     __tablename__ = "playbook_evidence_links"
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -208,7 +208,7 @@ class PlaybookEvidenceLink(Base):
     version: Mapped["PlaybookVersion"] = relationship(back_populates="evidence_links")
 
 
-class PlaybookApproval(Base):
+class PlaybookApproval(Base, TenantOwnedMixin):
     __tablename__ = "playbook_approvals"
 
     id: Mapped[uuid.UUID] = mapped_column(

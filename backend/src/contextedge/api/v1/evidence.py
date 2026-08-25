@@ -33,6 +33,7 @@ async def get_live_zoho_ticket_context(
     user: AuthUser,
 ):
     """Read one exact Zoho ticket and its conversation using tenant credentials."""
+    user.require_role("domain_admin")
     if not ticket_id.isdigit() or len(ticket_id) > 64:
         raise HTTPException(status_code=400, detail="Invalid Zoho ticket id")
 

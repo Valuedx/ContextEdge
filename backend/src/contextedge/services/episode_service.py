@@ -298,6 +298,7 @@ async def create_episodes_from_evidence(
 
         for step_data in ep_data.get("steps", []):
             step = EpisodeStep(
+                tenant_id=tenant_id,
                 episode_id=episode.id,
                 step_order=step_data.get("step_order", 0),
                 step_type=step_data.get("step_type", "unknown"),

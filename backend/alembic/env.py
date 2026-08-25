@@ -8,25 +8,12 @@ from sqlalchemy import engine_from_config, pool
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from contextedge.models.base import Base  # noqa: E402
+import contextedge.models as _models_pkg  # noqa: E402
+import pkgutil  # noqa: E402
 
-# Import all model modules so Base.metadata is complete for autogenerate / migrations.
-import contextedge.models.audit  # noqa: E402, F401
-import contextedge.models.events  # noqa: E402, F401
-import contextedge.models.episode  # noqa: E402, F401
-import contextedge.models.evaluation  # noqa: E402, F401
-import contextedge.models.evidence  # noqa: E402, F401
-import contextedge.models.pattern  # noqa: E402, F401
-import contextedge.models.playbook  # noqa: E402, F401
-import contextedge.models.session  # noqa: E402, F401
-import contextedge.models.execution  # noqa: E402, F401
-import contextedge.models.source  # noqa: E402, F401
-import contextedge.models.tenant  # noqa: E402, F401
-import contextedge.models.policy  # noqa: E402, F401
-import contextedge.models.entity  # noqa: E402, F401
-import contextedge.models.claim  # noqa: E402, F401
-import contextedge.models.action_policy  # noqa: E402, F401
-import contextedge.models.error_signature  # noqa: E402, F401
-import contextedge.models.case_outcome  # noqa: E402, F401
+# Load every model module so autogenerate and metadata stay complete.
+for _mod in pkgutil.iter_modules(_models_pkg.__path__):
+    __import__(f"contextedge.models.{_mod.name}")
 
 from contextedge.config import settings  # noqa: E402
 from contextedge.migration_support import widen_alembic_version_column  # noqa: E402

@@ -130,6 +130,7 @@ async def create_pattern_from_episodes(
     # 1. Relational Links (Membership)
     for ep_id in episode_ids:
         link = PatternEvidenceLink(
+            tenant_id=tenant_id,
             pattern_id=pattern.id,
             episode_id=ep_id,
             link_type="member",
@@ -221,6 +222,7 @@ async def add_episode_to_pattern(
 
     if not existing_link:
         link = PatternEvidenceLink(
+            tenant_id=tenant_id,
             pattern_id=pattern.id,
             episode_id=episode_id,
             link_type="member",
@@ -286,44 +288,59 @@ async def deduplicate_evidence_items(db: AsyncSession, tenant_id: uuid.UUID) -> 
         duplicates = items[1:]
 
         for dup in duplicates:
+            params = {"can_id": canonical.id, "dup_id": dup.id, "tid": tenant_id}
             for query_str in (
-                "UPDATE case_links SET evidence_id = :can_id WHERE evidence_id = :dup_id",
-                "DELETE FROM evidence_identity_links WHERE evidence_id = :dup_id",
+                "UPDATE case_links SET evidence_id = :can_id"
+                " WHERE evidence_id = :dup_id AND tenant_id = :tid",
+                "DELETE FROM evidence_identity_links"
+                " WHERE evidence_id = :dup_id AND tenant_id = :tid",
                 "UPDATE episode_evidence_links SET evidence_id = :can_id"
-                " WHERE evidence_id = :dup_id AND episode_id NOT IN"
+                " WHERE evidence_id = :dup_id AND tenant_id = :tid AND episode_id NOT IN"
                 " (SELECT episode_id FROM episode_evidence_links"
-                " WHERE evidence_id = :can_id)",
-                "DELETE FROM episode_evidence_links WHERE evidence_id = :dup_id",
+                " WHERE evidence_id = :can_id AND tenant_id = :tid)",
+                "DELETE FROM episode_evidence_links"
+                " WHERE evidence_id = :dup_id AND tenant_id = :tid",
                 "UPDATE pattern_evidence_links SET evidence_id = :can_id"
-                " WHERE evidence_id = :dup_id AND pattern_id NOT IN"
+                " WHERE evidence_id = :dup_id AND tenant_id = :tid AND pattern_id NOT IN"
                 " (SELECT pattern_id FROM pattern_evidence_links"
-                " WHERE evidence_id = :can_id)",
-                "DELETE FROM pattern_evidence_links WHERE evidence_id = :dup_id",
+                " WHERE evidence_id = :can_id AND tenant_id = :tid)",
+                "DELETE FROM pattern_evidence_links"
+                " WHERE evidence_id = :dup_id AND tenant_id = :tid",
                 "UPDATE playbook_evidence_links SET evidence_id = :can_id"
-                " WHERE evidence_id = :dup_id AND playbook_version_id NOT IN"
+                " WHERE evidence_id = :dup_id AND tenant_id = :tid AND playbook_version_id NOT IN"
                 " (SELECT playbook_version_id FROM playbook_evidence_links"
-                " WHERE evidence_id = :can_id)",
-                "DELETE FROM playbook_evidence_links WHERE evidence_id = :dup_id",
+                " WHERE evidence_id = :can_id AND tenant_id = :tid)",
+                "DELETE FROM playbook_evidence_links"
+                " WHERE evidence_id = :dup_id AND tenant_id = :tid",
             ):
                 try:
-                    await db.execute(text(query_str), {"can_id": canonical.id, "dup_id": dup.id})
+                    await db.execute(text(query_str), params)
                 except Exception:
                     pass
 
-            await db.execute(delete(EvidenceItem).where(EvidenceItem.id == dup.id))
+            await db.execute(
+                delete(EvidenceItem).where(
+                    EvidenceItem.id == dup.id,
+                    EvidenceItem.tenant_id == tenant_id,
+                )
+            )
 
             if dup.raw_object_ref:
                 ref_cnt = (
                     await db.execute(
                         select(func.count())
                         .select_from(EvidenceItem)
-                        .where(EvidenceItem.raw_object_ref == dup.raw_object_ref)
+                        .where(
+                            EvidenceItem.raw_object_ref == dup.raw_object_ref,
+                            EvidenceItem.tenant_id == tenant_id,
+                        )
                     )
                 ).scalar_one()
                 if ref_cnt == 0:
                     await db.execute(
                         delete(RawEvidenceObject).where(
-                            RawEvidenceObject.id == dup.raw_object_ref
+                            RawEvidenceObject.id == dup.raw_object_ref,
+                            RawEvidenceObject.tenant_id == tenant_id,
                         )
                     )
 

@@ -7,6 +7,7 @@ from contextedge.deps import AuthUser, DbSession
 from contextedge.middleware.audit import log_audit_event
 from contextedge.models.tenant import Domain
 from contextedge.schemas.tenant import DomainCreate, DomainResponse, DomainUpdate
+from contextedge.services.tenant_membership import assert_workspace_in_tenant
 
 router = APIRouter()
 
@@ -30,6 +31,7 @@ async def list_domains(
 @router.post("", response_model=DomainResponse, status_code=status.HTTP_201_CREATED)
 async def create_domain(body: DomainCreate, db: DbSession, user: AuthUser):
     user.require_role("tenant_admin")
+    await assert_workspace_in_tenant(db, user.tenant_id, body.workspace_id)
     domain = Domain(tenant_id=user.tenant_id, **body.model_dump())
     db.add(domain)
     await db.flush()

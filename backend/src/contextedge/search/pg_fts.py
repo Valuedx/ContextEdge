@@ -50,6 +50,7 @@ async def search_evidence_fts(
     # Fallback: ticket number search via raw_evidence_objects payload
     raw_number_match = EvidenceItem.raw_object_ref.in_(
         select(RawEvidenceObject.id).where(
+            RawEvidenceObject.tenant_id == tenant_id,
             or_(
                 RawEvidenceObject.raw_payload["ticket_number"].astext.ilike(f"%{query}%"),
                 RawEvidenceObject.raw_payload["ticketNumber"].astext.ilike(f"%{query}%"),

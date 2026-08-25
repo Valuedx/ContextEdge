@@ -22,6 +22,12 @@ async def create_agent_graph_subset(
     user: AuthUser,
 ):
     """Return a ranked, bounded, authorization-filtered agent graph projection."""
+    user.require_any_role(
+        "analyst",
+        "playbook_reviewer",
+        "knowledge_manager",
+        "domain_admin",
+    )
     effective = body.model_copy(update={"as_of": normalize_graph_as_of(body.as_of)})
     scope = await build_agent_graph_scope(db, user, effective.domain_id)
     return await AgentGraphProjectionService(db).project(
@@ -47,6 +53,12 @@ async def cmdb_topology(
     when ServiceNow is unreachable."""
     from contextedge.services.cmdb_topology_service import lookup_topology
 
+    user.require_any_role(
+        "analyst",
+        "playbook_reviewer",
+        "knowledge_manager",
+        "domain_admin",
+    )
     return await lookup_topology(db, user.tenant_id, ci)
 
 
@@ -114,6 +126,12 @@ async def change_risk(
     cached blast radius — every factor explained."""
     from contextedge.services.change_risk_service import assess_change_risk
 
+    user.require_any_role(
+        "analyst",
+        "playbook_reviewer",
+        "knowledge_manager",
+        "domain_admin",
+    )
     return await assess_change_risk(db, user.tenant_id, ci, window_days=window_days)
 
 
@@ -205,6 +223,12 @@ async def graph_neighbors(
     as_of: datetime | None = Query(None, description="Point-in-time traversal timestamp"),
 ):
     """Return neighboring nodes reachable via graph edges up to *max_depth* hops."""
+    user.require_any_role(
+        "analyst",
+        "playbook_reviewer",
+        "knowledge_manager",
+        "domain_admin",
+    )
     return await get_neighbors(
         db,
         tenant_id=user.tenant_id,
@@ -228,6 +252,12 @@ async def graph_subgraph(
     as_of: datetime | None = Query(None),
 ):
     """Return the subgraph around any entity as nodes + edges suitable for visualization."""
+    user.require_any_role(
+        "analyst",
+        "playbook_reviewer",
+        "knowledge_manager",
+        "domain_admin",
+    )
     return await get_entity_subgraph(
         db,
         tenant_id=user.tenant_id,
@@ -247,6 +277,12 @@ async def graph_stats(
     as_of: datetime | None = Query(None),
 ):
     """Return aggregate edge-type and node-type counts for the tenant."""
+    user.require_any_role(
+        "analyst",
+        "playbook_reviewer",
+        "knowledge_manager",
+        "domain_admin",
+    )
     return await get_graph_stats(
         db,
         tenant_id=user.tenant_id,

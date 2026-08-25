@@ -7,6 +7,7 @@ from sqlalchemy import select
 from contextedge.deps import AuthUser, DbSession
 from contextedge.middleware.audit import log_audit_event
 from contextedge.models.tenant import RoleBinding, Tenant, User
+from contextedge.tenant_rls import bind_session_tenant
 from contextedge.schemas.tenant import (
     PLATFORM_ASSIGNABLE_ROLES,
     TENANT_ASSIGNABLE_ROLES,
@@ -117,6 +118,8 @@ async def list_users(
                 status_code=403,
                 detail="Only the platform super admin can list another tenant",
             )
+    if scope_id != user.tenant_id:
+        await bind_session_tenant(db, scope_id, bypass=False)
     stmt = select(User).where(User.tenant_id == scope_id)
     if not user.has_exact_role("platform_super_admin"):
         hidden = select(RoleBinding.user_id).where(
@@ -150,10 +153,15 @@ async def create_user(body: UserCreate, db: DbSession, user: AuthUser):
             raise HTTPException(status_code=404, detail="Tenant not found")
         target_tenant_id = tenant.id
 
+    if target_tenant_id != user.tenant_id:
+        await bind_session_tenant(db, target_tenant_id, bypass=False)
+
     role = body.role or "analyst"
     _assert_can_assign(user, role)
 
-    existing = await db.execute(select(User).where(User.username == body.username))
+    existing = await db.execute(
+        select(User).where(User.username == body.username, User.tenant_id == target_tenant_id)
+    )
     if existing.scalar_one_or_none():
         raise HTTPException(status_code=409, detail="User with this username already exists")
 
@@ -192,6 +200,7 @@ async def create_user(body: UserCreate, db: DbSession, user: AuthUser):
 
 @router.get("/{user_id}", response_model=UserResponse)
 async def get_user(user_id: UUID, db: DbSession, user: AuthUser):
+    user.require_role("tenant_admin")
     u = await _managed_user(db, user, user_id)
     roles = await _roles_by_user(db, [u.id])
     names = await _tenant_names(db, [u.tenant_id])
@@ -268,6 +277,7 @@ async def assign_role(user_id: UUID, body: RoleBindingCreate, db: DbSession, use
 
 @router.get("/{user_id}/roles", response_model=list[RoleBindingResponse])
 async def list_user_roles(user_id: UUID, db: DbSession, user: AuthUser):
+    user.require_role("tenant_admin")
     target = await _managed_user(db, user, user_id)
     result = await db.execute(
         select(RoleBinding).where(
@@ -302,7 +312,10 @@ async def remove_role(user_id: UUID, role_binding_id: UUID, db: DbSession, user:
     await log_audit_event(
         db,
         tenant_id=target.tenant_id,
+        actor_id=user.user_id,
+        actor_email=user.email,
+        action="role.removed",
         resource_type="role_binding",
         resource_id=str(role_binding_id),
-        details={"target_user_id": str(user_id)},
+        details={"target_user_id": str(user_id), "role": rb.role},
     )

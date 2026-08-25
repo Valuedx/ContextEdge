@@ -5,6 +5,7 @@ from collections.abc import Awaitable, Callable
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from contextedge.database import async_sessionmaker, create_db_engine
+from contextedge.tenant_rls import bind_session_tenant
 
 
 async def _with_session[T](
@@ -16,6 +17,7 @@ async def _with_session[T](
     worker_session_factory = async_sessionmaker(worker_engine, expire_on_commit=False)
 
     async with worker_session_factory() as db:
+        await bind_session_tenant(db, None, bypass=True)
         try:
             out = await fn(db)
             await db.commit()

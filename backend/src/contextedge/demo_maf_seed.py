@@ -284,6 +284,9 @@ def _demo_id(kind: str, key: str) -> uuid.UUID:
 async def seed_maf_demo() -> None:
     require_destructive_reset_allowed("demo_maf_seed")
     async with async_session_factory() as db:
+        from contextedge.tenant_rls import bind_session_tenant
+
+        await bind_session_tenant(db, None, bypass=True)
         print("1. Truncating old unlinked data tables...")
         tables_to_wipe = [
             "playbook_evidence_links",
@@ -395,6 +398,7 @@ async def seed_maf_demo() -> None:
             # Playbook Version
             version = PlaybookVersion(
                 id=version_id,
+                tenant_id=tenant.id,
                 playbook_id=playbook_id,
                 semantic_version="1.0.0",
                 trigger_conditions={"all": scenario["triggers"]},
@@ -506,6 +510,7 @@ async def seed_maf_demo() -> None:
 
                     # Link PatternEvidenceLink
                     pel = PatternEvidenceLink(
+                        tenant_id=tenant.id,
                         pattern_id=pattern_id,
                         episode_id=episode_id,
                         evidence_id=evidence_id,

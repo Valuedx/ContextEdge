@@ -24,6 +24,10 @@ from contextedge.schemas.source import (
 from contextedge.services.evidence_normalization import evidence_content_hash_from_payload
 from contextedge.services.evidence_typing import UPLOADABLE_EVIDENCE_TYPES
 from contextedge.services.policy_assignment import assert_policy_assignment
+from contextedge.services.tenant_membership import (
+    assert_domains_in_tenant,
+    assert_workspace_in_tenant,
+)
 from contextedge.services.source_service import (
     discover_source_objects,
     encrypt_credentials,
@@ -43,6 +47,7 @@ async def list_sources(
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
 ):
+    user.require_role("domain_admin")
     q = select(Source).where(Source.tenant_id == user.tenant_id)
     if source_type:
         q = q.where(Source.source_type == source_type)
@@ -63,6 +68,7 @@ async def list_source_types(user: AuthUser):
     with no connector behind them, and hid two that worked — which is a
     drift that a client-side list makes invisible until a user hits it.
     """
+    user.require_role("domain_admin")
     from contextedge.connectors.registry import source_type_catalog
 
     return [
@@ -80,6 +86,9 @@ async def list_source_types(user: AuthUser):
 @router.post("", response_model=SourceResponse, status_code=status.HTTP_201_CREATED)
 async def create_source(body: SourceCreate, db: DbSession, user: AuthUser):
     user.require_role("domain_admin")
+
+    await assert_workspace_in_tenant(db, user.tenant_id, body.workspace_id)
+    await assert_domains_in_tenant(db, user.tenant_id, body.domain_ids)
 
     await assert_policy_assignment(
         db, user.tenant_id, body.retention_policy_id, "retention"
@@ -127,6 +136,7 @@ async def create_source(body: SourceCreate, db: DbSession, user: AuthUser):
     if body.credentials:
         encrypted = await encrypt_credentials(body.credentials)
         cred = SourceCredential(
+            tenant_id=source.tenant_id,
             source_id=source.id,
             auth_type=body.auth_type,
             encrypted_credentials=encrypted,
@@ -152,6 +162,7 @@ async def create_source(body: SourceCreate, db: DbSession, user: AuthUser):
 
 @router.get("/{source_id}", response_model=SourceResponse)
 async def get_source(source_id: UUID, db: DbSession, user: AuthUser):
+    user.require_role("domain_admin")
     result = await db.execute(
         select(Source).where(Source.id == source_id, Source.tenant_id == user.tenant_id)
     )
@@ -173,6 +184,7 @@ async def update_source(source_id: UUID, body: SourceUpdate, db: DbSession, user
 
     update_data = body.model_dump(exclude_unset=True)
     if "domain_ids" in update_data and update_data["domain_ids"] is not None:
+        await assert_domains_in_tenant(db, user.tenant_id, update_data["domain_ids"])
         update_data["domain_ids"] = [str(d) for d in update_data["domain_ids"]]
     if "retention_policy_id" in update_data:
         await assert_policy_assignment(

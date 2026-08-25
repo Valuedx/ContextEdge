@@ -232,6 +232,9 @@ async def _print_accounts(db: AsyncSession, tenant: Tenant) -> None:
 
 async def seed():
     async with async_session_factory() as db:
+        from contextedge.tenant_rls import bind_session_tenant
+
+        await bind_session_tenant(db, None, bypass=True)
         tenant = await resolve_seed_tenant(db)
         if tenant is None:
             tenant = Tenant(

@@ -107,13 +107,15 @@ async def _check_migrations() -> str:
 
 
 def create_app() -> FastAPI:
+    debug_docs = settings.app_env == "development" or settings.app_debug
     app = FastAPI(
         title="ContextEdge",
         description="Operational Memory and Living Playbook Platform",
         version="0.1.0",
         lifespan=lifespan,
-        docs_url="/docs",
-        redoc_url="/redoc",
+        docs_url="/docs" if debug_docs else None,
+        redoc_url="/redoc" if debug_docs else None,
+        openapi_url="/openapi.json" if debug_docs else None,
     )
 
     from contextedge.middleware.request_audit import RequestAuditMiddleware
@@ -165,7 +167,10 @@ def create_app() -> FastAPI:
             headers=headers,
         )
 
-    Instrumentator().instrument(app).expose(app)
+    if settings.app_env == "development" or settings.app_debug:
+        Instrumentator().instrument(app).expose(app)
+    else:
+        Instrumentator().instrument(app)
 
     from contextedge.api.v1 import router as api_v1_router
     app.include_router(api_v1_router, prefix="/api/v1")

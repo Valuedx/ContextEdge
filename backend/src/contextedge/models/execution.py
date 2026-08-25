@@ -35,7 +35,7 @@ class ExecutionRun(Base, TenantScopedMixin):
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     tenant_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=False, index=True,
+        UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True,
     )
     session_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("resolution_sessions.id"), nullable=True, index=True,
@@ -92,7 +92,7 @@ class ExecutionStepRun(Base):
         nullable=False, index=True,
     )
     tenant_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=False, index=True,
+        UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True,
     )
     step_index: Mapped[int] = mapped_column(Integer, nullable=False)
     step_title: Mapped[str | None] = mapped_column(String(500), nullable=True)
@@ -151,7 +151,7 @@ class ToolInvocation(Base):
         nullable=False, index=True,
     )
     tenant_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=False, index=True,
+        UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True,
     )
     tool_name: Mapped[str] = mapped_column(String(200), nullable=False)
     tool_version: Mapped[str | None] = mapped_column(String(50), nullable=True)
@@ -183,7 +183,7 @@ class ApprovalRequest(Base):
         nullable=True,
     )
     tenant_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=False, index=True,
+        UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True,
     )
     requested_by: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     requested_action: Mapped[str] = mapped_column(String(120), nullable=False)

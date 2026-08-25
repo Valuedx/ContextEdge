@@ -5,7 +5,7 @@ from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from contextedge.models.base import Base, TenantScopedMixin
+from contextedge.models.base import Base, TenantOwnedMixin, TenantScopedMixin
 
 
 class Source(Base, TenantScopedMixin):
@@ -15,7 +15,7 @@ class Source(Base, TenantScopedMixin):
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
     tenant_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=False, index=True
+        UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True
     )
     workspace_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("workspaces.id"), nullable=True
@@ -59,7 +59,7 @@ class SourceObject(Base, TenantScopedMixin):
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
     tenant_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=False, index=True
+        UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True
     )
     source_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("sources.id"), nullable=False, index=True
@@ -86,7 +86,7 @@ class SourceObject(Base, TenantScopedMixin):
     checkpoints: Mapped[list["SyncCheckpoint"]] = relationship(back_populates="source_object")
 
 
-class SourceCredential(Base):
+class SourceCredential(Base, TenantOwnedMixin):
     __tablename__ = "source_credentials"
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -108,7 +108,7 @@ class SourceCredential(Base):
     source: Mapped["Source"] = relationship(back_populates="credentials")
 
 
-class SyncCheckpoint(Base):
+class SyncCheckpoint(Base, TenantOwnedMixin):
     __tablename__ = "sync_checkpoints"
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -138,7 +138,7 @@ class SyncRun(Base):
         UUID(as_uuid=True), ForeignKey("source_objects.id"), nullable=True
     )
     tenant_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), nullable=False, index=True
+        UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True
     )
     run_type: Mapped[str] = mapped_column(String(30), nullable=False)
     status: Mapped[str] = mapped_column(String(30), nullable=False, default="pending")

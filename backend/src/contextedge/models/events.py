@@ -20,7 +20,7 @@ class OperationalEvent(Base):
     )
     tenant_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("tenants.id"),
+        ForeignKey("tenants.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
@@ -68,6 +68,12 @@ class Notification(Base, TenantScopedMixin):
         UUID(as_uuid=True),
         primary_key=True,
         default=uuid.uuid4,
+    )
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("tenants.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
     )
     user_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),

@@ -1,9 +1,28 @@
 from collections.abc import AsyncGenerator
 
+from sqlalchemy import event
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
 from contextedge.config import settings
+import contextedge.tenant_rls  # noqa: F401 — register Session.after_begin RLS rebind
+
+
+def _clear_rls_gucs(dbapi_connection) -> None:
+    cursor = dbapi_connection.cursor()
+    try:
+        cursor.execute("SELECT set_config('app.bypass_rls', 'off', false)")
+        cursor.execute("SELECT set_config('app.tenant_id', '', false)")
+    finally:
+        cursor.close()
+
+
+def _reset_rls_gucs_checkout(dbapi_connection, connection_record, connection_proxy) -> None:
+    _clear_rls_gucs(dbapi_connection)
+
+
+def _reset_rls_gucs_checkin(dbapi_connection, connection_record) -> None:
+    _clear_rls_gucs(dbapi_connection)
 
 
 def create_db_engine(use_null_pool: bool = False):
@@ -20,7 +39,10 @@ def create_db_engine(use_null_pool: bool = False):
         kwargs["max_overflow"] = 10
         kwargs["pool_timeout"] = 30
 
-    return create_async_engine(settings.database_url, **kwargs)
+    engine = create_async_engine(settings.database_url, **kwargs)
+    event.listen(engine.sync_engine, "checkout", _reset_rls_gucs_checkout)
+    event.listen(engine.sync_engine, "checkin", _reset_rls_gucs_checkin)
+    return engine
 
 engine = create_db_engine()
 async_session_factory = async_sessionmaker(engine, expire_on_commit=False)

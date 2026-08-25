@@ -109,6 +109,9 @@ def control_check_for(session_factory, run_id: uuid.UUID):
     async def _check() -> str | None:
         try:
             async with session_factory() as probe:
+                from contextedge.tenant_rls import bind_session_tenant
+
+                await bind_session_tenant(probe, None, bypass=True)
                 signal = (
                     await probe.execute(
                         select(SyncRun.control).where(SyncRun.id == run_id)

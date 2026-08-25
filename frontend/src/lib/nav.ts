@@ -52,6 +52,21 @@ export function seesAllSidebarTabs(userRoles: string[]): boolean {
   return userRoles.includes("platform_super_admin");
 }
 
+export function canAccessDashboardPath(
+  userRoles: string[],
+  pathname: string,
+  access?: RoleTabAccess | null,
+): boolean {
+  const ranked = [...NAV_ITEMS].sort((a, b) => b.href.length - a.href.length);
+  const item = ranked.find(
+    (entry) => pathname === entry.href || pathname.startsWith(`${entry.href}/`),
+  );
+  if (!item) {
+    return true;
+  }
+  return canSeeSidebarItem(userRoles, item, access);
+}
+
 export function canSeeSidebarItem(
   userRoles: string[],
   item: NavAccessItem,

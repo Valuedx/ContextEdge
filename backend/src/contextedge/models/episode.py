@@ -19,7 +19,7 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from contextedge.models.base import Base, TenantScopedMixin
+from contextedge.models.base import Base, TenantOwnedMixin, TenantScopedMixin
 
 if TYPE_CHECKING:
     from contextedge.models.evidence import EvidenceItem
@@ -69,7 +69,7 @@ class CanonicalIdentity(Base, TenantScopedMixin):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     tenant_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("tenants.id"),
+        ForeignKey("tenants.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
@@ -123,7 +123,9 @@ class IdentityAlias(Base):
     # Denormalized from the canonical row (0033) so alias uniqueness can be
     # tenant-scoped without a join. Not index=True: the composite lookup
     # index above leads with tenant_id.
-    tenant_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False
+    )
     alias_text: Mapped[str] = mapped_column(String(500), nullable=False, index=True)
     normalized_alias: Mapped[str | None] = mapped_column(String(500), nullable=True)
     alias_type: Mapped[str] = mapped_column(
@@ -155,7 +157,7 @@ class EvidenceIdentityLink(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     tenant_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("tenants.id"),
+        ForeignKey("tenants.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
@@ -190,7 +192,7 @@ class CorrelationEdge(Base, TenantScopedMixin):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     tenant_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("tenants.id"),
+        ForeignKey("tenants.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
@@ -216,7 +218,7 @@ class Episode(Base, TenantScopedMixin):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     tenant_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("tenants.id"),
+        ForeignKey("tenants.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
@@ -266,7 +268,7 @@ class Episode(Base, TenantScopedMixin):
     )
 
 
-class EpisodeStep(Base):
+class EpisodeStep(Base, TenantOwnedMixin):
     __tablename__ = "episode_steps"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -307,7 +309,7 @@ class EpisodeEvidenceLink(Base):
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
     tenant_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=False, index=True
+        UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True
     )
     episode_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
@@ -362,7 +364,7 @@ class IdentityMergeProposal(Base, TenantScopedMixin):
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
     tenant_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=False, index=True
+        UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True
     )
     # The identity to KEEP, and the one folded into it.
     primary_identity_id: Mapped[uuid.UUID] = mapped_column(

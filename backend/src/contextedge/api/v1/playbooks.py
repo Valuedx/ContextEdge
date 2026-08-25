@@ -758,7 +758,11 @@ async def generate_playbook(
     if not episode_ids:
         raise HTTPException(status_code=400, detail="Pattern has no associated episodes to analyze")
 
-    res = await db.execute(select(Episode).where(Episode.id.in_(episode_ids)))
+    res = await db.execute(
+        select(Episode).where(
+            Episode.id.in_(episode_ids), Episode.tenant_id == user.tenant_id
+        )
+    )
     episodes = res.scalars().all()
 
     # 2. Call AI Generator

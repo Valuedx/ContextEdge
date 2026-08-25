@@ -49,6 +49,7 @@ class EvalRunResponse(BaseModel):
 
 @router.get("/datasets", response_model=list[EvalDatasetResponse])
 async def list_datasets(db: DbSession, user: AuthUser, limit: int = Query(50, ge=1, le=200)):
+    user.require_role("knowledge_manager")
     result = await db.execute(
         select(EvaluationDataset)
         .where(EvaluationDataset.tenant_id == user.tenant_id)
@@ -74,6 +75,7 @@ async def create_dataset(body: EvalDatasetCreate, db: DbSession, user: AuthUser)
 
 @router.get("/runs", response_model=list[EvalRunResponse])
 async def list_runs(db: DbSession, user: AuthUser, limit: int = Query(50, ge=1, le=200)):
+    user.require_role("knowledge_manager")
     result = await db.execute(
         select(EvaluationRun)
         .where(EvaluationRun.tenant_id == user.tenant_id)
@@ -86,6 +88,16 @@ async def list_runs(db: DbSession, user: AuthUser, limit: int = Query(50, ge=1, 
 @router.post("/runs", response_model=EvalRunResponse, status_code=status.HTTP_201_CREATED)
 async def create_run(body: EvalRunCreate, db: DbSession, user: AuthUser):
     user.require_role("knowledge_manager")
+    dataset = (
+        await db.execute(
+            select(EvaluationDataset).where(
+                EvaluationDataset.id == body.dataset_id,
+                EvaluationDataset.tenant_id == user.tenant_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if dataset is None:
+        raise HTTPException(status_code=404, detail="Evaluation dataset not found")
     run = EvaluationRun(
         tenant_id=user.tenant_id,
         dataset_id=body.dataset_id,
@@ -104,6 +116,7 @@ async def create_run(body: EvalRunCreate, db: DbSession, user: AuthUser):
 
 @router.get("/runs/{run_id}", response_model=EvalRunResponse)
 async def get_run(run_id: UUID, db: DbSession, user: AuthUser):
+    user.require_role("knowledge_manager")
     result = await db.execute(
         select(EvaluationRun).where(
             EvaluationRun.id == run_id,

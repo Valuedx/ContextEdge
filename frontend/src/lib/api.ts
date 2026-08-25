@@ -1,4 +1,5 @@
 import { readActiveTenantId } from "./active-tenant";
+import { isPlatformSuperAdmin } from "./roles";
 
 function getApiBase(): string {
   if (typeof window !== "undefined" && window.location.hostname) {
@@ -11,6 +12,18 @@ function getApiBase(): string {
     return `${protocol}//${host}:8001`;
   }
   return process.env.NEXT_PUBLIC_API_URL || "http://localhost:8001";
+}
+
+function _tokenRoles(): string[] {
+  if (typeof window === "undefined") return [];
+  const token = localStorage.getItem("access_token");
+  if (!token) return [];
+  try {
+    const payload = JSON.parse(atob(token.split(".")[1] || "")) as { roles?: unknown };
+    return Array.isArray(payload.roles) ? payload.roles.filter((r): r is string => typeof r === "string") : [];
+  } catch {
+    return [];
+  }
 }
 
 class ApiClient {
@@ -42,7 +55,7 @@ class ApiClient {
       headers["Authorization"] = `Bearer ${token}`;
     }
     const activeTenant = readActiveTenantId();
-    if (activeTenant) {
+    if (activeTenant && isPlatformSuperAdmin(_tokenRoles())) {
       headers["X-Tenant-Id"] = activeTenant;
     }
     if (typeof crypto !== "undefined" && "randomUUID" in crypto) {

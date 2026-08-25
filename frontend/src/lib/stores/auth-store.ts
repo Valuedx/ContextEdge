@@ -64,6 +64,10 @@ export const useAuthStore = create<AuthState>((set) => ({
     }
   },
   setTenantContext: (tenantId: string) => {
+    const payload = parseToken();
+    if (!payload?.roles.includes("platform_super_admin")) {
+      return;
+    }
     writeActiveTenantId(tenantId);
     set({ tenantId });
   },

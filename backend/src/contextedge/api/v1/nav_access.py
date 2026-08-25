@@ -141,8 +141,16 @@ async def load_access_map(db: DbSession) -> dict[str, list[str]]:
 
 
 @router.get("", response_model=NavAccessResponse)
-async def get_nav_access(db: DbSession, _user: AuthUser):
+async def get_nav_access(db: DbSession, user: AuthUser):
     access = await load_access_map(db)
+    if not user.has_exact_role("platform_super_admin"):
+        visible: dict[str, list[str]] = {}
+        for role, hrefs in access.items():
+            if user.has_exact_role(role) or (
+                role == "tenant_admin" and user.has_exact_role("admin")
+            ):
+                visible[role] = hrefs
+        access = visible
     return NavAccessResponse(
         tabs=[NavTabOut(label=label, href=href) for label, href in NAV_TABS],
         roles=list(EDITABLE_ROLES),

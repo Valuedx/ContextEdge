@@ -411,6 +411,7 @@ async def register_attachment_artifacts(
 
         artifact = AttachmentArtifact(
             id=artifact_id,
+            tenant_id=evidence.tenant_id,
             evidence_id=evidence.id,
             filename=filename[:500],
             mime_type=mime_type[:100],

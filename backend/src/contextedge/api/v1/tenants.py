@@ -6,8 +6,9 @@ from sqlalchemy import select
 
 from contextedge.deps import AuthUser, DbSession
 from contextedge.middleware.audit import log_audit_event
-from contextedge.models.tenant import RoleBinding, Tenant, User
+from contextedge.models.tenant import Domain, RoleBinding, Tenant, User, Workspace
 from contextedge.schemas.tenant import TenantCreate, TenantResponse, TenantUpdate
+from contextedge.tenant_rls import bind_session_tenant
 
 router = APIRouter()
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -20,7 +21,7 @@ async def list_tenants(
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
 ):
-    user.require_role("platform_super_admin")
+    user.require_exact_role("platform_super_admin")
     result = await db.execute(
         select(Tenant).limit(limit).offset(offset).order_by(Tenant.created_at.desc())
     )
@@ -33,7 +34,7 @@ async def create_tenant(
     db: DbSession,
     user: AuthUser,
 ):
-    user.require_role("platform_super_admin")
+    user.require_exact_role("platform_super_admin")
     existing = await db.execute(select(Tenant).where(Tenant.slug == body.slug))
     if existing.scalar_one_or_none():
         raise HTTPException(status_code=409, detail="Tenant slug already exists")
@@ -44,6 +45,28 @@ async def create_tenant(
     db.add(tenant)
     await db.flush()
     await db.refresh(tenant)
+    # RLS is bound to the super-admin home tenant; child rows for the new
+    # tenant must be written in that tenant's session context.
+    await bind_session_tenant(db, tenant.id, bypass=False)
+
+    workspace = Workspace(
+        tenant_id=tenant.id,
+        name="Default Workspace",
+        description="Created with the tenant",
+        config={},
+        is_active=True,
+    )
+    db.add(workspace)
+    await db.flush()
+    db.add(
+        Domain(
+            tenant_id=tenant.id,
+            workspace_id=workspace.id,
+            name="Default Domain",
+            description="Created with the tenant",
+            is_active=True,
+        )
+    )
 
     if body.admin_username:
         if not body.admin_password:
@@ -51,7 +74,11 @@ async def create_tenant(
                 status_code=400,
                 detail="admin_password is required when creating a tenant admin",
             )
-        existing = await db.execute(select(User).where(User.username == body.admin_username))
+        existing = await db.execute(
+            select(User).where(
+                User.username == body.admin_username, User.tenant_id == tenant.id
+            )
+        )
         if existing.scalar_one_or_none():
             raise HTTPException(status_code=409, detail="User with this username already exists")
         admin = User(
@@ -90,7 +117,7 @@ async def get_tenant(tenant_id: UUID, db: DbSession, user: AuthUser):
     tenant = result.scalar_one_or_none()
     if not tenant:
         raise HTTPException(status_code=404, detail="Tenant not found")
-    if user.tenant_id != tenant_id and not user.has_role("platform_super_admin"):
+    if user.tenant_id != tenant_id and not user.has_exact_role("platform_super_admin"):
         raise HTTPException(status_code=403, detail="Access denied")
     return tenant
 
@@ -103,6 +130,8 @@ async def update_tenant(
     user: AuthUser,
 ):
     user.require_role("tenant_admin")
+    if tenant_id != user.tenant_id and not user.has_exact_role("platform_super_admin"):
+        raise HTTPException(status_code=403, detail="Access denied")
     result = await db.execute(select(Tenant).where(Tenant.id == tenant_id))
     tenant = result.scalar_one_or_none()
     if not tenant:

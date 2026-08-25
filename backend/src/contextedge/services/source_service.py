@@ -198,6 +198,7 @@ async def rotate_source_credentials(
 
     encrypted = await encrypt_credentials(credentials)
     credential = SourceCredential(
+        tenant_id=source.tenant_id,
         source_id=source.id,
         auth_type=auth_type or source.auth_type,
         encrypted_credentials=encrypted,

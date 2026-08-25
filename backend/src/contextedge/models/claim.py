@@ -29,7 +29,7 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from contextedge.models.base import Base, TenantScopedMixin
+from contextedge.models.base import Base, TenantOwnedMixin, TenantScopedMixin
 
 CLAIM_TYPES = (
     "probable_root_cause",
@@ -61,7 +61,7 @@ class Claim(Base, TenantScopedMixin):
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
     tenant_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=False, index=True
+        UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True
     )
     domain_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("domains.id"), nullable=True, index=True
@@ -108,7 +108,7 @@ class Claim(Base, TenantScopedMixin):
     )
 
 
-class ClaimEvidence(Base):
+class ClaimEvidence(Base, TenantOwnedMixin):
     __tablename__ = "claim_evidence"
     __table_args__ = (
         UniqueConstraint("claim_id", "evidence_id", name="uq_claim_evidence_pair"),
@@ -142,7 +142,7 @@ class ClaimEvidence(Base):
     claim: Mapped[Claim] = relationship(back_populates="evidence_links")
 
 
-class DecisionEvidence(Base):
+class DecisionEvidence(Base, TenantOwnedMixin):
     """Relational link between ``decisions`` and ``evidence_items``.
 
     The existing ``Decision.evidence_summary JSONB`` cache stays — it's
@@ -200,7 +200,7 @@ class DecisionClaim(Base):
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
     tenant_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=False, index=True
+        UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True
     )
     decision_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),

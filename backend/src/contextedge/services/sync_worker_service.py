@@ -407,6 +407,9 @@ async def _read_control(run_id: uuid.UUID) -> str | None:
 
     try:
         async with async_session_factory() as probe:
+            from contextedge.tenant_rls import bind_session_tenant
+
+            await bind_session_tenant(probe, None, bypass=True)
             return (
                 await probe.execute(
                     _select(_SyncRun.control).where(_SyncRun.id == run_id)
@@ -499,6 +502,7 @@ async def run_backfill_job(
         if result.new_checkpoint:
             db.add(
                 SyncCheckpoint(
+                    tenant_id=tenant_id,
                     source_object_id=so.id,
                     checkpoint_data=result.new_checkpoint.data,
                 )
@@ -614,6 +618,7 @@ async def run_incremental_job(
         if result.new_checkpoint:
             db.add(
                 SyncCheckpoint(
+                    tenant_id=tenant_id,
                     source_object_id=so.id,
                     checkpoint_data=result.new_checkpoint.data,
                 )

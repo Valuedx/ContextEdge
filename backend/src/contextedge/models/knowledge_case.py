@@ -40,7 +40,7 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from contextedge.models.base import Base, TenantScopedMixin
+from contextedge.models.base import Base, TenantOwnedMixin, TenantScopedMixin
 
 
 class KnowledgeCase(Base, TenantScopedMixin):
@@ -52,7 +52,7 @@ class KnowledgeCase(Base, TenantScopedMixin):
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
     tenant_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=False, index=True
+        UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True
     )
     workspace_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), nullable=True
@@ -136,7 +136,7 @@ class KnowledgeCase(Base, TenantScopedMixin):
     )
 
 
-class KnowledgeCaseStep(Base):
+class KnowledgeCaseStep(Base, TenantOwnedMixin):
     """One documented action. Mirrors EpisodeStep's shape deliberately.
 
     The fields an episode step carries about what HAPPENED — failed_flag,

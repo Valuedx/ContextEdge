@@ -18,7 +18,11 @@ class FixCohortStat(Base):
     __tablename__ = "fix_cohort_stats"
     __table_args__ = (
         UniqueConstraint(
-            "fix_pattern_id", "cohort_type", "cohort_key", name="uq_fix_cohort"
+            "tenant_id",
+            "fix_pattern_id",
+            "cohort_type",
+            "cohort_key",
+            name="uq_fix_cohort",
         ),
     )
 
@@ -26,7 +30,7 @@ class FixCohortStat(Base):
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
     tenant_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=False, index=True
+        UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True
     )
     fix_pattern_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),

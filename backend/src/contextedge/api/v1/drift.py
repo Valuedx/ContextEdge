@@ -22,5 +22,6 @@ async def get_drift_alerts(db: DbSession, user: AuthUser):
 
     Read-only: does not change playbook lifecycle. Expiry transitions run on the Celery drift task.
     """
+    user.require_role("knowledge_manager")
     raw = await list_drift_alerts(db, user.tenant_id)
     return [DriftAlertResponse(**item) for item in raw]
