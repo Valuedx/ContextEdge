@@ -1,11 +1,16 @@
 /**
  * Role helper utilities — single source of truth for permission checks.
  *
- * All helpers treat `platform_super_admin` as a super-role that satisfies any check.
+ * Keep this hierarchy aligned with CurrentUser.has_role in the API.
  */
 
 export function hasRole(roles: string[], role: string): boolean {
-  return roles.includes(role) || roles.includes("platform_super_admin");
+  return (
+    roles.includes(role) ||
+    roles.includes("platform_super_admin") ||
+    roles.includes("tenant_admin") ||
+    roles.includes("admin")
+  );
 }
 
 // ── Named predicates ─────────────────────────────────────────────────────────
@@ -26,7 +31,7 @@ export const canManageEval = (roles: string[]) => isKnowledgeManager(roles);
 
 /** Can transition playbook status */
 export const canTransitionPlaybook = (roles: string[]) =>
-  isPlaybookReviewer(roles) || isKnowledgeManager(roles) || isTenantAdmin(roles);
+  isPlaybookReviewer(roles);
 
 /**
  * Can change a playbook's automation mode.

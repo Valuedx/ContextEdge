@@ -2,7 +2,7 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ColumnDef } from "@tanstack/react-table";
-import { Plus, Loader2 } from "lucide-react";
+import { Plus, Loader2, ShieldCheck, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 
@@ -30,7 +30,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { api } from "@/lib/api";
-import type { Domain, Tenant, User, Workspace } from "@/lib/types";
+import type { Domain, RoleBinding, Tenant, User, Workspace } from "@/lib/types";
 import { useAuthStore } from "@/lib/stores/auth-store";
 import { isTenantAdmin } from "@/lib/roles";
 
@@ -224,11 +224,140 @@ const domainColumns: ColumnDef<Domain>[] = [
   },
 ];
 
-const userColumns: ColumnDef<User>[] = [
-  { accessorKey: "email", header: "Email" },
-  { accessorKey: "display_name", header: "Name" },
-  { accessorKey: "status", header: "Status" },
-];
+const ASSIGNABLE_ROLES = [
+  { value: "analyst", label: "Analyst" },
+  { value: "knowledge_manager", label: "Knowledge manager" },
+  { value: "playbook_reviewer", label: "Playbook reviewer" },
+  { value: "domain_admin", label: "Domain administrator" },
+  { value: "tenant_admin", label: "Tenant administrator" },
+] as const;
+
+function ManageUserRolesDialog({ user, onClose }: { user: User; onClose: () => void }) {
+  const qc = useQueryClient();
+  const [role, setRole] = useState("playbook_reviewer");
+  const { data: bindings = [], isLoading } = useQuery<RoleBinding[]>({
+    queryKey: ["user-roles", user.id],
+    queryFn: () => api.get(`/users/${user.id}/roles`),
+  });
+
+  const assign = useMutation({
+    mutationFn: () =>
+      api.post<RoleBinding>(`/users/${user.id}/roles`, {
+        user_id: user.id,
+        role,
+        scope_type: "tenant",
+        scope_id: null,
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["user-roles", user.id] });
+      toast.success("Role assigned. It takes effect at the user's next sign in.");
+    },
+    onError: (error: Error) => toast.error(error.message || "Failed to assign role"),
+  });
+
+  const remove = useMutation({
+    mutationFn: (bindingId: string) =>
+      api.delete(`/users/${user.id}/roles/${bindingId}`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["user-roles", user.id] });
+      toast.success("Role removed. The user's current session remains valid until next sign in.");
+    },
+    onError: (error: Error) => toast.error(error.message || "Failed to remove role"),
+  });
+
+  const assigned = new Set(bindings.map((binding) => binding.role));
+
+  return (
+    <DialogContent>
+      <DialogHeader>
+        <DialogTitle>Manage roles</DialogTitle>
+      </DialogHeader>
+      <div className="space-y-4">
+        <div>
+          <p className="font-medium">{user.display_name}</p>
+          <p className="text-sm text-muted-foreground">{user.email}</p>
+        </div>
+        <div className="space-y-2">
+          <Label>Assigned roles</Label>
+          {isLoading ? (
+            <Skeleton className="h-10 w-full" />
+          ) : bindings.length === 0 ? (
+            <p className="rounded-md border border-dashed px-3 py-4 text-sm text-muted-foreground">
+              No roles assigned.
+            </p>
+          ) : (
+            <div className="divide-y rounded-md border">
+              {bindings.map((binding) => (
+                <div key={binding.id} className="flex items-center justify-between gap-3 px-3 py-2">
+                  <span className="text-sm capitalize">{binding.role.replaceAll("_", " ")}</span>
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    title={`Remove ${binding.role.replaceAll("_", " ")}`}
+                    disabled={remove.isPending}
+                    onClick={() => remove.mutate(binding.id)}
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+        <div className="space-y-2">
+          <Label htmlFor="new-user-role">Assign role</Label>
+          <div className="flex gap-2">
+            <Select value={role} onValueChange={(value) => setRole(value ?? "playbook_reviewer")}>
+              <SelectTrigger id="new-user-role" className="flex-1">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {ASSIGNABLE_ROLES.map((option) => (
+                  <SelectItem key={option.value} value={option.value} disabled={assigned.has(option.value)}>
+                    {option.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Button disabled={assign.isPending || assigned.has(role)} onClick={() => assign.mutate()}>
+              {assign.isPending ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <ShieldCheck className="h-4 w-4" />
+              )}
+              Assign
+            </Button>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Playbook approval requires the Playbook reviewer role. Role changes are included in a new token at the next sign in.
+          </p>
+        </div>
+      </div>
+      <DialogFooter>
+        <Button variant="outline" onClick={onClose}>Close</Button>
+      </DialogFooter>
+    </DialogContent>
+  );
+}
+
+function userColumns(onManageRoles: (user: User) => void): ColumnDef<User>[] {
+  return [
+    { accessorKey: "email", header: "Email" },
+    { accessorKey: "display_name", header: "Name" },
+    { accessorKey: "status", header: "Status" },
+    {
+      id: "actions",
+      header: "Access",
+      enableSorting: false,
+      cell: ({ row }) => (
+        <Button variant="outline" size="sm" onClick={() => onManageRoles(row.original)}>
+          <ShieldCheck className="h-4 w-4" />
+          Manage roles
+        </Button>
+      ),
+    },
+  ];
+}
 
 // ── Page ──────────────────────────────────────────────────────────────────
 
@@ -239,6 +368,7 @@ export default function SettingsPage() {
 
   const [wsOpen, setWsOpen] = useState(false);
   const [domOpen, setDomOpen] = useState(false);
+  const [roleUser, setRoleUser] = useState<User | null>(null);
 
   const { data: tenant, isLoading: tenantLoading } = useQuery({
     queryKey: ["tenant", tenantId],
@@ -391,8 +521,13 @@ export default function SettingsPage() {
           ) : users.length === 0 ? (
             <p className="text-sm text-muted-foreground">No users returned.</p>
           ) : (
-            <DataTable columns={userColumns} data={users} />
+            <DataTable columns={userColumns(setRoleUser)} data={users} />
           )}
+          <Dialog open={!!roleUser} onOpenChange={(open) => { if (!open) setRoleUser(null); }}>
+            {roleUser && (
+              <ManageUserRolesDialog user={roleUser} onClose={() => setRoleUser(null)} />
+            )}
+          </Dialog>
         </TabsContent>
 
         {/* ── Retention ── */}

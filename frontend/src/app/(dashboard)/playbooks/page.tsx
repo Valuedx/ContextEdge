@@ -11,12 +11,22 @@ import { PageHeader } from "@/components/common/page-header";
 import { DataTable } from "@/components/common/data-table";
 import { DataTableSkeleton } from "@/components/common/data-table-skeleton";
 import { StatusBadge } from "@/components/common/status-badge";
+import { PlaybookLifecycleActions } from "@/components/common/playbook-lifecycle-actions";
 import { Input } from "@/components/ui/input";
 import { buttonVariants } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { api } from "@/lib/api";
 import type { Playbook } from "@/lib/types";
 import Link from "next/link";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+
+const LIFECYCLE_TABS = [
+  { value: "all", label: "All" },
+  { value: "candidate", label: "Candidates" },
+  { value: "under_review", label: "Under review" },
+  { value: "approved", label: "Approved" },
+  { value: "restricted", label: "Restricted" },
+] as const;
 
 const columns: ColumnDef<Playbook>[] = [
   {
@@ -56,19 +66,29 @@ const columns: ColumnDef<Playbook>[] = [
     header: "Updated",
     cell: ({ row }) => new Date(row.getValue("updated_at")).toLocaleString(),
   },
+  {
+    id: "actions",
+    header: "Review action",
+    enableSorting: false,
+    cell: ({ row }) => <PlaybookLifecycleActions playbook={row.original} />,
+  },
 ];
 
 export default function PlaybooksPage() {
   const pg = usePagination(50);
   const [searchQuery, setSearchQuery] = useState("");
+  const [lifecycleState, setLifecycleState] = useState("all");
 
   const params: Record<string, string> = { ...pg.params };
   if (searchQuery.trim()) {
     params.q = searchQuery.trim();
   }
+  if (lifecycleState !== "all") {
+    params.lifecycle_state = lifecycleState;
+  }
 
   const { data = [], isLoading } = useQuery<Playbook[]>({
-    queryKey: ["playbooks", pg.page, searchQuery],
+    queryKey: ["playbooks", pg.page, searchQuery, lifecycleState],
     queryFn: () => api.get("/playbooks", params),
   });
 
@@ -86,7 +106,22 @@ export default function PlaybooksPage() {
       />
 
       {/* Advanced Search Bar */}
-      <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
+      <div className="flex flex-col gap-3">
+        <Tabs
+          value={lifecycleState}
+          onValueChange={(value) => {
+            setLifecycleState(value);
+            pg.reset();
+          }}
+        >
+          <TabsList variant="glass" className="h-auto flex-wrap justify-start">
+            {LIFECYCLE_TABS.map((tab) => (
+              <TabsTrigger key={tab.value} value={tab.value}>
+                {tab.label}
+              </TabsTrigger>
+            ))}
+          </TabsList>
+        </Tabs>
         <div className="relative flex-1">
           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
           <Input
@@ -107,7 +142,7 @@ export default function PlaybooksPage() {
       </div>
 
       {isLoading ? (
-        <DataTableSkeleton columns={5} />
+        <DataTableSkeleton columns={8} />
       ) : (
         <>
           <DataTable columns={columns} data={data} />

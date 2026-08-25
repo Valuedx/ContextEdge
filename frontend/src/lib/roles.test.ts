@@ -23,12 +23,13 @@ describe("canEditAutomationMode", () => {
     expect(canEditAutomationMode(["platform_super_admin"])).toBe(true);
   });
 
-  it("is strictly narrower than transitioning a playbook", () => {
+  it("keeps playbook approval limited to reviewers and API admin super-roles", () => {
     // A reviewer may move a playbook through its lifecycle without
     // being able to authorise it to act.
-    for (const role of ["knowledge_manager", "playbook_reviewer"]) {
-      expect(canTransitionPlaybook([role])).toBe(true);
-      expect(canEditAutomationMode([role])).toBe(false);
-    }
+    expect(canTransitionPlaybook(["playbook_reviewer"])).toBe(true);
+    expect(canTransitionPlaybook(["knowledge_manager"])).toBe(false);
+    expect(canTransitionPlaybook(["tenant_admin"])).toBe(true);
+    expect(canTransitionPlaybook(["admin"])).toBe(true);
+    expect(canEditAutomationMode(["playbook_reviewer"])).toBe(false);
   });
 });

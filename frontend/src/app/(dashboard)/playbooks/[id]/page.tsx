@@ -17,6 +17,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { StatusBadge } from "@/components/common/status-badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { PlaybookSteps } from "@/components/common/playbook-steps";
+import { PlaybookLifecycleActions } from "@/components/common/playbook-lifecycle-actions";
 import { cn } from "@/lib/utils";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
@@ -900,10 +901,8 @@ export default function PlaybookDetailPage() {
                 Score: {(((latest?.playbook_confidence ?? playbook.confidence ?? 0.8)) * 100).toFixed(0)}%
               </div>
             )}
-            {canTransitionPlaybook(roles) && hasTransitions && (
-              <Button variant="outline" onClick={() => setTransitionOpen(true)}>
-                Transition state
-              </Button>
+            {hasTransitions && (
+              <PlaybookLifecycleActions playbook={playbook} showPermissionHint />
             )}
             <Link href="/playbooks" className={cn(buttonVariants({ variant: "outline" }))}>
               All playbooks

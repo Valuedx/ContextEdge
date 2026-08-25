@@ -185,7 +185,10 @@ export function RotateCredentialsDialog({
                 </div>
                 <div className="space-y-1.5">
                   <Label htmlFor="rot_zoho_dc">Data Center</Label>
-                  <Select value={zohoDataCenter} onValueChange={setZohoDataCenter}>
+                  <Select
+                    value={zohoDataCenter}
+                    onValueChange={(value) => setZohoDataCenter(value ?? "com")}
+                  >
                     <SelectTrigger id="rot_zoho_dc">
                       <SelectValue placeholder="Select Data Center" />
                     </SelectTrigger>
