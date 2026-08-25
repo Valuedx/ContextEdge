@@ -970,6 +970,27 @@ class ZohoDeskConnector(BaseConnector):
         out.extend(rows[limit:])
         return out
 
+    async def fetch_ticket_context(self, ticket_id: str) -> dict[str, Any]:
+        """Fetch one exact ticket plus its complete threads/comments on demand."""
+        record_id = str(ticket_id or "").strip()
+        if not record_id:
+            raise ValueError("ticket_id is required")
+        detail = await self._get(
+            f"/tickets/{record_id}",
+            params={"include": MODULES["tickets"]["list_includes"]},
+        )
+        if not isinstance(detail, dict):
+            raise ValueError("Zoho Desk returned an invalid ticket detail response")
+        hydrated = await self.hydrate_thread(f"zoho_ticket:{record_id}")
+        return {
+            "ticket": self._ticket_content(detail),
+            "messages": hydrated.messages,
+            "participant_count": hydrated.participant_count,
+            "message_count": len(hydrated.messages),
+            "external_thread_id": hydrated.thread_id,
+            "hydration_status": "complete",
+        }
+
     async def backfill(
         self,
         object_id: str,

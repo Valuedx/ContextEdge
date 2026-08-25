@@ -16,7 +16,7 @@ import httpx
 import pytest
 
 import contextedge.connectors.zoho_desk.connector as connector_module
-from contextedge.connectors.base import Checkpoint, DateRange
+from contextedge.connectors.base import Checkpoint, DateRange, HydratedThread
 from contextedge.connectors.zoho_desk.connector import (
     PAGE_SIZE,
     ZohoDeskConnector,
@@ -37,6 +37,37 @@ CREDENTIALS = {
     "org_id": "60001911841",
     "data_center": "in",
 }
+
+
+@pytest.mark.asyncio
+async def test_fetch_ticket_context_uses_exact_id_and_complete_thread():
+    connector = ZohoDeskConnector({}, CREDENTIALS)
+    connector._get = AsyncMock(
+        return_value={
+            "id": "11270000062142113",
+            "ticketNumber": "166356",
+            "subject": "arraycopy index out of bounds",
+            "description": "Workflow Executor failed.",
+        }
+    )
+    connector.hydrate_thread = AsyncMock(
+        return_value=HydratedThread(
+            thread_id="zoho_ticket:11270000062142113",
+            messages=[{"body": "Fixed the CSV field mapping."}],
+            participant_count=2,
+        )
+    )
+
+    result = await connector.fetch_ticket_context("11270000062142113")
+
+    connector._get.assert_awaited_once()
+    assert connector._get.await_args.args[0] == "/tickets/11270000062142113"
+    connector.hydrate_thread.assert_awaited_once_with(
+        "zoho_ticket:11270000062142113"
+    )
+    assert result["ticket"]["ticket_number"] == "166356"
+    assert result["message_count"] == 1
+    assert result["hydration_status"] == "complete"
 
 
 @pytest.fixture(autouse=True)

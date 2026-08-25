@@ -49,7 +49,10 @@ async def get_thread(thread_id: UUID, db: DbSession, user: AuthUser):
     actual_count = count_res.scalar_one()
     if actual_count > 0:
         thread.message_count = actual_count
-        thread.hydration_status = "complete"
+        # Do not infer hydration completion from a non-zero count. The parent
+        # ticket may already be linked to this thread before any comments are
+        # hydrated. Only the hydration worker can assert that the connector
+        # returned the complete conversation.
 
     return thread
 

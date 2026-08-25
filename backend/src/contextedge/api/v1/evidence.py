@@ -26,11 +26,83 @@ from contextedge.services.policy_assignment import assert_policy_assignment
 router = APIRouter()
 
 
+@router.get("/zoho-ticket/{ticket_id}/live-context")
+async def get_live_zoho_ticket_context(
+    ticket_id: str,
+    db: DbSession,
+    user: AuthUser,
+):
+    """Read one exact Zoho ticket and its conversation using tenant credentials."""
+    if not ticket_id.isdigit() or len(ticket_id) > 64:
+        raise HTTPException(status_code=400, detail="Invalid Zoho ticket id")
+
+    source_result = await db.execute(
+        select(Source)
+        .where(
+            Source.tenant_id == user.tenant_id,
+            Source.source_type == "zoho_desk",
+            Source.is_active.is_(True),
+        )
+        .order_by(Source.created_at.desc())
+        .limit(1)
+    )
+    source = source_result.scalar_one_or_none()
+    if source is None:
+        raise HTTPException(status_code=404, detail="Zoho Desk source is not configured")
+
+    from contextedge.models.source import SourceCredential
+    from contextedge.connectors.registry import get_connector
+    from contextedge.services.source_service import decrypt_credentials
+
+    credential_result = await db.execute(
+        select(SourceCredential).where(
+            SourceCredential.source_id == source.id,
+            SourceCredential.status == "active",
+        )
+    )
+    credential = credential_result.scalar_one_or_none()
+    if credential is None:
+        raise HTTPException(status_code=409, detail="Zoho Desk credentials are unavailable")
+
+    try:
+        decrypted = await decrypt_credentials(credential.encrypted_credentials)
+    except Exception as exc:
+        from cryptography.fernet import InvalidToken
+
+        if isinstance(exc, InvalidToken):
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Zoho Desk credentials cannot be decrypted with the current "
+                    "ENCRYPTION_KEY; rotate or re-save the source credentials."
+                ),
+            ) from exc
+        raise
+    connector = get_connector(source.source_type, source.config, decrypted)
+    fetch = getattr(connector, "fetch_ticket_context", None)
+    if fetch is None:
+        raise HTTPException(status_code=501, detail="Live ticket retrieval is unsupported")
+    try:
+        return await fetch(ticket_id)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        import httpx
+
+        if isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code == 404:
+            raise HTTPException(status_code=404, detail="Zoho ticket not found") from exc
+        raise HTTPException(
+            status_code=502,
+            detail=f"Zoho live ticket retrieval failed ({type(exc).__name__})",
+        ) from exc
+
+
 @router.get("", response_model=list[EvidenceItemResponse])
 async def search_evidence(
     db: DbSession,
     user: AuthUser,
     query: str | None = None,
+    external_id: str | None = Query(None, max_length=500),
     source_id: UUID | None = None,
     relevance_state: str | None = None,
     evidence_type: str | None = None,
@@ -41,7 +113,7 @@ async def search_evidence(
 ):
     excluded_policy_ids = await resolve_excluded_access_policy_ids(db, user.tenant_id, user.roles)
 
-    if query and query.strip():
+    if query and query.strip() and not external_id:
         from contextedge.search.pg_fts import search_evidence_fts
 
         fts_results = await search_evidence_fts(
@@ -68,6 +140,14 @@ async def search_evidence(
         )
     if source_id:
         q = q.where(EvidenceItem.source_id == source_id)
+    if external_id:
+        q = q.join(
+            RawEvidenceObject,
+            EvidenceItem.raw_object_ref == RawEvidenceObject.id,
+        ).where(
+            RawEvidenceObject.tenant_id == user.tenant_id,
+            RawEvidenceObject.external_id == external_id.strip(),
+        )
     if relevance_state:
         q = q.where(EvidenceItem.relevance_state == relevance_state)
     if evidence_type:
