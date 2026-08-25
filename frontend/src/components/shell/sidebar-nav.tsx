@@ -27,7 +27,7 @@ import {
   Waypoints,
   CheckCircle2,
   DollarSign,
-  ListChecks,
+  Sparkles,
   Gauge,
 } from "lucide-react";
 import { useAuthStore } from "@/lib/stores/auth-store";
@@ -48,7 +48,7 @@ const navItems: NavItem[] = [
   { label: "Evidence", href: "/evidence", icon: FileSearch },
   { label: "Sessions", href: "/sessions", icon: Layers },
   { label: "Runtime", href: "/runtime", icon: Radio },
-  { label: "Review Queue", href: "/review", icon: CheckCircle2 },
+  { label: "Reviewer Console", href: "/review", icon: CheckCircle2 },
   { label: "Execution", href: "/execution", icon: PlayCircle },
   { label: "Decisions", href: "/decisions", icon: Scale },
   { label: "Episodes", href: "/episodes", icon: GitBranch },
@@ -57,7 +57,7 @@ const navItems: NavItem[] = [
   { label: "Neg. Knowledge", href: "/negative-knowledge", icon: BrainCircuit, requiredRoles: ["knowledge_manager", "domain_admin", "tenant_admin"] },
   { label: "Identities", href: "/identities", icon: Fingerprint, requiredRoles: ["knowledge_manager", "domain_admin", "tenant_admin"] },
   { label: "Correlations", href: "/correlations", icon: Share2, requiredRoles: ["knowledge_manager", "domain_admin", "tenant_admin"] },
-  { label: "Review Queues", href: "/suggestions", icon: ListChecks, requiredRoles: ["knowledge_manager", "domain_admin", "tenant_admin"] },
+  { label: "Suggestions", href: "/suggestions", icon: Sparkles, requiredRoles: ["knowledge_manager", "domain_admin", "tenant_admin"] },
   { label: "Graph Explorer", href: "/graph-explorer", icon: Waypoints },
   { label: "Contradictions", href: "/contradictions", icon: AlertTriangle },
   { label: "Drift", href: "/drift", icon: Activity },

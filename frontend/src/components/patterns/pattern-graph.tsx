@@ -3,9 +3,19 @@
 import { useQuery } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import { api } from "@/lib/api";
-import { Loader2, Info, Network, HelpCircle, ExternalLink, X } from "lucide-react";
-import { useEffect, useCallback, useState } from "react";
-import { toast } from "sonner";
+import {
+  Eye,
+  EyeOff,
+  ExternalLink,
+  Info,
+  List,
+  Loader2,
+  Map,
+  Maximize2,
+  Network,
+  X,
+} from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ReactFlow,
   ReactFlowProvider,
@@ -14,6 +24,7 @@ import {
   useReactFlow,
   Background,
   Controls,
+  MiniMap,
   Panel,
   Node,
   Edge,
@@ -22,7 +33,8 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import dagre from "dagre";
-import { getNodeClassName, edgeColors } from "@/components/graph/graph-constants";
+import { getNodeClassName, edgeColors, GRAPH_NODE_CARD_CLASS } from "@/components/graph/graph-constants";
+import { graphNodeRecordHref } from "@/components/graph/graph-node-routes";
 import type { PatternSubgraph } from "@/lib/types";
 
 // ── Node Descriptions for Hover & Selected Node Inspector ────────────────────
@@ -106,17 +118,20 @@ function layoutGraph(nodes: Node[], edges: Edge[], direction = "LR") {
   };
 }
 
-// ── Node type → app route mapping ───────────────────────────────────────────
+const LEGEND_ITEMS = [
+  { type: "playbook", label: "Playbook", hint: "Fix Guide", dot: "bg-blue-500" },
+  { type: "pattern", label: "Pattern", hint: "Recurring Issue", dot: "bg-sky-500" },
+  { type: "episode", label: "Episode", hint: "Incident Summary", dot: "bg-emerald-500" },
+  { type: "identity", label: "Identity", hint: "User / Host", dot: "bg-purple-400" },
+  { type: "evidence", label: "Evidence", hint: "Raw Ticket", dot: "bg-slate-400" },
+] as const;
 
-const NODE_ROUTES: Partial<Record<string, string>> = {
-  pattern: "/patterns",
-  episode: "/episodes",
-  playbook: "/playbooks",
-  evidence: "/evidence",
-  session: "/sessions",
-  decision: "/decisions",
-  identity: "/identities",
-};
+function nodeTypeOf(node: Node): string {
+  if (typeof node.data?.nodeType === "string" && node.data.nodeType) {
+    return node.data.nodeType;
+  }
+  return node.id.split(":")[0] || "";
+}
 
 // ── Inner canvas — must live inside ReactFlowProvider ───────────────────────
 
@@ -125,185 +140,304 @@ function FlowCanvas({
   edges,
   onNodesChange,
   onEdgesChange,
-  onNodeClick,
   hasData,
+  isTruncated,
+  graphKey,
+  onFullscreen,
+  returnTo,
 }: {
   nodes: Node[];
   edges: Edge[];
   onNodesChange: ReturnType<typeof useNodesState>[2];
   onEdgesChange: ReturnType<typeof useEdgesState>[2];
-  onNodeClick: (event: React.MouseEvent, node: Node) => void;
   hasData: boolean;
+  isTruncated: boolean;
+  graphKey: string;
+  onFullscreen?: () => void;
+  returnTo?: string;
 }) {
   const { fitView } = useReactFlow();
+  const nodeCount = nodes.length;
   const router = useRouter();
-  const [hoveredNodeType, setHoveredNodeType] = useState<string | null>(null);
-  const [hoveredNodeLabel, setHoveredNodeLabel] = useState<string | null>(null);
   const [selectedNodeData, setSelectedNodeData] = useState<{
     id: string;
     type: string;
     rawId: string;
     label: string;
   } | null>(null);
+  const [hintOpen, setHintOpen] = useState(false);
+  const [legendOpen, setLegendOpen] = useState(true);
+  const [miniMapOpen, setMiniMapOpen] = useState(true);
+  const [typeFilter, setTypeFilter] = useState<string | null>(null);
 
-  // Re-fit viewport whenever the node set changes
+  const visibleNodes = useMemo(() => {
+    if (!typeFilter) return nodes;
+    return nodes.filter((node) => nodeTypeOf(node) === typeFilter);
+  }, [nodes, typeFilter]);
+
+  const visibleEdges = useMemo(() => {
+    if (!typeFilter) return edges;
+    const visibleIds = new Set(visibleNodes.map((node) => node.id));
+    return edges.filter(
+      (edge) => visibleIds.has(edge.source) && visibleIds.has(edge.target),
+    );
+  }, [edges, typeFilter, visibleNodes]);
+
+  // Re-fit only when new graph data is laid out. React Flow selection also
+  // updates `nodes`; depending on the whole array makes every click jump.
   useEffect(() => {
-    if (nodes.length > 0) {
+    if (nodeCount > 0) {
       requestAnimationFrame(() =>
         fitView({ padding: 0.15, duration: 350, maxZoom: 1.2 })
       );
     }
-  }, [nodes, fitView]);
+  }, [graphKey, nodeCount, fitView]);
 
-  const handleNodeMouseEnter = (_: React.MouseEvent, node: Node) => {
-    const nodeType = node.id.split(":")[0];
-    setHoveredNodeType(nodeType);
-    setHoveredNodeLabel(String(node.data?.label || ""));
-  };
+  const skipFilterFit = useRef(true);
+  useEffect(() => {
+    if (skipFilterFit.current) {
+      skipFilterFit.current = false;
+      return;
+    }
+    requestAnimationFrame(() =>
+      fitView({ padding: 0.2, duration: 250, maxZoom: 1.4 })
+    );
+  }, [typeFilter, fitView]);
 
-  const handleNodeMouseLeave = () => {
-    setHoveredNodeType(null);
-    setHoveredNodeLabel(null);
-  };
-
-  const handleCanvasNodeClick = (e: React.MouseEvent, node: Node) => {
-    const [type, ...idParts] = node.id.split(":");
-    const rawId = idParts.join(":");
-    const label = String(node.data?.label || "");
+  const handleCanvasNodeClick = (event: React.MouseEvent, node: Node) => {
+    if (event.detail === 2) return;
+    const storedType = typeof node.data?.nodeType === "string" ? node.data.nodeType : "";
+    const storedRawId = typeof node.data?.rawId === "string" ? node.data.rawId : "";
+    const [typeFromId, ...idParts] = node.id.split(":");
+    const type = storedType || typeFromId;
+    const rawId = storedRawId || idParts.join(":");
+    const label = String(node.data?.label || node.id);
     setSelectedNodeData({ id: node.id, type, rawId, label });
-    onNodeClick(e, node);
+    setHintOpen(false);
   };
 
-  const activeNodeType = selectedNodeData ? selectedNodeData.type : hoveredNodeType;
-  const activeNodeLabel = selectedNodeData ? selectedNodeData.label : hoveredNodeLabel;
-  const activeInfo = activeNodeType ? NODE_DESCRIPTIONS[activeNodeType] : null;
-  const hoveredInfo = hoveredNodeType ? NODE_DESCRIPTIONS[hoveredNodeType] : null;
+  const handleOpenFullscreen = () => {
+    if (!onFullscreen) return;
+    setSelectedNodeData(null);
+    setHintOpen(false);
+    onFullscreen();
+  };
 
-  const redirectRoute = selectedNodeData && NODE_ROUTES[selectedNodeData.type]
-    ? `${NODE_ROUTES[selectedNodeData.type]}/${selectedNodeData.rawId}`
+  const activeInfo = selectedNodeData
+    ? NODE_DESCRIPTIONS[selectedNodeData.type] ?? {
+        label: selectedNodeData.type.replace(/_/g, " ").toUpperCase() || "NODE",
+        desc: "Selected graph node. Open the linked record when a route is available.",
+        icon: "●",
+      }
+    : null;
+
+  const redirectRoute = selectedNodeData
+    ? graphNodeRecordHref(selectedNodeData.type, selectedNodeData.rawId, { from: returnTo })
     : null;
 
   return (
     <ReactFlow
-      nodes={nodes}
-      edges={edges}
+      nodes={visibleNodes}
+      edges={visibleEdges}
       onNodesChange={onNodesChange}
       onEdgesChange={onEdgesChange}
       onNodeClick={handleCanvasNodeClick}
-      onNodeMouseEnter={handleNodeMouseEnter}
-      onNodeMouseLeave={handleNodeMouseLeave}
-      fitView
+      onNodeDoubleClick={() => handleOpenFullscreen()}
+      onPaneClick={() => {
+        setSelectedNodeData(null);
+        setHintOpen(false);
+      }}
+      onDoubleClick={(event) => {
+        const target = event.target as HTMLElement;
+        if (target.closest(".react-flow__panel")) return;
+        handleOpenFullscreen();
+      }}
+      nodesFocusable
+      elementsSelectable
+      selectNodesOnDrag={false}
       colorMode="system"
     >
       <Background color="#cbd5e1" gap={20} />
       <Controls
+        position="top-left"
         showInteractive={false}
         className="border border-input bg-card fill-foreground text-foreground shadow-sm"
       />
 
-      {/* Top Left: Interactive Node Details & Guidance Panel */}
+      {hasData && miniMapOpen && (
+        <MiniMap
+          pannable
+          zoomable
+          ariaLabel="Pattern graph overview"
+          position="bottom-right"
+          nodeColor={(node) => {
+            const type = node.id.split(":")[0];
+            if (type === "playbook") return "#2563eb";
+            if (type === "pattern") return "#0284c7";
+            if (type === "episode") return "#16a34a";
+            if (type === "evidence") return "#64748b";
+            if (type === "identity") return "#a855f7";
+            return "#94a3b8";
+          }}
+          nodeStrokeWidth={3}
+          maskColor="rgb(15 23 42 / 0.12)"
+          className="hidden rounded-lg border border-input bg-card shadow-lg md:block"
+        />
+      )}
+
       {hasData && (
         <Panel
-          position="top-left"
-          className="max-w-md rounded-lg border bg-card p-4 text-foreground shadow-lg transition-all duration-200"
+          position="top-right"
+          className="relative flex items-center gap-1 rounded-lg border bg-card p-1 text-foreground shadow-lg"
         >
-          {selectedNodeData && activeInfo ? (
-            <div className="space-y-2">
-              <div className="flex items-center justify-between gap-2">
-                <div className="flex items-center gap-2 text-primary font-bold text-xs uppercase tracking-wider">
-                  <span>{activeInfo.icon}</span>
-                  <span>{activeInfo.label}</span>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setSelectedNodeData(null)}
-                  className="rounded p-0.5 text-muted-foreground hover:text-foreground"
-                  title="Close Selection"
-                >
-                  <X className="h-3.5 w-3.5" />
-                </button>
-              </div>
-              <h4 className="text-sm font-semibold leading-snug">
-                &ldquo;{activeNodeLabel}&rdquo;
-              </h4>
-              <p className="text-xs text-muted-foreground leading-relaxed">
-                {activeInfo.desc}
-              </p>
-              {redirectRoute ? (
-                <button
-                  type="button"
-                  onClick={() => router.push(redirectRoute)}
-                  className="mt-2 inline-flex items-center gap-1.5 rounded-md bg-action px-3 py-1.5 text-xs font-medium text-action-foreground transition-colors hover:bg-action/90"
-                >
-                  <span>View Details & Redirect</span>
-                  <ExternalLink className="h-3.5 w-3.5" />
-                </button>
-              ) : (
-                <p className="text-[11px] text-muted-foreground italic pt-1">
-                  Enrichment concept node — inspect connected Episodes or Patterns for deep details.
+          <button
+            type="button"
+            onClick={() => {
+              if (!selectedNodeData) return;
+              setSelectedNodeData(null);
+            }}
+            disabled={!selectedNodeData}
+            className="inline-flex h-8 items-center gap-1.5 rounded-md px-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
+            title={selectedNodeData ? "Hide details panel" : "Click a node to view details"}
+          >
+            {selectedNodeData ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+            Details
+          </button>
+          <button
+            type="button"
+            onClick={() => setLegendOpen((value) => !value)}
+            className="inline-flex h-8 items-center gap-1.5 rounded-md px-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            title={legendOpen ? "Hide legend" : "Show legend"}
+          >
+            <List className="h-3.5 w-3.5" />
+            Legend
+          </button>
+          <button
+            type="button"
+            onClick={() => setMiniMapOpen((value) => !value)}
+            className="inline-flex h-8 items-center gap-1.5 rounded-md px-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            title={miniMapOpen ? "Hide minimap" : "Show minimap"}
+          >
+            <Map className="h-3.5 w-3.5" />
+            Map
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              if (onFullscreen) {
+                onFullscreen();
+                return;
+              }
+              fitView({ padding: 0.18, duration: 250, maxZoom: 1.2 });
+            }}
+            className="inline-flex h-8 items-center gap-1.5 rounded-md px-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            title={onFullscreen ? "Open fullscreen graph" : "Fit graph to view"}
+          >
+            <Maximize2 className="h-3.5 w-3.5" />
+            Full
+          </button>
+          <button
+            type="button"
+            onClick={() => setHintOpen((value) => !value)}
+            className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            title="Graph tips"
+            aria-label="Graph tips"
+            aria-expanded={hintOpen}
+          >
+            <Info className="h-3.5 w-3.5" />
+          </button>
+          {hintOpen && (
+            <div className="absolute right-0 top-full z-20 mt-1 w-64 rounded-lg border bg-card p-3 text-xs text-muted-foreground shadow-lg">
+              <p>Click any node to inspect details. Double-click the graph to open fullscreen.</p>
+              {isTruncated && (
+                <p className="mt-2 rounded-md border border-amber-500/30 bg-amber-500/10 px-2 py-1.5 text-[11px] font-medium text-amber-700 dark:text-amber-300">
+                  Showing key connections for this large graph.
                 </p>
               )}
-            </div>
-          ) : hoveredInfo ? (
-            <div className="space-y-1.5">
-              <div className="flex items-center gap-2 text-primary font-bold text-xs">
-                <span>{hoveredInfo.icon}</span>
-                <span>{hoveredInfo.label}</span>
-              </div>
-              <p className="text-xs font-medium line-clamp-1">
-                &ldquo;{hoveredNodeLabel}&rdquo;
-              </p>
-              <p className="text-[11px] text-muted-foreground leading-snug">
-                {hoveredInfo.desc}
-              </p>
-            </div>
-          ) : (
-            <div className="flex items-center gap-2 text-xs text-muted-foreground">
-              <HelpCircle className="h-4 w-4 text-primary shrink-0" />
-              <span>Click any node on the graph to inspect details and open its direct record.</span>
             </div>
           )}
         </Panel>
       )}
 
-      {/* Bottom Panel: Interactive Node Legend */}
-      {hasData && (
+      {selectedNodeData && activeInfo && (
         <Panel
-          position="bottom-center"
-          className="flex flex-wrap items-center gap-4 rounded-lg border bg-card px-3.5 py-2 text-[11px] text-muted-foreground shadow-lg"
+          position="top-center"
+          className="max-w-md rounded-lg border bg-card p-4 text-foreground shadow-lg transition-all duration-200"
         >
-          <div className="flex items-center gap-1.5">
-            <span className="h-2 w-2 rounded-full bg-blue-500"></span>
-            <span className="font-semibold text-foreground">Playbook:</span> Fix Guide
-          </div>
-          <div className="flex items-center gap-1.5">
-            <span className="h-2 w-2 rounded-full bg-sky-500"></span>
-            <span className="font-semibold text-foreground">Pattern:</span> Recurring Issue
-          </div>
-          <div className="flex items-center gap-1.5">
-            <span className="h-2 w-2 rounded-full bg-emerald-500"></span>
-            <span className="font-semibold text-foreground">Episode:</span> Incident Summary
-          </div>
-          <div className="flex items-center gap-1.5">
-            <span className="h-2 w-2 rounded-full bg-purple-400"></span>
-            <span className="font-semibold text-foreground">Identity:</span> User / Host
-          </div>
-          <div className="flex items-center gap-1.5">
-            <span className="h-2 w-2 rounded-full bg-slate-400"></span>
-            <span className="font-semibold text-foreground">Evidence:</span> Raw Ticket
+          <div className="space-y-2">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2 text-primary font-bold text-xs uppercase tracking-wider">
+                <span>{activeInfo.icon}</span>
+                <span>{activeInfo.label}</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSelectedNodeData(null)}
+                className="rounded p-0.5 text-muted-foreground hover:text-foreground"
+                title="Close details panel"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </div>
+            <h4 className="text-sm font-semibold leading-snug">
+              &ldquo;{selectedNodeData.label}&rdquo;
+            </h4>
+            <p className="text-xs text-muted-foreground leading-relaxed">
+              {activeInfo.desc}
+            </p>
+            {redirectRoute ? (
+              <button
+                type="button"
+                onClick={() => router.push(redirectRoute)}
+                className="mt-2 inline-flex items-center gap-1.5 rounded-md bg-action px-3 py-1.5 text-xs font-medium text-action-foreground transition-colors hover:bg-action/90"
+              >
+                <span>View Details & Redirect</span>
+                <ExternalLink className="h-3.5 w-3.5" />
+              </button>
+            ) : (
+              <p className="text-[11px] text-muted-foreground italic pt-1">
+                Enrichment concept node — inspect connected Episodes or Patterns for deep details.
+              </p>
+            )}
           </div>
         </Panel>
       )}
 
-      {/* Top Right: Click hint */}
-      {hasData && (
+      {hasData && legendOpen && (
         <Panel
-          position="top-right"
-          className="rounded-lg border bg-card p-2.5 text-xs text-muted-foreground shadow-lg"
+          position="bottom-center"
+          className="nodrag nopan nowheel flex flex-wrap items-center gap-2 rounded-lg border bg-card px-3.5 py-2 text-[11px] text-muted-foreground shadow-lg"
+          onMouseDown={(event) => event.stopPropagation()}
         >
-          <div className="flex items-center gap-1.5">
-            <Info className="h-3 w-3" /> Click a node to open details
-          </div>
+          {LEGEND_ITEMS.map((item) => {
+            const active = typeFilter === item.type;
+            return (
+              <button
+                key={item.type}
+                type="button"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  setTypeFilter((current) => (current === item.type ? null : item.type));
+                  setSelectedNodeData(null);
+                }}
+                aria-pressed={active}
+                title={
+                  active
+                    ? `Showing only ${item.label} nodes — click again to show all`
+                    : `Show only ${item.label} nodes`
+                }
+                className={`inline-flex items-center gap-1.5 rounded-md px-2 py-1 transition-colors ${
+                  active
+                    ? "bg-muted text-foreground ring-1 ring-ring"
+                    : "hover:bg-muted/70 hover:text-foreground"
+                }`}
+              >
+                <span className={`h-2 w-2 rounded-full ${item.dot}`} />
+                <span className="font-semibold text-foreground">{item.label}:</span>
+                {item.hint}
+              </button>
+            );
+          })}
         </Panel>
       )}
 
@@ -335,9 +469,9 @@ function FlowCanvas({
 // ── Public component ─────────────────────────────────────────────────────────
 
 export function PatternGraph({ patternId }: { patternId: string }) {
-  const router = useRouter();
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
+  const [fullscreenOpen, setFullscreenOpen] = useState(false);
 
   const { data, isLoading, error } = useQuery<PatternSubgraph>({
     queryKey: ["pattern-graph", patternId],
@@ -360,10 +494,10 @@ export function PatternGraph({ patternId }: { patternId: string }) {
 
       return {
         id: `${n.type}:${n.id}`,
-        data: { label: displayLabel },
-        className: `px-4 py-2 border-2 rounded-lg text-sm transition-all cursor-pointer hover:scale-105 ${
-          getNodeClassName(n.type)
-        }${n.type === "pattern" ? " font-bold shadow-[0_0_15px_rgba(99,102,241,0.5)]" : ""}`,
+        data: { label: displayLabel, nodeType: n.type, rawId: n.id },
+        className: `${GRAPH_NODE_CARD_CLASS} ${getNodeClassName(n.type)}${
+          n.type === "pattern" ? " font-bold" : ""
+        }`,
         type: "default",
         position: { x: 0, y: 0 },
         // Native browser hover tooltip attribute
@@ -390,25 +524,6 @@ export function PatternGraph({ patternId }: { patternId: string }) {
     setEdges(laidEdges);
   }, [data, setNodes, setEdges]);
 
-  // Navigate to the entity page when a node is clicked
-  const handleNodeClick = useCallback(
-    (_: React.MouseEvent, node: Node) => {
-      const [type, ...idParts] = node.id.split(":");
-      const id = idParts.join(":");
-      const route = NODE_ROUTES[type];
-      
-      if (route) {
-        router.push(`${route}/${id}`);
-      } else {
-        toast.info(
-          `"${node.data.label}" is an enrichment concept. Dedicated detail pages are available for Episodes, Patterns, and Identities.`,
-          { duration: 4000 }
-        );
-      }
-    },
-    [router],
-  );
-
   if (isLoading) {
     return (
       <div className="flex justify-center p-12">
@@ -426,24 +541,68 @@ export function PatternGraph({ patternId }: { patternId: string }) {
   }
 
   const hasData = nodes.length > 1;
+  const graphKey = `${patternId}:${data?.nodes.length ?? 0}:${data?.edges.length ?? 0}:${data?.truncated ? "truncated" : "full"}`;
 
   return (
-    <div className="relative w-full h-[600px] overflow-hidden rounded-lg border bg-card">
-      {data?.truncated && (
-        <div className="absolute top-2 left-1/2 -translate-x-1/2 z-10 px-3 py-1 rounded-full bg-amber-500/15 border border-amber-500/30 text-amber-300 text-xs font-medium pointer-events-none">
-          Large graph — showing the strongest connections only
+    <>
+      <div className="relative w-full h-[600px] overflow-hidden rounded-lg border bg-card">
+        <ReactFlowProvider>
+          <FlowCanvas
+            nodes={nodes}
+            edges={edges}
+            onNodesChange={onNodesChange}
+            onEdgesChange={onEdgesChange}
+            hasData={hasData}
+            isTruncated={Boolean(data?.truncated)}
+            graphKey={graphKey}
+            onFullscreen={() => setFullscreenOpen(true)}
+            returnTo={`/patterns/${patternId}`}
+          />
+        </ReactFlowProvider>
+      </div>
+
+      {fullscreenOpen && (
+        <div
+          className="fixed inset-0 z-50 bg-background"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Pattern graph fullscreen"
+        >
+          <div className="flex h-12 items-center justify-between border-b bg-card px-4 shadow-sm">
+            <div className="min-w-0">
+              <p className="truncate text-sm font-semibold text-foreground">
+                Pattern graph
+              </p>
+              <p className="text-xs text-muted-foreground">
+                Explore nodes, connections, and source records
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setFullscreenOpen(false)}
+              className="inline-flex h-9 w-9 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+              aria-label="Close fullscreen graph"
+              title="Close"
+            >
+              <X className="h-5 w-5" />
+            </button>
+          </div>
+          <div className="h-[calc(100vh-3rem)]">
+            <ReactFlowProvider>
+              <FlowCanvas
+                nodes={nodes}
+                edges={edges}
+                onNodesChange={onNodesChange}
+                onEdgesChange={onEdgesChange}
+                hasData={hasData}
+                isTruncated={Boolean(data?.truncated)}
+                graphKey={`fullscreen:${graphKey}`}
+                returnTo={`/patterns/${patternId}`}
+              />
+            </ReactFlowProvider>
+          </div>
         </div>
       )}
-      <ReactFlowProvider>
-        <FlowCanvas
-          nodes={nodes}
-          edges={edges}
-          onNodesChange={onNodesChange}
-          onEdgesChange={onEdgesChange}
-          onNodeClick={handleNodeClick}
-          hasData={hasData}
-        />
-      </ReactFlowProvider>
-    </div>
+    </>
   );
 }

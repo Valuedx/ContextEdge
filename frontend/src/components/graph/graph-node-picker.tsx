@@ -1,9 +1,11 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
+import { ChevronDown } from "lucide-react";
 
 import { SearchableSelect } from "@/components/common/searchable-select";
 import { api } from "@/lib/api";
+import { cn } from "@/lib/utils";
 import type {
   CanonicalIdentity,
   Decision,
@@ -162,6 +164,7 @@ export function GraphNodePicker({
   onNodeIdChange,
   onNodeTypeChange,
   showType = true,
+  nodeLabel = "Node name",
 }: {
   className?: string;
   nodeId: string;
@@ -170,6 +173,7 @@ export function GraphNodePicker({
   onNodeIdChange: (value: string) => void;
   onNodeTypeChange?: (value: string) => void;
   showType?: boolean;
+  nodeLabel?: string;
 }) {
   const { data: options = [], error, isLoading } = useQuery<GraphNodeOption[], Error>({
     queryKey: ["graph-node-picker", nodeType],
@@ -189,29 +193,32 @@ export function GraphNodePicker({
   ];
 
   return (
-    <div className={className ?? "flex flex-wrap items-end gap-3"}>
+    <div className={cn("flex min-w-0 items-end gap-2.5", className)}>
       {showType && (
-        <div className="space-y-1">
-          <label className="text-xs text-muted-foreground">Node type</label>
-          <select
-            value={nodeType}
-            onChange={(event) => {
-              onNodeTypeChange?.(event.target.value);
-              onNodeIdChange("");
-            }}
-            className="h-8 rounded-md border border-input bg-background px-2.5 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          >
-            {nodeTypes.map((type) => (
-              <option key={type} value={type}>
-                {type.replace(/_/g, " ")}
-              </option>
-            ))}
-          </select>
+        <div className="flex shrink-0 flex-col gap-1">
+          <label className="text-xs font-medium text-muted-foreground">Node type</label>
+          <div className="relative">
+            <select
+              value={nodeType}
+              onChange={(event) => {
+                onNodeTypeChange?.(event.target.value);
+                onNodeIdChange("");
+              }}
+              className="h-8 appearance-none rounded-md border border-input bg-background pl-2.5 pr-8 text-xs font-medium capitalize outline-none transition-colors hover:border-slate-400 focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/20"
+            >
+              {nodeTypes.map((type) => (
+                <option key={type} value={type} className="capitalize">
+                  {type.replace(/_/g, " ")}
+                </option>
+              ))}
+            </select>
+            <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground opacity-60" />
+          </div>
         </div>
       )}
 
-      <div className="min-w-[280px] flex-1 space-y-1">
-        <label className="text-xs text-muted-foreground">Node name</label>
+      <div className="flex min-w-44 sm:min-w-60 flex-1 flex-col gap-1">
+        <label className="text-xs font-medium text-muted-foreground">{nodeLabel}</label>
         <SearchableSelect
           value={nodeId || NO_NODE}
           options={selectOptions}
@@ -224,10 +231,6 @@ export function GraphNodePicker({
         />
         {error ? (
           <p className="text-xs text-destructive">{error.message}</p>
-        ) : !isLoading && options.length === 0 ? (
-          <p className="text-xs text-muted-foreground">
-            No selectable records found for {nodeType.replace(/_/g, " ")}.
-          </p>
         ) : null}
       </div>
     </div>

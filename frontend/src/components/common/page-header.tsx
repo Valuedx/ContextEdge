@@ -22,11 +22,12 @@ export function PageHeader({
   return (
     <div
       className={cn(
-        "rounded-lg border bg-card px-5 py-5 text-card-foreground shadow-sm sm:flex sm:items-start sm:justify-between sm:gap-5",
+        "flex flex-col gap-3 rounded-lg border bg-card px-4 py-3 text-card-foreground shadow-sm",
+        "lg:flex-row lg:items-center lg:justify-between lg:gap-4",
         className
       )}
     >
-      <div className="min-w-0 flex-1 space-y-2">
+      <div className="min-w-0 flex-1 space-y-1">
         {backHref && (
           <Link
             href={backHref}
@@ -36,17 +37,17 @@ export function PageHeader({
             <span className="truncate">{backLabel}</span>
           </Link>
         )}
-        <h2 className="text-balance text-2xl font-semibold leading-tight tracking-tight text-foreground">
+        <h2 className="truncate text-xl font-semibold leading-tight tracking-tight text-foreground">
           {title}
         </h2>
         {description && (
-          <p className="max-w-3xl text-pretty text-sm leading-relaxed text-muted-foreground">
+          <p className="truncate text-sm leading-snug text-muted-foreground">
             {description}
           </p>
         )}
       </div>
       {actions && (
-        <div className="mt-4 flex w-full min-w-0 shrink-0 flex-wrap items-center justify-start gap-2 sm:mt-0 sm:w-auto sm:max-w-[72%] sm:justify-end">
+        <div className="flex min-w-0 shrink-0 items-center gap-2 overflow-x-auto [&>div]:flex [&>div]:flex-nowrap [&>div]:items-center">
           {actions}
         </div>
       )}

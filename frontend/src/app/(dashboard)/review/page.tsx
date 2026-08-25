@@ -877,8 +877,8 @@ function ReviewPageContent() {
   return (
     <div className="space-y-4 h-[calc(100vh-10rem)] flex flex-col">
       <PageHeader
-        title="Review Queue"
-        description="Confidence-ranked pending decisions. Approve, reject with structured reason, or open the full trace."
+        title="Reviewer Console"
+        description="Confidence-ranked pending AI decisions and session reviews. Approve, reject with structured reasons, or inspect full traces."
       />
       <div className="flex-1 flex border rounded-md overflow-hidden">
         <QueuePane

@@ -604,7 +604,7 @@ export default function AdminCostPage() {
         description="Per-tenant spend, cache-hit rate, and model/task breakdown. Pick a window, or scope to a single sync run — a run still going updates every 5 seconds."
       />
 
-      <div className="flex flex-wrap items-end gap-3">
+      <div className="flex items-end gap-3 overflow-x-auto">
         <div className="space-y-1.5">
           <label className="text-xs font-medium text-muted-foreground">
             Window

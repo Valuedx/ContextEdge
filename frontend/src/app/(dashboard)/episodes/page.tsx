@@ -293,7 +293,7 @@ export default function EpisodesPage() {
         title="Episodes" 
         description="Reconstructed troubleshooting episodes from correlated evidence." 
         actions={
-          <div className="flex flex-wrap items-center justify-start gap-2 sm:justify-end">
+          <div className="flex items-center gap-2">
             {selectedIds.length > 0 && (
               <Button
                 type="button"

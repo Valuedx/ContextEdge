@@ -173,7 +173,7 @@ function DecisionsPageContent() {
         description="First-class decision traces with evidence, options, reasoning, and outcomes."
       />
 
-      <div className="flex flex-wrap gap-3 items-end">
+      <div className="flex items-end gap-3 overflow-x-auto">
         <div className="space-y-1">
           <Label className="text-xs">Decision type</Label>
           <Select value={typeFilter} onValueChange={(v) => setTypeFilter(v ?? "")}>
@@ -281,10 +281,10 @@ function DecisionsPageContent() {
                 Chain
               </TabsTrigger>
             </TabsList>
-            <TabsContent value="detail" className="mt-4">
+            <TabsContent value="detail" className="mt-3">
               <DecisionDetail decision={displayDecision} />
             </TabsContent>
-            <TabsContent value="chain" className="mt-4">
+            <TabsContent value="chain" className="mt-3">
               {chainQuery.isLoading ? (
                 <p className="text-sm text-muted-foreground">Loading chain…</p>
               ) : chainQuery.data ? (

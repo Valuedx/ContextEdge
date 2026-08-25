@@ -209,7 +209,7 @@ export default function SourceDetailPage() {
         backHref="/sources"
         backLabel="Sources"
         actions={
-          <div className="flex flex-wrap justify-start gap-2 sm:justify-end">
+          <div className="flex items-center gap-2">
             <Link
               href={`/inventory/${id}`}
               className={cn(buttonVariants({ variant: "outline" }))}

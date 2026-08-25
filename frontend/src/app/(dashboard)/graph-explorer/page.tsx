@@ -12,6 +12,10 @@ import { GraphNeighbors } from "@/components/graph/graph-neighbors";
 import { GraphQueryControls } from "@/components/graph/graph-query-controls";
 import { GraphStats } from "@/components/graph/graph-stats";
 import { GraphSubgraph } from "@/components/graph/graph-subgraph";
+import {
+  backLabelForPath,
+  safeInternalReturnPath,
+} from "@/components/graph/graph-node-routes";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 const TAB_NAMES = ["stats", "subgraph", "neighbors", "agent-context", "proposals"] as const;
@@ -46,6 +50,7 @@ function GraphExplorerContent() {
       ? initialType
       : undefined;
 
+  const returnTo = safeInternalReturnPath(searchParams.get("from"));
   const [activeTab, setActiveTab] = useState<TabName>(validTab);
   const [domainId, setDomainId] = useState(searchParams.get("domain_id") ?? "");
   const initialAsOf = asLocalDateTime(searchParams.get("as_of"));
@@ -84,6 +89,8 @@ function GraphExplorerContent() {
       <PageHeader
         title="Graph Explorer"
         description="Explore operational relationships, temporal topology, and agent-ready context."
+        backHref={returnTo ?? undefined}
+        backLabel={returnTo ? backLabelForPath(returnTo) : undefined}
       />
 
       <GraphQueryControls
@@ -108,43 +115,42 @@ function GraphExplorerContent() {
       />
 
       <Tabs value={activeTab} onValueChange={changeTab} className="w-full">
-        <div className="mb-4 flex justify-start overflow-x-auto">
-          <TabsList>
-            <TabsTrigger value="stats" className="flex items-center gap-2">
-              <BarChart3 className="h-4 w-4" /> Statistics
-            </TabsTrigger>
-            <TabsTrigger value="subgraph" className="flex items-center gap-2">
-              <Network className="h-4 w-4" /> Subgraph
-            </TabsTrigger>
-            <TabsTrigger value="neighbors" className="flex items-center gap-2">
-              <GitBranch className="h-4 w-4" /> Neighbors
-            </TabsTrigger>
-            <TabsTrigger value="agent-context" className="flex items-center gap-2">
-              <BrainCircuit className="h-4 w-4" /> Agent Context
-            </TabsTrigger>
-            <TabsTrigger value="proposals" className="flex items-center gap-2">
-              <GitPullRequest className="h-4 w-4" /> Proposals
-            </TabsTrigger>
-          </TabsList>
-        </div>
+        <TabsList variant="glass" className="max-w-full justify-start overflow-x-auto gap-1 border border-border/80 bg-muted/60 p-1 shadow-xs">
+          <TabsTrigger value="stats" className="gap-2">
+            <BarChart3 className="h-4 w-4" /> Statistics
+          </TabsTrigger>
+          <TabsTrigger value="subgraph" className="gap-2">
+            <Network className="h-4 w-4" /> Subgraph
+          </TabsTrigger>
+          <TabsTrigger value="neighbors" className="gap-2">
+            <GitBranch className="h-4 w-4" /> Neighbors
+          </TabsTrigger>
+          <TabsTrigger value="agent-context" className="gap-2">
+            <BrainCircuit className="h-4 w-4" /> Agent Context
+          </TabsTrigger>
+          <TabsTrigger value="proposals" className="gap-2">
+            <GitPullRequest className="h-4 w-4" /> Proposals
+          </TabsTrigger>
+        </TabsList>
 
-        <TabsContent value="stats" className="border-none p-0 outline-none">
+        <TabsContent value="stats" className="mt-4 border-none p-0 outline-none">
           <GraphStats scope={scope} />
         </TabsContent>
-        <TabsContent value="subgraph" className="border-none p-0 outline-none">
+        <TabsContent value="subgraph" className="mt-4 border-none p-0 outline-none">
           <GraphSubgraph
             scope={scope}
             initialType={validType}
             initialId={validType ? initialId : undefined}
+            returnTo={returnTo ?? undefined}
           />
         </TabsContent>
-        <TabsContent value="neighbors" className="border-none p-0 outline-none">
+        <TabsContent value="neighbors" className="mt-4 border-none p-0 outline-none">
           <GraphNeighbors scope={scope} />
         </TabsContent>
-        <TabsContent value="agent-context" className="border-none p-0 outline-none">
+        <TabsContent value="agent-context" className="mt-4 border-none p-0 outline-none">
           <AgentContextPreview scope={scope} />
         </TabsContent>
-        <TabsContent value="proposals" className="border-none p-0 outline-none">
+        <TabsContent value="proposals" className="mt-4 border-none p-0 outline-none">
           <EdgeProposals />
         </TabsContent>
       </Tabs>

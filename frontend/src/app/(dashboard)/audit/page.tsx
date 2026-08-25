@@ -106,7 +106,7 @@ export default function AuditPage() {
       />
 
       {/* Filter bar */}
-      <div className="flex flex-wrap items-end gap-3">
+      <div className="flex items-end gap-3 overflow-x-auto">
         <div className="space-y-1">
           <Label className="text-xs">Action type</Label>
           <Select value={actionFilter} onValueChange={(v) => setActionFilter(v ?? "all")}>

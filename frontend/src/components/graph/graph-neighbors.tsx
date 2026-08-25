@@ -10,12 +10,13 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
-  Loader2,
-  GitBranch,
-  Search,
-  ArrowRight,
   ArrowLeft,
+  ArrowRight,
+  ChevronDown,
   ExternalLink,
+  GitBranch,
+  Loader2,
+  Search,
 } from "lucide-react";
 import { nodeColors, NODE_TYPE_OPTIONS } from "./graph-constants";
 import {
@@ -111,8 +112,8 @@ export function GraphNeighbors({ scope }: { scope: GraphScope }) {
 
   return (
     <div className="space-y-4">
-      <Card>
-        <CardHeader>
+      <Card size="sm">
+        <CardHeader className="pb-0">
           <CardTitle className="flex items-center gap-2">
             <Search className="h-4 w-4" /> BFS Neighbor Traversal
           </CardTitle>
@@ -127,30 +128,33 @@ export function GraphNeighbors({ scope }: { scope: GraphScope }) {
               onNodeIdChange={setNodeId}
             />
 
-            <div className="space-y-1">
-              <label className="text-xs text-muted-foreground">Edge Type (optional)</label>
+            <div className="flex flex-col gap-1">
+              <label className="text-xs font-medium text-muted-foreground">Edge Type (optional)</label>
               <Input
                 placeholder="e.g. belongs_to"
                 value={edgeTypeFilter}
                 onChange={(e) => setEdgeTypeFilter(e.target.value)}
-                className="w-40"
+                className="h-8 w-36 text-xs sm:w-44"
               />
             </div>
 
-            <div className="space-y-1">
-              <label className="text-xs text-muted-foreground">Depth</label>
-              <select
-                value={maxDepth}
-                onChange={(e) => setMaxDepth(Number(e.target.value))}
-                className="h-8 rounded-md border border-input bg-background px-2.5 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              >
-                <option value={1}>1 hop</option>
-                <option value={2}>2 hops</option>
-                <option value={3}>3 hops</option>
-              </select>
+            <div className="flex flex-col gap-1">
+              <label className="text-xs font-medium text-muted-foreground">Depth</label>
+              <div className="relative">
+                <select
+                  value={maxDepth}
+                  onChange={(e) => setMaxDepth(Number(e.target.value))}
+                  className="h-8 appearance-none rounded-md border border-input bg-background pl-2.5 pr-8 text-xs font-medium outline-none transition-colors hover:border-slate-400 focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/20"
+                >
+                  <option value={1}>1 hop</option>
+                  <option value={2}>2 hops</option>
+                  <option value={3}>3 hops</option>
+                </select>
+                <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground opacity-60" />
+              </div>
             </div>
 
-            <Button onClick={handleSearch} disabled={!nodeId.trim() || isFetching}>
+            <Button size="sm" className="h-8" onClick={handleSearch} disabled={!nodeId.trim() || isFetching}>
               {isFetching ? (
                 <Loader2 className="h-4 w-4 animate-spin mr-1" />
               ) : (
@@ -178,7 +182,7 @@ export function GraphNeighbors({ scope }: { scope: GraphScope }) {
 
       {data && !isLoading && data.length === 0 && (
         <Card>
-          <CardContent className="py-8">
+          <CardContent className="py-6">
             <div className="text-center space-y-3">
               <GitBranch className="h-12 w-12 text-muted-foreground mx-auto" />
               <p className="text-muted-foreground text-sm">No neighbors found for this node.</p>

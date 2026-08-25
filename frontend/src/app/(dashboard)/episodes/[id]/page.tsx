@@ -187,7 +187,7 @@ export default function EpisodeDetailPage() {
         backHref="/episodes"
         backLabel="Episodes"
         actions={
-          <div className="flex flex-wrap justify-start gap-2 sm:justify-end">
+          <div className="flex items-center gap-2">
             {showApprove && episode.reviewer_state !== "approved" && (
               <Button
                 disabled={approveMut.isPending}

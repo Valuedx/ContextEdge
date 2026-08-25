@@ -242,11 +242,11 @@ export default function RuntimePage() {
           <TabsTrigger value="feedback">Feedback</TabsTrigger>
         </TabsList>
 
-        <TabsContent value="feedback" className="mt-4">
+        <TabsContent value="feedback" className="mt-3">
           <FeedbackTab />
         </TabsContent>
 
-        <TabsContent value="sandbox" className="mt-4 space-y-6">
+        <TabsContent value="sandbox" className="mt-3 space-y-4">
 
       <Card>
         <CardHeader>

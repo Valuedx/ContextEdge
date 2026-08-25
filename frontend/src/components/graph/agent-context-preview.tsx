@@ -69,6 +69,7 @@ function AgentFlow({
   onEdgesChange,
   onNodeClick,
   onEdgeClick,
+  graphKey,
 }: {
   nodes: Node[];
   edges: Edge[];
@@ -76,6 +77,7 @@ function AgentFlow({
   onEdgesChange: ReturnType<typeof useEdgesState>[2];
   onNodeClick: (node: Node) => void;
   onEdgeClick: (edge: Edge) => void;
+  graphKey: string;
 }) {
   const { fitView } = useReactFlow();
   useEffect(() => {
@@ -84,7 +86,7 @@ function AgentFlow({
         fitView({ padding: 0.18, duration: 300, maxZoom: 1.1 }),
       );
     }
-  }, [fitView, nodes]);
+  }, [fitView, graphKey, nodes.length]);
 
   return (
     <ReactFlow
@@ -203,7 +205,7 @@ export function AgentContextPreview({ scope }: { scope: GraphScope }) {
     const rawNodes: Node[] = result.nodes.map((node) => ({
       id: node.key,
       data: { label: node.label, agentNode: node },
-      className: `h-[58px] w-[190px] overflow-hidden rounded-lg border-2 px-3 py-2 text-xs ${getNodeClassName(node.type)}`,
+      className: `graph-node-card box-border h-[58px] w-[190px] overflow-hidden rounded-lg border-2 px-3 py-2 text-xs ${getNodeClassName(node.type)}`,
       position: { x: 0, y: 0 },
     }));
     const rawEdges: Edge[] = result.relationships.map((relationship, index) => {
@@ -288,10 +290,10 @@ export function AgentContextPreview({ scope }: { scope: GraphScope }) {
   }, []);
 
   return (
-    <div className="space-y-4">
-      <div className="border-b pb-4">
-        <div className="grid gap-3 lg:grid-cols-[minmax(280px,2fr)_minmax(220px,1fr)_auto]">
-          <div className="space-y-1">
+    <div className="space-y-3">
+      <div className="space-y-3 rounded-lg border bg-card p-3 shadow-sm">
+        <div className="grid items-stretch gap-3 lg:grid-cols-2">
+          <div className="flex min-h-0 flex-col gap-1">
             <label className="text-xs text-muted-foreground" htmlFor="agent-query">
               Agent query
             </label>
@@ -300,12 +302,11 @@ export function AgentContextPreview({ scope }: { scope: GraphScope }) {
               value={query}
               onChange={(event) => setQuery(event.target.value)}
               placeholder="Why did the payment workflow fail?"
-              className="min-h-20"
+              className="min-h-24 flex-1 resize-y lg:min-h-[10.5rem]"
             />
           </div>
-          <div className="grid gap-2">
+          <div className="space-y-2">
             <GraphNodePicker
-              className="grid gap-2"
               nodeType={seedType}
               nodeId={seedId}
               nodeTypes={MAF_NODE_TYPE_OPTIONS}
@@ -313,89 +314,111 @@ export function AgentContextPreview({ scope }: { scope: GraphScope }) {
               onNodeIdChange={setSeedId}
             />
             <GraphNodePicker
-              className="grid gap-2"
               nodeType="session"
               nodeId={sessionId}
               nodeTypes={["session"]}
               onNodeIdChange={setSessionId}
               showType={false}
+              nodeLabel="Session"
             />
-            <label className="space-y-1 text-xs text-muted-foreground">
-              Entity terms
-              <Input
-                value={entities}
-                onChange={(event) => setEntities(event.target.value)}
-                placeholder="workflow, host"
-              />
-            </label>
+            <div className="flex items-end gap-2">
+              <div className="flex min-w-0 flex-1 flex-col gap-1">
+                <label className="text-xs font-medium text-muted-foreground" htmlFor="agent-entities">
+                  Entity terms
+                </label>
+                <Input
+                  id="agent-entities"
+                  value={entities}
+                  onChange={(event) => setEntities(event.target.value)}
+                  placeholder="workflow, host"
+                  className="h-8 text-xs"
+                />
+              </div>
+              <Button
+                className="shrink-0"
+                disabled={!canRun || mutation.isPending}
+                onClick={() => {
+                  setSelection(null);
+                  mutation.mutate(request);
+                }}
+              >
+                {mutation.isPending ? (
+                  <Loader2 className="size-4 animate-spin" />
+                ) : (
+                  <Search className="size-4" />
+                )}
+                Preview
+              </Button>
+            </div>
           </div>
-          <Button
-            className="self-end"
-            disabled={!canRun || mutation.isPending}
-            onClick={() => {
-              setSelection(null);
-              mutation.mutate(request);
-            }}
-          >
-            {mutation.isPending ? (
-              <Loader2 className="size-4 animate-spin" />
-            ) : (
-              <Search className="size-4" />
-            )}
-            Preview
-          </Button>
         </div>
 
-        <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
-          <label className="space-y-1 text-xs text-muted-foreground">
-            Depth
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+          <div className="flex flex-col gap-1">
+            <label className="text-xs font-medium text-muted-foreground" htmlFor="agent-depth">
+              Depth
+            </label>
             <Input
+              id="agent-depth"
               type="number"
               min={1}
               max={3}
+              className="h-8 text-xs"
               value={maxDepth}
               onChange={(event) =>
                 setMaxDepth(clamp(event.target.value, 1, 3, 2))
               }
             />
-          </label>
-          <label className="space-y-1 text-xs text-muted-foreground">
-            Nodes
+          </div>
+          <div className="flex flex-col gap-1">
+            <label className="text-xs font-medium text-muted-foreground" htmlFor="agent-nodes">
+              Nodes
+            </label>
             <Input
+              id="agent-nodes"
               type="number"
               min={1}
               max={60}
+              className="h-8 text-xs"
               value={maxNodes}
               onChange={(event) =>
                 setMaxNodes(clamp(event.target.value, 1, 60, 24))
               }
             />
-          </label>
-          <label className="space-y-1 text-xs text-muted-foreground">
-            Relationships
+          </div>
+          <div className="flex flex-col gap-1">
+            <label className="text-xs font-medium text-muted-foreground" htmlFor="agent-rel">
+              Relationships
+            </label>
             <Input
+              id="agent-rel"
               type="number"
               min={0}
               max={120}
+              className="h-8 text-xs"
               value={maxRelationships}
               onChange={(event) =>
                 setMaxRelationships(clamp(event.target.value, 0, 120, 48))
               }
             />
-          </label>
-          <label className="space-y-1 text-xs text-muted-foreground">
-            Characters
+          </div>
+          <div className="flex flex-col gap-1">
+            <label className="text-xs font-medium text-muted-foreground" htmlFor="agent-chars">
+              Characters
+            </label>
             <Input
+              id="agent-chars"
               type="number"
               min={500}
               max={30000}
               step={500}
+              className="h-8 text-xs"
               value={maxCharacters}
               onChange={(event) =>
                 setMaxCharacters(clamp(event.target.value, 500, 30000, 12000))
               }
             />
-          </label>
+          </div>
         </div>
       </div>
 
@@ -453,12 +476,12 @@ export function AgentContextPreview({ scope }: { scope: GraphScope }) {
           ))}
 
           {mutation.data.nodes.length === 0 ? (
-            <div className="flex min-h-72 items-center justify-center rounded-lg border text-sm text-muted-foreground">
+            <div className="flex min-h-40 items-center justify-center rounded-lg border text-sm text-muted-foreground">
               No authorized context matched this request.
             </div>
           ) : (
-            <div className="grid min-h-[620px] overflow-hidden rounded-lg border bg-card lg:grid-cols-[minmax(0,1fr)_300px]">
-              <div className="h-[620px] min-w-0">
+            <div className="grid overflow-hidden rounded-lg border bg-card lg:grid-cols-[minmax(0,1fr)_280px]">
+              <div className="h-[420px] min-w-0 lg:h-[480px]">
                 <ReactFlowProvider>
                   <AgentFlow
                     nodes={nodes}
@@ -467,6 +490,7 @@ export function AgentContextPreview({ scope }: { scope: GraphScope }) {
                     onEdgesChange={onEdgesChange}
                     onNodeClick={inspectNode}
                     onEdgeClick={inspectEdge}
+                    graphKey={`${mutation.data.nodes.length}:${mutation.data.relationships.length}:${mutation.data.nodes[0]?.key ?? ""}`}
                   />
                 </ReactFlowProvider>
               </div>

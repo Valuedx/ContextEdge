@@ -395,7 +395,7 @@ export default function SettingsPage() {
   });
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
       <PageHeader
         title="Settings"
         description="Tenant, workspaces, domains, and users for your organization."
@@ -415,22 +415,21 @@ export default function SettingsPage() {
         </TabsList>
 
         {/* ── General ── */}
-        <TabsContent value="general" className="mt-4">
+        <TabsContent value="general">
           <Card>
             <CardHeader><CardTitle>Tenant</CardTitle></CardHeader>
             <CardContent>
               {tenantLoading ? (
-                <div className="space-y-4">
+                <div className="grid gap-3 sm:grid-cols-2">
                   {Array.from({ length: 4 }).map((_, i) => (
                     <div key={i} className="space-y-1.5">
                       <Skeleton className="h-3 w-16" />
                       <Skeleton className="h-4 w-[min(100%,14rem)]" />
                     </div>
                   ))}
-                  <Skeleton className="mt-2 h-32 w-full max-w-md rounded-md" />
                 </div>
               ) : tenant ? (
-                <dl className="space-y-2 text-sm">
+                <dl className="grid gap-x-6 gap-y-3 text-sm sm:grid-cols-2">
                   <div>
                     <dt className="text-muted-foreground">Name</dt>
                     <dd className="font-medium">{tenant.name}</dd>
@@ -443,7 +442,7 @@ export default function SettingsPage() {
                     <dt className="text-muted-foreground">Status</dt>
                     <dd>{tenant.is_active ? "Active" : "Inactive"}</dd>
                   </div>
-                  <div>
+                  <div className="sm:col-span-2">
                     <dt className="text-muted-foreground">Config</dt>
                     <dd>
                       <pre className="mt-1 max-h-48 overflow-auto rounded-md bg-muted p-2 text-xs">
@@ -460,10 +459,11 @@ export default function SettingsPage() {
         </TabsContent>
 
         {/* ── Workspaces ── */}
-        <TabsContent value="workspaces" className="mt-4 space-y-4">
+        <TabsContent value="workspaces" className="space-y-3">
           {admin && (
-            <div className="flex justify-end">
-              <Button onClick={() => setWsOpen(true)}>
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-sm font-medium text-foreground">Workspaces</p>
+              <Button size="sm" onClick={() => setWsOpen(true)}>
                 <Plus className="mr-2 h-4 w-4" />
                 New Workspace
               </Button>
@@ -482,10 +482,11 @@ export default function SettingsPage() {
         </TabsContent>
 
         {/* ── Domains ── */}
-        <TabsContent value="domains" className="mt-4 space-y-4">
+        <TabsContent value="domains" className="space-y-3">
           {admin && (
-            <div className="flex justify-end">
-              <Button onClick={() => setDomOpen(true)}>
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-sm font-medium text-foreground">Domains</p>
+              <Button size="sm" onClick={() => setDomOpen(true)}>
                 <Plus className="mr-2 h-4 w-4" />
                 New Domain
               </Button>
@@ -509,7 +510,7 @@ export default function SettingsPage() {
         </TabsContent>
 
         {/* ── Users ── */}
-        <TabsContent value="users" className="mt-4">
+        <TabsContent value="users">
           {!admin ? (
             <p className="text-sm text-muted-foreground">
               Tenant admin role is required to list users.
@@ -531,7 +532,7 @@ export default function SettingsPage() {
         </TabsContent>
 
         {/* ── Retention ── */}
-        <TabsContent value="retention" className="mt-4">
+        <TabsContent value="retention">
           <Card>
             <CardHeader><CardTitle>Retention</CardTitle></CardHeader>
             <CardContent className="text-sm text-muted-foreground">

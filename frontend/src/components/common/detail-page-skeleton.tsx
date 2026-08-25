@@ -19,18 +19,18 @@ export function DetailPageSkeleton({
 }: DetailPageSkeletonProps) {
   return (
     <div className={cn("space-y-6", className)}>
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-        <div className="space-y-2">
-          <Skeleton className="h-8 w-[min(100%,20rem)]" />
-          <Skeleton className="h-4 w-[min(100%,28rem)]" />
+      <div className="flex flex-col gap-3 rounded-lg border bg-card px-4 py-3 lg:flex-row lg:items-center lg:justify-between">
+        <div className="min-w-0 flex-1 space-y-1">
+          <Skeleton className="h-6 w-[min(100%,16rem)]" />
+          <Skeleton className="h-4 w-[min(100%,24rem)]" />
         </div>
         {actionSlots === 2 ? (
-          <div className="flex shrink-0 flex-wrap gap-2">
-            <Skeleton className="h-9 w-28 rounded-md" />
-            <Skeleton className="h-9 w-36 rounded-md" />
+          <div className="flex shrink-0 gap-2">
+            <Skeleton className="h-8 w-24 rounded-md" />
+            <Skeleton className="h-8 w-32 rounded-md" />
           </div>
         ) : (
-          <Skeleton className="h-9 w-32 shrink-0 rounded-md" />
+          <Skeleton className="h-8 w-28 shrink-0 rounded-md" />
         )}
       </div>
       <div className="flex flex-wrap gap-2">

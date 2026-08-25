@@ -188,7 +188,13 @@ async def get_pattern_graph(
 
 
 @router.get("/{pattern_id}/evidence-links", response_model=list[PatternEvidenceLinkResponse])
-async def list_pattern_evidence_links(pattern_id: UUID, db: DbSession, user: AuthUser):
+async def list_pattern_evidence_links(
+    pattern_id: UUID,
+    db: DbSession,
+    user: AuthUser,
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+):
     pattern = (
         await db.execute(
             select(Pattern).where(Pattern.id == pattern_id, Pattern.tenant_id == user.tenant_id)
@@ -200,6 +206,8 @@ async def list_pattern_evidence_links(pattern_id: UUID, db: DbSession, user: Aut
         select(PatternEvidenceLink)
         .where(PatternEvidenceLink.pattern_id == pattern_id)
         .order_by(PatternEvidenceLink.created_at.desc())
+        .limit(limit)
+        .offset(offset)
     )
     return result.scalars().all()
 

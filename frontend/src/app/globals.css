@@ -185,7 +185,7 @@
   }
 
   .glass-tabs-list {
-    @apply gap-1 rounded-lg border bg-muted p-1 shadow-sm;
+    @apply gap-0.5 rounded-lg border bg-muted p-1;
   }
 
   .glass-tabs-list [data-slot="tabs-trigger"][data-active] {
@@ -193,4 +193,28 @@
     background-color: var(--card);
     box-shadow: 0 1px 3px rgb(15 23 42 / 0.08);
   }
+}
+
+.react-flow__node {
+  box-sizing: border-box;
+}
+
+.react-flow__node.graph-node-card {
+  outline: 2px solid transparent;
+  outline-offset: 2px;
+  transition: outline-color 150ms ease;
+}
+
+.react-flow__node.graph-node-card:hover {
+  outline-color: color-mix(in oklab, var(--ring) 50%, transparent);
+}
+
+.react-flow__node.graph-node-card.selected,
+.react-flow__node-default.selected.graph-node-card {
+  outline-color: var(--ring);
+}
+
+.react-flow__node-default.selected,
+.react-flow__node-default.selected:hover {
+  box-shadow: none;
 }

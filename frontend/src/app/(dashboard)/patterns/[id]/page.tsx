@@ -18,12 +18,13 @@ import {
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { api } from "@/lib/api";
+import { usePagination } from "@/lib/hooks/use-pagination";
 import type { Pattern, PatternEvidenceLink } from "@/lib/types";
 
 import { PatternGraph } from "@/components/patterns/pattern-graph";
 import { AlertCircle, Zap, Shield, Bug, Lightbulb, StepForward, Activity, Link2, Plus, Trash2, CheckCircle2, Sparkles, Loader2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
-import { Separator } from "@/components/ui/separator";
+import { PaginationControls } from "@/components/common/pagination-controls";
 
 const LINK_TYPES = ["supports", "contradicts", "derives", "anchors", "illustrates"];
 
@@ -90,7 +91,7 @@ function AddLinkDialog({ patternId, onClose }: { patternId: string; onClose: () 
       <DialogFooter>
         <Button variant="outline" onClick={onClose}>Cancel</Button>
         <Button disabled={mut.isPending || !evidenceId.trim()} onClick={() => mut.mutate()}>
-          {mut.isPending ? "Adding…" : "Add"}
+          {mut.isPending ? "Adding..." : "Add"}
         </Button>
       </DialogFooter>
     </DialogContent>
@@ -102,6 +103,7 @@ export default function PatternDetailPage() {
   const patternId = params.id;
   const qc = useQueryClient();
   const [addLinkOpen, setAddLinkOpen] = useState(false);
+  const evidencePg = usePagination(10);
 
   const { data: pattern, isLoading, error } = useQuery({
     queryKey: ["pattern", patternId],
@@ -109,15 +111,20 @@ export default function PatternDetailPage() {
     enabled: !!patternId,
   });
 
-  const { data: evidenceLinks = [] } = useQuery<PatternEvidenceLink[]>({
-    queryKey: ["pattern-evidence-links", patternId],
-    queryFn: () => api.get(`/patterns/${patternId}/evidence-links`),
+  const { data: evidenceLinks = [], isFetching: evidenceLinksFetching } = useQuery<PatternEvidenceLink[]>({
+    queryKey: ["pattern-evidence-links", patternId, evidencePg.page],
+    queryFn: () => api.get<PatternEvidenceLink[]>(`/patterns/${patternId}/evidence-links`, evidencePg.params),
     enabled: !!patternId,
   });
 
   const delLink = useMutation({
     mutationFn: (linkId: string) => api.delete(`/patterns/${patternId}/evidence-links/${linkId}`),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["pattern-evidence-links", patternId] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["pattern-evidence-links", patternId] });
+      if (evidenceLinks.length === 1 && evidencePg.page > 0) {
+        evidencePg.prevPage();
+      }
+    },
     onError: (err: Error) => toast.error(err.message || "Delete failed"),
   });
 
@@ -175,7 +182,7 @@ export default function PatternDetailPage() {
         backHref="/patterns"
         backLabel="Patterns"
         actions={
-          <div className="flex flex-wrap justify-start gap-2 sm:justify-end">
+          <div className="flex items-center gap-2">
             <Button
               variant={pattern.active_flag ? "outline" : "default"}
               disabled={approveMut.isPending || pattern.active_flag}
@@ -250,8 +257,8 @@ export default function PatternDetailPage() {
         </Card>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <div className="lg:col-span-2 space-y-6">
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,2fr)_minmax(18rem,1fr)] lg:items-start">
+        <div className="min-w-0 space-y-6">
           <Card>
             <CardHeader>
               <CardTitle className="text-base font-semibold text-foreground">Knowledge Graph Visualization</CardTitle>
@@ -282,9 +289,110 @@ export default function PatternDetailPage() {
               </CardContent>
             </Card>
           )}
+
+          <Card>
+            <CardHeader className="flex flex-col gap-3 border-b sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <CardTitle className="flex items-center gap-2 text-base font-semibold text-foreground">
+                  <Link2 className="h-4 w-4 text-primary" /> Evidence Links
+                </CardTitle>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Page {evidencePg.page + 1} - {evidencePg.pageSize} links per request
+                </p>
+              </div>
+              <Button size="sm" onClick={() => setAddLinkOpen(true)}>
+                <Plus className="mr-1.5 h-3.5 w-3.5" />
+                Add link
+              </Button>
+            </CardHeader>
+            <CardContent className="p-0">
+              {evidenceLinksFetching && evidenceLinks.length === 0 ? (
+                <div className="space-y-2 p-4">
+                  {Array.from({ length: 3 }).map((_, i) => (
+                    <div key={i} className="h-10 animate-pulse rounded-md bg-muted" />
+                  ))}
+                </div>
+              ) : evidenceLinks.length === 0 ? (
+                <p className="p-4 text-sm text-muted-foreground">No evidence links yet.</p>
+              ) : (
+                <>
+                  <div className="divide-y">
+                    {evidenceLinks.map((lk) => (
+                      <div
+                        key={lk.id}
+                        className="grid items-center gap-3 px-4 py-3 text-sm sm:grid-cols-[auto_minmax(0,1fr)_auto_auto]"
+                      >
+                        <Badge variant="outline" className="w-fit text-xs">
+                          {lk.link_type}
+                        </Badge>
+                        <span className="min-w-0 truncate font-mono text-xs text-muted-foreground">
+                          {lk.evidence_id ?? lk.episode_id ?? "-"}
+                        </span>
+                        <span className="text-xs text-muted-foreground">w={lk.weight.toFixed(1)}</span>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-7 w-7 justify-self-end"
+                          disabled={delLink.isPending}
+                          onClick={() => delLink.mutate(lk.id)}
+                        >
+                          <Trash2 className="h-3.5 w-3.5 text-destructive" />
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="border-t px-4 pb-3">
+                    <PaginationControls
+                      page={evidencePg.page}
+                      pageSize={evidencePg.pageSize}
+                      count={evidenceLinks.length}
+                      onPrev={evidencePg.prevPage}
+                      onNext={evidencePg.nextPage}
+                    />
+                  </div>
+                </>
+              )}
+            </CardContent>
+          </Card>
+
+          {pattern.observed_errors && pattern.observed_errors.length > 0 && (
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="flex items-center gap-2 text-sm font-semibold text-foreground">
+                  <Bug className="h-3 w-3 text-rose-500" /> Observed Errors
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-2">
+                {pattern.observed_errors.map((error, i) => (
+                  <div key={i} className="break-all rounded border border-rose-200 bg-rose-50 p-2 font-mono text-xs text-rose-700 dark:border-rose-500/30 dark:bg-rose-500/10 dark:text-rose-300">
+                    {error}
+                  </div>
+                ))}
+              </CardContent>
+            </Card>
+          )}
+
+          {pattern.root_causes && pattern.root_causes.length > 0 && (
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="flex items-center gap-2 text-sm font-semibold text-foreground">
+                  <Lightbulb className="h-3 w-3 text-amber-500" /> Identified Root Causes
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                 <ul className="space-y-2">
+                  {pattern.root_causes.map((item, i) => (
+                    <li key={i} className="flex items-start gap-2 text-xs text-muted-foreground">
+                      <div className="mt-1 w-1.5 h-1.5 rounded-full bg-amber-500/50" /> {item}
+                    </li>
+                  ))}
+                </ul>
+              </CardContent>
+            </Card>
+          )}
         </div>
 
-        <div className="space-y-6">
+        <div className="min-w-0 space-y-6 lg:sticky lg:top-0 lg:max-h-[calc(100vh-8rem)] lg:overflow-y-auto lg:overscroll-contain lg:pr-1">
           <Card>
             <CardHeader>
               <CardTitle className="text-base font-semibold text-foreground">Pattern Summary</CardTitle>
@@ -342,84 +450,9 @@ export default function PatternDetailPage() {
               </CardContent>
             </Card>
           )}
-
-          {pattern.observed_errors && pattern.observed_errors.length > 0 && (
-            <Card>
-              <CardHeader className="pb-2">
-                <CardTitle className="flex items-center gap-2 text-sm font-semibold text-foreground">
-                  <Bug className="h-3 w-3 text-rose-500" /> Observed Errors
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-2">
-                {pattern.observed_errors.map((error, i) => (
-                  <div key={i} className="break-all rounded border border-rose-200 bg-rose-50 p-2 font-mono text-xs text-rose-700 dark:border-rose-500/30 dark:bg-rose-500/10 dark:text-rose-300">
-                    {error}
-                  </div>
-                ))}
-              </CardContent>
-            </Card>
-          )}
-
-          {pattern.root_causes && pattern.root_causes.length > 0 && (
-            <Card>
-              <CardHeader className="pb-2">
-                <CardTitle className="flex items-center gap-2 text-sm font-semibold text-foreground">
-                  <Lightbulb className="h-3 w-3 text-amber-500" /> Identified Root Causes
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                 <ul className="space-y-2">
-                  {pattern.root_causes.map((item, i) => (
-                    <li key={i} className="flex items-start gap-2 text-xs text-muted-foreground">
-                      <div className="mt-1 w-1.5 h-1.5 rounded-full bg-amber-500/50" /> {item}
-                    </li>
-                  ))}
-                </ul>
-              </CardContent>
-            </Card>
-          )}
         </div>
       </div>
 
-      <Separator />
-
-      <div className="space-y-4">
-        <div className="flex items-center justify-between">
-          <h3 className="text-lg font-semibold flex items-center gap-2">
-            <Link2 className="h-4 w-4" /> Evidence links
-          </h3>
-          <Button size="sm" onClick={() => setAddLinkOpen(true)}>
-            <Plus className="mr-1.5 h-3.5 w-3.5" />
-            Add link
-          </Button>
-        </div>
-        {evidenceLinks.length === 0 ? (
-          <p className="text-sm text-muted-foreground">No evidence links yet.</p>
-        ) : (
-          <div className="space-y-2">
-            {evidenceLinks.map((lk) => (
-              <div key={lk.id} className="flex items-center justify-between rounded-md border px-3 py-2 text-sm">
-                <div className="flex items-center gap-3 min-w-0">
-                  <Badge variant="outline" className="text-xs shrink-0">{lk.link_type}</Badge>
-                  <span className="font-mono text-xs truncate text-muted-foreground">
-                    {lk.evidence_id ?? lk.episode_id ?? "—"}
-                  </span>
-                  <span className="text-xs text-muted-foreground shrink-0">w={lk.weight.toFixed(1)}</span>
-                </div>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-7 w-7 shrink-0"
-                  disabled={delLink.isPending}
-                  onClick={() => delLink.mutate(lk.id)}
-                >
-                  <Trash2 className="h-3.5 w-3.5 text-destructive" />
-                </Button>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
 
       <Dialog open={addLinkOpen} onOpenChange={(o) => { if (!o) setAddLinkOpen(false); }}>
         {addLinkOpen && patternId && (

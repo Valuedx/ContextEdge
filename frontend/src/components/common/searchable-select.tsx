@@ -73,20 +73,15 @@ export function SearchableSelect({
         id={triggerId}
         disabled={disabled || loading}
         className={cn(
-          buttonVariants({ variant: "outline" }),
-          "h-auto min-h-8 w-full justify-between gap-2 px-3 py-2 text-left font-normal",
+          buttonVariants({ variant: "outline", size: "sm" }),
+          "h-8 w-full justify-between gap-2 px-3 text-left font-normal",
           className,
         )}
       >
-        <span className="min-w-0 flex-1">
-          <span className={cn("block truncate", !selected && "text-muted-foreground")}>
+        <span className="min-w-0 flex-1 truncate">
+          <span className={cn("truncate", !selected && "text-muted-foreground")}>
             {loading ? loadingText : selected?.label || placeholder}
           </span>
-          {selected?.meta && (
-            <span className="block truncate text-xs text-muted-foreground">
-              {selected.meta}
-            </span>
-          )}
         </span>
         <ChevronsUpDown className="size-4 shrink-0 opacity-50" />
       </PopoverTrigger>

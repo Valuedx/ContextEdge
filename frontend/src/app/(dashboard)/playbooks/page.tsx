@@ -165,10 +165,11 @@ export default function PlaybooksPage() {
         title="Playbooks"
         description="Governed living playbooks and candidate review queue."
         actions={
-          <div className="flex flex-wrap items-center justify-end gap-2">
+          <div className="flex items-center gap-2">
             {selectedIds.length > 0 && (
               <Button
                 type="button"
+                size="sm"
                 disabled={!canBulkTransition || !bulkTarget || bulkTransition.isPending}
                 title={
                   !canBulkTransition
@@ -197,7 +198,7 @@ export default function PlaybooksPage() {
                     : `Select one review state (${selectedIds.length})`}
               </Button>
             )}
-            <Link href="/patterns" className={cn(buttonVariants(), "")}>
+            <Link href="/patterns" className={cn(buttonVariants({ size: "sm" }))}>
               <Plus className="mr-2 h-4 w-4" />
               Generate from Pattern
             </Link>
@@ -215,7 +216,7 @@ export default function PlaybooksPage() {
             resetSelection();
           }}
         >
-          <TabsList variant="glass" className="h-auto flex-wrap justify-start">
+          <TabsList variant="glass" className="max-w-full justify-start overflow-x-auto">
             {LIFECYCLE_TABS.map((tab) => (
               <TabsTrigger key={tab.value} value={tab.value}>
                 {tab.label}

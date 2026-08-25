@@ -980,7 +980,7 @@ export default function PlaybookDetailPage() {
         backHref="/playbooks"
         backLabel="Playbooks"
         actions={
-          <div className="flex flex-wrap items-center justify-start gap-2 sm:justify-end">
+          <div className="flex items-center gap-2">
             {((selectedVersion ?? latest)?.playbook_confidence !== undefined || playbook.confidence !== undefined) && (
               <div className="flex items-center gap-1.5 rounded-md bg-emerald-500/10 border border-emerald-500/20 px-3 py-1.5 text-xs font-semibold text-emerald-600 dark:text-emerald-400">
                 <Sparkles className="h-3.5 w-3.5" />

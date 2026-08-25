@@ -127,3 +127,7 @@ export function getNodeClassName(nodeType: string): string {
   if (!c) return "bg-card border-border text-foreground";
   return `${c.bg} ${c.border} ${c.text} shadow-sm`;
 }
+
+/** Fixed box on hover/select so edge handles do not jump. */
+export const GRAPH_NODE_CARD_CLASS =
+  "graph-node-card box-border px-4 py-2 border-2 rounded-lg text-sm cursor-pointer";

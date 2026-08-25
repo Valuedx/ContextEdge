@@ -247,6 +247,28 @@ async def list_merge_proposals(
     ]
 
 
+@router.get("/{identity_id}", response_model=IdentityResponse)
+async def get_identity(
+    identity_id: UUID,
+    db: DbSession,
+    user: AuthUser,
+):
+    user.require_role("knowledge_manager")
+    identity = (
+        await db.execute(
+            select(CanonicalIdentity)
+            .where(
+                CanonicalIdentity.id == identity_id,
+                CanonicalIdentity.tenant_id == user.tenant_id,
+            )
+            .options(selectinload(CanonicalIdentity.aliases))
+        )
+    ).scalar_one_or_none()
+    if not identity:
+        raise HTTPException(status_code=404, detail="Identity not found")
+    return identity
+
+
 @router.post("/merge-proposals/{proposal_id}/decide", response_model=StatusResponse)
 async def decide_merge_proposal(
     proposal_id: UUID,

@@ -569,6 +569,9 @@ export interface CanonicalIdentity {
   tenant_id: string;
   entity_type: string;
   canonical_name: string;
+  resolution_state?: string;
+  resolution_confidence?: number | null;
+  resolution_method?: string | null;
   metadata_extra: Record<string, unknown> | null;
   is_active: boolean;
   created_at: string;

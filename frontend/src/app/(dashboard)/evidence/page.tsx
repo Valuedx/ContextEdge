@@ -5,6 +5,7 @@ import { ColumnDef } from "@tanstack/react-table";
 import { RefreshCw, Trash2, Loader2, FilterX } from "lucide-react";
 
 import { PageHeader } from "@/components/common/page-header";
+import { PageToolbar } from "@/components/common/page-toolbar";
 import { DataTable } from "@/components/common/data-table";
 import { DataTableSkeleton } from "@/components/common/data-table-skeleton";
 import { StatusBadge } from "@/components/common/status-badge";
@@ -256,138 +257,127 @@ export default function EvidencePage() {
     <div className="space-y-6">
       <PageHeader title="Evidence Explorer" description="Search and browse operational evidence across all sources." />
       
-      {/* Header Controls & Filters Bar */}
-      <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border bg-card p-4 shadow-sm">
-        <div className="flex flex-wrap items-center gap-3 flex-1 min-w-[280px]">
-          {/* Search Input */}
-          <div className="w-full sm:w-64">
-            <Input
-              placeholder="Search record #, title, or text…"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") {
-                  pg.reset();
-                  setAppliedQuery(search.trim());
-                }
-              }}
-              className="font-mono text-sm"
-            />
-          </div>
-
-          {/* Type Filter */}
-          <Select value={evidenceTypeFilter} onValueChange={(v) => { pg.reset(); setEvidenceTypeFilter(v ?? "all"); }}>
-            <SelectTrigger className="w-36">
-              <SelectValue placeholder="All Types" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All Types</SelectItem>
-              <SelectItem value="ticket">Ticket</SelectItem>
-              <SelectItem value="kb_article">KB Article</SelectItem>
-              <SelectItem value="slack_message">Slack</SelectItem>
-              <SelectItem value="teams_message">Teams</SelectItem>
-              <SelectItem value="email">Email</SelectItem>
-              <SelectItem value="sop">SOP</SelectItem>
-            </SelectContent>
-          </Select>
-
-          {/* Relevance Filter */}
-          <Select value={relevanceFilter} onValueChange={(v) => { pg.reset(); setRelevanceFilter(v ?? "all"); }}>
-            <SelectTrigger className="w-40">
-              <SelectValue placeholder="All Relevance" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All Relevance</SelectItem>
-              <SelectItem value="operational">Operational</SelectItem>
-              <SelectItem value="possibly_relevant">Possibly Relevant</SelectItem>
-              <SelectItem value="not_relevant">Not Relevant</SelectItem>
-              <SelectItem value="unclassified">Unclassified</SelectItem>
-            </SelectContent>
-          </Select>
-
-          {/* Source Type Filter */}
-          <Select value={sourceTypeFilter} onValueChange={(v) => { pg.reset(); setSourceTypeFilter(v ?? "all"); }}>
-            <SelectTrigger className="w-36">
-              <SelectValue placeholder="All Sources" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All Sources</SelectItem>
-              <SelectItem value="zoho_desk">Zoho Desk</SelectItem>
-              <SelectItem value="servicenow">ServiceNow</SelectItem>
-              <SelectItem value="teams">Teams</SelectItem>
-              <SelectItem value="email">Email</SelectItem>
-            </SelectContent>
-          </Select>
-
-          {/* Search Button */}
-          <Button
-            type="button"
-            variant="secondary"
-            onClick={() => {
+      <PageToolbar
+        actions={
+          <>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={() => queryClient.invalidateQueries({ queryKey: ["evidence"] })}
+              disabled={isFetching}
+            >
+              {isFetching ? (
+                <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
+              )}
+              Refresh
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant="destructive"
+              onClick={() => setPurgeOpen(true)}
+              disabled={purgeMutation.isPending}
+            >
+              {purgeMutation.isPending && <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />}
+              Purge All
+            </Button>
+            {selectedIds.length > 0 && (
+              <Button
+                type="button"
+                size="sm"
+                variant="destructive"
+                onClick={() => setBulkDeleteOpen(true)}
+                disabled={bulkDeleteMutation.isPending}
+              >
+                {bulkDeleteMutation.isPending ? (
+                  <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Trash2 className="mr-1.5 h-3.5 w-3.5" />
+                )}
+                Delete Selected
+              </Button>
+            )}
+          </>
+        }
+      >
+        <Input
+          placeholder="Search record #, title, or text…"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
               pg.reset();
               setAppliedQuery(search.trim());
-            }}
-          >
-            Search
-          </Button>
-
-          {/* Clear Filters Button */}
-          {(appliedQuery || evidenceTypeFilter !== "all" || relevanceFilter !== "all" || sourceTypeFilter !== "all") && (
-            <Button
-              type="button"
-              variant="outline"
-              onClick={clearAllFilters}
-              className="text-xs"
-            >
-              <FilterX className="mr-1.5 h-3.5 w-3.5" />
-              Clear Filters
-            </Button>
-          )}
-        </div>
-
-        {/* Right Action Buttons */}
-        <div className="flex items-center gap-2">
+            }
+          }}
+          className="h-8 w-[16rem] shrink-0 font-mono text-sm"
+        />
+        <Select value={evidenceTypeFilter} onValueChange={(v) => { pg.reset(); setEvidenceTypeFilter(v ?? "all"); }}>
+          <SelectTrigger size="sm" className="w-[8.5rem] shrink-0">
+            <SelectValue placeholder="All Types" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All Types</SelectItem>
+            <SelectItem value="ticket">Ticket</SelectItem>
+            <SelectItem value="kb_article">KB Article</SelectItem>
+            <SelectItem value="slack_message">Slack</SelectItem>
+            <SelectItem value="teams_message">Teams</SelectItem>
+            <SelectItem value="email">Email</SelectItem>
+            <SelectItem value="sop">SOP</SelectItem>
+          </SelectContent>
+        </Select>
+        <Select value={relevanceFilter} onValueChange={(v) => { pg.reset(); setRelevanceFilter(v ?? "all"); }}>
+          <SelectTrigger size="sm" className="w-[9.5rem] shrink-0">
+            <SelectValue placeholder="All Relevance" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All Relevance</SelectItem>
+            <SelectItem value="operational">Operational</SelectItem>
+            <SelectItem value="possibly_relevant">Possibly Relevant</SelectItem>
+            <SelectItem value="not_relevant">Not Relevant</SelectItem>
+            <SelectItem value="unclassified">Unclassified</SelectItem>
+          </SelectContent>
+        </Select>
+        <Select value={sourceTypeFilter} onValueChange={(v) => { pg.reset(); setSourceTypeFilter(v ?? "all"); }}>
+          <SelectTrigger size="sm" className="w-[8.5rem] shrink-0">
+            <SelectValue placeholder="All Sources" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All Sources</SelectItem>
+            <SelectItem value="zoho_desk">Zoho Desk</SelectItem>
+            <SelectItem value="servicenow">ServiceNow</SelectItem>
+            <SelectItem value="teams">Teams</SelectItem>
+            <SelectItem value="email">Email</SelectItem>
+          </SelectContent>
+        </Select>
+        <Button
+          type="button"
+          size="sm"
+          variant="secondary"
+          className="shrink-0"
+          onClick={() => {
+            pg.reset();
+            setAppliedQuery(search.trim());
+          }}
+        >
+          Search
+        </Button>
+        {(appliedQuery || evidenceTypeFilter !== "all" || relevanceFilter !== "all" || sourceTypeFilter !== "all") && (
           <Button
             type="button"
+            size="sm"
             variant="outline"
-            onClick={() => queryClient.invalidateQueries({ queryKey: ["evidence"] })}
-            disabled={isFetching}
+            onClick={clearAllFilters}
+            className="shrink-0 text-xs"
           >
-            {isFetching ? (
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-            ) : (
-              <RefreshCw className="mr-2 h-4 w-4" />
-            )}
-            Refresh
+            <FilterX className="mr-1.5 h-3.5 w-3.5" />
+            Clear
           </Button>
-
-          <Button
-            type="button"
-            variant="destructive"
-            onClick={() => setPurgeOpen(true)}
-            disabled={purgeMutation.isPending}
-          >
-            {purgeMutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-            Purge All
-          </Button>
-
-          {selectedIds.length > 0 && (
-            <Button
-              type="button"
-              variant="destructive"
-              onClick={() => setBulkDeleteOpen(true)}
-              disabled={bulkDeleteMutation.isPending}
-            >
-              {bulkDeleteMutation.isPending ? (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              ) : (
-                <Trash2 className="mr-2 h-4 w-4" />
-              )}
-              Delete Selected
-            </Button>
-          )}
-        </div>
-      </div>
+        )}
+      </PageToolbar>
 
       <ConfirmActionDialog
         open={bulkDeleteOpen}

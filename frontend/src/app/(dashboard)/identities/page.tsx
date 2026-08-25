@@ -2,6 +2,7 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ColumnDef } from "@tanstack/react-table";
+import Link from "next/link";
 import { useState } from "react";
 import { toast } from "sonner";
 import { Pencil, GitMerge } from "lucide-react";
@@ -205,7 +206,9 @@ export default function IdentitiesPage() {
       accessorKey: "canonical_name",
       header: "Name",
       cell: ({ row }) => (
-        <span className="font-medium text-sm">{row.getValue("canonical_name")}</span>
+        <Link href={`/identities/${row.original.id}`} className="font-medium text-sm hover:underline">
+          {row.getValue("canonical_name")}
+        </Link>
       ),
     },
     {

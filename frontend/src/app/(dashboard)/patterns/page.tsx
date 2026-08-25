@@ -240,16 +240,14 @@ export default function PatternsPage() {
       />
       
       <Tabs defaultValue="list" className="w-full">
-        <div className="flex justify-start mb-4">
-          <TabsList>
-            <TabsTrigger value="list" className="flex items-center gap-2">
-              <List className="h-4 w-4" /> List View
-            </TabsTrigger>
-            <TabsTrigger value="graph" className="flex items-center gap-2">
-              <Network className="h-4 w-4" /> Graph View (Clustering)
-            </TabsTrigger>
-          </TabsList>
-        </div>
+        <TabsList>
+          <TabsTrigger value="list">
+            <List className="h-4 w-4" /> List View
+          </TabsTrigger>
+          <TabsTrigger value="graph">
+            <Network className="h-4 w-4" /> Graph View (Clustering)
+          </TabsTrigger>
+        </TabsList>
 
         <TabsContent value="list" className="border-none p-0 outline-none">
           {isLoading ? (

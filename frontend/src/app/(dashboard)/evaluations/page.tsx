@@ -347,7 +347,7 @@ export default function EvaluationsPage() {
           <TabsTrigger value="datasets">Datasets</TabsTrigger>
         </TabsList>
 
-        <TabsContent value="runs" className="mt-4 space-y-4">
+        <TabsContent value="runs" className="mt-3 space-y-4">
           {runsLoading ? (
             <DataTableSkeleton columns={5} />
           ) : runs.length === 0 ? (
@@ -380,7 +380,7 @@ export default function EvaluationsPage() {
           )}
         </TabsContent>
 
-        <TabsContent value="datasets" className="mt-4">
+        <TabsContent value="datasets" className="mt-3">
           {dsLoading ? (
             <DataTableSkeleton columns={3} />
           ) : datasets.length === 0 ? (

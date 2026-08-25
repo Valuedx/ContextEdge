@@ -62,7 +62,7 @@ export function EdgeProposals() {
   const proposals = data?.proposals ?? [];
   if (proposals.length === 0) {
     return (
-      <div className="rounded-md border p-12 text-center text-muted-foreground">
+      <div className="rounded-md border p-6 text-center text-sm text-muted-foreground">
         No pending dependency proposals. Agents record discovered dependencies
         here during investigations; approving one makes it authored topology.
       </div>

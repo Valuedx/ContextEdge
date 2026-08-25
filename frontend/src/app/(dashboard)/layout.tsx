@@ -52,8 +52,8 @@ export default function DashboardLayout({
           sidebarCollapsed={sidebarCollapsed}
           onToggleSidebar={() => setSidebarCollapsed((value) => !value)}
         />
-        <main className="relative flex-1 overflow-y-auto p-5 md:p-7">
-          <div className="mx-auto flex w-full max-w-[1440px] flex-col gap-6">
+        <main className="relative flex-1 overflow-y-auto px-4 py-4 md:px-5 md:py-4">
+          <div className="flex w-full flex-col gap-4">
             {children}
           </div>
         </main>

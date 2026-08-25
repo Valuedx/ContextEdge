@@ -289,7 +289,7 @@ export default function DiscoveryPage() {
         backHref={`/sources/${sourceId}`}
         backLabel="Source"
         actions={
-          <div className="flex flex-wrap justify-start gap-2 sm:justify-end">
+          <div className="flex items-center gap-2">
             {/* Backfill Trigger */}
             {objects.some((o) => o.approved_for_backfill) && canApprove && (
               <Button
