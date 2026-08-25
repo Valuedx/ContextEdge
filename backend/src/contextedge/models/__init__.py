@@ -123,7 +123,7 @@ from contextedge.models.source import (
     SyncCheckpoint,
     SyncRun,
 )
-from contextedge.models.tenant import Domain, RoleBinding, Tenant, User, Workspace
+from contextedge.models.tenant import Domain, RoleBinding, RoleNavAccess, Tenant, User, Workspace
 from contextedge.models.thread_topic import ThreadTopic
 from contextedge.models.trust import AUTONOMY_LEVELS, UNSCOPED, TrustProfile
 from contextedge.models.verification import (
@@ -136,7 +136,7 @@ from contextedge.models.verification import (
 
 __all__ = [
     "Base", "TenantScopedMixin",
-    "Tenant", "Workspace", "Domain", "User", "RoleBinding",
+    "Tenant", "Workspace", "Domain", "User", "RoleBinding", "RoleNavAccess",
     "AuditLog",
     "OperationalEvent", "Notification",
     "Source", "SourceObject", "SourceCredential", "SyncCheckpoint", "SyncRun",

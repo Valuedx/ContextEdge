@@ -2,6 +2,7 @@
 
 import {
   Bell,
+  Building2,
   CheckCheck,
   ChevronsLeft,
   ChevronsRight,
@@ -22,8 +23,57 @@ import { ThemeToggle } from "@/components/theme-toggle";
 import { useAuthStore } from "@/lib/stores/auth-store";
 import { logout } from "@/lib/auth";
 import { api } from "@/lib/api";
-import type { Notification } from "@/lib/types";
+import type { Notification, Tenant } from "@/lib/types";
 import { BrandLockup } from "@/components/brand/brand";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+} from "@/components/ui/select";
+import { isPlatformSuperAdmin } from "@/lib/roles";
+
+function TenantSwitcher() {
+  const qc = useQueryClient();
+  const tenantId = useAuthStore((s) => s.tenantId);
+  const setTenantContext = useAuthStore((s) => s.setTenantContext);
+  const { data: tenants = [] } = useQuery({
+    queryKey: ["tenants"],
+    queryFn: () => api.get<Tenant[]>("/tenants"),
+  });
+  const selected = tenants.find((tenant) => tenant.id === tenantId);
+
+  if (tenants.length === 0) return null;
+
+  return (
+    <div className="flex min-w-0 items-center gap-2">
+      <Building2 className="hidden h-4 w-4 shrink-0 text-muted-foreground sm:block" />
+      <Select
+        value={tenantId ?? undefined}
+        onValueChange={(value) => {
+          if (!value || value === tenantId) return;
+          setTenantContext(value);
+          void qc.invalidateQueries();
+        }}
+      >
+        <SelectTrigger
+          size="sm"
+          className="h-9 max-w-[220px]"
+          aria-label="Switch tenant"
+        >
+          <span className="truncate">{selected?.name ?? "Select tenant"}</span>
+        </SelectTrigger>
+        <SelectContent align="end">
+          {tenants.map((tenant) => (
+            <SelectItem key={tenant.id} value={tenant.id}>
+              {tenant.name}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    </div>
+  );
+}
 
 function NotificationBell() {
   const qc = useQueryClient();
@@ -112,7 +162,9 @@ export function AppHeader({
   onToggleSidebar,
 }: AppHeaderProps) {
   const email = useAuthStore((s) => s.email);
+  const roles = useAuthStore((s) => s.roles);
   const ToggleIcon = sidebarCollapsed ? ChevronsRight : ChevronsLeft;
+  const showTenantSwitcher = isPlatformSuperAdmin(roles);
 
   return (
     <header className="sticky top-0 z-30 flex h-16 items-center justify-between border-b bg-card px-5 shadow-sm md:px-7">
@@ -136,6 +188,7 @@ export function AppHeader({
       </div>
 
       <div className="flex items-center gap-2">
+        {showTenantSwitcher && <TenantSwitcher />}
         <ThemeToggle />
         <NotificationBell />
 

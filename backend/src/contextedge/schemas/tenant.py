@@ -17,7 +17,22 @@ def _normalize_email(value: str) -> str:
     return email
 
 
+def _normalize_username(value: str) -> str:
+    username = value.strip().lower()
+    if "@" in username or " " in username:
+        raise ValueError("Use a username without @")
+    if not username or len(username) > 64:
+        raise ValueError("Invalid username")
+    allowed = set("abcdefghijklmnopqrstuvwxyz0123456789._-")
+    if username[0] not in set("abcdefghijklmnopqrstuvwxyz0123456789"):
+        raise ValueError("Username must start with a letter or number")
+    if any(ch not in allowed for ch in username):
+        raise ValueError("Username may only contain letters, numbers, dot, underscore, or hyphen")
+    return username
+
+
 EmailAddress = Annotated[str, AfterValidator(_normalize_email)]
+Username = Annotated[str, AfterValidator(_normalize_username)]
 
 
 class TenantCreate(BaseModel):
@@ -25,6 +40,9 @@ class TenantCreate(BaseModel):
     slug: str = Field(..., min_length=1, max_length=100, pattern=r"^[a-z0-9-]+$")
     config: dict = Field(default_factory=dict)
     retention_defaults: dict | None = None
+    admin_username: Username | None = None
+    admin_display_name: str | None = Field(None, min_length=1, max_length=255)
+    admin_password: str | None = Field(None, min_length=8)
 
 
 class TenantUpdate(BaseModel):
@@ -97,12 +115,24 @@ class DomainResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+TENANT_ASSIGNABLE_ROLES = {
+    "analyst",
+    "knowledge_manager",
+    "playbook_reviewer",
+    "domain_admin",
+    "tenant_admin",
+}
+PLATFORM_ASSIGNABLE_ROLES = TENANT_ASSIGNABLE_ROLES | {"platform_super_admin"}
+
+
 class UserCreate(BaseModel):
-    email: EmailAddress
+    username: Username
     display_name: str = Field(..., min_length=1, max_length=255)
     password: str | None = Field(None, min_length=8)
     external_id: str | None = None
     sso_provider: str | None = None
+    role: str | None = Field("analyst", pattern=r"^[a-z_]+$")
+    tenant_id: UUID | None = None
 
 
 class UserUpdate(BaseModel):
@@ -114,10 +144,13 @@ class UserUpdate(BaseModel):
 class UserResponse(BaseModel):
     id: UUID
     tenant_id: UUID
-    email: str
+    tenant_name: str | None = None
+    username: str
+    email: str | None = None
     display_name: str
     status: str
     sso_provider: str | None
+    roles: list[str] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
 
@@ -144,7 +177,7 @@ class RoleBindingResponse(BaseModel):
 
 
 class LoginRequest(BaseModel):
-    email: EmailAddress
+    username: Username
     password: str
 
 

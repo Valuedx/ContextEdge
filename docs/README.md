@@ -154,15 +154,11 @@ lives in [RUNBOOK.md](RUNBOOK.md).
 
 ---
 
-## 🔑 Default Development Credentials
+## 🔑 Sign-in
 
-| Email | Password | Role |
-|-------|----------|------|
-| `admin@contextedge.local` | `admin123` | Admin |
-| `analyst@contextedge.local` | `analyst123` | Analyst |
-
-> ⚠️ Local development seed accounts only — never reuse in shared or
-> production environments.
+Accounts are stored in the database with hashed passwords. Create users in
+Settings, or bootstrap them via `SEED_*` environment variables when running
+seed. Do not hardcode usernames or passwords in application code.
 
 ---
 

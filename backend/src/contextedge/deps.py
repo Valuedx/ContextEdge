@@ -4,10 +4,12 @@ from uuid import UUID
 from fastapi import Depends, Header, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import JWTError, jwt
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from contextedge.config import settings
 from contextedge.database import get_db
+from contextedge.models.tenant import Tenant
 from contextedge.security_tokens import service_token_context
 
 security = HTTPBearer(auto_error=False)
@@ -34,6 +36,9 @@ class CurrentUser:
         self.principal_type = principal_type
         self.allowed_domain_ids = allowed_domain_ids
 
+    def has_exact_role(self, role: str) -> bool:
+        return role in self.roles
+
     def has_role(self, role: str) -> bool:
         if (
             "platform_super_admin" in self.roles
@@ -42,6 +47,11 @@ class CurrentUser:
         ):
             return True
         return role in self.roles
+
+    def can_assign_role(self, role: str) -> bool:
+        if role == "platform_super_admin":
+            return self.has_exact_role("platform_super_admin")
+        return self.has_role("tenant_admin")
 
     def require_role(self, role: str) -> None:
         if not self.has_role(role):
@@ -71,7 +81,9 @@ def _service_principal(token: str) -> CurrentUser | None:
 
 async def get_current_user(
     credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(security)],
+    db: Annotated[AsyncSession, Depends(get_db)],
     x_service_token: str | None = Header(default=None, alias="X-Service-Token"),
+    x_tenant_id: str | None = Header(default=None, alias="X-Tenant-Id"),
 ) -> CurrentUser:
     if x_service_token:
         principal = _service_principal(x_service_token.strip())
@@ -98,15 +110,32 @@ async def get_current_user(
         allowed_jwt: list[UUID] | None = None
         if isinstance(jwt_domains, list):
             allowed_jwt = [UUID(str(x)) for x in jwt_domains]
-        return CurrentUser(
+        principal = CurrentUser(
             user_id=UUID(payload["sub"]),
             tenant_id=UUID(payload["tenant_id"]),
-            email=payload.get("email", ""),
+            email=payload.get("username") or payload.get("email", ""),
             roles=payload.get("roles", []),
             workspace_ids=[UUID(w) for w in payload.get("workspace_ids", [])],
             principal_type="user",
             allowed_domain_ids=allowed_jwt,
         )
+        if x_tenant_id and principal.has_exact_role("platform_super_admin"):
+            try:
+                override = UUID(x_tenant_id.strip())
+            except ValueError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Invalid tenant",
+                ) from exc
+            tenant = (
+                await db.execute(select(Tenant).where(Tenant.id == override, Tenant.is_active.is_(True)))
+            ).scalar_one_or_none()
+            if tenant is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
+            principal.tenant_id = tenant.id
+        return principal
+    except HTTPException:
+        raise
     except (JWTError, KeyError, ValueError) as e:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

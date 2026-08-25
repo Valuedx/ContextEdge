@@ -20,6 +20,7 @@ from contextedge.models.pattern import Pattern, PatternEvidenceLink
 from contextedge.models.playbook import Playbook, PlaybookVersion
 from contextedge.models.source import Source
 from contextedge.models.tenant import Domain, Tenant, User
+from contextedge.seed import resolve_owner_user, resolve_seed_tenant
 from contextedge.seed_guard import require_destructive_reset_allowed
 
 DEMO_NAMESPACE = uuid.UUID("778ddaf7-0b68-4c26-a7df-3b539ba7a72c")
@@ -245,7 +246,9 @@ async def reset_and_seed():
                 raise
 
         print("2. Fetching Tenant, Domain, and Admin User...")
-        tenant = (await db.execute(select(Tenant).where(Tenant.slug == "default"))).scalar_one()
+        tenant = await resolve_seed_tenant(db)
+        if tenant is None:
+            raise RuntimeError("No seed tenant found. Run `python -m contextedge.seed` first.")
         domain = (
             await db.execute(
                 select(Domain).where(
@@ -254,14 +257,11 @@ async def reset_and_seed():
                 )
             )
         ).scalar_one()
-        owner = (
-            await db.execute(
-                select(User).where(
-                    User.tenant_id == tenant.id,
-                    User.email == "admin@contextedge.local",
-                )
+        owner = await resolve_owner_user(db, tenant.id)
+        if owner is None:
+            raise RuntimeError(
+                "No user found in the seed tenant. Create users in Settings or set SEED_* env vars, then re-run seed."
             )
-        ).scalar_one()
 
         demo_source = (
             await db.execute(select(Source).where(Source.tenant_id == tenant.id))

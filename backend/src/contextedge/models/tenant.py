@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import BigInteger, DateTime, ForeignKey, Numeric, String, Text, func
+from sqlalchemy import BigInteger, DateTime, ForeignKey, Numeric, String, Text, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -75,7 +75,8 @@ class User(Base, TenantScopedMixin):
         UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=False, index=True
     )
     external_id: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
-    email: Mapped[str] = mapped_column(String(320), nullable=False, index=True)
+    username: Mapped[str] = mapped_column(String(64), unique=True, nullable=False, index=True)
+    email: Mapped[str | None] = mapped_column(String(320), nullable=True, index=True)
     display_name: Mapped[str] = mapped_column(String(255), nullable=False)
     password_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
     status: Mapped[str] = mapped_column(String(20), default="active", nullable=False)
@@ -106,6 +107,19 @@ class RoleBinding(Base, TenantScopedMixin):
     )
 
     user: Mapped["User"] = relationship(back_populates="role_bindings")
+
+
+class RoleNavAccess(Base, TimestampMixin):
+    """Platform-wide mapping of role -> sidebar href. Edited by platform super admin."""
+
+    __tablename__ = "role_nav_access"
+    __table_args__ = (UniqueConstraint("role", "href", name="uq_role_nav_access_role_href"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    role: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
+    href: Mapped[str] = mapped_column(String(200), nullable=False)
 
 
 # Valid values for ``TenantLLMBudget.action_on_exceed``. Matches the

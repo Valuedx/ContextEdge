@@ -34,7 +34,7 @@ HEADER = """# ContextEdge — API Documentation
 
 - **Base URL**: `/api/v1`
 - **Authentication**: JWT Bearer token in the `Authorization` header
-  (obtained via `POST /api/v1/auth/login` with `{"email", "password"}`),
+  (obtained via `POST /api/v1/auth/login` with `{"username", "password"}`),
   or `X-Service-Token` for configured service accounts.
 - **Error format**: `{"detail": "message"}` with a matching HTTP status.
 """

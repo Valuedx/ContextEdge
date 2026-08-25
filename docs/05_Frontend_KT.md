@@ -1130,8 +1130,9 @@ npm run lint
 
 `NEXT_PUBLIC_API_URL` repoints the client at another backend; `NEXT_DIST_DIR` lets a second dev
 server run beside the first. Backend CORS allows `http://localhost:3000` by default
-(`backend/src/contextedge/config.py:200-206`). Seeded dev logins are
-`admin@contextedge.local` / `admin123` and `analyst@contextedge.local` / `analyst123`.
+(`backend/src/contextedge/config.py:200-206`). Sign in with users stored in
+the database (Settings or `SEED_*` env vars when seeding). Passwords are hashed
+and are not hardcoded in the frontend.
 
 **Known CI caveat**: frontend lint is listed among the open CI-depth items in
 `codewiki/KNOWN_GAPS.md:57`. The vitest job is a required gate; treat a lint failure as real work,

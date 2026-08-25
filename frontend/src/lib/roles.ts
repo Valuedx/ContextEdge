@@ -4,6 +4,37 @@
  * Keep this hierarchy aligned with CurrentUser.has_role in the API.
  */
 
+export const ROLE_LABELS: Record<string, string> = {
+  platform_super_admin: "Platform super admin",
+  tenant_admin: "Tenant administrator",
+  domain_admin: "Domain administrator",
+  knowledge_manager: "Knowledge manager",
+  playbook_reviewer: "Playbook reviewer",
+  analyst: "Analyst",
+};
+
+export function roleLabel(role: string): string {
+  return ROLE_LABELS[role] ?? role.replaceAll("_", " ");
+}
+
+export const TENANT_ASSIGNABLE_ROLES = [
+  { value: "analyst", label: ROLE_LABELS.analyst },
+  { value: "knowledge_manager", label: ROLE_LABELS.knowledge_manager },
+  { value: "playbook_reviewer", label: ROLE_LABELS.playbook_reviewer },
+  { value: "domain_admin", label: ROLE_LABELS.domain_admin },
+  { value: "tenant_admin", label: ROLE_LABELS.tenant_admin },
+] as const;
+
+export function assignableRoles(actorRoles: string[]) {
+  if (actorRoles.includes("platform_super_admin")) {
+    return [
+      { value: "platform_super_admin", label: ROLE_LABELS.platform_super_admin },
+      ...TENANT_ASSIGNABLE_ROLES,
+    ];
+  }
+  return [...TENANT_ASSIGNABLE_ROLES];
+}
+
 export function hasRole(roles: string[], role: string): boolean {
   return (
     roles.includes(role) ||
@@ -12,6 +43,31 @@ export function hasRole(roles: string[], role: string): boolean {
     roles.includes("admin")
   );
 }
+
+export const isPlatformSuperAdmin = (roles: string[]) =>
+  roles.includes("platform_super_admin");
+
+function navRoles(roles: string[]): string[] {
+  const next = new Set(roles.filter(Boolean));
+  if (next.has("admin")) next.add("tenant_admin");
+  return [...next];
+}
+
+/** Sidebar and settings tabs: exact role match unless a helper grants all tabs. */
+export function canSeeNav(userRoles: string[], allowed: readonly string[]): boolean {
+  const have = navRoles(userRoles);
+  return allowed.some((role) => have.includes(role));
+}
+
+export const SETTINGS_TABS = {
+  general: ["platform_super_admin", "tenant_admin"],
+  tenants: ["platform_super_admin"],
+  workspaces: ["tenant_admin", "platform_super_admin"],
+  domains: ["tenant_admin", "platform_super_admin"],
+  users: ["tenant_admin", "platform_super_admin"],
+  retention: ["tenant_admin", "platform_super_admin"],
+  tabAccess: ["platform_super_admin"],
+} as const;
 
 // ── Named predicates ─────────────────────────────────────────────────────────
 

@@ -1,14 +1,16 @@
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Query, status
+from passlib.context import CryptContext
 from sqlalchemy import select
 
 from contextedge.deps import AuthUser, DbSession
 from contextedge.middleware.audit import log_audit_event
-from contextedge.models.tenant import Tenant
+from contextedge.models.tenant import RoleBinding, Tenant, User
 from contextedge.schemas.tenant import TenantCreate, TenantResponse, TenantUpdate
 
 router = APIRouter()
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 
 @router.get("", response_model=list[TenantResponse])
@@ -36,10 +38,39 @@ async def create_tenant(
     if existing.scalar_one_or_none():
         raise HTTPException(status_code=409, detail="Tenant slug already exists")
 
-    tenant = Tenant(**body.model_dump())
+    tenant = Tenant(
+        **body.model_dump(exclude={"admin_username", "admin_display_name", "admin_password"})
+    )
     db.add(tenant)
     await db.flush()
     await db.refresh(tenant)
+
+    if body.admin_username:
+        if not body.admin_password:
+            raise HTTPException(
+                status_code=400,
+                detail="admin_password is required when creating a tenant admin",
+            )
+        existing = await db.execute(select(User).where(User.username == body.admin_username))
+        if existing.scalar_one_or_none():
+            raise HTTPException(status_code=409, detail="User with this username already exists")
+        admin = User(
+            tenant_id=tenant.id,
+            username=body.admin_username,
+            display_name=body.admin_display_name or body.admin_username,
+            password_hash=pwd_context.hash(body.admin_password),
+            status="active",
+        )
+        db.add(admin)
+        await db.flush()
+        db.add(
+            RoleBinding(
+                tenant_id=tenant.id,
+                user_id=admin.id,
+                role="tenant_admin",
+                scope_type="tenant",
+            )
+        )
 
     await log_audit_event(
         db,

@@ -14,7 +14,7 @@ router = APIRouter()
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 # Hash of an unguessable throwaway value, verified on the no-candidate path
-# so "email exists" and "email doesn't exist" take the same time.
+# so "username exists" and "username doesn't exist" take the same time.
 _DUMMY_PASSWORD_HASH = pwd_context.hash("contextedge-timing-equalizer")
 
 
@@ -25,7 +25,8 @@ def _create_token(user: User, roles: list[str]) -> str:
     payload = {
         "sub": str(user.id),
         "tenant_id": str(user.tenant_id),
-        "email": user.email,
+        "username": user.username,
+        "email": user.username,
         "roles": roles,
         "exp": expire,
     }
@@ -36,34 +37,25 @@ def _create_token(user: User, roles: list[str]) -> str:
 async def login(body: LoginRequest, db: DbSession):
     import anyio
 
-    # User.email is not globally unique (two tenants can hold the same
-    # address), so fetch all matches instead of scalar_one_or_none() — which
-    # raises MultipleResultsFound and turns a duplicate email into a 500.
-    # Candidate cap bounds the bcrypt work an attacker can trigger per call.
     result = await db.execute(
         select(User)
-        .where(User.email == body.email, User.status == "active")
+        .where(User.username == body.username, User.status == "active")
         .order_by(User.created_at.asc())
         .limit(5)
     )
     candidates = [u for u in result.scalars().all() if u.password_hash]
     if len(candidates) == 5:
-        # The DoS cap may be hiding a 6th+ same-email account that can now
-        # never log in — make that diagnosable.
         import structlog
 
         structlog.get_logger().warning(
-            "auth.candidate_cap_reached", email=body.email
+            "auth.candidate_cap_reached", username=body.username
         )
     if not candidates:
-        # Dummy verify keeps response time flat whether or not the email
-        # exists (user-enumeration timing oracle).
         await anyio.to_thread.run_sync(
             pwd_context.verify, body.password, _DUMMY_PASSWORD_HASH
         )
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
 
-    # bcrypt is ~100-300ms of CPU — never run it on the event loop.
     matching = []
     for candidate in candidates:
         verified = await anyio.to_thread.run_sync(
@@ -74,13 +66,11 @@ async def login(body: LoginRequest, db: DbSession):
     if not matching:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
     if len(matching) > 1:
-        # Same email + same password across tenants: refusing is safer than
-        # guessing which tenant the caller meant.
         import structlog
 
         structlog.get_logger().warning(
             "auth.ambiguous_login_rejected",
-            email=body.email,
+            username=body.username,
             tenant_ids=[str(u.tenant_id) for u in matching],
         )
         raise HTTPException(

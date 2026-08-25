@@ -121,6 +121,14 @@ class TenantContextMiddleware(BaseHTTPMiddleware):
                         request.state.tenant_id = payload.get("tenant_id")
                         request.state.user_email = payload.get("email")
                         request.state.roles = payload.get("roles") or []
+                        override = request.headers.get("x-tenant-id")
+                        if (
+                            override
+                            and "platform_super_admin" in (request.state.roles or [])
+                        ):
+                            parsed = _parse_uuid(override.strip())
+                            if parsed is not None:
+                                request.state.tenant_id = str(parsed)
                     except JWTError:
                         pass
 

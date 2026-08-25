@@ -527,20 +527,15 @@ sequenceDiagram
 
 ---
 
-## 6. Default Credentials
+## 6. Sign-in accounts
 
-For local development, testing, and debugging purposes, the database initialization script (`make seed`) seeds the database with default test users. 
+Users live in the database (`users` + hashed `password_hash`). The seed script
+creates the default tenant structure; it does not hardcode usernames or
+passwords. Create accounts in Settings, or bootstrap them with `SEED_*`
+environment variables when running seed.
 
-**WARNING: Do NOT use these in production or staging environments. They must be removed or passwords changed before deployment.**
-
-- **Platform Admin User:**
-  - Role: Has full access to all system settings across the tenant.
-  - Email: `admin@contextedge.local`
-  - Password: `admin123`
-- **Standard Analyst User:**
-  - Role: Has read-only access to playbooks and runtime search.
-  - Email: `analyst@contextedge.local`
-  - Password: `analyst123`
+**WARNING: Do not commit credentials in application code, and do not reuse
+development passwords in production.**
 
 ---
 

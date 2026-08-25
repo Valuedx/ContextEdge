@@ -235,18 +235,19 @@ We use **Alembic**. There are 72 revision files in `backend/alembic/versions/`.
 
 ### `seed.py` — rated 8/10
 - **Where:** `backend/src/contextedge/seed.py`
-- **What:** inserts the default tenant, workspaces, domains, policies and users.
+- **What:** inserts the default tenant, workspace, and domain. Users are not hardcoded; they come from the database (Settings) or optional `SEED_*` environment variables.
 - **Run it:** `make seed` (`cd backend && python dev.py seed`).
-- **Rationale:** local development should be turnkey. Without it you cannot log in.
+- **Rationale:** tenant structure should be turnkey. Sign-in uses hashed passwords already stored on `users`.
 
 ### The destructive scripts are guarded
 `reset_db_and_seed.py` and `demo_maf_seed.py` TRUNCATE tenant-global tables. `seed_guard.require_destructive_reset_allowed` refuses to run either unless `APP_ENV=development` or `CONTEXTEDGE_ALLOW_DB_RESET=1` (`backend/src/contextedge/seed_guard.py:35-60`). `demo_maf_seed.py` additionally seeds context-graph and playbook data for Microsoft Agent Framework demos.
 
 ### Default credentials
-- **Admin:** `admin@contextedge.local` / `admin123`
-- **Analyst:** `analyst@contextedge.local` / `analyst123`
+Users and passwords are stored in the database. Seed does not hardcode
+accounts. Create users in Settings, or pass `SEED_*` environment variables
+when running `python -m contextedge.seed`.
 
-> ⚠️ These exist only in the local development seed. Never create them, or reuse these passwords, in any shared or production environment.
+> ⚠️ Never commit usernames or passwords in application or UI code.
 
 Note that `users.email` is **unique per tenant, not globally** (`models/tenant.py:68-85`). Login handles that deliberately: it fetches up to five matching active users, and if the same email and password work in two tenants it returns 401 "Ambiguous account" rather than guessing (`api/v1/auth.py:35-101`).
 

@@ -11,7 +11,7 @@ import { useAuthStore } from "@/lib/stores/auth-store";
 import { BrandLockup } from "@/components/brand/brand";
 
 export default function LoginPage() {
-  const [email, setEmail] = useState("");
+  const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
@@ -23,7 +23,7 @@ export default function LoginPage() {
     setError("");
     setLoading(true);
     try {
-      const res = await login(email, password);
+      const res = await login(username, password);
       setAuthenticated(res.access_token);
       router.push("/overview");
     } catch (err: unknown) {
@@ -47,7 +47,7 @@ export default function LoginPage() {
             Sign in to ContextEdge
           </CardTitle>
           <p className="text-sm text-muted-foreground">
-            Use your workspace credentials to continue.
+            Sign in with your username. Do not use an email address.
           </p>
         </CardHeader>
         <CardContent>
@@ -58,13 +58,16 @@ export default function LoginPage() {
               </div>
             )}
             <div className="space-y-2">
-              <Label htmlFor="email">Email</Label>
+              <Label htmlFor="username">Username</Label>
               <Input
-                id="email"
-                type="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                placeholder="admin@contextedge.local"
+                id="username"
+                type="text"
+                autoComplete="username"
+                autoCapitalize="none"
+                autoCorrect="off"
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                placeholder="username"
                 required
               />
             </div>

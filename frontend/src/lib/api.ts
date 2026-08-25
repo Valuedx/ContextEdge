@@ -1,3 +1,5 @@
+import { readActiveTenantId } from "./active-tenant";
+
 function getApiBase(): string {
   if (typeof window !== "undefined" && window.location.hostname) {
     const protocol = window.location.protocol || "http:";
@@ -38,6 +40,10 @@ class ApiClient {
     };
     if (token) {
       headers["Authorization"] = `Bearer ${token}`;
+    }
+    const activeTenant = readActiveTenantId();
+    if (activeTenant) {
+      headers["X-Tenant-Id"] = activeTenant;
     }
     if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
       headers["X-Request-ID"] = crypto.randomUUID();

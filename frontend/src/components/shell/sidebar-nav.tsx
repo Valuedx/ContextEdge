@@ -31,50 +31,48 @@ import {
   Gauge,
 } from "lucide-react";
 import { useAuthStore } from "@/lib/stores/auth-store";
-import { hasRole } from "@/lib/roles";
+import { NAV_ITEMS, canSeeSidebarItem, type NavAccessPayload } from "@/lib/nav";
+import { api } from "@/lib/api";
+import { useQuery } from "@tanstack/react-query";
 
-interface NavItem {
-  label: string;
-  href: string;
-  icon: React.ElementType;
-  /** Item is shown only if the user holds at least one of these roles (or platform_super_admin). Omit to show to everyone. */
-  requiredRoles?: string[];
-}
-
-const navItems: NavItem[] = [
-  { label: "Overview", href: "/overview", icon: LayoutDashboard },
-  { label: "Sources", href: "/sources", icon: Database },
-  { label: "Sync Operations", href: "/sync", icon: RefreshCw },
-  { label: "Evidence", href: "/evidence", icon: FileSearch },
-  { label: "Sessions", href: "/sessions", icon: Layers },
-  { label: "Runtime", href: "/runtime", icon: Radio },
-  { label: "Reviewer Console", href: "/review", icon: CheckCircle2 },
-  { label: "Execution", href: "/execution", icon: PlayCircle },
-  { label: "Decisions", href: "/decisions", icon: Scale },
-  { label: "Episodes", href: "/episodes", icon: GitBranch },
-  { label: "Patterns", href: "/patterns", icon: Network },
-  { label: "Playbooks", href: "/playbooks", icon: BookOpen },
-  { label: "Neg. Knowledge", href: "/negative-knowledge", icon: BrainCircuit, requiredRoles: ["knowledge_manager", "domain_admin", "tenant_admin"] },
-  { label: "Identities", href: "/identities", icon: Fingerprint, requiredRoles: ["knowledge_manager", "domain_admin", "tenant_admin"] },
-  { label: "Correlations", href: "/correlations", icon: Share2, requiredRoles: ["knowledge_manager", "domain_admin", "tenant_admin"] },
-  { label: "Suggestions", href: "/suggestions", icon: Sparkles, requiredRoles: ["knowledge_manager", "domain_admin", "tenant_admin"] },
-  { label: "Graph Explorer", href: "/graph-explorer", icon: Waypoints },
-  { label: "Contradictions", href: "/contradictions", icon: AlertTriangle },
-  { label: "Drift", href: "/drift", icon: Activity },
-  { label: "Evaluations", href: "/evaluations", icon: FlaskConical },
-  { label: "Policies", href: "/policies", icon: Shield, requiredRoles: ["tenant_admin"] },
-  { label: "Audit Log", href: "/audit", icon: ClipboardList, requiredRoles: ["tenant_admin", "domain_admin"] },
-  { label: "LLM Cost", href: "/admin/cost", icon: DollarSign, requiredRoles: ["tenant_admin"] },
-  { label: "Pipeline Health", href: "/admin/pipeline", icon: Gauge, requiredRoles: ["tenant_admin"] },
-  { label: "Settings", href: "/settings", icon: Settings },
-];
+const ICONS: Record<string, React.ElementType> = {
+  "/overview": LayoutDashboard,
+  "/sources": Database,
+  "/sync": RefreshCw,
+  "/evidence": FileSearch,
+  "/sessions": Layers,
+  "/runtime": Radio,
+  "/review": CheckCircle2,
+  "/execution": PlayCircle,
+  "/decisions": Scale,
+  "/episodes": GitBranch,
+  "/patterns": Network,
+  "/playbooks": BookOpen,
+  "/negative-knowledge": BrainCircuit,
+  "/identities": Fingerprint,
+  "/correlations": Share2,
+  "/suggestions": Sparkles,
+  "/graph-explorer": Waypoints,
+  "/contradictions": AlertTriangle,
+  "/drift": Activity,
+  "/evaluations": FlaskConical,
+  "/policies": Shield,
+  "/audit": ClipboardList,
+  "/admin/cost": DollarSign,
+  "/admin/pipeline": Gauge,
+  "/settings": Settings,
+};
 
 export function SidebarNav({ collapsed = false }: { collapsed?: boolean }) {
   const pathname = usePathname();
   const roles = useAuthStore((s) => s.roles);
 
-  const visibleItems = navItems.filter((item) =>
-    !item.requiredRoles || item.requiredRoles.some((r) => hasRole(roles, r))
+  const { data: navAccess } = useQuery({
+    queryKey: ["nav-access"],
+    queryFn: () => api.get<NavAccessPayload>("/nav-access"),
+  });
+  const visibleItems = NAV_ITEMS.filter((item) =>
+    canSeeSidebarItem(roles, item, navAccess?.access),
   );
 
   return (
@@ -82,7 +80,7 @@ export function SidebarNav({ collapsed = false }: { collapsed?: boolean }) {
       {visibleItems.map((item) => {
         const isActive =
           pathname === item.href || pathname.startsWith(item.href + "/");
-        const Icon = item.icon;
+        const Icon = ICONS[item.href] ?? LayoutDashboard;
         return (
           <Link
             key={item.href}

@@ -158,7 +158,10 @@ frontend/
     lib/
 ```
 
-## Default Development Credentials
+## Sign-in
 
-- `admin@contextedge.local` / `admin123`
-- `analyst@contextedge.local` / `analyst123`
+Login uses a **username** (no `@`). Accounts and hashed passwords live in the
+database. Create users in Settings, or bootstrap with `SEED_*_USERNAME` /
+`SEED_*_PASSWORD` when running seed.
+
+On a Docker server, follow `docs/DOCKER_USERNAME_LOGIN.md`.

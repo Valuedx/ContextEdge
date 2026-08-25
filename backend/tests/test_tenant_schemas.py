@@ -4,34 +4,33 @@ from pydantic import ValidationError
 from contextedge.schemas.tenant import LoginRequest, UserCreate
 
 
-def test_login_request_accepts_seeded_local_email():
-    body = LoginRequest(email=" Admin@ContextEdge.Local ", password="admin123")
+def test_login_request_accepts_username():
+    body = LoginRequest(username=" SuperAdmin-ContextEdge ", password="secret-password")
 
-    assert body.email == "admin@contextedge.local"
+    assert body.username == "superadmin-contextedge"
 
 
-def test_user_create_accepts_local_email():
+def test_user_create_accepts_username():
     user = UserCreate(
-        email="analyst@contextedge.local",
+        username="analyst-ae",
         display_name="Sample Analyst",
-        password="analyst123",
+        password="analyst-password",
     )
 
-    assert user.email == "analyst@contextedge.local"
+    assert user.username == "analyst-ae"
+    assert user.role == "analyst"
 
 
 @pytest.mark.parametrize(
-    "email",
+    "username",
     [
         "",
-        "admin",
-        "admin@",
-        "@contextedge.local",
-        "admin @contextedge.local",
-        "admin@@contextedge.local",
-        "admin@.local",
+        "admin@company",
+        "admin user",
+        "@admin",
+        "bad username!",
     ],
 )
-def test_login_request_rejects_malformed_email(email: str):
+def test_login_request_rejects_email_or_malformed_username(username: str):
     with pytest.raises(ValidationError):
-        LoginRequest(email=email, password="admin123")
+        LoginRequest(username=username, password="secret-password")

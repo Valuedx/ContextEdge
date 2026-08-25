@@ -173,8 +173,10 @@ cd ..
 
 Seeded users:
 
-- `admin@contextedge.local` / `admin123`
-- `analyst@contextedge.local` / `analyst123`
+Accounts live in the database. Create them in Settings, or bootstrap with
+`SEED_SUPER_ADMIN_EMAIL` / `SEED_SUPER_ADMIN_PASSWORD` (and optional tenant-admin
+/ analyst pairs) when running seed. Passwords are stored hashed; they are not
+hardcoded in application code.
 
 The seed is idempotent for the default tenant slug. The destructive variants
 (`reset_db_and_seed`, `demo_maf_seed`) truncate tenant-global tables and are blocked

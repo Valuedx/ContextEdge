@@ -33,10 +33,13 @@ export interface Domain {
 export interface User {
   id: string;
   tenant_id: string;
-  email: string;
+  tenant_name?: string | null;
+  username: string;
+  email: string | null;
   display_name: string;
   status: string;
   sso_provider: string | null;
+  roles?: string[];
   created_at: string;
   updated_at: string;
 }

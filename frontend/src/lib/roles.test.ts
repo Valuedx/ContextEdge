@@ -1,17 +1,15 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  SETTINGS_TABS,
   canEditAutomationMode,
+  canSeeNav,
   canTransitionPlaybook,
 } from "./roles";
+import { canSeeSidebarItem, NAV_ITEMS } from "./nav";
 
 describe("canEditAutomationMode", () => {
   it("is narrower than editing the playbook", () => {
-    // Automation mode decides whether a playbook may act on a real
-    // system: `suggest_only` caps every caller at read_only regardless
-    // of their own role, so raising it is what makes every other
-    // approval gate load-bearing. Authoring a procedure and authorising
-    // it to take destructive action are different privileges.
     expect(canEditAutomationMode(["tenant_admin"])).toBe(true);
     expect(canEditAutomationMode(["knowledge_manager"])).toBe(false);
     expect(canEditAutomationMode(["playbook_reviewer"])).toBe(false);
@@ -19,13 +17,37 @@ describe("canEditAutomationMode", () => {
     expect(canEditAutomationMode([])).toBe(false);
   });
 
-  it("still admits the platform super-role", () => {
-    expect(canEditAutomationMode(["platform_super_admin"])).toBe(true);
+  it("shows settings and tenant tabs only to the matching admin role", () => {
+    expect(canSeeNav(["analyst"], SETTINGS_TABS.users)).toBe(false);
+    expect(canSeeNav(["domain_admin"], SETTINGS_TABS.users)).toBe(false);
+    expect(canSeeNav(["tenant_admin"], SETTINGS_TABS.users)).toBe(true);
+    expect(canSeeNav(["tenant_admin"], SETTINGS_TABS.tenants)).toBe(false);
+    expect(canSeeNav(["platform_super_admin"], SETTINGS_TABS.tenants)).toBe(true);
+    expect(canSeeNav(["analyst"], ["domain_admin"])).toBe(false);
+    expect(canSeeNav(["domain_admin"], ["domain_admin"])).toBe(true);
+  });
+
+  it("shows every sidebar tab to tenant admin until a custom map is loaded", () => {
+    const sources = NAV_ITEMS.find((item) => item.href === "/sources");
+    expect(sources).toBeTruthy();
+    expect(canSeeSidebarItem(["tenant_admin"], sources!)).toBe(true);
+    expect(canSeeSidebarItem(["analyst"], sources!)).toBe(false);
+    expect(canSeeSidebarItem(["domain_admin"], sources!)).toBe(true);
+    expect(NAV_ITEMS.every((item) => canSeeSidebarItem(["tenant_admin"], item))).toBe(true);
+  });
+
+  it("uses super-admin saved tab access when provided", () => {
+    const sources = NAV_ITEMS.find((item) => item.href === "/sources")!;
+    expect(
+      canSeeSidebarItem(["analyst"], sources, { analyst: ["/overview", "/sources"] }),
+    ).toBe(true);
+    expect(canSeeSidebarItem(["analyst"], sources, { analyst: ["/overview"] })).toBe(false);
+    expect(canSeeSidebarItem(["platform_super_admin"], sources, { analyst: ["/overview"] })).toBe(
+      true,
+    );
   });
 
   it("keeps playbook approval limited to reviewers and API admin super-roles", () => {
-    // A reviewer may move a playbook through its lifecycle without
-    // being able to authorise it to act.
     expect(canTransitionPlaybook(["playbook_reviewer"])).toBe(true);
     expect(canTransitionPlaybook(["knowledge_manager"])).toBe(false);
     expect(canTransitionPlaybook(["tenant_admin"])).toBe(true);

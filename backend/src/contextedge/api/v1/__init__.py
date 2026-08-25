@@ -35,6 +35,7 @@ from contextedge.api.v1 import (  # noqa: E402, F401
     tenants,
     threads,
     users,
+    nav_access,
     workspaces,
 )
 
@@ -43,6 +44,7 @@ router.include_router(tenants.router, prefix="/tenants", tags=["tenants"])
 router.include_router(workspaces.router, prefix="/workspaces", tags=["workspaces"])
 router.include_router(domains.router, prefix="/domains", tags=["domains"])
 router.include_router(users.router, prefix="/users", tags=["users"])
+router.include_router(nav_access.router, prefix="/nav-access", tags=["nav-access"])
 router.include_router(audit.router, prefix="/audit-logs", tags=["audit"])
 router.include_router(sources.router, prefix="/sources", tags=["sources"])
 router.include_router(sync.router, prefix="/sync-runs", tags=["sync"])

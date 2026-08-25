@@ -220,8 +220,9 @@ python dev.py seed
 
 Seeded development users:
 
-- `admin@contextedge.local` / `admin123`
-- `analyst@contextedge.local` / `analyst123`
+Accounts are stored in the database. Create them in Settings, or set `SEED_*`
+environment variables when running seed. Passwords are hashed; they are not
+printed or hardcoded in the app.
 
 The seed script is idempotent for the default tenant slug and will skip if the default tenant already exists. The destructive variants (`reset_db_and_seed`, `demo_maf_seed`) TRUNCATE tenant-global tables and are refused unless `APP_ENV=development` or `CONTEXTEDGE_ALLOW_DB_RESET=1` (`backend/src/contextedge/seed_guard.py:20-60`).
 

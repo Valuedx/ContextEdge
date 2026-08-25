@@ -130,8 +130,8 @@ export async function loadGraphNodeOptions(nodeType: string): Promise<GraphNodeO
       const rows = await api.get<User[]>("/users", { limit: "200" });
       return rows.map((row) => ({
         id: row.id,
-        label: row.display_name || row.email,
-        meta: row.email,
+        label: row.display_name || row.username,
+        meta: row.username,
       }));
     }
     case "decision": {

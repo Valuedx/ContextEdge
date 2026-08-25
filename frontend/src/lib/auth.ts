@@ -1,4 +1,5 @@
 import { api } from "./api";
+import { writeActiveTenantId } from "./active-tenant";
 
 interface TokenResponse {
   access_token: string;
@@ -9,16 +10,17 @@ interface TokenResponse {
 interface JwtPayload {
   sub: string;
   tenant_id: string;
+  username?: string;
   email: string;
   roles: string[];
   exp: number;
 }
 
 export async function login(
-  email: string,
+  username: string,
   password: string
 ): Promise<TokenResponse> {
-  const res = await api.post<TokenResponse>("/auth/login", { email, password });
+  const res = await api.post<TokenResponse>("/auth/login", { username, password });
   if (typeof window !== "undefined") {
     localStorage.setItem("access_token", res.access_token);
   }
@@ -28,6 +30,7 @@ export async function login(
 export function logout() {
   if (typeof window !== "undefined") {
     localStorage.removeItem("access_token");
+    writeActiveTenantId(null);
     window.location.href = "/login";
   }
 }
