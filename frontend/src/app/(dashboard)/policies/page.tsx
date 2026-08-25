@@ -22,6 +22,7 @@ import { api } from "@/lib/api";
 import type { PoliciesOverview, PolicyType, TenantPolicyRecord } from "@/lib/types";
 import { useAuthStore } from "@/lib/stores/auth-store";
 import { isTenantAdmin } from "@/lib/roles";
+import { ConfirmActionDialog } from "@/components/common/confirm-action-dialog";
 
 const SECTIONS: {
   key: keyof PoliciesOverview;
@@ -92,6 +93,7 @@ function PolicySection({
   const qc = useQueryClient();
   const [createOpen, setCreateOpen] = useState(false);
   const [editRecord, setEditRecord] = useState<TenantPolicyRecord | null>(null);
+  const [deleteRecord, setDeleteRecord] = useState<TenantPolicyRecord | null>(null);
   const [form, setForm] = useState<PolicyFormState>(emptyForm);
   const [formError, setFormError] = useState<string | null>(null);
 
@@ -157,7 +159,10 @@ function PolicySection({
 
   const deleteMut = useMutation({
     mutationFn: (id: string) => api.delete(`/policies/${id}`),
-    onSuccess: () => invalidate(),
+    onSuccess: () => {
+      invalidate();
+      setDeleteRecord(null);
+    },
   });
 
   const openCreate = () => {
@@ -215,11 +220,7 @@ function PolicySection({
                       variant="ghost"
                       className="text-destructive hover:text-destructive"
                       disabled={deleteMut.isPending}
-                      onClick={() => {
-                        if (window.confirm(`Delete policy “${item.name}”?`)) {
-                          deleteMut.mutate(item.id);
-                        }
-                      }}
+                      onClick={() => setDeleteRecord(item)}
                     >
                       Delete
                     </Button>
@@ -233,6 +234,24 @@ function PolicySection({
           </ul>
         )}
       </CardContent>
+
+      <ConfirmActionDialog
+        open={!!deleteRecord}
+        onOpenChange={(open) => {
+          if (!open) setDeleteRecord(null);
+        }}
+        title="Delete policy?"
+        description={
+          deleteRecord
+            ? `This will permanently delete "${deleteRecord.name}".`
+            : "This policy will be permanently deleted."
+        }
+        confirmLabel="Delete policy"
+        isPending={deleteMut.isPending}
+        onConfirm={() => {
+          if (deleteRecord) deleteMut.mutate(deleteRecord.id);
+        }}
+      />
 
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
         <DialogContent className="max-w-lg">

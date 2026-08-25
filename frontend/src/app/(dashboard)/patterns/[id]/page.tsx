@@ -1,7 +1,6 @@
 "use client";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useState } from "react";
 import { toast } from "sonner";
@@ -11,8 +10,7 @@ import {
   DetailStatCardsSkeleton,
   DetailWideCardSkeleton,
 } from "@/components/common/detail-page-skeleton";
-import { Button, buttonVariants } from "@/components/ui/button";
-import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle,
@@ -158,11 +156,13 @@ export default function PatternDetailPage() {
   if (error || !pattern) {
     return (
       <div className="space-y-4">
-        <PageHeader title="Pattern" description="Not found." />
+        <PageHeader
+          title="Pattern"
+          description="Not found."
+          backHref="/patterns"
+          backLabel="Patterns"
+        />
         <p className="text-sm text-destructive">{String((error as Error)?.message || "Missing")}</p>
-        <Link href="/patterns" className={cn(buttonVariants({ variant: "outline" }))}>
-          Back to patterns
-        </Link>
       </div>
     );
   }
@@ -172,8 +172,10 @@ export default function PatternDetailPage() {
       <PageHeader
         title={pattern.title}
         description={`${pattern.pattern_type.replace("_", " ")} · ${pattern.episode_count} episodes linked`}
+        backHref="/patterns"
+        backLabel="Patterns"
         actions={
-          <div className="flex gap-2">
+          <div className="flex flex-wrap justify-start gap-2 sm:justify-end">
             <Button
               variant={pattern.active_flag ? "outline" : "default"}
               disabled={approveMut.isPending || pattern.active_flag}
@@ -201,9 +203,6 @@ export default function PatternDetailPage() {
               Generate Playbook
             </Button>
 
-            <Link href="/patterns" className={cn(buttonVariants({ variant: "outline" }))}>
-              All patterns
-            </Link>
           </div>
         }
       />

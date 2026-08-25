@@ -16,8 +16,7 @@ import {
   KNOWLEDGE_EVIDENCE_TYPES,
 } from "@/components/common/applicability";
 import { StatusBadge } from "@/components/common/status-badge";
-import { Button, buttonVariants } from "@/components/ui/button";
-import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import {
@@ -27,7 +26,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import {  } from "@/components/ui/separator";
 import { api } from "@/lib/api";
 import { ThreadConversation } from "@/components/common/thread-conversation";
 import type {
@@ -161,11 +159,13 @@ export default function EvidenceDetailPage() {
   if (error || !item) {
     return (
       <div className="space-y-4">
-        <PageHeader title="Evidence Item" description="Not found." />
+        <PageHeader
+          title="Evidence Item"
+          description="Not found."
+          backHref="/evidence"
+          backLabel="Evidence"
+        />
         <p className="text-sm text-destructive">{String((error as Error)?.message || "Missing")}</p>
-        <Link href="/evidence" className={cn(buttonVariants({ variant: "outline" }))}>
-          Back to evidence
-        </Link>
       </div>
     );
   }
@@ -176,11 +176,8 @@ export default function EvidenceDetailPage() {
       <PageHeader
         title={item.title || "Untitled Evidence Ticket"}
         description={`Type: ${item.evidence_type} · Ingested ${new Date(item.ingested_at).toLocaleString()}`}
-        actions={
-          <Link href="/evidence" className={cn(buttonVariants({ variant: "outline", size: "sm" }))}>
-            All Evidence
-          </Link>
-        }
+        backHref="/evidence"
+        backLabel="Evidence"
       />
 
       {/* Primary Grid: Ticket Provenance & Linked Knowledge Context */}

@@ -19,6 +19,7 @@ import { AddSourceDialog } from "@/components/sources/add-source-dialog";
 import { EditSourceDialog } from "@/components/sources/edit-source-dialog";
 import { usePagination } from "@/lib/hooks/use-pagination";
 import { PaginationControls } from "@/components/common/pagination-controls";
+import { ConfirmActionDialog } from "@/components/common/confirm-action-dialog";
 
 function SourceActions({
   source,
@@ -28,11 +29,13 @@ function SourceActions({
   onEdit: (source: Source) => void;
 }) {
   const queryClient = useQueryClient();
+  const [deleteOpen, setDeleteOpen] = useState(false);
   const mutation = useMutation({
     mutationFn: () => api.delete(`/sources/${source.id}`),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["sources"] });
       toast.success(`Source "${source.display_name}" deleted`);
+      setDeleteOpen(false);
     },
     onError: (err: Error) => {
       toast.error(err.message || "Failed to delete source");
@@ -57,11 +60,7 @@ function SourceActions({
         className="text-muted-foreground hover:text-destructive"
         title="Delete source"
         aria-label={`Delete ${source.display_name}`}
-        onClick={() => {
-          if (confirm(`Are you sure you want to delete "${source.display_name}"? This will also remove all associated evidence logs.`)) {
-            mutation.mutate();
-          }
-        }}
+        onClick={() => setDeleteOpen(true)}
         disabled={mutation.isPending}
       >
         {mutation.isPending ? (
@@ -70,6 +69,15 @@ function SourceActions({
           <Trash2 className="h-4 w-4" />
         )}
       </Button>
+      <ConfirmActionDialog
+        open={deleteOpen}
+        onOpenChange={setDeleteOpen}
+        title="Delete source?"
+        description={`This will delete "${source.display_name}" and remove its associated evidence logs.`}
+        confirmLabel="Delete source"
+        isPending={mutation.isPending}
+        onConfirm={() => mutation.mutate()}
+      />
     </div>
   );
 }

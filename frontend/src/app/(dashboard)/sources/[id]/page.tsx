@@ -190,11 +190,13 @@ export default function SourceDetailPage() {
   if (error || !source) {
     return (
       <div className="space-y-6">
-        <PageHeader title="Source" description="Source was not found or you lack access." />
+        <PageHeader
+          title="Source"
+          description="Source was not found or you lack access."
+          backHref="/sources"
+          backLabel="Sources"
+        />
         <p className="text-destructive text-sm">{String((error as Error)?.message || "Not found")}</p>
-        <Link href="/sources" className={cn(buttonVariants({ variant: "outline" }))}>
-          Back to sources
-        </Link>
       </div>
     );
   }
@@ -204,8 +206,10 @@ export default function SourceDetailPage() {
       <PageHeader
         title={source.display_name}
         description={`${source.source_type} · ${source.sync_mode} sync`}
+        backHref="/sources"
+        backLabel="Sources"
         actions={
-          <div className="flex flex-wrap gap-2">
+          <div className="flex flex-wrap justify-start gap-2 sm:justify-end">
             <Link
               href={`/inventory/${id}`}
               className={cn(buttonVariants({ variant: "outline" }))}

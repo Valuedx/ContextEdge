@@ -15,10 +15,9 @@ import {
 } from "@/components/common/detail-page-skeleton";
 import { Skeleton } from "@/components/ui/skeleton";
 import { StatusBadge } from "@/components/common/status-badge";
-import { Button, buttonVariants } from "@/components/ui/button";
+import { Button } from "@/components/ui/button";
 import { PlaybookSteps } from "@/components/common/playbook-steps";
 import { PlaybookLifecycleActions } from "@/components/common/playbook-lifecycle-actions";
-import { cn } from "@/lib/utils";
 import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Dialog,
@@ -955,11 +954,13 @@ export default function PlaybookDetailPage() {
   if (error || !playbook) {
     return (
       <div className="space-y-4">
-        <PageHeader title="Playbook" description="Not found." />
+        <PageHeader
+          title="Playbook"
+          description="Not found."
+          backHref="/playbooks"
+          backLabel="Playbooks"
+        />
         <p className="text-sm text-destructive">{String((error as Error)?.message || "Missing")}</p>
-        <Link href="/playbooks" className={cn(buttonVariants({ variant: "outline" }))}>
-          Back to playbooks
-        </Link>
       </div>
     );
   }
@@ -976,8 +977,10 @@ export default function PlaybookDetailPage() {
       <PageHeader
         title={playbook.title}
         description={`Stable key ${playbook.stable_key} · ${playbook.automation_mode}`}
+        backHref="/playbooks"
+        backLabel="Playbooks"
         actions={
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center justify-start gap-2 sm:justify-end">
             {((selectedVersion ?? latest)?.playbook_confidence !== undefined || playbook.confidence !== undefined) && (
               <div className="flex items-center gap-1.5 rounded-md bg-emerald-500/10 border border-emerald-500/20 px-3 py-1.5 text-xs font-semibold text-emerald-600 dark:text-emerald-400">
                 <Sparkles className="h-3.5 w-3.5" />
@@ -987,9 +990,6 @@ export default function PlaybookDetailPage() {
             {hasTransitions && (
               <PlaybookLifecycleActions playbook={playbook} showPermissionHint />
             )}
-            <Link href="/playbooks" className={cn(buttonVariants({ variant: "outline" }))}>
-              All playbooks
-            </Link>
           </div>
         }
       />

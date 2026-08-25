@@ -24,14 +24,17 @@ import {
 import { toast } from "sonner";
 import { usePagination } from "@/lib/hooks/use-pagination";
 import { PaginationControls } from "@/components/common/pagination-controls";
+import { ConfirmActionDialog } from "@/components/common/confirm-action-dialog";
 
 function EvidenceActions({ evidenceId }: { evidenceId: string; title: string }) {
   const queryClient = useQueryClient();
+  const [deleteOpen, setDeleteOpen] = useState(false);
   const mutation = useMutation({
     mutationFn: () => api.delete(`/evidence/${evidenceId}`),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["evidence"] });
       toast.success("Evidence record deleted");
+      setDeleteOpen(false);
     },
     onError: (err: Error) => {
       toast.error(err.message || "Failed to delete record");
@@ -39,23 +42,32 @@ function EvidenceActions({ evidenceId }: { evidenceId: string; title: string }) 
   });
 
   return (
-    <Button
-      variant="ghost"
-      size="icon"
-      className="text-muted-foreground hover:text-destructive"
-      onClick={() => {
-        if (confirm(`Permanently delete this evidence record?`)) {
-          mutation.mutate();
-        }
-      }}
-      disabled={mutation.isPending}
-    >
-      {mutation.isPending ? (
-          <Loader2 className="h-4 w-4 animate-spin" />
-      ) : (
-          <Trash2 className="h-4 w-4" />
-      )}
-    </Button>
+    <>
+      <Button
+        variant="ghost"
+        size="icon"
+        className="text-muted-foreground hover:text-destructive"
+        title="Delete evidence"
+        aria-label="Delete evidence"
+        onClick={() => setDeleteOpen(true)}
+        disabled={mutation.isPending}
+      >
+        {mutation.isPending ? (
+            <Loader2 className="h-4 w-4 animate-spin" />
+        ) : (
+            <Trash2 className="h-4 w-4" />
+        )}
+      </Button>
+      <ConfirmActionDialog
+        open={deleteOpen}
+        onOpenChange={setDeleteOpen}
+        title="Delete evidence?"
+        description="This evidence record will be permanently deleted."
+        confirmLabel="Delete evidence"
+        isPending={mutation.isPending}
+        onConfirm={() => mutation.mutate()}
+      />
+    </>
   );
 }
 
@@ -187,6 +199,8 @@ export default function EvidencePage() {
   const [relevanceFilter, setRelevanceFilter] = useState("all");
   const [sourceTypeFilter, setSourceTypeFilter] = useState("all");
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
+  const [purgeOpen, setPurgeOpen] = useState(false);
 
   const pg = usePagination(50);
   const queryClient = useQueryClient();
@@ -197,9 +211,23 @@ export default function EvidencePage() {
       queryClient.invalidateQueries({ queryKey: ["evidence"] });
       toast.success(`${selectedIds.length} records deleted`);
       setSelectedIds([]);
+      setBulkDeleteOpen(false);
     },
     onError: (err: Error) => {
       toast.error(err.message || "Bulk delete failed");
+    },
+  });
+
+  const purgeMutation = useMutation({
+    mutationFn: () => api.delete("/evidence/purge"),
+    onSuccess: () => {
+      toast.success("All evidence records purged");
+      queryClient.invalidateQueries({ queryKey: ["evidence"] });
+      setPurgeOpen(false);
+      setSelectedIds([]);
+    },
+    onError: (err: Error) => {
+      toast.error(err.message || "Purge failed");
     },
   });
 
@@ -336,18 +364,10 @@ export default function EvidencePage() {
           <Button
             type="button"
             variant="destructive"
-            onClick={() => {
-              const confirmText = prompt("Type 'PURGE' to permanently delete ALL evidence records:");
-              if (confirmText === "PURGE") {
-                api.delete("/evidence/purge")
-                  .then(() => {
-                    toast.success("All evidence records purged");
-                    queryClient.invalidateQueries({ queryKey: ["evidence"] });
-                  })
-                  .catch((err) => toast.error(err.message || "Purge failed"));
-              }
-            }}
+            onClick={() => setPurgeOpen(true)}
+            disabled={purgeMutation.isPending}
           >
+            {purgeMutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
             Purge All
           </Button>
 
@@ -355,11 +375,7 @@ export default function EvidencePage() {
             <Button
               type="button"
               variant="destructive"
-              onClick={() => {
-                if (confirm(`Delete ${selectedIds.length} selected records?`)) {
-                  bulkDeleteMutation.mutate(selectedIds);
-                }
-              }}
+              onClick={() => setBulkDeleteOpen(true)}
               disabled={bulkDeleteMutation.isPending}
             >
               {bulkDeleteMutation.isPending ? (
@@ -372,6 +388,27 @@ export default function EvidencePage() {
           )}
         </div>
       </div>
+
+      <ConfirmActionDialog
+        open={bulkDeleteOpen}
+        onOpenChange={setBulkDeleteOpen}
+        title="Delete selected evidence?"
+        description={`This will permanently delete ${selectedIds.length} selected evidence record${selectedIds.length === 1 ? "" : "s"}.`}
+        confirmLabel="Delete selected"
+        isPending={bulkDeleteMutation.isPending}
+        onConfirm={() => bulkDeleteMutation.mutate(selectedIds)}
+      />
+      <ConfirmActionDialog
+        open={purgeOpen}
+        onOpenChange={setPurgeOpen}
+        title="Purge all evidence?"
+        description="This permanently deletes every evidence record. This action cannot be undone."
+        confirmLabel="Purge evidence"
+        confirmationText="PURGE"
+        confirmationLabel="Type PURGE to confirm"
+        isPending={purgeMutation.isPending}
+        onConfirm={() => purgeMutation.mutate()}
+      />
 
       {isLoading ? (
         <DataTableSkeleton columns={7} />

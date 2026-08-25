@@ -22,9 +22,11 @@ import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 import { usePagination } from "@/lib/hooks/use-pagination";
 import { PaginationControls } from "@/components/common/pagination-controls";
+import { ConfirmActionDialog } from "@/components/common/confirm-action-dialog";
 
 function EpisodeActions({ episodeId, title, isApproved }: { episodeId: string; title: string; isApproved: boolean }) {
   const queryClient = useQueryClient();
+  const [deleteOpen, setDeleteOpen] = useState(false);
 
   const approveMutation = useMutation({
     mutationFn: () => api.post(`/episodes/${episodeId}/approve`, {}),
@@ -44,6 +46,7 @@ function EpisodeActions({ episodeId, title, isApproved }: { episodeId: string; t
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["episodes"] });
       toast.success(`Episode "${title}" deleted`);
+      setDeleteOpen(false);
     },
     onError: (err: Error) => {
       toast.error(err.message || "Failed to delete episode");
@@ -57,6 +60,7 @@ function EpisodeActions({ episodeId, title, isApproved }: { episodeId: string; t
         size="icon"
         className={isApproved ? "text-emerald-500 hover:text-emerald-600" : "text-muted-foreground hover:text-emerald-500"}
         title={isApproved ? "Re-Approve & Update Pattern/Playbook" : "Approve Episode"}
+        aria-label={isApproved ? "Re-approve episode" : "Approve episode"}
         onClick={(e) => {
           e.stopPropagation();
           approveMutation.mutate();
@@ -74,11 +78,10 @@ function EpisodeActions({ episodeId, title, isApproved }: { episodeId: string; t
         size="icon"
         className="text-muted-foreground hover:text-destructive"
         title="Delete Episode"
+        aria-label="Delete episode"
         onClick={(e) => {
           e.stopPropagation();
-          if (confirm(`Are you sure you want to delete episode "${title}"?`)) {
-            deleteMutation.mutate();
-          }
+          setDeleteOpen(true);
         }}
         disabled={deleteMutation.isPending}
       >
@@ -88,6 +91,15 @@ function EpisodeActions({ episodeId, title, isApproved }: { episodeId: string; t
           <Trash2 className="h-4 w-4" />
         )}
       </Button>
+      <ConfirmActionDialog
+        open={deleteOpen}
+        onOpenChange={setDeleteOpen}
+        title="Delete episode?"
+        description={`This will permanently delete "${title}".`}
+        confirmLabel="Delete episode"
+        isPending={deleteMutation.isPending}
+        onConfirm={() => deleteMutation.mutate()}
+      />
     </div>
   );
 }
@@ -281,11 +293,12 @@ export default function EpisodesPage() {
         title="Episodes" 
         description="Reconstructed troubleshooting episodes from correlated evidence." 
         actions={
-          <div className="flex flex-wrap items-center gap-3">
+          <div className="flex flex-wrap items-center justify-start gap-2 sm:justify-end">
             {selectedIds.length > 0 && (
               <Button
                 type="button"
                 variant="default"
+                size="sm"
                 className="bg-emerald-600 hover:bg-emerald-700 text-white"
                 onClick={() => {
                   bulkApproveMutation.mutate(selectedIds);
@@ -304,6 +317,7 @@ export default function EpisodesPage() {
             <Button
               type="button"
               variant="outline"
+              size="sm"
               onClick={() =>
                 setSortMode((m) => (m === "review_priority" ? "newest" : "review_priority"))
               }
@@ -314,6 +328,7 @@ export default function EpisodesPage() {
             <Button
               type="button"
               variant="outline"
+              size="sm"
               onClick={handleAiReview}
               disabled={isAiReviewing}
               title="AI first-pass review of pending drafts. Approval only happens when EPISODE_AI_REVIEW=auto_approve AND deterministic floors pass; otherwise verdicts are advisory annotations for your queue."
@@ -329,6 +344,7 @@ export default function EpisodesPage() {
               onClick={handleConstructPattern}
               disabled={isClustering}
               variant="outline"
+              size="sm"
             >
               {isClustering ? (
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -340,6 +356,7 @@ export default function EpisodesPage() {
             <Button 
               onClick={handleReconstruct} 
               disabled={isReconstructing}
+              size="sm"
             >
               {isReconstructing ? (
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />

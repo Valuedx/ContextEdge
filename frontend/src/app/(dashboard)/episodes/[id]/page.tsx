@@ -13,8 +13,7 @@ import {
 } from "@/components/common/detail-page-skeleton";
 import { Skeleton } from "@/components/ui/skeleton";
 import { StatusBadge } from "@/components/common/status-badge";
-import { Button, buttonVariants } from "@/components/ui/button";
-import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
@@ -161,11 +160,13 @@ export default function EpisodeDetailPage() {
   if (error || !episode) {
     return (
       <div className="space-y-4">
-        <PageHeader title="Episode" description="Not found." />
+        <PageHeader
+          title="Episode"
+          description="Not found."
+          backHref="/episodes"
+          backLabel="Episodes"
+        />
         <p className="text-sm text-destructive">{String((error as Error)?.message || "Missing")}</p>
-        <Link href="/episodes" className={cn(buttonVariants({ variant: "outline" }))}>
-          Back to episodes
-        </Link>
       </div>
     );
   }
@@ -183,11 +184,10 @@ export default function EpisodeDetailPage() {
       <PageHeader
         title={episode.title}
         description="Structured troubleshooting timeline with extracted steps."
+        backHref="/episodes"
+        backLabel="Episodes"
         actions={
-          <div className="flex flex-wrap gap-2">
-            <Link href="/episodes" className={cn(buttonVariants({ variant: "outline" }))}>
-              All episodes
-            </Link>
+          <div className="flex flex-wrap justify-start gap-2 sm:justify-end">
             {showApprove && episode.reviewer_state !== "approved" && (
               <Button
                 disabled={approveMut.isPending}

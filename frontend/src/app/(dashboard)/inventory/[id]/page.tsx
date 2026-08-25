@@ -286,8 +286,10 @@ export default function DiscoveryPage() {
       <PageHeader
         title="Discovery inventory"
         description="Discovered objects for this source. Approve channels or mailboxes for sync and backfill."
+        backHref={`/sources/${sourceId}`}
+        backLabel="Source"
         actions={
-          <div className="flex flex-wrap gap-2">
+          <div className="flex flex-wrap justify-start gap-2 sm:justify-end">
             {/* Backfill Trigger */}
             {objects.some((o) => o.approved_for_backfill) && canApprove && (
               <Button
@@ -316,12 +318,6 @@ export default function DiscoveryPage() {
                 Refresh
               </Button>
             )}
-            <Link
-              href={`/sources/${sourceId}`}
-              className={cn(buttonVariants({ variant: "outline" }))}
-            >
-              Back to source
-            </Link>
           </div>
         }
       />

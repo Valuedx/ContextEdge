@@ -14,6 +14,7 @@ import { ColumnDef } from "@tanstack/react-table";
 import { BookOpen, Loader2, Network, List, Trash2, BookCheck, RefreshCw } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useQueryClient } from "@tanstack/react-query";
+import { useState } from "react";
 
 import { PageHeader } from "@/components/common/page-header";
 import { DataTable } from "@/components/common/data-table";
@@ -27,10 +28,12 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { PatternGraph } from "@/components/patterns/pattern-graph";
 import { usePagination } from "@/lib/hooks/use-pagination";
 import { PaginationControls } from "@/components/common/pagination-controls";
+import { ConfirmActionDialog } from "@/components/common/confirm-action-dialog";
 
 function PatternActions({ pattern }: { pattern: Pattern }) {
   const router = useRouter();
   const queryClient = useQueryClient();
+  const [deleteOpen, setDeleteOpen] = useState(false);
 
   const generateMutation = useMutation({
     mutationFn: () => api.post("/playbooks/generate", { pattern_id: pattern.id }),
@@ -50,17 +53,12 @@ function PatternActions({ pattern }: { pattern: Pattern }) {
     onSuccess: () => {
       toast.success(`Pattern "${pattern.title}" deleted`);
       queryClient.invalidateQueries({ queryKey: ["patterns"] });
+      setDeleteOpen(false);
     },
     onError: (err: Error) => {
       toast.error(err.message || "Failed to delete pattern");
     },
   });
-
-  const handleDelete = () => {
-    if (confirm(`Are you sure you want to delete pattern "${pattern.title}"?`)) {
-      deleteMutation.mutate();
-    }
-  };
 
   return (
     <div className="flex items-center gap-1.5">
@@ -118,7 +116,8 @@ function PatternActions({ pattern }: { pattern: Pattern }) {
         size="icon"
         className="text-muted-foreground hover:text-red-500 h-8 w-8"
         title="Delete Pattern"
-        onClick={handleDelete}
+        aria-label="Delete pattern"
+        onClick={() => setDeleteOpen(true)}
         disabled={deleteMutation.isPending}
       >
         {deleteMutation.isPending ? (
@@ -127,6 +126,15 @@ function PatternActions({ pattern }: { pattern: Pattern }) {
           <Trash2 className="h-3.5 w-3.5" />
         )}
       </Button>
+      <ConfirmActionDialog
+        open={deleteOpen}
+        onOpenChange={setDeleteOpen}
+        title="Delete pattern?"
+        description={`This will permanently delete "${pattern.title}".`}
+        confirmLabel="Delete pattern"
+        isPending={deleteMutation.isPending}
+        onConfirm={() => deleteMutation.mutate()}
+      />
     </div>
   );
 }
@@ -210,8 +218,10 @@ export default function PatternsPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <PageHeader title="Patterns" description="Operational patterns derived from episode clusters." />
+      <PageHeader
+        title="Patterns"
+        description="Operational patterns derived from episode clusters."
+        actions={
         <Button
           variant="outline"
           size="sm"
@@ -224,9 +234,10 @@ export default function PatternsPage() {
           ) : (
             <RefreshCw className="h-3.5 w-3.5" />
           )}
-          Clean & Deduplicate 🧹
+          Clean & Deduplicate
         </Button>
-      </div>
+        }
+      />
       
       <Tabs defaultValue="list" className="w-full">
         <div className="flex justify-start mb-4">

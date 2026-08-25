@@ -1,9 +1,10 @@
 "use client";
 
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ColumnDef } from "@tanstack/react-table";
-import { Trash2 } from "lucide-react";
+import { Loader2, Trash2 } from "lucide-react";
 import { toast } from "sonner";
+import { useState } from "react";
 
 import { PageHeader } from "@/components/common/page-header";
 import { DataTable } from "@/components/common/data-table";
@@ -12,6 +13,7 @@ import { StatusBadge } from "@/components/common/status-badge";
 import { api } from "@/lib/api";
 import type { Source, SyncRun } from "@/lib/types";
 import { Button } from "@/components/ui/button";
+import { ConfirmActionDialog } from "@/components/common/confirm-action-dialog";
 
 type SyncRunRow = SyncRun & {
   source_name: string;
@@ -68,30 +70,62 @@ const columns: ColumnDef<SyncRunRow>[] = [
 
 function SyncAction({ runId }: { runId: string }) {
   const queryClient = useQueryClient();
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const deleteMutation = useMutation({
+    mutationFn: () => api.delete(`/sync-runs/${runId}`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["sync-runs"] });
+      toast.success("Sync log deleted");
+      setDeleteOpen(false);
+    },
+    onError: (err: Error) => toast.error(err.message || "Delete failed"),
+  });
+
   return (
-    <Button
-      variant="ghost"
-      size="icon"
-      className="text-muted-foreground hover:text-destructive"
-      onClick={() => {
-        if (confirm("Delete this sync run log?")) {
-          api.delete(`/sync-runs/${runId}`).then(() => {
-            queryClient.invalidateQueries({ queryKey: ["sync-runs"] });
-            toast.success("Sync log deleted");
-          }).catch(err => toast.error(err.message));
-        }
-      }}
-    >
-      <Trash2 className="h-4 w-4" />
-    </Button>
+    <>
+      <Button
+        variant="ghost"
+        size="icon"
+        className="text-muted-foreground hover:text-destructive"
+        title="Delete sync log"
+        aria-label="Delete sync log"
+        onClick={() => setDeleteOpen(true)}
+        disabled={deleteMutation.isPending}
+      >
+        {deleteMutation.isPending ? (
+          <Loader2 className="h-4 w-4 animate-spin" />
+        ) : (
+          <Trash2 className="h-4 w-4" />
+        )}
+      </Button>
+      <ConfirmActionDialog
+        open={deleteOpen}
+        onOpenChange={setDeleteOpen}
+        title="Delete sync log?"
+        description="This removes the selected sync run log from history."
+        confirmLabel="Delete log"
+        isPending={deleteMutation.isPending}
+        onConfirm={() => deleteMutation.mutate()}
+      />
+    </>
   );
 }
 
 export default function SyncPage() {
   const queryClient = useQueryClient();
+  const [clearHistoryOpen, setClearHistoryOpen] = useState(false);
   const { data: syncRuns = [], isLoading: runsLoading } = useQuery<SyncRun[]>({
     queryKey: ["sync-runs"],
     queryFn: () => api.get("/sync-runs"),
+  });
+  const purgeMutation = useMutation({
+    mutationFn: () => api.delete("/sync-runs/purge"),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["sync-runs"] });
+      toast.success("Sync history cleared");
+      setClearHistoryOpen(false);
+    },
+    onError: (err: Error) => toast.error(err.message || "Clear history failed"),
   });
   const { data: sources = [], isLoading: sourcesLoading } = useQuery<Source[]>({
     queryKey: ["sources", "sync-page"],
@@ -117,18 +151,22 @@ export default function SyncPage() {
         actions={
             <Button
               variant="destructive"
-              onClick={() => {
-                if (confirm("Delete ALL sync operation logs?")) {
-                  api.delete("/sync-runs/purge").then(() => {
-                    queryClient.invalidateQueries({ queryKey: ["sync-runs"] });
-                    toast.success("Sync history cleared");
-                  }).catch(err => toast.error(err.message));
-                }
-              }}
+              onClick={() => setClearHistoryOpen(true)}
+              disabled={purgeMutation.isPending}
             >
+              {purgeMutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               Clear History
             </Button>
           }
+      />
+      <ConfirmActionDialog
+        open={clearHistoryOpen}
+        onOpenChange={setClearHistoryOpen}
+        title="Clear sync history?"
+        description="This deletes all sync operation logs. Source configuration and ingested evidence are not deleted."
+        confirmLabel="Clear history"
+        isPending={purgeMutation.isPending}
+        onConfirm={() => purgeMutation.mutate()}
       />
       {isLoading ? (
         <DataTableSkeleton columns={6} />
