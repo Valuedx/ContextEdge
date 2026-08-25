@@ -34,6 +34,7 @@ import { api } from "@/lib/api";
 import type { PoliciesOverview, Source, SourceObject, SyncRun } from "@/lib/types";
 import { useAuthStore } from "@/lib/stores/auth-store";
 import { hasRole, canListPoliciesForSource } from "@/lib/roles";
+import { RotateCredentialsDialog } from "@/components/sources/rotate-credentials-dialog";
 
 const syncColumns: ColumnDef<SyncRun>[] = [
   { accessorKey: "run_type", header: "Type" },
@@ -118,14 +119,7 @@ export default function SourceDetailPage() {
       toast.error(`Discovery failed: ${err.message || "Unknown error"}`),
   });
 
-  const rotateCredsMut = useMutation({
-    mutationFn: () => api.post(`/sources/${id}/credentials/rotate`, {}),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["source", id] });
-      toast.success("Credential rotation initiated");
-    },
-    onError: (err: Error) => toast.error(err.message || "Rotation failed"),
-  });
+  const [rotateDialogOpen, setRotateDialogOpen] = useState(false);
 
   // A backfill lives inside one connector call for minutes at a time — the
   // live Zoho corpus measured 913 seconds — so the run list is polled while
@@ -254,14 +248,9 @@ export default function SourceDetailPage() {
             {canDiscover && (
               <Button
                 variant="outline"
-                disabled={rotateCredsMut.isPending}
-                onClick={() => rotateCredsMut.mutate()}
+                onClick={() => setRotateDialogOpen(true)}
               >
-                {rotateCredsMut.isPending ? (
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                ) : (
-                  <KeyRound className="mr-2 h-4 w-4" />
-                )}
+                <KeyRound className="mr-2 h-4 w-4" />
                 Rotate credentials
               </Button>
             )}
@@ -455,6 +444,12 @@ export default function SourceDetailPage() {
           <DataTable columns={syncColumns} data={syncRuns} />
         )}
       </div>
+
+      <RotateCredentialsDialog
+        source={source}
+        open={rotateDialogOpen}
+        onOpenChange={setRotateDialogOpen}
+      />
     </div>
   );
 }

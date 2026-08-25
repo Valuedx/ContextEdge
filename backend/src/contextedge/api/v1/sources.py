@@ -592,9 +592,53 @@ async def delete_source(source_id: UUID, db: DbSession, user: AuthUser):
 
     if evidence_ids:
         from contextedge.models.episode import CorrelationEdge
-        from contextedge.models.evidence import AttachmentArtifact
+        from contextedge.models.evidence import AttachmentArtifact, EvidenceChunk
+        from contextedge.models.knowledge_case import CaseLink
+        from contextedge.models.situation import SituationEvidenceLink, SituationOccurrence
+        from contextedge.models.session import SessionAction
+        from contextedge.models.knowledge_supersession import KnowledgeSupersession
+        from contextedge.models.correlation_suggestion import CorrelationSuggestion
+        from contextedge.models.claim import ClaimEvidenceLink, ClaimContradiction
+        from contextedge.models.playbook import PlaybookEvidenceLink
 
-        # 2. Delete Correlation Edges
+        # 2. Delete Dependent Links & Edges referencing evidence
+        await db.execute(
+            delete(CaseLink).where(CaseLink.source_evidence_id.in_(evidence_ids))
+        )
+        await db.execute(
+            delete(SituationEvidenceLink).where(SituationEvidenceLink.evidence_id.in_(evidence_ids))
+        )
+        await db.execute(
+            delete(SituationOccurrence).where(SituationOccurrence.evidence_id.in_(evidence_ids))
+        )
+        await db.execute(
+            delete(SessionAction).where(SessionAction.evidence_id.in_(evidence_ids))
+        )
+        await db.execute(
+            delete(KnowledgeSupersession).where(
+                or_(
+                    KnowledgeSupersession.old_evidence_id.in_(evidence_ids),
+                    KnowledgeSupersession.new_evidence_id.in_(evidence_ids)
+                )
+            )
+        )
+        await db.execute(
+            delete(CorrelationSuggestion).where(
+                or_(
+                    CorrelationSuggestion.source_evidence_id.in_(evidence_ids),
+                    CorrelationSuggestion.target_evidence_id.in_(evidence_ids)
+                )
+            )
+        )
+        await db.execute(
+            delete(ClaimEvidenceLink).where(ClaimEvidenceLink.evidence_id.in_(evidence_ids))
+        )
+        await db.execute(
+            delete(ClaimContradiction).where(ClaimContradiction.evidence_id.in_(evidence_ids))
+        )
+        await db.execute(
+            delete(PlaybookEvidenceLink).where(PlaybookEvidenceLink.evidence_id.in_(evidence_ids))
+        )
         await db.execute(
             delete(CorrelationEdge).where(
                 or_(
@@ -603,13 +647,14 @@ async def delete_source(source_id: UUID, db: DbSession, user: AuthUser):
                 )
             )
         )
-
-        # 3. Delete Attachment Artifacts
         await db.execute(
             delete(AttachmentArtifact).where(AttachmentArtifact.evidence_id.in_(evidence_ids))
         )
+        await db.execute(
+            delete(EvidenceChunk).where(EvidenceChunk.evidence_id.in_(evidence_ids))
+        )
 
-        # 4. Delete Evidence Items
+        # 3. Delete Evidence Items
         await db.execute(
             delete(EvidenceItem).where(EvidenceItem.source_id == source_id)
         )
