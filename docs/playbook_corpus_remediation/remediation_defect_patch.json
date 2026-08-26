@@ -1,0 +1,1237 @@
+{
+ "space": [
+  {
+   "playbook_id": "dc6a3e33-5e3d-4a5a-9680-8f571c5ea33c",
+   "title": "AutomationEdge File Upload and Configuration Troubleshooting",
+   "order": 2,
+   "risk": "medium",
+   "current_text": "Review and update the allowed file types whitelist to include required business extensions (for example, adding.zip extension if ZIP file uploads are failing).",
+   "new_text": "Review and update the allowed file types whitelist to include required business extensions (for example, adding .zip extension if ZIP file uploads are failing).",
+   "fix": "restore-space",
+   "reasons": [
+    "whitespace-collapse"
+   ]
+  },
+  {
+   "playbook_id": "dc6a3e33-5e3d-4a5a-9680-8f571c5ea33c",
+   "title": "AutomationEdge File Upload and Configuration Troubleshooting",
+   "order": 4,
+   "risk": "medium",
+   "current_text": "Log in to the AutomationEdge portal, navigate to the file upload section, and upload a file close to the newly configured maximum size limit using an allowed file extension (e.g.,.zip).",
+   "new_text": "Log in to the AutomationEdge portal, navigate to the file upload section, and upload a file close to the newly configured maximum size limit using an allowed file extension (e.g., .zip).",
+   "fix": "restore-space",
+   "reasons": [
+    "whitespace-collapse"
+   ]
+  },
+  {
+   "playbook_id": "49877f87-6fe1-4e7e-939d-8e6e42bfe824",
+   "title": "AutomationEdge Plugin and Library Compatibility Troubleshooting",
+   "order": 4,
+   "risk": "medium",
+   "current_text": "If missing plugin errors or ClassNotFoundException persist after syncing, close Process Studio. Navigate to the Process Studio installation directory, delete the psplugins and.process-studio directories, then launch the application by running process-studio.bat.",
+   "new_text": "If missing plugin errors or ClassNotFoundException persist after syncing, close Process Studio. Navigate to the Process Studio installation directory, delete the psplugins and .process-studio directories, then launch the application by running process-studio.bat.",
+   "fix": "restore-space",
+   "reasons": [
+    "whitespace-collapse"
+   ]
+  },
+  {
+   "playbook_id": "49877f87-6fe1-4e7e-939d-8e6e42bfe824",
+   "title": "AutomationEdge Plugin and Library Compatibility Troubleshooting",
+   "order": 5,
+   "risk": "medium",
+   "current_text": "Open the.psw workflow file in Process Studio and verify that all workflow steps load without error. Export or import the workflow onto the AutomationEdge server to verify version parity between Process Studio and the server.",
+   "new_text": "Open the .psw workflow file in Process Studio and verify that all workflow steps load without error. Export or import the workflow onto the AutomationEdge server to verify version parity between Process Studio and the server.",
+   "fix": "restore-space",
+   "reasons": [
+    "whitespace-collapse"
+   ]
+  },
+  {
+   "playbook_id": "851d2fd2-a338-4c9c-930c-805b4daaea29",
+   "title": "AutomationEdge Process Studio Launch Failure Remediation",
+   "order": 0,
+   "risk": "medium",
+   "current_text": "Back up the current Process Studio installation directory, workspace folder, and the local.pluginconf directory before modifying files.",
+   "new_text": "Back up the current Process Studio installation directory, workspace folder, and the local .pluginconf directory before modifying files.",
+   "fix": "restore-space",
+   "reasons": [
+    "whitespace-collapse"
+   ]
+  },
+  {
+   "playbook_id": "851d2fd2-a338-4c9c-930c-805b4daaea29",
+   "title": "AutomationEdge Process Studio Launch Failure Remediation",
+   "order": 4,
+   "risk": "medium",
+   "current_text": "Deregister Process Studio and then re-register it to clear the corrupted.pluginconf folder and resynchronize plugins.",
+   "new_text": "Deregister Process Studio and then re-register it to clear the corrupted .pluginconf folder and resynchronize plugins.",
+   "fix": "restore-space",
+   "reasons": [
+    "whitespace-collapse"
+   ]
+  },
+  {
+   "playbook_id": "7f3d4a13-ed6b-44cd-b966-06c18fa80b6d",
+   "title": "AutomationEdge Process Studio Project and Workspace Recovery",
+   "order": 0,
+   "risk": "medium",
+   "current_text": "Check the Process Studio logs for specific errors regarding workspace settings, plugins, file corruption, or connection issues '.pluginsconf file is tampered or corrupted', 'Error while creating.settings : Access is denied', 'Invalid process studio distribution', or tenant field mismatch.",
+   "new_text": "Check the Process Studio logs for specific errors regarding workspace settings, plugins, file corruption, or connection issues '.pluginsconf file is tampered or corrupted', 'Error while creating .settings : Access is denied', 'Invalid process studio distribution', or tenant field mismatch.",
+   "fix": "restore-space",
+   "reasons": [
+    "whitespace-collapse"
+   ]
+  },
+  {
+   "playbook_id": "7f3d4a13-ed6b-44cd-b966-06c18fa80b6d",
+   "title": "AutomationEdge Process Studio Project and Workspace Recovery",
+   "order": 1,
+   "risk": "medium",
+   "current_text": "If projects are not visible or workspace launch fails with workspace settings errors, inspect the workspace directory. Verify write permissions on the directory and update the.settings file to ensure active projects are properly listed.",
+   "new_text": "If projects are not visible or workspace launch fails with workspace settings errors, inspect the workspace directory. Verify write permissions on the directory and update the .settings file to ensure active projects are properly listed.",
+   "fix": "restore-space",
+   "reasons": [
+    "whitespace-collapse"
+   ]
+  },
+  {
+   "playbook_id": "7f3d4a13-ed6b-44cd-b966-06c18fa80b6d",
+   "title": "AutomationEdge Process Studio Project and Workspace Recovery",
+   "order": 2,
+   "risk": "medium",
+   "current_text": "If Process Studio reports missing plugins when opening workflows (.psw), open Process Studio, go to Tools, click 'sync plugins', provide username and password in the AutomationEdge connection details window, and click Connect. If the issue persists, close Process Studio, delete the psplugins and.process-studio folders from the Process Studio directory, and start Process Studio by running process-studio.bat.",
+   "new_text": "If Process Studio reports missing plugins when opening workflows (.psw), open Process Studio, go to Tools, click 'sync plugins', provide username and password in the AutomationEdge connection details window, and click Connect. If the issue persists, close Process Studio, delete the psplugins and .process-studio folders from the Process Studio directory, and start Process Studio by running process-studio.bat.",
+   "fix": "restore-space",
+   "reasons": [
+    "whitespace-collapse"
+   ]
+  },
+  {
+   "playbook_id": "7f3d4a13-ed6b-44cd-b966-06c18fa80b6d",
+   "title": "AutomationEdge Process Studio Project and Workspace Recovery",
+   "order": 5,
+   "risk": "medium",
+   "current_text": "Launch Process Studio by running process-studio.bat, open the target workspace, open the relevant.psw workflow files, and perform a test save and pull operation.",
+   "new_text": "Launch Process Studio by running process-studio.bat, open the target workspace, open the relevant .psw workflow files, and perform a test save and pull operation.",
+   "fix": "restore-space",
+   "reasons": [
+    "whitespace-collapse"
+   ]
+  },
+  {
+   "playbook_id": "43110cad-56e7-43be-a79a-acc79314fc0d",
+   "title": "Client-Side Network and Firewall Restrictions Troubleshooting for AutomationEdge",
+   "order": 1,
+   "risk": "low",
+   "current_text": "Verify the configured server URLs by checking AEServerURL and Process Studio login URL inside the.psrc configuration file located under PS Home/.process-studio/.psrc.",
+   "new_text": "Verify the configured server URLs by checking AEServerURL and Process Studio login URL inside the .psrc configuration file located under PS Home/.process-studio/.psrc.",
+   "fix": "restore-space",
+   "reasons": [
+    "whitespace-collapse"
+   ]
+  },
+  {
+   "playbook_id": "43110cad-56e7-43be-a79a-acc79314fc0d",
+   "title": "Client-Side Network and Firewall Restrictions Troubleshooting for AutomationEdge",
+   "order": 3,
+   "risk": "low",
+   "current_text": "Check client proxy configuration. If an automatic proxy script is used, copy the script address from system proxy settings, download the.pac file in a browser, and verify IP range routing. Alternatively, test by temporarily removing the system-level proxy if direct access is allowed.",
+   "new_text": "Check client proxy configuration. If an automatic proxy script is used, copy the script address from system proxy settings, download the .pac file in a browser, and verify IP range routing. Alternatively, test by temporarily removing the system-level proxy if direct access is allowed.",
+   "fix": "restore-space",
+   "reasons": [
+    "whitespace-collapse"
+   ]
+  },
+  {
+   "playbook_id": "4aba6364-5576-43f4-9e7a-7f7ddd2a03f0",
+   "title": "Excel Plugin Protected File Handling and Engine Configuration",
+   "order": 0,
+   "risk": "low",
+   "current_text": "Inspect the target file format (.xls,.xlsx, or.xlsb) and identify the specific protection mechanism applied (password-protected sheet/workbook vs read-only attribute).",
+   "new_text": "Inspect the target file format (.xls, .xlsx, or .xlsb) and identify the specific protection mechanism applied (password-protected sheet/workbook vs read-only attribute).",
+   "fix": "restore-space",
+   "reasons": [
+    "whitespace-collapse"
+   ]
+  },
+  {
+   "playbook_id": "4aba6364-5576-43f4-9e7a-7f7ddd2a03f0",
+   "title": "Excel Plugin Protected File Handling and Engine Configuration",
+   "order": 1,
+   "risk": "low",
+   "current_text": "For password-protected.xls or.xlsx files failing to read, open the Excel Input plugin step settings in Process Studio and set the spreadsheet engine type to 'Excel 2007 XLSX (Apache POI)'. Save the step configuration.",
+   "new_text": "For password-protected .xls or .xlsx files failing to read, open the Excel Input plugin step settings in Process Studio and set the spreadsheet engine type to 'Excel 2007 XLSX (Apache POI)'. Save the step configuration.",
+   "fix": "restore-space",
+   "reasons": [
+    "whitespace-collapse"
+   ]
+  },
+  {
+   "playbook_id": "4aba6364-5576-43f4-9e7a-7f7ddd2a03f0",
+   "title": "Excel Plugin Protected File Handling and Engine Configuration",
+   "order": 2,
+   "risk": "low",
+   "current_text": "If handling a password-protected.xlsb file, check if the installed plugin version is 4.8 or later. If running on an earlier version, convert or save the source workbook as a password-protected.xlsx file before running the process.",
+   "new_text": "If handling a password-protected .xlsb file, check if the installed plugin version is 4.8 or later. If running on an earlier version, convert or save the source workbook as a password-protected .xlsx file before running the process.",
+   "fix": "restore-space",
+   "reasons": [
+    "whitespace-collapse"
+   ]
+  },
+  {
+   "playbook_id": "4aba6364-5576-43f4-9e7a-7f7ddd2a03f0",
+   "title": "Excel Plugin Protected File Handling and Engine Configuration",
+   "order": 3,
+   "risk": "low",
+   "current_text": "If requiring read-only protection features on.xlsx files where the plugin only supports read-only for.xls files, convert the file workflow to use.xls format or remove the read-only flag constraint prior to plugin execution.",
+   "new_text": "If requiring read-only protection features on .xlsx files where the plugin only supports read-only for .xls files, convert the file workflow to use .xls format or remove the read-only flag constraint prior to plugin execution.",
+   "fix": "restore-space",
+   "reasons": [
+    "whitespace-collapse"
+   ]
+  },
+  {
+   "playbook_id": "24b3a585-87b2-46c0-9a81-76a4d66807e7",
+   "title": "Handling Unsupported File Types in Message Parsing Workflows",
+   "order": 1,
+   "risk": "low",
+   "current_text": "Deploy and configure the standard built-in workflow to parse the.eml file and extract attachments.",
+   "new_text": "Deploy and configure the standard built-in workflow to parse the .eml file and extract attachments.",
+   "fix": "restore-space",
+   "reasons": [
+    "whitespace-collapse"
+   ]
+  },
+  {
+   "playbook_id": "24b3a585-87b2-46c0-9a81-76a4d66807e7",
+   "title": "Handling Unsupported File Types in Message Parsing Workflows",
+   "order": 2,
+   "risk": "low",
+   "current_text": "Provide or execute a custom PowerShell script designed to parse.msg files and extract their attachments outside the native workflow.",
+   "new_text": "Provide or execute a custom PowerShell script designed to parse .msg files and extract their attachments outside the native workflow.",
+   "fix": "restore-space",
+   "reasons": [
+    "whitespace-collapse"
+   ]
+  },
+  {
+   "playbook_id": "9cf651e2-c846-4fb3-adfa-d53abeea439f",
+   "title": "Java Application SSL/TLS Certificate Trust Store Misconfiguration",
+   "order": 1,
+   "risk": "medium",
+   "current_text": "Obtain the required SSL/TLS certificate file (e.g.,.cer,.crt, or intermediate/root certificates) from your IT team or the target service.",
+   "new_text": "Obtain the required SSL/TLS certificate file (e.g.,.cer, .crt, or intermediate/root certificates) from your IT team or the target service.",
+   "fix": "restore-space",
+   "reasons": [
+    "whitespace-collapse"
+   ]
+  },
+  {
+   "playbook_id": "b93624cb-f5a0-4b58-a259-f930c18e0b1d",
+   "title": "Post-Deployment UI Asset Configuration Drift Remediation",
+   "order": 0,
+   "risk": "low",
+   "current_text": "Check if the custom logo file exists in <Tomcat home>/webapps/aeui/assets/images and verify that its extension is one of.jpg,.png,.svg, or.gif.",
+   "new_text": "Check if the custom logo file exists in <Tomcat home>/webapps/aeui/assets/images and verify that its extension is one of .jpg, .png, .svg, or .gif.",
+   "fix": "restore-space",
+   "reasons": [
+    "whitespace-collapse"
+   ]
+  },
+  {
+   "playbook_id": "b93624cb-f5a0-4b58-a259-f930c18e0b1d",
+   "title": "Post-Deployment UI Asset Configuration Drift Remediation",
+   "order": 1,
+   "risk": "low",
+   "current_text": "Add or copy the customer logo file under directory <Tomcat home>/webapps/aeui/assets/images. Supported file types are.jpg,.png,.svg, and.gif.",
+   "new_text": "Add or copy the customer logo file under directory <Tomcat home>/webapps/aeui/assets/images. Supported file types are .jpg, .png, .svg, and .gif.",
+   "fix": "restore-space",
+   "reasons": [
+    "whitespace-collapse"
+   ]
+  },
+  {
+   "playbook_id": "bbc28425-1474-4fc5-a85b-2fd3a8a854c3",
+   "title": "Process Studio and Plugin Connectivity, Synchronization, and Registration Troubleshooting",
+   "order": 2,
+   "risk": "low",
+   "current_text": "Open the target.psw workflow file in Process Studio to verify that all required plugins and steps load without error.",
+   "new_text": "Open the target .psw workflow file in Process Studio to verify that all required plugins and steps load without error.",
+   "fix": "restore-space",
+   "reasons": [
+    "whitespace-collapse"
+   ]
+  },
+  {
+   "playbook_id": "e29cd637-e49f-445d-adac-997f47334c57",
+   "title": "Process Studio Resource Contention and Performance Degradation",
+   "order": 2,
+   "risk": "medium",
+   "current_text": "Check host system RAM utilization and inspect the Process Studio startup.bat file and workflow configuration to confirm memory allocation parameters.",
+   "new_text": "Check host system RAM utilization and inspect the Process Studio startup .bat file and workflow configuration to confirm memory allocation parameters.",
+   "fix": "restore-space",
+   "reasons": [
+    "whitespace-collapse"
+   ]
+  },
+  {
+   "playbook_id": "e29cd637-e49f-445d-adac-997f47334c57",
+   "title": "Process Studio Resource Contention and Performance Degradation",
+   "order": 3,
+   "risk": "medium",
+   "current_text": "Adjust the startup.bat configuration to assign sufficient memory, optimize host RAM, and replace or deploy the custom GUI-Automation JAR file if GUI Spy fails to load.",
+   "new_text": "Adjust the startup .bat configuration to assign sufficient memory, optimize host RAM, and replace or deploy the custom GUI-Automation JAR file if GUI Spy fails to load.",
+   "fix": "restore-space",
+   "reasons": [
+    "whitespace-collapse"
+   ]
+  },
+  {
+   "playbook_id": "6bd9f576-a88a-47ef-accc-25b998dd75ae",
+   "title": "RPA Workflow Failures During Excel File Operations",
+   "order": 0,
+   "risk": "medium",
+   "current_text": "Verify that the target file path exists, is correctly formatted for the executing agent operating system, and check if the file format is a password-protected.xls or.xlsm file.",
+   "new_text": "Verify that the target file path exists, is correctly formatted for the executing agent operating system, and check if the file format is a password-protected .xls or .xlsm file.",
+   "fix": "restore-space",
+   "reasons": [
+    "whitespace-collapse"
+   ]
+  },
+  {
+   "playbook_id": "103c28f3-8e70-4e53-9583-7fdded11966d",
+   "title": "Workflow Operation Failure Due to Plugin or Environment Configuration Issues",
+   "order": 1,
+   "risk": "medium",
+   "current_text": "In Process Studio, click Tools > Sync plugins. In the AutomationEdge connection details window, enter the username and password, then click Connect. Once synchronization completes, reopen the.psw workflow file.",
+   "new_text": "In Process Studio, click Tools > Sync plugins. In the AutomationEdge connection details window, enter the username and password, then click Connect. Once synchronization completes, reopen the .psw workflow file.",
+   "fix": "restore-space",
+   "reasons": [
+    "whitespace-collapse"
+   ]
+  },
+  {
+   "playbook_id": "103c28f3-8e70-4e53-9583-7fdded11966d",
+   "title": "Workflow Operation Failure Due to Plugin or Environment Configuration Issues",
+   "order": 2,
+   "risk": "medium",
+   "current_text": "Close Process Studio. Navigate to the Process Studio installation directory. Delete the psplugins and.process-studio folders. Launch Process Studio by executing process-studio.bat.",
+   "new_text": "Close Process Studio. Navigate to the Process Studio installation directory. Delete the psplugins and .process-studio folders. Launch Process Studio by executing process-studio.bat.",
+   "fix": "restore-space",
+   "reasons": [
+    "whitespace-collapse"
+   ]
+  }
+ ],
+ "restore": [
+  {
+   "playbook_id": "21fdd065-fb50-4a0e-95d1-a4d623b659bf",
+   "title": "Advanced REST Client SSL Handshake Failure Due to TLS Version Incompatibility",
+   "order": 0,
+   "risk": "medium",
+   "current_text": "Send a test request to the target REST API URL using an external API toolPostman to confirm the endpoint is reachable and to check the required TLS version",
+   "new_text": "Send a test request to the target REST API URL using an external API tool such as Postman to confirm the endpoint is reachable and to check the required TLS version.",
+   "fix": "restore-original",
+   "reasons": [
+    "content-loss:3w",
+    "word-fusion"
+   ]
+  },
+  {
+   "playbook_id": "f16cccd3-5b51-46b3-b306-3b8370a28e3f",
+   "title": "Agent Upgrade Feature Misunderstanding and Clarification",
+   "order": 3,
+   "risk": "low",
+   "current_text": "If the behavior is a confirmed bug a plugin sync failure, log the bug details, inform the customer of the upcoming patch release version containing the fix, and apply any known temporary workaround.",
+   "new_text": "If the behavior is a confirmed bug (such as a plugin sync failure), log the bug details, inform the customer of the upcoming patch release version containing the fix, and apply any known temporary workaround.",
+   "fix": "restore-original",
+   "reasons": [
+    "article-example-collapsed"
+   ]
+  },
+  {
+   "playbook_id": "9bd2023d-b07f-4b34-916b-1673f206a44f",
+   "title": "API Authentication Failure Due to Expired or Invalid Tokens",
+   "order": 3,
+   "risk": "low",
+   "current_text": "If the error occurs within a packaged integration or connector the ManageEngine plugin failing to refresh tokens automatically, deploy the updated plugin JAR version containing token lifecycle fixes.",
+   "new_text": "If the error occurs within a packaged integration or connector (such as the ManageEngine plugin) failing to refresh tokens automatically, deploy the updated plugin JAR version containing token lifecycle fixes.",
+   "fix": "restore-original",
+   "reasons": [
+    "article-example-collapsed"
+   ]
+  },
+  {
+   "playbook_id": "f5020485-4c01-46fe-aa36-f5e83778c1f3",
+   "title": "Application Feature Blocked by Environmental Policy",
+   "order": 0,
+   "risk": "medium",
+   "current_text": "Inspect execution logs and error output to determine if the failure is caused by an environmental policy restriction Group Policy blocking PowerShell or an access deniala 401 Unauthorized error",
+   "new_text": "Inspect execution logs and error output to determine if the failure is caused by an environmental policy restriction (such as Group Policy blocking PowerShell) or an access denial such as a 401 Unauthorized error.",
+   "fix": "restore-original",
+   "reasons": [
+    "article-example-collapsed",
+    "content-loss:3w"
+   ]
+  },
+  {
+   "playbook_id": "f5020485-4c01-46fe-aa36-f5e83778c1f3",
+   "title": "Application Feature Blocked by Environmental Policy",
+   "order": 1,
+   "risk": "medium",
+   "current_text": "Replace the blocked dependency workflow with a supported native alternative,a User-Defined Java Class plugin or modified Java script, to bypass the restricted scripting engine",
+   "new_text": "Replace the blocked dependency workflow with a supported native alternative, such as a User-Defined Java Class plugin or modified Java script, to bypass the restricted scripting engine.",
+   "fix": "restore-original",
+   "reasons": [
+    "article-example-collapsed"
+   ]
+  },
+  {
+   "playbook_id": "5afb9e0c-d908-42e9-a779-ccd60172447b",
+   "title": "Automated Browser Instability Post Chrome Update in Virtualized Environments",
+   "order": 1,
+   "risk": "low",
+   "current_text": "Update the browser launch configuration or automation runner parameters to disable GPU hardware acceleration and force software rendering (for example, passing flags--disable-gpu.",
+   "new_text": "Update the browser launch configuration or automation runner parameters to disable GPU hardware acceleration and force software rendering (for example, passing flags such as --disable-gpu and --disable-software-rasterizer or deploying an updated runner configuration JAR).",
+   "fix": "restore-original",
+   "reasons": [
+    "content-loss:11w"
+   ]
+  },
+  {
+   "playbook_id": "7723a9b6-b8b4-44e1-99cd-f9071ac79130",
+   "title": "Automation Bot Failure Due to Target Application UI/Event Changes",
+   "order": 1,
+   "risk": "medium",
+   "current_text": "For selector mismatches: review the automation script the Python automation file with the development team and update the XPath or element locator to match the modified application UI structure.",
+   "new_text": "For selector mismatches: review the automation script (such as the Python automation file) with the development team and update the XPath or element locator to match the modified application UI structure.",
+   "fix": "restore-original",
+   "reasons": [
+    "article-example-collapsed"
+   ]
+  },
+  {
+   "playbook_id": "8f92ac43-3faa-46ca-9ef4-b63cab3656ad",
+   "title": "Automation Edge Workflow Stalling/Failure Due to Plugin/Configuration Issues",
+   "order": 2,
+   "risk": "medium",
+   "current_text": "Verify the environment variable paths, runtime dependencies, and output variable definitions for custom script pluginsthe Python Execution Plugin",
+   "new_text": "Verify the environment variable paths, runtime dependencies, and output variable definitions for custom script plugins such as the Python Execution Plugin.",
+   "fix": "restore-original",
+   "reasons": [
+    "article-example-collapsed",
+    "content-loss:3w"
+   ]
+  },
+  {
+   "playbook_id": "bb35d404-8e13-4b4c-aca7-0c699a68ddee",
+   "title": "Automation Plugin UI Element Interaction Failure",
+   "order": 0,
+   "risk": "low",
+   "current_text": "Inspect the failing automation task definition and verify whether the Robot Handling plugin is configured to interact with a native OS UI element,the File Explorer address bar",
+   "new_text": "Inspect the failing automation task definition and verify whether the Robot Handling plugin is configured to interact with a native OS UI element, such as the File Explorer address bar.",
+   "fix": "restore-original",
+   "reasons": [
+    "article-example-collapsed"
+   ]
+  },
+  {
+   "playbook_id": "393cf5c2-d449-44f0-8205-7bc7e8e6612e",
+   "title": "Automation Process Failure Due to Input File Formatting",
+   "order": 0,
+   "risk": "low",
+   "current_text": "Inspect the automation process error logs and the input file to identify formatting discrepanciesinvalid delimiters, missing headers, unexpected newline characters, or encoding mismatches",
+   "new_text": "Inspect the automation process error logs and the input file to identify formatting discrepancies such as invalid delimiters, missing headers, unexpected newline characters, or encoding mismatches.",
+   "fix": "restore-original",
+   "reasons": [
+    "content-loss:3w"
+   ]
+  },
+  {
+   "playbook_id": "51f59d9e-6e04-4444-b804-9d6d53777ea3",
+   "title": "AutomationEdge ActiveMQ Configuration and Performance Remediation",
+   "order": 1,
+   "risk": "medium",
+   "current_text": "Open activemq.xml in <ACTIVEMQ_HOME>\\conf\\ (or C:/ActiveMQ/conf/activemq.xml). Check for syntax errorsan extra '/' in <policyEntry topic=\"> /\" > within the destinationPolicy section. Remove the invalid '/' if present, and confirm the broker configuration includes <broker useJmx=\"true\"...>",
+   "new_text": "Open activemq.xml in <ACTIVEMQ_HOME>\\conf\\ (or C:/ActiveMQ/conf/activemq.xml). Check for syntax errors such as an extra '/' in <policyEntry topic=\"> /\" > within the destinationPolicy section. Remove the invalid '/' if present, and confirm the broker configuration includes <broker useJmx=\"true\" ...>.",
+   "fix": "restore-original",
+   "reasons": [
+    "article-example-collapsed",
+    "content-loss:2w"
+   ]
+  },
+  {
+   "playbook_id": "f504074d-5826-4ba2-b04a-1dbb18b7ec83",
+   "title": "AutomationEdge and DocEdge Upgrade and Migration Playbook",
+   "order": 4,
+   "risk": "medium",
+   "current_text": "Inspect the web application deployment descriptor (web.xml) for schema validity, ensuring configuration tagsasync-supported are valid and correctly positioned",
+   "new_text": "Inspect the web application deployment descriptor (web.xml) for schema validity, ensuring configuration tags such as async-supported are valid and correctly positioned.",
+   "fix": "restore-original",
+   "reasons": [
+    "content-loss:3w"
+   ]
+  },
+  {
+   "playbook_id": "49877f87-6fe1-4e7e-939d-8e6e42bfe824",
+   "title": "AutomationEdge Plugin and Library Compatibility Troubleshooting",
+   "order": 2,
+   "risk": "medium",
+   "current_text": "If the Agent fails with 'Cannot run program \"python\": CreateProcess error=2' or third-party dependency conflictsNoSuchMethodError, install the required Python runtime as administrator, set system environment variables, remove conflicting external Python packages or duplicate third-party JARs from the Agent external library directory, and restart the AutomationEdge Agent and Apache Tomcat services",
+   "new_text": "If the Agent fails with 'Cannot run program \"python\": CreateProcess error=2' or third-party dependency conflicts such as NoSuchMethodError, install the required Python runtime as administrator, set system environment variables, remove conflicting external Python packages or duplicate third-party JARs from the Agent external library directory, and restart the AutomationEdge Agent and Apache Tomcat services.",
+   "fix": "restore-original",
+   "reasons": [
+    "content-loss:3w"
+   ]
+  },
+  {
+   "playbook_id": "95fe54a7-6817-494b-a1e8-54513fe87d47",
+   "title": "AutomationEdge Post-Upgrade Service Instability and Configuration Drift",
+   "order": 0,
+   "risk": "high",
+   "current_text": "Check the AutomationEdge server startup logs for port conflicts on port 8081 and deployment errorsIllegalStateException during aeengine.war initialization",
+   "new_text": "Check the AutomationEdge server startup logs for port conflicts on port 8081 and deployment errors such as IllegalStateException during aeengine.war initialization.",
+   "fix": "restore-original",
+   "reasons": [
+    "content-loss:3w"
+   ]
+  },
+  {
+   "playbook_id": "4f60f2cd-9936-40a1-9afe-53c856674f67",
+   "title": "AutomationEdge User Management Configuration Constraint",
+   "order": 0,
+   "risk": "low",
+   "current_text": "Review the requested configuration changes to separate configurable role permissions the Password tab from hardcoded product limitations the 'Native Users' option.",
+   "new_text": "Review the requested configuration changes to separate configurable role permissions (such as the Password tab) from hardcoded product limitations (such as the 'Native Users' option).",
+   "fix": "restore-original",
+   "reasons": [
+    "article-example-collapsed"
+   ]
+  },
+  {
+   "playbook_id": "17d0c7d2-b278-4175-8284-7dcbeb5ce26d",
+   "title": "Blocked Upgrade Due to Critical File Download Issues",
+   "order": 1,
+   "risk": "medium",
+   "current_text": "Check if an alternative bypass asset\u2014an updated User Acceptance Testing (UAT or production license file\u2014can fulfill the upgrade requirement without downloading the restricted utility package.",
+   "new_text": "Check if an alternative bypass asset\u2014such as an updated User Acceptance Testing (UAT) or production license file\u2014can fulfill the upgrade requirement without downloading the restricted utility package.",
+   "fix": "restore-original",
+   "reasons": [
+    "article-example-collapsed"
+   ]
+  },
+  {
+   "playbook_id": "17d0c7d2-b278-4175-8284-7dcbeb5ce26d",
+   "title": "Blocked Upgrade Due to Critical File Download Issues",
+   "order": 3,
+   "risk": "medium",
+   "current_text": "Generate and provide the required replacement asset an updated UAT license file or refreshed direct download link to the customer through an approved secure channel.",
+   "new_text": "Generate and provide the required replacement asset (such as an updated UAT license file or refreshed direct download link) to the customer through an approved secure channel.",
+   "fix": "restore-original",
+   "reasons": [
+    "article-example-collapsed"
+   ]
+  },
+  {
+   "playbook_id": "0548189e-436c-48e5-94d2-978df74f997f",
+   "title": "Bypass Script Execution Restrictions in Automation Plugins via JavaScript Injection",
+   "order": 0,
+   "risk": "low",
+   "current_text": "Inspect the failure logs of the unattended automation run to determine if the failure originates from a PowerShell-backed plugin the Windows Mouse Action plugin encountering execution restrictions or throwing NoSuchElementException.",
+   "new_text": "Inspect the failure logs of the unattended automation run to determine if the failure originates from a PowerShell-backed plugin (such as the Windows Mouse Action plugin) encountering execution restrictions or throwing NoSuchElementException.",
+   "fix": "restore-original",
+   "reasons": [
+    "article-example-collapsed"
+   ]
+  },
+  {
+   "playbook_id": "8f77b4a5-6009-4e33-bef5-9ab0a5b04aab",
+   "title": "Chrome Browser Automation Compatibility and Configuration Drift",
+   "order": 5,
+   "risk": "medium",
+   "current_text": "Inspect the WEB-GUI/webui_drivers directory and verify that the ChromeDriver matching the installed Chrome version exists and is not blocked, deleted, or quarantined by antivirus softwareTrend Micro",
+   "new_text": "Inspect the WEB-GUI/webui_drivers directory and verify that the ChromeDriver matching the installed Chrome version exists and is not blocked, deleted, or quarantined by antivirus software such as Trend Micro.",
+   "fix": "restore-original",
+   "reasons": [
+    "content-loss:3w",
+    "word-fusion"
+   ]
+  },
+  {
+   "playbook_id": "43110cad-56e7-43be-a79a-acc79314fc0d",
+   "title": "Client-Side Network and Firewall Restrictions Troubleshooting for AutomationEdge",
+   "order": 2,
+   "risk": "low",
+   "current_text": "Test connection from an alternate network a mobile hotspot or non-corporate network to isolate corporate network controls from external ISP blocks.",
+   "new_text": "Test connection from an alternate network (such as a mobile hotspot or non-corporate network) to isolate corporate network controls from external ISP blocks.",
+   "fix": "restore-original",
+   "reasons": [
+    "article-example-collapsed"
+   ]
+  },
+  {
+   "playbook_id": "f1ac9510-558b-4a74-ad99-95b486ee2640",
+   "title": "Customer Inquiry for Non-Existent Out-of-the-Box Feature",
+   "order": 2,
+   "risk": "low",
+   "current_text": "Communicate planned development milestones an upcoming feature marketplace or future release and note the customer's account for follow-up updates upon release.",
+   "new_text": "Communicate planned development milestones (such as an upcoming feature marketplace or future release) and note the customer's account for follow-up updates upon release.",
+   "fix": "restore-original",
+   "reasons": [
+    "article-example-collapsed"
+   ]
+  },
+  {
+   "playbook_id": "49284dae-2541-4cdf-a8de-36d3cdd2881b",
+   "title": "Database Schema Initialization Conflict During Application Upgrade",
+   "order": 0,
+   "risk": "medium",
+   "current_text": "Inspect the application startup logs the Catalina and Spring application logs for Liquibase errors, schema creation exceptions, or connection timeouts.",
+   "new_text": "Inspect the application startup logs (such as the Catalina and Spring application logs) for Liquibase errors, schema creation exceptions, or connection timeouts.",
+   "fix": "restore-original",
+   "reasons": [
+    "article-example-collapsed"
+   ]
+  },
+  {
+   "playbook_id": "b31f4e0e-0c9a-4763-bd29-723f8f94cffa",
+   "title": "Environment Upgrade Blocked by Missing Software License",
+   "order": 0,
+   "risk": "medium",
+   "current_text": "Identify the specific license entitlement required for the environment the required unit step count for the target upgrade version and VAPT remediation.",
+   "new_text": "Identify the specific license entitlement required for the environment (such as the required unit step count for the target upgrade version and VAPT remediation).",
+   "fix": "restore-original",
+   "reasons": [
+    "article-example-collapsed",
+    "determiner-collision"
+   ]
+  },
+  {
+   "playbook_id": "133bff80-bc4d-4bda-a0ba-26d9cb92be63",
+   "title": "Environmental Restrictions on Preferred Technology Workaround",
+   "order": 0,
+   "risk": "medium",
+   "current_text": "Inspect execution logs and environment policy constraints to verify why the preferred technology a Python script was blocked or unsupported.",
+   "new_text": "Inspect execution logs and environment policy constraints to verify why the preferred technology (such as a Python script) was blocked or unsupported.",
+   "fix": "restore-original",
+   "reasons": [
+    "article-example-collapsed"
+   ]
+  },
+  {
+   "playbook_id": "133bff80-bc4d-4bda-a0ba-26d9cb92be63",
+   "title": "Environmental Restrictions on Preferred Technology Workaround",
+   "order": 1,
+   "risk": "medium",
+   "current_text": "Implement the approved custom alternative a User Defined Java Class for Exchange Web Services to replace the blocked script.",
+   "new_text": "Implement the approved custom alternative (such as a User Defined Java Class for Exchange Web Services) to replace the blocked script.",
+   "fix": "restore-original",
+   "reasons": [
+    "article-example-collapsed"
+   ]
+  },
+  {
+   "playbook_id": "97c03595-28ca-46a2-8b0e-90eed45da5aa",
+   "title": "External Regulatory File Version Update Handling",
+   "order": 0,
+   "risk": "medium",
+   "current_text": "Identify the specific regulatory authority, the new return file format or version updated eXtensible Business Reporting Language / XBRL specifications, and the affected internal target directory the Automation folder.",
+   "new_text": "Identify the specific regulatory authority, the new return file format or version (such as updated eXtensible Business Reporting Language / XBRL specifications), and the affected internal target directory (such as the Automation folder).",
+   "fix": "restore-original",
+   "reasons": [
+    "article-example-collapsed"
+   ]
+  },
+  {
+   "playbook_id": "1f3497bf-dad7-4bc3-a6a8-42f39cf34e37",
+   "title": "External Service Connection Failure Due to Outdated Plugin or Library",
+   "order": 0,
+   "risk": "medium",
+   "current_text": "Inspect the application error logs to identify the specific failure mode: determine if the failure is an authentication/permission rejection AccessDenied or blocked key-based auth or a runtime library restriction com.jcraft.jsch.ChannelSftp.",
+   "new_text": "Inspect the application error logs to identify the specific failure mode: determine if the failure is an authentication/permission rejection (such as AccessDenied or blocked key-based auth) or a runtime library restriction (such as com.jcraft.jsch.ChannelSftp security restrictions).",
+   "fix": "restore-original",
+   "reasons": [
+    "content-loss:3w"
+   ]
+  },
+  {
+   "playbook_id": "6307b7a0-ae02-45bf-a925-3a5223b63d93",
+   "title": "GUI Automation and Spy Troubleshooting in Process Studio",
+   "order": 0,
+   "risk": "medium",
+   "current_text": "Inspect system resource utilization (CPU and memory) on the workstation running Process Studio and check whether the required browser extension the Chrome extension is installed and enabled.",
+   "new_text": "Inspect system resource utilization (CPU and memory) on the workstation running Process Studio and check whether the required browser extension (such as the Chrome extension) is installed and enabled.",
+   "fix": "restore-original",
+   "reasons": [
+    "article-example-collapsed"
+   ]
+  },
+  {
+   "playbook_id": "da345261-913e-45f9-b0f2-d48719bdbfff",
+   "title": "GUI Automation Plugin Failure Due to Incorrect or Incompatible JAR Version",
+   "order": 0,
+   "risk": "medium",
+   "current_text": "Inspect the Process Studio and Agent logs to identify whether the failure is caused by a javassist bytecode parsing exception (e.g., 'invalid constant type: 19 at 4') or a plugin version mismatch a workflow requiring GUI Plugin 4.6 or 4.7.",
+   "new_text": "Inspect the Process Studio and Agent logs to identify whether the failure is caused by a javassist bytecode parsing exception (e.g., 'invalid constant type: 19 at 4') or a plugin version mismatch (such as a workflow requiring GUI Plugin 4.6 or 4.7).",
+   "fix": "restore-original",
+   "reasons": [
+    "article-example-collapsed"
+   ]
+  },
+  {
+   "playbook_id": "da345261-913e-45f9-b0f2-d48719bdbfff",
+   "title": "GUI Automation Plugin Failure Due to Incorrect or Incompatible JAR Version",
+   "order": 2,
+   "risk": "medium",
+   "current_text": "Replace the incompatible or corrupted JAR file in the Process Studio or Agent lib directory with the supported version (for javassist sync errors, deploy the latest compatible javassist JAR; for version mismatch issues, deploy the matching GUI Automation complete JARversion 4.6.",
+   "new_text": "Replace the incompatible or corrupted JAR file in the Process Studio or Agent lib directory with the supported version (for javassist sync errors, deploy the latest compatible javassist JAR; for version mismatch issues, deploy the matching GUI Automation complete JAR such as version 4.6).",
+   "fix": "restore-original",
+   "reasons": [
+    "content-loss:3w"
+   ]
+  },
+  {
+   "playbook_id": "3dd28795-f792-4548-97e1-5bbcfdf51e4a",
+   "title": "Handling Client Requests for Sensitive or Confidential Data",
+   "order": 2,
+   "risk": "low",
+   "current_text": "Escalate the inquiry to the appropriate internal team the account management, product, or compliance team to prepare the authorized high-level response.",
+   "new_text": "Escalate the inquiry to the appropriate internal team (such as the account management, product, or compliance team) to prepare the authorized high-level response.",
+   "fix": "restore-original",
+   "reasons": [
+    "article-example-collapsed"
+   ]
+  },
+  {
+   "playbook_id": "399db8d0-0818-45f6-aed1-91343e1a833d",
+   "title": "Inconsistent Web Element Identification in Automation Workflows",
+   "order": 2,
+   "risk": "medium",
+   "current_text": "Construct resilient, common XPath expressions that match elements across both UAT and Production using methodsstarts-with, contains, relative XPath, or logical operators",
+   "new_text": "Construct resilient, common XPath expressions that match elements across both UAT and Production using methods such as starts-with, contains, relative XPath, or logical operators.",
+   "fix": "restore-original",
+   "reasons": [
+    "content-loss:3w"
+   ]
+  },
+  {
+   "playbook_id": "5216e09a-b6d2-46dc-b95c-e90524b18499",
+   "title": "Incorrect Microsoft Graph API Endpoint for SharePoint Site Creation",
+   "order": 0,
+   "risk": "medium",
+   "current_text": "Inspect the application configuration files web.xml to locate the configured Microsoft Graph API endpoint URL for SharePoint operations.",
+   "new_text": "Inspect the application configuration files (such as web.xml or environment property files) to locate the configured Microsoft Graph API endpoint URL for SharePoint operations.",
+   "fix": "restore-original",
+   "reasons": [
+    "content-loss:4w"
+   ]
+  },
+  {
+   "playbook_id": "5526511a-5281-4565-822c-331fcf8e2d73",
+   "title": "Intermittent Connection and Resource Exhaustion for Automation Services",
+   "order": 0,
+   "risk": "medium",
+   "current_text": "Inspect agent and server logs for the specific failure signature: look for socket timeouts, 'Connection refused' (org.apache.http.conn.HttpHostConnectException), 'Connection reset', or JDBC errorsorg.postgresql.core.v3.ConnectionFactoryImpl.enableSSL",
+   "new_text": "Inspect agent and server logs for the specific failure signature: look for socket timeouts, 'Connection refused' (org.apache.http.conn.HttpHostConnectException), 'Connection reset', or JDBC errors such as org.postgresql.core.v3.ConnectionFactoryImpl.enableSSL.",
+   "fix": "restore-original",
+   "reasons": [
+    "content-loss:2w"
+   ]
+  },
+  {
+   "playbook_id": "46cf9f0f-44b0-45ca-a7f7-ae34f9bd6277",
+   "title": "Intermittent Process Output Mismatch Due to Plugin Configuration",
+   "order": 1,
+   "risk": "medium",
+   "current_text": "Review the workflow design to locate memory-intensive stepsStream Lookup operations and unbuffered SQL script plugins",
+   "new_text": "Review the workflow design to locate memory-intensive steps such as Stream Lookup operations and unbuffered SQL script plugins.",
+   "fix": "restore-original",
+   "reasons": [
+    "content-loss:3w",
+    "word-fusion"
+   ]
+  },
+  {
+   "playbook_id": "2851114a-d353-4ec9-9793-07f870faf4e9",
+   "title": "Investigation and Resolution Triage for Unidentified Intermittent or Critical Issues",
+   "order": 2,
+   "risk": "high",
+   "current_text": "Check if a matching bug record or target plugin/software release version a 4.5 patch has been identified by engineering.",
+   "new_text": "Check if a matching bug record or target plugin/software release version (such as a 4.5 patch) has been identified by engineering.",
+   "fix": "restore-original",
+   "reasons": [
+    "article-example-collapsed"
+   ]
+  },
+  {
+   "playbook_id": "0d221c82-2cf5-495e-a722-522873a47f33",
+   "title": "Middleware Service Startup/Stability Issues Post-Maintenance",
+   "order": 3,
+   "risk": "medium",
+   "current_text": "If Tomcat fails to start because port 8005 is occupied by another process, edit the Tomcat server configuration to assign an unused port for the shutdown port,port 8005",
+   "new_text": "If Tomcat fails to start because port 8005 is occupied by another process, edit the Tomcat server configuration to assign an unused port for the shutdown port, such as changing port 8005 to 8006.",
+   "fix": "restore-original",
+   "reasons": [
+    "content-loss:3w"
+   ]
+  },
+  {
+   "playbook_id": "02582e53-c0e8-4f29-b80b-e21238d5a8fd",
+   "title": "Missing Application Dependency JAR After Deployment",
+   "order": 0,
+   "risk": "medium",
+   "current_text": "Inspect the application startup logs to identify missing class errors and confirm if required dependency JAR files,snakeyaml-1.33.jar",
+   "new_text": "Inspect the application startup logs to identify missing class errors and confirm if required dependency JAR files, such as snakeyaml-1.33.jar, are absent from the WEB-INF/lib directory.",
+   "fix": "restore-original",
+   "reasons": [
+    "content-loss:6w"
+   ]
+  },
+  {
+   "playbook_id": "f5ca046f-3ee8-48f4-8f39-c07e2421cf51",
+   "title": "New Feature Planning and Guidance",
+   "order": 0,
+   "risk": "low",
+   "current_text": "Review the requested feature specifications, identifying specific target integrationsAzure OpenAI for policy search or ARC plugins for email retrieval",
+   "new_text": "Review the requested feature specifications, identifying specific target integrations such as Azure OpenAI for policy search or ARC plugins for email retrieval.",
+   "fix": "restore-original",
+   "reasons": [
+    "content-loss:3w",
+    "word-fusion"
+   ]
+  },
+  {
+   "playbook_id": "72113119-f5e4-49c1-941b-297ce1c3946e",
+   "title": "Planned Cloud Patching Impact Communication",
+   "order": 0,
+   "risk": "low",
+   "current_text": "Identify the exact maintenance window and review which cloud components,the Automation Engine (AE, will be affected by the scheduled patching.",
+   "new_text": "Identify the exact maintenance window and review which cloud components, such as the Automation Engine (AE), will be affected by the scheduled patching.",
+   "fix": "restore-original",
+   "reasons": [
+    "article-example-collapsed"
+   ]
+  },
+  {
+   "playbook_id": "52eeba5b-dcc1-4f92-b4c8-fcdf7e495caa",
+   "title": "Policy-Driven Restricted Log Access",
+   "order": 1,
+   "risk": "low",
+   "current_text": "Offer and schedule a supervised remote session a Microsoft Teams call with the customer to review logs interactively on their screen.",
+   "new_text": "Offer and schedule a supervised remote session (such as a Microsoft Teams call) with the customer to review logs interactively on their screen.",
+   "fix": "restore-original",
+   "reasons": [
+    "article-example-collapsed"
+   ]
+  },
+  {
+   "playbook_id": "669b80a0-f90d-4523-a69f-003c618233ad",
+   "title": "Remediating Plugin Sync Failures in Process Studio / Agent",
+   "order": 5,
+   "risk": "medium",
+   "current_text": "Trigger synchronization of the plugin the Web GUI plugin from Process Studio or Agent and confirm successful completion.",
+   "new_text": "Trigger synchronization of the plugin (such as the Web GUI plugin) from Process Studio or Agent and confirm successful completion.",
+   "fix": "restore-original",
+   "reasons": [
+    "article-example-collapsed",
+    "determiner-collision"
+   ]
+  },
+  {
+   "playbook_id": "2ab2ef53-d30b-48f9-bff0-1b412770a510",
+   "title": "Resolving External Network and Proxy Restrictions Blocking AutomationEdge Access",
+   "order": 0,
+   "risk": "medium",
+   "current_text": "Test network reachability to the AutomationEdge endpoint ondemand.automationedge.com from the host machine, and test the connection using an alternative network a mobile hotspot to determine whether the issue is isolated to the local network or ISP.",
+   "new_text": "Test network reachability to the AutomationEdge endpoint (such as ondemand.automationedge.com) from the host machine, and test the connection using an alternative network (such as a mobile hotspot) to determine whether the issue is isolated to the local network or ISP.",
+   "fix": "restore-original",
+   "reasons": [
+    "article-example-collapsed"
+   ]
+  },
+  {
+   "playbook_id": "142617ee-cd98-48dd-8c1a-3d745c8d8a4f",
+   "title": "Resolving Workflow Failures Due to Missing Dynamic Folders",
+   "order": 0,
+   "risk": "low",
+   "current_text": "Inspect the failing workflow step logs the Excel Writer step to identify the missing target directory path and verify at what point file creation fails.",
+   "new_text": "Inspect the failing workflow step logs (such as the Excel Writer step) to identify the missing target directory path and verify at what point file creation fails.",
+   "fix": "restore-original",
+   "reasons": [
+    "article-example-collapsed"
+   ]
+  },
+  {
+   "playbook_id": "0507e518-931e-42f5-b458-9709310590eb",
+   "title": "Security Vulnerability Remediation for Outdated Components",
+   "order": 2,
+   "risk": "medium",
+   "current_text": "Stop and disable the obsolete or unused service an old Tomcat 11.0.14 instance on the host.",
+   "new_text": "Stop and disable the obsolete or unused service (such as an old Tomcat 11.0.14 instance) on the host.",
+   "fix": "restore-original",
+   "reasons": [
+    "article-example-collapsed"
+   ]
+  },
+  {
+   "playbook_id": "c767861f-53d1-4a02-a479-2f656e9a31f7",
+   "title": "SFTP 'No Such File' Error Due to Incorrect Pathing",
+   "order": 1,
+   "risk": "low",
+   "current_text": "Update the remote path configuration to specify the absolute path starting with a leading slash '/'. If available, verify and copy the exact directory path directly from an SFTP clientWinSCP",
+   "new_text": "Update the remote path configuration to specify the absolute path starting with a leading slash '/'. If available, verify and copy the exact directory path directly from an SFTP client such as WinSCP.",
+   "fix": "restore-original",
+   "reasons": [
+    "content-loss:2w"
+   ]
+  },
+  {
+   "playbook_id": "25cd7a1e-2085-4d2e-910a-ae3b33512c66",
+   "title": "UAT Application Deployment Failure Due to web.xml Parsing Error",
+   "order": 1,
+   "risk": "medium",
+   "current_text": "Edit web.xml to correct the malformed XML elements, ensuring tagsinit-param and servlet configurations strictly comply with standard XML deployment descriptor schema rules",
+   "new_text": "Edit web.xml to correct the malformed XML elements, ensuring tags such as init-param and servlet configurations strictly comply with standard XML deployment descriptor schema rules.",
+   "fix": "restore-original",
+   "reasons": [
+    "content-loss:3w"
+   ]
+  },
+  {
+   "playbook_id": "0b43d798-44d4-44fb-a8be-ca9e83301858",
+   "title": "User Reported Functionality Issue Due to Misaligned Expectations",
+   "order": 1,
+   "risk": "low",
+   "current_text": "Determine whether the issue is caused by unsupported user expectations or an actual technical fault an SSL handshake 'Connection reset' or plugin sync failure.",
+   "new_text": "Determine whether the issue is caused by unsupported user expectations or an actual technical fault (such as an SSL handshake 'Connection reset' or plugin sync failure).",
+   "fix": "restore-original",
+   "reasons": [
+    "article-example-collapsed"
+   ]
+  },
+  {
+   "playbook_id": "ac4ffef8-dc5f-403f-8477-9b276e53cd05",
+   "title": "VAPT Remediation and AutomationEdge Version Upgrade",
+   "order": 3,
+   "risk": "high",
+   "current_text": "Check if remaining VAPT findings require a product version upgrade or patch (e.g., AutomationEdge version 8.2.3, 8.2.4, 8.2.5, or 8.5.0) to resolve core component vulnerabilitiesLog4j or Apache Tomcat",
+   "new_text": "Check if remaining VAPT findings require a product version upgrade or patch (e.g., AutomationEdge version 8.2.3, 8.2.4, 8.2.5, or 8.5.0) to resolve core component vulnerabilities such as Log4j or Apache Tomcat.",
+   "fix": "restore-original",
+   "reasons": [
+    "content-loss:3w"
+   ]
+  },
+  {
+   "playbook_id": "84b73cd0-8a20-4532-9e06-a4fae750ca7f",
+   "title": "VBScript Automation Failure Due to Unhandled Excel Pop-ups",
+   "order": 0,
+   "risk": "low",
+   "current_text": "Inspect the automation runner session to identify any active or background excel.exe processes and inspect visible modal promptssave prompts, update alerts, or add-in notifications",
+   "new_text": "Inspect the automation runner session to identify any active or background excel.exe processes and inspect visible modal prompts such as save prompts, update alerts, or add-in notifications.",
+   "fix": "restore-original",
+   "reasons": [
+    "content-loss:3w"
+   ]
+  },
+  {
+   "playbook_id": "a1e012cb-0c75-46ec-86ea-bc0cc9c7dc8b",
+   "title": "Workflow Execution Failure Due to GUI Plugin Version Mismatch",
+   "order": 1,
+   "risk": "medium",
+   "current_text": "Determine if the deployment environment has a lower GUI Plugin version than the authoring environment an agent on pre-4.7 while workflow was edited in 4.7.",
+   "new_text": "Determine if the deployment environment has a lower GUI Plugin version than the authoring environment (such as an agent on pre-4.7 while workflow was edited in 4.7).",
+   "fix": "restore-original",
+   "reasons": [
+    "article-example-collapsed"
+   ]
+  }
+ ],
+ "period": [
+  {
+   "playbook_id": "ccd1376e-5d64-477b-946f-527686dbf9d6",
+   "title": "Agent Workflow Failure Post-Plugin Update Due to Plugin Bug",
+   "order": 1,
+   "risk": "medium",
+   "current_text": "Inspect the Process Studio and Agent logs for library corruption or bytecode parsing errors,'java.io.IOException: invalid constant type' or 'Error while accessing JAR file: JAR might be corrupted' pointing to javassist or plugin JARs",
+   "new_text": "Inspect the Process Studio and Agent logs for library corruption or bytecode parsing errors,'java.io.IOException: invalid constant type' or 'Error while accessing JAR file: JAR might be corrupted' pointing to javassist or plugin JARs.",
+   "fix": "terminal-period",
+   "reasons": [
+    "lost-terminal-period"
+   ]
+  },
+  {
+   "playbook_id": "79b59988-0f10-438a-814d-83db621471bd",
+   "title": "Application Migration: Incompatibility of Path-Based Object Properties with Surface Plugin",
+   "order": 2,
+   "risk": "low",
+   "current_text": "Inform the requester that properties'Exists', 'Is Visible', or 'Is Enabled/Active' are strictly object/path-based validations and have no direct equivalent or replacement within the Surface plugin",
+   "new_text": "Inform the requester that properties'Exists', 'Is Visible', or 'Is Enabled/Active' are strictly object/path-based validations and have no direct equivalent or replacement within the Surface plugin.",
+   "fix": "terminal-period",
+   "reasons": [
+    "lost-terminal-period"
+   ]
+  },
+  {
+   "playbook_id": "69f527a7-9898-4c5b-bbc4-c3d3233d5a19",
+   "title": "Automated Workflow Stalling/Failure with External Integrations",
+   "order": 2,
+   "risk": "medium",
+   "current_text": "Check if the bot stalls when processing multiple inputs concurrently,multiple email inputs arriving in the scheduler queue",
+   "new_text": "Check if the bot stalls when processing multiple inputs concurrently,multiple email inputs arriving in the scheduler queue.",
+   "fix": "terminal-period",
+   "reasons": [
+    "lost-terminal-period"
+   ]
+  },
+  {
+   "playbook_id": "4c2563de-6ab0-4b8c-8839-d7a99dd926f7",
+   "title": "Automation Workflow Browser Session Termination",
+   "order": 2,
+   "risk": "medium",
+   "current_text": "Check all downstream integration steps,email sending API calls, for improper string handling and formatting that trigger HTTP 400 Bad Request errors",
+   "new_text": "Check all downstream integration steps,email sending API calls, for improper string handling and formatting that trigger HTTP 400 Bad Request errors.",
+   "fix": "terminal-period",
+   "reasons": [
+    "lost-terminal-period"
+   ]
+  },
+  {
+   "playbook_id": "929e3ef9-f1b6-4660-9df4-92c32e9d3bd1",
+   "title": "Custom Development for Advanced Data Handling Requirements",
+   "order": 0,
+   "risk": "medium",
+   "current_text": "Assess the data handling requirement against standard platform plugins and check environment execution constraints,PowerShell script execution policies",
+   "new_text": "Assess the data handling requirement against standard platform plugins and check environment execution constraints,PowerShell script execution policies.",
+   "fix": "terminal-period",
+   "reasons": [
+    "lost-terminal-period"
+   ]
+  },
+  {
+   "playbook_id": "abcbda87-73f0-4e5f-8b85-61571e29abc9",
+   "title": "Excel Input Plugin Data & Metadata Interpretation Troubleshooting",
+   "order": 1,
+   "risk": "medium",
+   "current_text": "Check dynamic sheet name parameters for unintended formatting,numeric conversions appending '.0' to the sheet name",
+   "new_text": "Check dynamic sheet name parameters for unintended formatting,numeric conversions appending '.0' to the sheet name.",
+   "fix": "terminal-period",
+   "reasons": [
+    "lost-terminal-period"
+   ]
+  },
+  {
+   "playbook_id": "3dd28795-f792-4548-97e1-5bbcfdf51e4a",
+   "title": "Handling Client Requests for Sensitive or Confidential Data",
+   "order": 0,
+   "risk": "low",
+   "current_text": "Review the client request to identify whether it explicitly asks for restricted entities,client names, bank names, or proprietary dataset details",
+   "new_text": "Review the client request to identify whether it explicitly asks for restricted entities,client names, bank names, or proprietary dataset details.",
+   "fix": "terminal-period",
+   "reasons": [
+    "lost-terminal-period"
+   ]
+  },
+  {
+   "playbook_id": "7e6d3b7d-d06a-48cc-b8e6-5c06cd949bf5",
+   "title": "Misrouted Feature Request and Complex Requirement Triage",
+   "order": 0,
+   "risk": "low",
+   "current_text": "Review the support ticket description and requirements to verify whether the request describes broken existing functionality or an unbuilt business requirement,dynamic calculation rules or custom business logic",
+   "new_text": "Review the support ticket description and requirements to verify whether the request describes broken existing functionality or an unbuilt business requirement,dynamic calculation rules or custom business logic.",
+   "fix": "terminal-period",
+   "reasons": [
+    "lost-terminal-period"
+   ]
+  },
+  {
+   "playbook_id": "e9457596-2af3-45ff-a734-1d93044f24e6",
+   "title": "Misunderstood Rate Limiting for Bulk Operations",
+   "order": 2,
+   "risk": "low",
+   "current_text": "Provide rate limiting behavior clarification to the client team and recommend client workflow adjustments,client-side batch throttling or payload chunking",
+   "new_text": "Provide rate limiting behavior clarification to the client team and recommend client workflow adjustments,client-side batch throttling or payload chunking.",
+   "fix": "terminal-period",
+   "reasons": [
+    "lost-terminal-period"
+   ]
+  },
+  {
+   "playbook_id": "4507acc0-f2f0-4160-97d9-553ca571b6dd",
+   "title": "ML Plugin Compatibility and Input/Output Format Troubleshooting",
+   "order": 0,
+   "risk": "medium",
+   "current_text": "Inspect the AutomationEdge Agent logs and CPU capabilities. Verify that the agent machine processor supports the AVX (Advanced Vector Extensions) instruction set required by TensorFlow, and check logs for ProcessStudioException errors'Cannot run program \"python\"' or missing package errors",
+   "new_text": "Inspect the AutomationEdge Agent logs and CPU capabilities. Verify that the agent machine processor supports the AVX (Advanced Vector Extensions) instruction set required by TensorFlow, and check logs for ProcessStudioException errors'Cannot run program \"python\"' or missing package errors.",
+   "fix": "terminal-period",
+   "reasons": [
+    "lost-terminal-period"
+   ]
+  },
+  {
+   "playbook_id": "ad13b9bb-68f7-447f-a4dc-f639632c8719",
+   "title": "New Feature Deployment Blocked by Insufficient Database Permissions",
+   "order": 3,
+   "risk": "medium",
+   "current_text": "Update and refine the custom code or User Defined Java Class logic to handle required processing operations,record status updates, metadata retrieval, and specific field handling",
+   "new_text": "Update and refine the custom code or User Defined Java Class logic to handle required processing operations,record status updates, metadata retrieval, and specific field handling.",
+   "fix": "terminal-period",
+   "reasons": [
+    "lost-terminal-period"
+   ]
+  },
+  {
+   "playbook_id": "24eb583f-5ff2-4c24-881d-5a5891c566bf",
+   "title": "Third-Party Plugin Incompatibility Due to Upstream API Changes",
+   "order": 0,
+   "risk": "high",
+   "current_text": "Inspect the plugin execution logs to verify whether the failure stems from upstream API validation errors,rejected project key/ID formats or duplicate field entries",
+   "new_text": "Inspect the plugin execution logs to verify whether the failure stems from upstream API validation errors,rejected project key/ID formats or duplicate field entries.",
+   "fix": "terminal-period",
+   "reasons": [
+    "lost-terminal-period"
+   ]
+  },
+  {
+   "playbook_id": "2d4c4de4-23d5-4cdc-991a-c45d8cbdf103",
+   "title": "Tomcat Shutdown Port Conflict Resolution",
+   "order": 1,
+   "risk": "low",
+   "current_text": "Edit `conf/server.xml` and change the shutdown port attribute in the `<Server port=\"...\">` tag to an available port,8006",
+   "new_text": "Edit `conf/server.xml` and change the shutdown port attribute in the `<Server port=\"...\">` tag to an available port,8006.",
+   "fix": "terminal-period",
+   "reasons": [
+    "lost-terminal-period"
+   ]
+  },
+  {
+   "playbook_id": "4f2d122d-54c2-47d2-a329-f0c5b1e7ddcf",
+   "title": "Troubleshooting Advanced REST Client (ARC) Plugin Limitations and Failures",
+   "order": 1,
+   "risk": "medium",
+   "current_text": "Inspect the error log and request configuration for URL encoding and parameter issues,'Illegal character in path' or unexpectedly empty response bodies",
+   "new_text": "Inspect the error log and request configuration for URL encoding and parameter issues,'Illegal character in path' or unexpectedly empty response bodies.",
+   "fix": "terminal-period",
+   "reasons": [
+    "lost-terminal-period"
+   ]
+  },
+  {
+   "playbook_id": "4d2e8e79-5d8b-4621-8f6c-af52e9cd4482",
+   "title": "Workflow Execution Logging and Monitoring Visibility Issues",
+   "order": 2,
+   "risk": "low",
+   "current_text": "Check the workflow execution history for upstream errors,plugin download failures or agent connectivity issues. Verify whether downstream steps skipped execution due to expected error-handling behavior",
+   "new_text": "Check the workflow execution history for upstream errors,plugin download failures or agent connectivity issues. Verify whether downstream steps skipped execution due to expected error-handling behavior.",
+   "fix": "terminal-period",
+   "reasons": [
+    "lost-terminal-period"
+   ]
+  }
+ ],
+ "reinsert": [
+  {
+   "playbook_id": "6307b7a0-ae02-45bf-a925-3a5223b63d93",
+   "title": "GUI Automation and Spy Troubleshooting in Process Studio",
+   "after_order": 1,
+   "fix": "reinsert-step",
+   "step": {
+    "text": "If encountering javassist/sync errors: Take a backup of the existing javassist JAR file from the Process Studio/Agent lib directory. Copy the latest javassist JAR file into the lib folder, replacing the existing file.",
+    "type": "action",
+    "order": 3,
+    "status": "ok",
+    "on_failure": "Restore the original javassist JAR from backup and verify file permissions.",
+    "source_refs": [
+     {
+      "id": "7457c2b1-cc9e-4fc4-ac2b-efa0b92c8846",
+      "kind": "knowledge",
+      "label": "kb-1",
+      "title": "Unable to Sync Web GUI Plugin in Version 7.x"
+     }
+    ],
+    "evidence_quality": "high",
+    "expected_outcome": "The javassist JAR file in the lib folder is updated to the latest supported version.",
+    "grounding_status": "grounded",
+    "step_classification": "procedure"
+   },
+   "text": "If encountering javassist/sync errors: Take a backup of the existing javassist JAR file from the Process Studio/Agent lib directory. Copy the latest javassist JAR file into the lib folder, replacing the existing file."
+  },
+  {
+   "playbook_id": "7f3d4a13-ed6b-44cd-b966-06c18fa80b6d",
+   "title": "AutomationEdge Process Studio Project and Workspace Recovery",
+   "after_order": 2,
+   "fix": "reinsert-step",
+   "step": {
+    "text": "If logs report that .pluginsconf is tampered or corrupted, navigate to the conf folder in the Process Studio directory. Take a backup of the .pluginsconf file and delete it. If the error persists upon reopening, backup the entire conf folder and delete the files inside conf before restarting Process Studio.",
+    "type": "action",
+    "order": 4,
+    "status": "ok",
+    "on_failure": "If Process Studio still fails to launch, proceed to clear the plugin cache folders.",
+    "source_refs": [
+     {
+      "id": "16af65a5-e25c-4bd2-85a5-c6652075454f",
+      "kind": "knowledge",
+      "label": "kb-4",
+      "title": "Error while opening Process Studio! .pluginsconf file is tampered or corrupted"
+     }
+    ],
+    "evidence_quality": "high",
+    "expected_outcome": "Corrupted plugin configuration files are removed and recreated cleanly upon restart.",
+    "grounding_status": "grounded",
+    "step_classification": "procedure"
+   },
+   "text": "If logs report that .pluginsconf is tampered or corrupted, navigate to the conf folder in the Process Studio directory. Take a backup of the .pluginsconf file and delete it. If the error persists upon reopening, backup the entire conf folder and delete the files inside conf before restarting Process Studio."
+  }
+ ],
+ "reinsert_verification": [
+  {
+   "playbook_id": "4ad47337-d421-4408-b46d-0a590e66813f",
+   "title": "License Invalidation Due to Server Hardware Replacement or MAC Address Change",
+   "after_order": 7,
+   "fix": "reinsert-step",
+   "step": {
+    "text": "Verify that license details display properly in AEUI and confirm that Process Studio launches without license invalidation errors.",
+    "type": "check",
+    "order": 9,
+    "status": "ok",
+    "on_failure": "Inspect AutomationEdge error logs for remaining AETokenValidationFilter or LicenseServiceImpl exceptions.",
+    "source_refs": [
+     {
+      "id": "502b5978-7615-43fd-87a6-42b070d67913",
+      "kind": "knowledge",
+      "label": "kb-1",
+      "title": "AE License details are not visible on AE server"
+     },
+     {
+      "id": "a278c4b7-ad58-4d72-a386-c7d46762aa2b",
+      "kind": "knowledge",
+      "label": "kb-3",
+      "title": "\"Invalid License \"Error while opening Process studio (On-premise ) and AutomationEdge UI."
+     },
+     {
+      "id": "78de7275-cc20-4120-9e26-43847feed79b",
+      "kind": "knowledge",
+      "label": "kb-4",
+      "title": "\"Invalid License \"Error while opening Process studio (On-premise instance)"
+     },
+     {
+      "id": "fac9aef7-dd93-4bda-818d-23d2fef5518f",
+      "kind": "episode",
+      "label": "ep-1",
+      "title": "UAT Server License Replacement and Error Resolution"
+     }
+    ],
+    "evidence_quality": "high",
+    "expected_outcome": "Process Studio opens normally, AEUI displays active license status, and no license errors appear in logs.",
+    "grounding_status": "grounded",
+    "step_classification": "procedure"
+   },
+   "text": "Verify that license details display properly in AEUI and confirm that Process Studio launches without license invalidation errors."
+  }
+ ],
+ "_meta": {
+  "source": "backup 2026-08-26 + remediation_decisions.jsonl",
+  "generated_for": "fix_remediation_defects.py"
+ }
+}

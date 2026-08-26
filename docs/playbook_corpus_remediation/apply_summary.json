@@ -1,0 +1,42 @@
+{
+  "reviewed": 440,
+  "actions": {
+    "KEEP": 187,
+    "IMPROVE": 233,
+    "SUPPRESS": 20
+  },
+  "apply_result": {
+    "stats": {
+      "kept": 187,
+      "improve": 233,
+      "suppressed": 20
+    },
+    "patterns_deactivated": 0,
+    "episode_relationships_removed": 0
+  },
+  "consistency": {
+    "playbooks": 440,
+    "candidates": 420,
+    "retired": 20,
+    "active_without_steps": 0,
+    "broken_current_version": 0,
+    "orphan_versions": 0,
+    "orphan_pel": 0,
+    "orphan_pattern_links": 0,
+    "orphan_episode_links": 0,
+    "playbooks_broken_pattern": 0,
+    "inactive_patterns": 0
+  },
+  "remaining_quality": {
+    "active_playbooks": 420,
+    "concreteness_bands": {
+      "67-100%": 179,
+      "0%": 109,
+      "34-66%": 100,
+      "1-33%": 32
+    },
+    "generic_or_bare_inspect_steps": 13,
+    "total_steps": 1847,
+    "active_with_zero_steps": 0
+  }
+}

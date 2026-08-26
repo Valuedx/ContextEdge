@@ -1,0 +1,20 @@
+{
+  "mode": "dry-run",
+  "playbooks_touched": 0,
+  "applied": [],
+  "skipped": [
+    {
+      "playbook_id": "f16cccd3-5b51-46b3-b306-3b8370a28e3f",
+      "title": "Agent Upgrade Feature Misunderstanding and Clarification",
+      "order": 3,
+      "fix": "restore-original",
+      "reasons": [
+        "article-example-collapsed"
+      ],
+      "why": "live text differs from expected",
+      "live": "If the behavior is a confirmed bug, log the bug details, inform the customer of plugin release 4.5 (ticket 219894) containing the fix, and apply any known temporary workaround.",
+      "expected": "If the behavior is a confirmed bug a plugin sync failure, log the bug details, inform the customer of the upcoming patch release version containing the fix, and apply any known temporary workaround."
+    }
+  ],
+  "missing": []
+}

@@ -1,0 +1,168 @@
+{
+  "A_shape": {
+    "playbooks_total": 440,
+    "lifecycle": {
+      "candidate": 420,
+      "retired": 20
+    },
+    "versions": 863,
+    "published_versions": 0,
+    "active_playbooks": 420,
+    "active_steps": 1849
+  },
+  "B_integrity": {
+    "broken_current_version_pointers": 0,
+    "orphan_versions": 0,
+    "active_playbooks_with_zero_steps": 0,
+    "empty_titles": []
+  },
+  "C_text_defects": {
+    "residual_defects": 1,
+    "ticket_verified_edits_excluded": 5,
+    "playbooks_not_in_reference": 0,
+    "detail": [
+      {
+        "title": "Agent Upgrade Feature Misunderstanding and Clarification",
+        "reasons": [
+          "article-example-collapsed",
+          "content-loss:7w"
+        ],
+        "original": "If the behavior is a confirmed bug (such as a plugin sync failure), log the bug details, inform the customer of the upcoming patch release version containing the fix, and apply any known temporary workaround.",
+        "current": "If the behavior is a confirmed bug, log the bug details, inform the customer of plugin release 4.5 (ticket 219894) containing the fix, and apply any known temporary workaround."
+      }
+    ]
+  },
+  "D_concreteness": {
+    "scorer": "remediate_playbook_corpus.remaining_quality (extract_coords or AE_PRODUCT)",
+    "bands": {
+      "67-100%": 176,
+      "34-66%": 98,
+      "1-33%": 34,
+      "0%": 112
+    },
+    "concrete_steps": 943,
+    "concrete_pct": 51.0,
+    "generic_or_bare_inspect_steps": 13,
+    "hedged_steps": 72,
+    "baseline_pre_change": {
+      "playbooks": 440,
+      "steps": 2006,
+      "concrete_steps": 983,
+      "bands": {
+        "0%": 127,
+        "1-33%": 41,
+        "34-66%": 99,
+        "67-100%": 173
+      },
+      "generic_or_bare_inspect_steps": 69,
+      "hedged_steps": 231
+    },
+    "post_remediation_reported": {
+      "playbooks": 420,
+      "steps": 1847,
+      "bands": {
+        "0%": 109,
+        "1-33%": 32,
+        "34-66%": 100,
+        "67-100%": 179
+      },
+      "generic_or_bare_inspect_steps": 13
+    }
+  },
+  "E_retrievability": {
+    "agent_retrievable_playbooks": 0,
+    "note": "search/playbook_candidates.py:55 gates every arm on lifecycle_state='approved'; hybrid_ranker.py:384-391 additionally drops playbooks with no published version. Zero here means /api/v1/runtime/match returns nothing for this tenant."
+  },
+  "F_step_shape": {
+    "playbooks_with_two_or_fewer_steps": 17,
+    "detail": [
+      {
+        "title": "Audit Log Purging Failure Due to Product Defect",
+        "risk": "medium",
+        "steps": 2
+      },
+      {
+        "title": "Automation Platform Configuration Update",
+        "risk": "low",
+        "steps": 2
+      },
+      {
+        "title": "BOT Login Failure Due to Application-Specific Error",
+        "risk": "low",
+        "steps": 2
+      },
+      {
+        "title": "Configuration Granularity Limitation for Time-Based Settings",
+        "risk": "low",
+        "steps": 2
+      },
+      {
+        "title": "Copilot User Agent Visibility Misunderstanding in T3",
+        "risk": "low",
+        "steps": 2
+      },
+      {
+        "title": "Customer Missing Operational Notifications",
+        "risk": "low",
+        "steps": 2
+      },
+      {
+        "title": "Dormant Account Activation",
+        "risk": "low",
+        "steps": 2
+      },
+      {
+        "title": "False Positive Security Alert for Legitimate Automation Tool Activity",
+        "risk": "low",
+        "steps": 2
+      },
+      {
+        "title": "Insecure Tomcat Auto-Deployment Remediation",
+        "risk": "medium",
+        "steps": 2
+      },
+      {
+        "title": "Missing or Disabled Vault Connection",
+        "risk": "low",
+        "steps": 2
+      },
+      {
+        "title": "Missing or Incorrect Certificate Deployment",
+        "risk": "medium",
+        "steps": 2
+      },
+      {
+        "title": "Monitoring Incident Data Ingestion Failure",
+        "risk": "medium",
+        "steps": 2
+      },
+      {
+        "title": "New Component Adoption Blocked by Customer Security Review",
+        "risk": "low",
+        "steps": 2
+      },
+      {
+        "title": "New Feature Planning and Guidance",
+        "risk": "low",
+        "steps": 2
+      },
+      {
+        "title": "Planned Cloud Patching Impact Communication",
+        "risk": "low",
+        "steps": 2
+      },
+      {
+        "title": "Routine Plugin Assignment Fulfillment",
+        "risk": "low",
+        "steps": 2
+      },
+      {
+        "title": "T3 Server Post-Migration UI Validation: Task Template and Document Metadata Tabs",
+        "risk": "low",
+        "steps": 2
+      }
+    ],
+    "playbooks_with_an_escalation_step": 17,
+    "playbooks_with_a_verification_step": 154
+  }
+}
