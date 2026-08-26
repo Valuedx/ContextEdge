@@ -256,6 +256,7 @@ class Settings(BaseSettings):
     # evals and integration tests can hit it; disable in production if
     # the tenant is not ready.
     agent_diagnose_enabled: bool = True
+    copilot_message_retention_days: int = Field(default=180, ge=1, le=3650)
 
 
 settings = Settings()

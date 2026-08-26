@@ -48,6 +48,12 @@ from contextedge.models.episode import (
     IdentityAlias,
 )
 from contextedge.models.error_signature import ErrorSignature, FixPattern
+from contextedge.models.copilot import (
+    CopilotConversation,
+    CopilotLoginEvent,
+    CopilotMessage,
+    CopilotUsageEvent,
+)
 from contextedge.models.evaluation import (
     EvaluationDataset,
     EvaluationRun,
@@ -145,6 +151,7 @@ __all__ = [
     "Base", "TenantScopedMixin",
     "Tenant", "Workspace", "Domain", "User", "RoleBinding", "RoleNavAccess",
     "AuditLog",
+    "CopilotLoginEvent", "CopilotUsageEvent", "CopilotConversation", "CopilotMessage",
     "OperationalEvent", "Notification",
     "Source", "SourceObject", "SourceCredential", "SyncCheckpoint", "SyncRun",
     "RawEvidenceObject", "EvidenceItem", "Thread", "AttachmentArtifact",

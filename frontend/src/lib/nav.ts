@@ -44,6 +44,7 @@ export const NAV_ITEMS: NavAccessItem[] = [
   { label: "Policies", href: "/policies", requiredRoles: [TA, SA] },
   { label: "Audit Log", href: "/audit", requiredRoles: [TA, SA, DA] },
   { label: "LLM Cost", href: "/admin/cost", requiredRoles: [TA, SA] },
+  { label: "Copilot Usage", href: "/admin/copilot", requiredRoles: [TA, SA] },
   { label: "Pipeline Health", href: "/admin/pipeline", requiredRoles: [TA, SA] },
   { label: "Settings", href: "/settings", requiredRoles: [TA, SA] },
 ];

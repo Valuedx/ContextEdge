@@ -174,6 +174,7 @@ celery_app = Celery(
         "contextedge.workers.maintenance_tasks",
         # Post-hard-delete orphan sweeps (review F-18 / F-20).
         "contextedge.workers.cleanup_tasks",
+        "contextedge.workers.copilot_tasks",
         # Relational-to-graph edge reconciliation for post-0031 rows.
         "contextedge.workers.graph_tasks",
         # Post-merge JSONB identity snapshot repair.
@@ -391,6 +392,11 @@ celery_app.conf.update(
             "task": "evaluation.backfill_playbook_embeddings",
             "schedule": 86400.0,
             "args": ("all", 200, True),
+        },
+        "purge-copilot-message-bodies-daily": {
+            "task": "evaluation.purge_copilot_message_bodies",
+            "schedule": 86400.0,
+            "args": ("all",),
         },
     },
 )

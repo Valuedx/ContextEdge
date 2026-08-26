@@ -950,3 +950,46 @@ export interface LlmUsageResponse {
   totals: LlmUsageTotals;
   by_model_task: LlmUsageBreakdownEntry[];
 }
+
+export interface CopilotUsageRow {
+  user_id?: string;
+  username?: string;
+  day?: string;
+  login_count: number;
+  last_login?: string | null;
+  chat_count: number;
+  total_tokens: number;
+}
+
+export interface CopilotUsageSummary {
+  from: string;
+  to: string;
+  group_by: "user" | "day";
+  rows: CopilotUsageRow[];
+}
+
+export interface CopilotConversationListItem {
+  id: string;
+  mode: string;
+  ticket_id: string | null;
+  ticket_number: string | null;
+  title: string;
+  message_count: number;
+  total_tokens: number;
+  started_at: string | null;
+  last_message_at: string | null;
+  user_id: string;
+}
+
+export interface CopilotConversationMessage {
+  seq: number;
+  role: string;
+  content: string;
+  action: string | null;
+  citations: unknown;
+  created_at: string | null;
+}
+
+export interface CopilotConversationDetail extends CopilotConversationListItem {
+  messages: CopilotConversationMessage[];
+}

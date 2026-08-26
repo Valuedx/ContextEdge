@@ -29,6 +29,7 @@ import {
   DollarSign,
   Sparkles,
   Gauge,
+  MessageSquare,
 } from "lucide-react";
 import { useAuthStore } from "@/lib/stores/auth-store";
 import { NAV_ITEMS, canSeeSidebarItem, type NavAccessPayload } from "@/lib/nav";
@@ -59,6 +60,7 @@ const ICONS: Record<string, React.ElementType> = {
   "/policies": Shield,
   "/audit": ClipboardList,
   "/admin/cost": DollarSign,
+  "/admin/copilot": MessageSquare,
   "/admin/pipeline": Gauge,
   "/settings": Settings,
 };
