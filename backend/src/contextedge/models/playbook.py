@@ -2,7 +2,18 @@ import uuid
 from datetime import datetime
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import CheckConstraint, Computed, DateTime, Float, ForeignKey, String, Text, UniqueConstraint, func
+from sqlalchemy import (
+    CheckConstraint,
+    Computed,
+    DateTime,
+    Float,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -206,6 +217,24 @@ class PlaybookVersion(Base, TenantOwnedMixin):
         DateTime(timezone=True),
         server_default=func.now(),
         nullable=False,
+    )
+    # Draft editing (0093). Published rows stay immutable (trigger on
+    # steps); these columns track in-place edits of unpublished drafts.
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+    revision: Mapped[int] = mapped_column(
+        Integer, server_default="1", default=1, nullable=False
+    )
+    created_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    last_edited_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    derived_from_version_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("playbook_versions.id", ondelete="SET NULL"),
+        nullable=True,
     )
 
     playbook: Mapped["Playbook"] = relationship(back_populates="versions")

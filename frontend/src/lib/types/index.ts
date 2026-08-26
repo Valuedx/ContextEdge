@@ -360,6 +360,16 @@ export interface PlaybookVersion {
   published_at: string | null;
   published_by: string | null;
   created_at: string;
+  /** Draft editing (0093). Optional so cached responses keep type-checking. */
+  revision?: number;
+  updated_at?: string | null;
+  derived_from_version_id?: string | null;
+  created_by?: string | null;
+  last_edited_by?: string | null;
+  last_edit_note?: string | null;
+  is_editable?: boolean;
+  verification_policy?: Record<string, unknown> | null;
+  edit_warnings?: string[];
 }
 
 export interface SyncRun {

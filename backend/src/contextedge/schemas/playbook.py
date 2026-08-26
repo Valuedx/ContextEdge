@@ -213,8 +213,75 @@ class PlaybookVersionResponse(BaseModel):
     published_at: datetime | None
     published_by: UUID | None
     created_at: datetime
+    # Draft editing (0093). Optional so cached/pre-migration payloads
+    # keep validating; ORM rows after the migration always send them.
+    revision: int = 1
+    updated_at: datetime | None = None
+    derived_from_version_id: UUID | None = None
+    created_by: UUID | None = None
+    last_edited_by: UUID | None = None
+    # Latest non-empty "Why did this change?" note. Not a column — the
+    # list/get handlers attach it from audit_logs so reviewers can see
+    # it without tenant-admin audit access.
+    last_edit_note: str | None = None
+    edit_warnings: list[str] = Field(default_factory=list)
+
+    @computed_field
+    @property
+    def is_editable(self) -> bool:
+        """Unpublished drafts can be patched in place. Published rows cannot."""
+        return self.published_at is None
 
     model_config = {"from_attributes": True}
+
+
+class PlaybookStepPatch(BaseModel):
+    """One step as sent by the editor. Partial by construction.
+
+    Unknown extra keys are accepted so a client cannot 422 on a field it
+    still has locally, but ``playbook_editing.normalize_steps`` never
+    copies them onto the stored step — provenance keys stay server-owned.
+    ``order`` is ignored: array position is the single source of order.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    step_id: str | None = None
+    text: str | None = None
+    title: str | None = None
+    description: str | None = None
+    type: str | None = None
+    expected_outcome: str | None = None
+    on_failure: str | None = None
+    reason: str | None = None
+    rollback_hint: str | None = None
+    safety_class: str | None = None
+    action_type: str | None = None
+    action_name: str | None = None
+    tool_ref: str | None = None
+    requires_approval: bool | None = None
+    reversible: bool | None = None
+    verification: bool | None = None
+    time_estimate_sec: int | None = Field(default=None, ge=0, le=86_400)
+    clear_fields: list[str] = Field(default_factory=list)
+
+
+class PlaybookVersionUpdate(BaseModel):
+    expected_revision: int = Field(..., ge=1)
+    steps: list[PlaybookStepPatch] | None = None
+    trigger_conditions: dict | None = None
+    branching_logic: dict | None = None
+    inputs: list | None = None
+    outputs: list | None = None
+    rollback_notes: str | None = None
+    execution_confidence_guidance: str | None = None
+    verification_policy: VerificationPolicy | None = None
+    playbook_confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+    edit_note: str | None = Field(default=None, max_length=500)
+
+
+class PlaybookVersionForkRequest(BaseModel):
+    edit_note: str | None = Field(default=None, max_length=500)
 
 
 class PlaybookCreate(BaseModel):

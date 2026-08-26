@@ -69,9 +69,17 @@ const columns: ColumnDef<Playbook>[] = [
     accessorKey: "title",
     header: "Title",
     cell: ({ row }) => (
-      <Link href={`/playbooks/${row.original.id}`} className="font-medium text-primary hover:underline">
-        {row.getValue("title")}
-      </Link>
+      <span className="inline-flex items-center gap-2">
+        <Link href={`/playbooks/${row.original.id}`} className="font-medium text-primary hover:underline">
+          {row.getValue("title")}
+        </Link>
+        <Link
+          href={`/playbooks/${row.original.id}?edit=1`}
+          className="text-xs text-muted-foreground hover:text-primary hover:underline"
+        >
+          Edit
+        </Link>
+      </span>
     ),
   },
   {

@@ -84,6 +84,11 @@ describe("PlaybookSteps", () => {
     expect(screen.getByText(/no instruction text/i)).toBeInTheDocument();
   });
 
+  it("shows an Edited badge when a grounded step was later changed", () => {
+    render(<PlaybookSteps steps={[{ ...STEP, human_edited: true }]} />);
+    expect(screen.getByText("Edited")).toBeInTheDocument();
+  });
+
   it("renders every step it was given", () => {
     const steps = Array.from({ length: 8 }, (_, i) => ({
       text: `Step number ${i + 1}`,

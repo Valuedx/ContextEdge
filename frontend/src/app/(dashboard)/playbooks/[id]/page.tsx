@@ -2,8 +2,8 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
-import { useParams } from "next/navigation";
-import { useState } from "react";
+import { useParams, useSearchParams } from "next/navigation";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Loader2 } from "lucide-react";
 
@@ -33,9 +33,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
+import { PlaybookEditor } from "@/components/playbooks/playbook-editor";
 import { api } from "@/lib/api";
+import { shouldOpenForkFromEditQuery } from "@/lib/playbook-steps";
 import type {
   PoliciesOverview,
   Playbook,
@@ -43,8 +44,8 @@ import type {
   PlaybookVersionDiff,
 } from "@/lib/types";
 import { useAuthStore } from "@/lib/stores/auth-store";
-import { canEditAutomationMode, canTransitionPlaybook } from "@/lib/roles";
-import { GitCompare, RotateCcw, GitFork, Sparkles, ListChecks, FileText, ChevronDown, ChevronUp, Search } from "lucide-react";
+import { canEditAutomationMode, canEditPlaybook, canTransitionPlaybook } from "@/lib/roles";
+import { GitCompare, RotateCcw, GitFork, Pencil, Sparkles, ListChecks, FileText, ChevronDown, ChevronUp, Search } from "lucide-react";
 
 function formatTriggerLabel(key: string): string {
   return key
@@ -303,100 +304,6 @@ function PlaybookLineageReferencesPanel({ playbookId }: { playbookId: string }) 
 // Two copies of a rule is one copy too many when only one of them is
 // enforced.
 
-
-function TransitionDialog({
-  playbook,
-  onClose,
-}: {
-  playbook: Playbook;
-  onClose: () => void;
-}) {
-  const qc = useQueryClient();
-  const available = playbook.allowed_transitions ?? [];
-  const [newState, setNewState] = useState(available[0] ?? "");
-  const [comment, setComment] = useState("");
-
-  const mut = useMutation({
-    mutationFn: () =>
-      api.post(`/playbooks/${playbook.id}/transition`, {
-        new_state: newState,
-        comment: comment.trim() || undefined,
-      }),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["playbook", playbook.id] });
-      toast.success(`Playbook transitioned to "${newState}"`);
-      onClose();
-    },
-    onError: (err: Error) => {
-      toast.error(err.message || "Transition failed");
-    },
-  });
-
-  if (available.length === 0) {
-    return (
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>No transitions available</DialogTitle>
-        </DialogHeader>
-        <p className="text-sm text-muted-foreground">
-          Playbooks in &quot;{playbook.lifecycle_state}&quot; state cannot be transitioned further.
-        </p>
-        <DialogFooter>
-          <Button variant="outline" onClick={onClose}>
-            Close
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    );
-  }
-
-  return (
-    <DialogContent>
-      <DialogHeader>
-        <DialogTitle>Transition playbook</DialogTitle>
-      </DialogHeader>
-      <div className="space-y-4">
-        <div>
-          <Label>New state</Label>
-          <Select value={newState} onValueChange={(v) => setNewState(v ?? "")}>
-            <SelectTrigger className="mt-1">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {available.map((s) => (
-                <SelectItem key={s} value={s}>
-                  {s}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-        <div>
-          <Label htmlFor="comment">Comment (optional)</Label>
-          <Textarea
-            id="comment"
-            className="mt-1"
-            placeholder="Reason for this transition…"
-            value={comment}
-            onChange={(e) => setComment(e.target.value)}
-          />
-        </div>
-      </div>
-      <DialogFooter>
-        <Button variant="outline" onClick={onClose}>
-          Cancel
-        </Button>
-        <Button disabled={!newState || mut.isPending} onClick={() => mut.mutate()}>
-          {mut.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-          Confirm
-        </Button>
-      </DialogFooter>
-      {mut.error && (
-        <p className="text-sm text-destructive">{String((mut.error as Error).message)}</p>
-      )}
-    </DialogContent>
-  );
-}
 
 function DiffDialog({
   playbookId,
@@ -903,13 +810,27 @@ function ConflictsPanel({ version }: { version: PlaybookVersion }) {
   );
 }
 
+function versionOptionLabel(version: PlaybookVersion, playbook: Playbook): string {
+  const bits = [`v${version.semantic_version}`];
+  if (version.id === playbook.current_version_id) bits.push("main");
+  bits.push(version.published_at ? "published" : "draft");
+  return bits.join(" · ");
+}
+
 export default function PlaybookDetailPage() {
   const params = useParams<{ id: string }>();
+  const searchParams = useSearchParams();
   const playbookId = params.id;
   const roles = useAuthStore((s) => s.roles);
-  const [transitionOpen, setTransitionOpen] = useState(false);
+  const canEdit = canEditPlaybook(roles);
   const [diffVersion, setDiffVersion] = useState<string | null>(null);
   const [selectedVersionId, setSelectedVersionId] = useState<string | null>(null);
+  const [mode, setMode] = useState<"view" | "edit">(
+    searchParams.get("edit") === "1" ? "edit" : "view",
+  );
+  const [forkOpen, setForkOpen] = useState(false);
+  const autoForkRef = useRef(false);
+  const wantsEdit = searchParams.get("edit") === "1";
   const qc = useQueryClient();
 
   const { data: playbook, isLoading, error } = useQuery({
@@ -934,6 +855,39 @@ export default function PlaybookDetailPage() {
     },
     onError: (err: Error) => toast.error(err.message || "Rollback failed"),
   });
+
+  const forkMut = useMutation({
+    mutationFn: (versionId: string) =>
+      api.post<PlaybookVersion>(`/playbooks/${playbookId}/versions/${versionId}/draft`, {}),
+    onSuccess: (draft) => {
+      qc.invalidateQueries({ queryKey: ["playbook-versions", playbookId] });
+      qc.invalidateQueries({ queryKey: ["playbook", playbookId] });
+      setSelectedVersionId(draft.id);
+      setMode("edit");
+      setForkOpen(false);
+      toast.success(`Opened draft v${draft.semantic_version} as the main version`);
+    },
+    onError: (err: Error) => toast.error(err.message || "Could not create draft"),
+  });
+
+  useEffect(() => {
+    if (autoForkRef.current || !playbook || versions.length === 0) return;
+    const main =
+      versions.find((v) => v.id === playbook.current_version_id) ?? versions[0];
+    const locked = ["retired", "deprecated"].includes(playbook.lifecycle_state);
+    if (
+      !shouldOpenForkFromEditQuery({
+        wantsEdit,
+        canEdit,
+        lifecycleLocked: locked,
+        currentVersionIsPublished: Boolean(main?.published_at),
+      })
+    ) {
+      return;
+    }
+    autoForkRef.current = true;
+    setForkOpen(true);
+  }, [playbook, versions, canEdit, wantsEdit]);
 
   if (!playbookId) return null;
 
@@ -965,12 +919,26 @@ export default function PlaybookDetailPage() {
     );
   }
 
-  const latest = versions[0];
-  const selectedVersion = versions.find((v) => v.id === selectedVersionId) ?? latest;
-  const selectedVersionIndex = selectedVersion
-    ? versions.findIndex((v) => v.id === selectedVersion.id)
-    : -1;
+  const mainVersion =
+    versions.find((v) => v.id === playbook.current_version_id) ?? versions[0];
+  const selectedVersion = versions.find((v) => v.id === selectedVersionId) ?? mainVersion;
+  const selectedIsMain = Boolean(
+    selectedVersion && selectedVersion.id === playbook.current_version_id,
+  );
+  const selectedIsDraft = Boolean(selectedVersion && !selectedVersion.published_at);
+  const lifecycleLocked = ["retired", "deprecated"].includes(playbook.lifecycle_state);
+  const editing = mode === "edit" && canEdit && selectedIsMain && selectedIsDraft && !lifecycleLocked;
   const hasTransitions = (playbook.allowed_transitions ?? []).length > 0;
+
+  const editTitle = !canEdit
+    ? "Knowledge managers can edit playbooks"
+    : lifecycleLocked
+      ? `Playbooks in ${playbook.lifecycle_state} cannot be edited`
+      : !selectedIsMain
+        ? "Switch to the main version to edit"
+        : selectedVersion?.published_at
+          ? "Edit as a new draft. Runtime keeps serving the published version until the draft is approved."
+          : "Edit this draft";
 
   return (
     <div className="space-y-6">
@@ -981,24 +949,18 @@ export default function PlaybookDetailPage() {
         backLabel="Playbooks"
         actions={
           <div className="flex items-center gap-2">
-            {((selectedVersion ?? latest)?.playbook_confidence !== undefined || playbook.confidence !== undefined) && (
+            {selectedVersion?.playbook_confidence !== undefined || playbook.confidence !== undefined ? (
               <div className="flex items-center gap-1.5 rounded-md bg-emerald-500/10 border border-emerald-500/20 px-3 py-1.5 text-xs font-semibold text-emerald-600 dark:text-emerald-400">
                 <Sparkles className="h-3.5 w-3.5" />
-                Score: {((((selectedVersion ?? latest)?.playbook_confidence ?? playbook.confidence ?? 0.8)) * 100).toFixed(0)}%
+                Score: {(((selectedVersion?.playbook_confidence ?? playbook.confidence ?? 0.8)) * 100).toFixed(0)}%
               </div>
-            )}
-            {hasTransitions && (
+            ) : null}
+            {hasTransitions && !editing && (
               <PlaybookLifecycleActions playbook={playbook} showPermissionHint />
             )}
           </div>
         }
       />
-
-      <Dialog open={transitionOpen} onOpenChange={setTransitionOpen}>
-        {transitionOpen && playbook && (
-          <TransitionDialog playbook={playbook} onClose={() => setTransitionOpen(false)} />
-        )}
-      </Dialog>
 
       <Dialog open={!!diffVersion} onOpenChange={(o) => { if (!o) setDiffVersion(null); }}>
         {diffVersion && playbookId && (
@@ -1008,6 +970,31 @@ export default function PlaybookDetailPage() {
             onClose={() => setDiffVersion(null)}
           />
         )}
+      </Dialog>
+
+      <Dialog open={forkOpen} onOpenChange={setForkOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Edit as a new draft</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            The published version stays the live procedure. Runtime, search embeddings, and
+            Support Copilot keep using it until this new draft is approved. The new draft
+            becomes the main version for editing.
+          </p>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setForkOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              disabled={!selectedVersion || forkMut.isPending}
+              onClick={() => selectedVersion && forkMut.mutate(selectedVersion.id)}
+            >
+              {forkMut.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              Create draft
+            </Button>
+          </DialogFooter>
+        </DialogContent>
       </Dialog>
 
       <div className="flex flex-wrap gap-2">
@@ -1024,17 +1011,21 @@ export default function PlaybookDetailPage() {
             <CardAction className="flex flex-wrap items-center justify-end gap-2">
               <Select
                 value={selectedVersion.id}
-                onValueChange={(value) => setSelectedVersionId(value)}
+                onValueChange={(value) => {
+                  if (value) setSelectedVersionId(value);
+                  if (editing) setMode("view");
+                }}
+                disabled={editing}
               >
-                <SelectTrigger className="h-8 w-[150px]">
+                <SelectTrigger className="h-8 w-[220px]">
                   <span className="truncate">
-                    v{selectedVersion.semantic_version}{selectedVersionIndex === 0 ? " latest" : ""}
+                    {versionOptionLabel(selectedVersion, playbook)}
                   </span>
                 </SelectTrigger>
                 <SelectContent>
-                  {versions.map((version, index) => (
+                  {versions.map((version) => (
                     <SelectItem key={version.id} value={version.id}>
-                      v{version.semantic_version}{index === 0 ? " latest" : ""}
+                      {versionOptionLabel(version, playbook)}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -1043,43 +1034,82 @@ export default function PlaybookDetailPage() {
                 variant="outline"
                 size="sm"
                 className="h-8"
+                disabled={editing}
                 onClick={() => setDiffVersion(selectedVersion.id)}
               >
                 <GitCompare className="mr-1 h-3.5 w-3.5" />
                 Diff
               </Button>
-              {selectedVersionIndex > 0 && canTransitionPlaybook(roles) && (
+              {selectedVersion.id !== playbook.current_version_id && canTransitionPlaybook(roles) && (
                 <Button
                   variant="outline"
                   size="sm"
                   className="h-8"
-                  disabled={rollbackMut.isPending}
+                  disabled={rollbackMut.isPending || editing}
                   onClick={() => rollbackMut.mutate(selectedVersion.id)}
                 >
                   <RotateCcw className="mr-1 h-3.5 w-3.5" />
                   Rollback
                 </Button>
               )}
+              {canEdit && !editing && (
+                <Button
+                  size="sm"
+                  className="h-8"
+                  disabled={lifecycleLocked || !selectedIsMain}
+                  title={editTitle}
+                  onClick={() => {
+                    if (selectedVersion.published_at) {
+                      setForkOpen(true);
+                      return;
+                    }
+                    setMode("edit");
+                  }}
+                >
+                  <Pencil className="mr-1 h-3.5 w-3.5" />
+                  {selectedVersion.published_at ? "Edit as new draft" : "Edit"}
+                </Button>
+              )}
               <span className="basis-full text-right text-xs font-normal text-muted-foreground">
-                v{selectedVersion.semantic_version} - {Array.isArray(selectedVersion.steps) ? selectedVersion.steps.length : 0} steps
+                {versionOptionLabel(selectedVersion, playbook)} — {Array.isArray(selectedVersion.steps) ? selectedVersion.steps.length : 0} steps
               </span>
             </CardAction>
           </CardHeader>
           <CardContent className="space-y-4">
-            <TriggerConditionsSummary triggerConditions={selectedVersion.trigger_conditions} />
-            <PlaybookSteps steps={selectedVersion.steps} />
-            <div className="border-t pt-4 text-xs text-muted-foreground">
-              <div className="space-y-2">
-                <p>
-                  <span className="font-medium text-foreground">Confidence</span>{" "}
-                  {(selectedVersion.playbook_confidence * 100).toFixed(0)}%
-                </p>
-                {selectedVersion.execution_confidence_guidance && (
-                  <p>{selectedVersion.execution_confidence_guidance}</p>
-                )}
-                <p>{new Date(selectedVersion.created_at).toLocaleString()}</p>
-              </div>
-            </div>
+            {editing ? (
+              <PlaybookEditor
+                playbook={playbook}
+                version={selectedVersion}
+                onCancel={() => setMode("view")}
+                onSaved={(next) => {
+                  setSelectedVersionId(next.id);
+                  setMode("view");
+                }}
+              />
+            ) : (
+              <>
+                <TriggerConditionsSummary triggerConditions={selectedVersion.trigger_conditions} />
+                <PlaybookSteps steps={selectedVersion.steps} />
+                <div className="border-t pt-4 text-xs text-muted-foreground">
+                  <div className="space-y-2">
+                    <p>
+                      <span className="font-medium text-foreground">Confidence</span>{" "}
+                      {(selectedVersion.playbook_confidence * 100).toFixed(0)}%
+                    </p>
+                    {selectedVersion.execution_confidence_guidance && (
+                      <p>{selectedVersion.execution_confidence_guidance}</p>
+                    )}
+                    {selectedVersion.last_edit_note ? (
+                      <p>
+                        <span className="font-medium text-foreground">Last edit note</span>{" "}
+                        {selectedVersion.last_edit_note}
+                      </p>
+                    ) : null}
+                    <p>{new Date(selectedVersion.created_at).toLocaleString()}</p>
+                  </div>
+                </div>
+              </>
+            )}
           </CardContent>
         </Card>
       ) : (
@@ -1090,7 +1120,7 @@ export default function PlaybookDetailPage() {
         </Card>
       )}
 
-      {playbook.description && (
+      {!editing && playbook.description && (
         <p className="text-sm text-muted-foreground whitespace-pre-wrap">{playbook.description}</p>
       )}
 

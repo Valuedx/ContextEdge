@@ -105,6 +105,9 @@ export const canTransitionPlaybook = (roles: string[]) =>
  */
 export const canEditAutomationMode = (roles: string[]) => isTenantAdmin(roles);
 
+/** Can edit a playbook's content (steps, triggers, notes). Not automation mode. */
+export const canEditPlaybook = (roles: string[]) => isKnowledgeManager(roles);
+
 /** Can trigger source discovery */
 export const canDiscoverSources = (roles: string[]) => isDomainAdmin(roles);
 

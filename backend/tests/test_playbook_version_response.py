@@ -119,6 +119,21 @@ def test_a_real_row_shape_round_trips_from_attributes():
     response = PlaybookVersionResponse.model_validate(row, from_attributes=True)
     assert response.evidence_refs["episode_ids"]
     assert response.steps
+    assert response.is_editable is True
+    assert response.revision == 1
+
+
+def test_editing_fields_default_on_legacy_payloads():
+    response = PlaybookVersionResponse(**_payload())
+    assert response.revision == 1
+    assert response.derived_from_version_id is None
+    assert response.edit_warnings == []
+    assert response.last_edit_note is None
+
+
+def test_last_edit_note_is_optional_on_the_response():
+    response = PlaybookVersionResponse(**_payload(last_edit_note="Clarify restart order"))
+    assert response.last_edit_note == "Clarify restart order"
 
 
 def test_a_genuinely_wrong_type_is_still_rejected():

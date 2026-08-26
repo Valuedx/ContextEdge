@@ -5,15 +5,16 @@ from datetime import UTC, datetime
 from uuid import UUID
 
 import structlog
-from fastapi import APIRouter, HTTPException, Query, Request, status
+from fastapi import APIRouter, HTTPException, Query, Request, Response, status
 from pydantic import BaseModel
-from sqlalchemy import func, select
+from sqlalchemy import case, delete, func, select
 from sqlalchemy.orm import selectinload
+from sqlalchemy.orm.attributes import flag_modified
 
 from contextedge.api.v1.evidence import _attach_source_references
 from contextedge.deps import AuthUser, DbSession
 from contextedge.middleware.audit import log_audit_event
-from contextedge.models.playbook import Playbook, PlaybookVersion
+from contextedge.models.playbook import Playbook, PlaybookEvidenceLink, PlaybookVersion
 from contextedge.schemas.playbook import (
     PlaybookBulkTransition,
     PlaybookCreate,
@@ -23,12 +24,21 @@ from contextedge.schemas.playbook import (
     PlaybookUpdate,
     PlaybookVersionCreate,
     PlaybookVersionDiffResponse,
+    PlaybookVersionForkRequest,
     PlaybookVersionResponse,
+    PlaybookVersionUpdate,
 )
 from contextedge.services.approval_policy_service import (
     ApprovalPolicyViolation,
     check_automation_mode,
     load_approval_policy,
+)
+from contextedge.services.event_log_service import append_operational_event
+from contextedge.services.playbook_editing import (
+    PlaybookEditValidationError,
+    normalize_steps,
+    validate_steps,
+    validate_version_fields,
 )
 from contextedge.services.playbook_service import (
     DuplicateVersionError,
@@ -37,6 +47,10 @@ from contextedge.services.playbook_service import (
     transition_playbook,
 )
 from contextedge.services.policy_assignment import assert_policy_assignment
+from contextedge.services.skill_registry_service import (
+    UnresolvedSkillReference,
+    validate_step_bindings,
+)
 
 router = APIRouter()
 logger = structlog.get_logger()
@@ -56,7 +70,81 @@ def _version_payload(version: PlaybookVersion) -> dict:
         "conflicts": version.conflicts,
         "playbook_confidence": version.playbook_confidence,
         "execution_confidence_guidance": version.execution_confidence_guidance,
+        # Required for fork and rollback: omitting it dropped verification
+        # policy from both the diff and any copy-forward.
+        "verification_policy": version.verification_policy,
     }
+
+
+def _conflict(code: str, message: str, **extra: object) -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail={"code": code, "message": message, **extra},
+    )
+
+
+async def _load_tenant_playbook(
+    db: DbSession, playbook_id: UUID, tenant_id: UUID
+) -> Playbook:
+    result = await db.execute(
+        select(Playbook).where(Playbook.id == playbook_id, Playbook.tenant_id == tenant_id)
+    )
+    playbook = result.scalar_one_or_none()
+    if not playbook:
+        raise HTTPException(status_code=404, detail="Playbook not found")
+    return playbook
+
+
+async def _load_playbook_version(
+    db: DbSession, playbook_id: UUID, version_id: UUID
+) -> PlaybookVersion:
+    result = await db.execute(
+        select(PlaybookVersion).where(
+            PlaybookVersion.id == version_id,
+            PlaybookVersion.playbook_id == playbook_id,
+        )
+    )
+    version = result.scalar_one_or_none()
+    if not version:
+        raise HTTPException(status_code=404, detail="Playbook version not found")
+    return version
+
+
+def _should_embed_draft(playbook: Playbook) -> bool:
+    """Approved playbooks keep the published fingerprint until this draft
+    itself is approved (N3). Candidates embed the current/top version so
+    the first approve is not the first semantic write."""
+    return playbook.lifecycle_state != "approved"
+
+
+async def _latest_edit_notes(
+    db: DbSession, tenant_id: UUID, version_ids: list[UUID]
+) -> dict[str, str]:
+    """Most recent non-empty edit_note per version, from audit_logs."""
+    if not version_ids:
+        return {}
+    from contextedge.models.audit import AuditLog
+
+    result = await db.execute(
+        select(AuditLog)
+        .where(
+            AuditLog.tenant_id == tenant_id,
+            AuditLog.action == "playbook.version_edited",
+            AuditLog.resource_type == "playbook_version",
+            AuditLog.resource_id.in_([str(vid) for vid in version_ids]),
+        )
+        .order_by(AuditLog.timestamp.desc())
+    )
+    notes: dict[str, str] = {}
+    for row in result.scalars():
+        rid = row.resource_id
+        if not rid or rid in notes:
+            continue
+        details = row.details if isinstance(row.details, dict) else {}
+        note = details.get("edit_note")
+        if isinstance(note, str) and note.strip():
+            notes[rid] = note.strip()
+    return notes
 
 
 def _version_diff(base: PlaybookVersion | None, target: PlaybookVersion) -> tuple[list[str], str]:
@@ -454,11 +542,24 @@ async def update_playbook(playbook_id: UUID, body: PlaybookUpdate, db: DbSession
     for field, value in update_data.items():
         setattr(playbook, field, value)
     if "title" in update_data or "description" in update_data:
-        # The semantic fingerprint tracks the text it was built from.
+        # Title/description live on the playbook row, so they belong in
+        # the fingerprint even for approved playbooks. embed_playbook
+        # still resolves the newest *published* version for step text,
+        # so an open draft cannot leak into search.
         from contextedge.services.playbook_embedding import embed_playbook
 
         await embed_playbook(db, playbook)
     await db.flush()
+    await log_audit_event(
+        db,
+        tenant_id=user.tenant_id,
+        actor_id=user.user_id,
+        actor_email=user.email,
+        action="playbook.updated",
+        resource_type="playbook",
+        resource_id=str(playbook.id),
+        details={"changed_fields": sorted(update_data.keys())},
+    )
     await db.refresh(playbook)
     return playbook
 
@@ -581,12 +682,27 @@ async def bulk_transition(
 
 @router.get("/{playbook_id}/versions", response_model=list[PlaybookVersionResponse])
 async def list_versions(playbook_id: UUID, db: DbSession, user: AuthUser):
+    playbook = await _load_tenant_playbook(db, playbook_id, user.tenant_id)
     result = await db.execute(
         select(PlaybookVersion)
-        .where(PlaybookVersion.playbook_id == playbook_id)
-        .order_by(PlaybookVersion.created_at.desc())
+        .where(
+            PlaybookVersion.playbook_id == playbook.id,
+            PlaybookVersion.tenant_id == user.tenant_id,
+        )
+        .order_by(
+            # Top/main version first — current_version_id is the editable
+            # draft after a fork, while runtime still reads published rows.
+            case((PlaybookVersion.id == playbook.current_version_id, 0), else_=1),
+            PlaybookVersion.created_at.desc(),
+        )
     )
-    return result.scalars().all()
+    versions = result.scalars().all()
+    notes = await _latest_edit_notes(db, user.tenant_id, [version.id for version in versions])
+    for version in versions:
+        note = notes.get(str(version.id))
+        if note:
+            version.last_edit_note = note
+    return versions
 
 
 @router.post(
@@ -612,14 +728,396 @@ async def create_version(
         version = await create_playbook_version(db, playbook, body.model_dump())
     except DuplicateVersionError as e:
         raise HTTPException(status_code=409, detail=str(e)) from e
+    except UnresolvedSkillReference as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+    version.created_by = user.user_id
     from contextedge.services.playbook_embedding import embed_playbook
 
     # Approved playbooks keep the published-version fingerprint until
     # this draft is published. Embedding it here would make semantic
-    # search match unpublished steps (N3).
-    if playbook.lifecycle_state != "approved":
+    # search match unpublished steps (N3). Candidates embed the new
+    # current/top version — that is the main version for search.
+    if _should_embed_draft(playbook):
         await embed_playbook(db, playbook, version)
     return version
+
+
+@router.patch(
+    "/{playbook_id}/versions/{version_id}",
+    response_model=PlaybookVersionResponse,
+)
+async def update_playbook_version(
+    playbook_id: UUID,
+    version_id: UUID,
+    body: PlaybookVersionUpdate,
+    db: DbSession,
+    user: AuthUser,
+):
+    user.require_role("knowledge_manager")
+    playbook = await _load_tenant_playbook(db, playbook_id, user.tenant_id)
+    version = await _load_playbook_version(db, playbook_id, version_id)
+
+    if playbook.lifecycle_state in {"retired", "deprecated"}:
+        raise _conflict(
+            "lifecycle_readonly",
+            f"Playbooks in '{playbook.lifecycle_state}' cannot be edited",
+        )
+    if version.published_at is not None:
+        raise _conflict(
+            "version_published",
+            "Published versions are immutable. Fork a draft to edit.",
+            hint="fork a draft",
+            fork_url=f"/playbooks/{playbook_id}/versions/{version_id}/draft",
+        )
+    if playbook.current_version_id != version.id:
+        raise _conflict(
+            "not_current_version",
+            "Only the current (top) version can be edited. Switch to the main version.",
+        )
+    if body.expected_revision != version.revision:
+        raise _conflict(
+            "revision_conflict",
+            "This version was edited elsewhere. Reload and retry.",
+            current_revision=version.revision,
+            updated_at=version.updated_at.isoformat() if version.updated_at else None,
+        )
+
+    changed_fields: list[str] = []
+    summary: dict | None = None
+    warnings: list[str] = []
+
+    if body.steps is not None:
+        try:
+            steps, summary = normalize_steps(version.steps, body.steps, user.user_id)
+            validate_result = validate_steps(steps)
+            warnings.extend(validate_result.get("warnings") or [])
+            validate_version_fields(
+                trigger_conditions=body.trigger_conditions,
+                rollback_notes=body.rollback_notes
+                if body.rollback_notes is not None
+                else version.rollback_notes,
+            )
+            await validate_step_bindings(db, user.tenant_id, steps)
+        except PlaybookEditValidationError as e:
+            raise HTTPException(status_code=422, detail=str(e)) from e
+        except UnresolvedSkillReference as e:
+            raise HTTPException(status_code=422, detail=str(e)) from e
+        version.steps = steps
+        flag_modified(version, "steps")
+        changed_fields.append("steps")
+
+    field_map = {
+        "trigger_conditions": body.trigger_conditions,
+        "branching_logic": body.branching_logic,
+        "inputs": body.inputs,
+        "outputs": body.outputs,
+        "rollback_notes": body.rollback_notes,
+        "execution_confidence_guidance": body.execution_confidence_guidance,
+        "playbook_confidence": body.playbook_confidence,
+    }
+    if body.trigger_conditions is not None or body.rollback_notes is not None:
+        try:
+            validate_version_fields(
+                trigger_conditions=body.trigger_conditions,
+                rollback_notes=body.rollback_notes,
+            )
+        except PlaybookEditValidationError as e:
+            raise HTTPException(status_code=422, detail=str(e)) from e
+    for field, value in field_map.items():
+        if value is not None:
+            setattr(version, field, value)
+            if field in {
+                "trigger_conditions",
+                "branching_logic",
+                "inputs",
+                "outputs",
+            }:
+                flag_modified(version, field)
+            changed_fields.append(field)
+    if body.verification_policy is not None:
+        version.verification_policy = body.verification_policy.model_dump()
+        flag_modified(version, "verification_policy")
+        changed_fields.append("verification_policy")
+
+    if not changed_fields and not body.edit_note:
+        return version
+
+    now = datetime.now(UTC)
+    version.revision = int(version.revision or 1) + 1
+    version.last_edited_by = user.user_id
+    version.updated_at = now
+    playbook.updated_at = now
+
+    from contextedge.services.playbook_embedding import embed_playbook
+
+    # Draft edits of a candidate re-fingerprint the current/top version.
+    # Approved playbooks keep serving the published embedding until this
+    # draft is itself approved.
+    if (
+        ("steps" in changed_fields or "trigger_conditions" in changed_fields)
+        and _should_embed_draft(playbook)
+    ):
+        await embed_playbook(db, playbook, version)
+
+    audit_summary = summary or {
+        "added": [],
+        "removed": [],
+        "modified": [],
+        "reordered": False,
+    }
+    await append_operational_event(
+        db,
+        tenant_id=user.tenant_id,
+        actor_id=user.user_id,
+        entity_type="playbook_version",
+        entity_id=version.id,
+        event_type="playbook.version_edited",
+        payload={
+            "playbook_id": str(playbook.id),
+            "semantic_version": version.semantic_version,
+            "revision": version.revision,
+            "changed_fields": changed_fields,
+            "summary": audit_summary,
+            "edit_note": body.edit_note,
+        },
+    )
+    await log_audit_event(
+        db,
+        tenant_id=user.tenant_id,
+        actor_id=user.user_id,
+        actor_email=user.email,
+        action="playbook.version_edited",
+        resource_type="playbook_version",
+        resource_id=str(version.id),
+        details={
+            "playbook_id": str(playbook.id),
+            "semantic_version": version.semantic_version,
+            "revision": version.revision,
+            "changed_fields": changed_fields,
+            "summary": audit_summary,
+            "edit_note": body.edit_note,
+        },
+    )
+    await db.flush()
+    await db.refresh(version)
+    if body.edit_note:
+        version.last_edit_note = body.edit_note
+    payload = PlaybookVersionResponse.model_validate(version)
+    if warnings:
+        return payload.model_copy(update={"edit_warnings": warnings})
+    return payload
+
+
+@router.post(
+    "/{playbook_id}/versions/{version_id}/draft",
+    response_model=PlaybookVersionResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def fork_playbook_version_draft(
+    playbook_id: UUID,
+    version_id: UUID,
+    db: DbSession,
+    user: AuthUser,
+    response: Response,
+    body: PlaybookVersionForkRequest | None = None,
+):
+    """Copy-on-write fork of a published version into a new unpublished draft.
+
+    The new row becomes ``current_version_id`` (the main/top version) but
+    runtime and embeddings keep serving the published source until this
+    draft is approved.
+    """
+    user.require_role("knowledge_manager")
+    playbook = await _load_tenant_playbook(db, playbook_id, user.tenant_id)
+    target = await _load_playbook_version(db, playbook_id, version_id)
+
+    if playbook.lifecycle_state in {"retired", "deprecated"}:
+        raise _conflict(
+            "lifecycle_readonly",
+            f"Playbooks in '{playbook.lifecycle_state}' cannot be edited",
+        )
+
+    existing_draft = (
+        await db.execute(
+            select(PlaybookVersion)
+            .where(
+                PlaybookVersion.playbook_id == playbook.id,
+                PlaybookVersion.published_at.is_(None),
+            )
+            .order_by(PlaybookVersion.created_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if existing_draft is not None:
+        playbook.current_version_id = existing_draft.id
+        playbook.updated_at = datetime.now(UTC)
+        response.status_code = status.HTTP_200_OK
+        return existing_draft
+
+    data = _version_payload(target)
+    try:
+        version = await create_playbook_version(db, playbook, data)
+    except DuplicateVersionError as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
+    except UnresolvedSkillReference as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+
+    version.derived_from_version_id = target.id
+    version.created_by = user.user_id
+    version.last_edited_by = user.user_id
+    # create_playbook_version already repoints current_version_id to this
+    # new row — that is the main/top version for subsequent edits.
+    if _should_embed_draft(playbook):
+        from contextedge.services.playbook_embedding import embed_playbook
+
+        await embed_playbook(db, playbook, version)
+
+    edit_note = body.edit_note if body is not None else None
+    await append_operational_event(
+        db,
+        tenant_id=user.tenant_id,
+        actor_id=user.user_id,
+        entity_type="playbook_version",
+        entity_id=version.id,
+        event_type="playbook.version_forked",
+        payload={
+            "playbook_id": str(playbook.id),
+            "source_version_id": str(target.id),
+            "semantic_version": version.semantic_version,
+            "edit_note": edit_note,
+        },
+    )
+    await log_audit_event(
+        db,
+        tenant_id=user.tenant_id,
+        actor_id=user.user_id,
+        actor_email=user.email,
+        action="playbook.version_forked",
+        resource_type="playbook_version",
+        resource_id=str(version.id),
+        details={
+            "playbook_id": str(playbook.id),
+            "source_version_id": str(target.id),
+            "semantic_version": version.semantic_version,
+            "edit_note": edit_note,
+        },
+    )
+    await db.flush()
+    await db.refresh(version)
+    return version
+
+
+@router.delete(
+    "/{playbook_id}/versions/{version_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def discard_playbook_version_draft(
+    playbook_id: UUID,
+    version_id: UUID,
+    db: DbSession,
+    user: AuthUser,
+):
+    user.require_role("knowledge_manager")
+    playbook = await _load_tenant_playbook(db, playbook_id, user.tenant_id)
+    version = await _load_playbook_version(db, playbook_id, version_id)
+
+    if version.published_at is not None:
+        raise _conflict(
+            "version_published",
+            "Published versions cannot be discarded.",
+        )
+
+    sibling_count = (
+        await db.execute(
+            select(func.count())
+            .select_from(PlaybookVersion)
+            .where(PlaybookVersion.playbook_id == playbook.id)
+        )
+    ).scalar_one()
+    if sibling_count <= 1:
+        raise _conflict(
+            "only_version",
+            "Cannot discard the only version of this playbook.",
+        )
+
+    newest_published = (
+        await db.execute(
+            select(PlaybookVersion)
+            .where(
+                PlaybookVersion.playbook_id == playbook.id,
+                PlaybookVersion.id != version.id,
+                PlaybookVersion.published_at.is_not(None),
+            )
+            .order_by(PlaybookVersion.published_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    fallback = newest_published
+    if fallback is None:
+        fallback = (
+            await db.execute(
+                select(PlaybookVersion)
+                .where(
+                    PlaybookVersion.playbook_id == playbook.id,
+                    PlaybookVersion.id != version.id,
+                )
+                .order_by(PlaybookVersion.created_at.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+
+    discarded_id = version.id
+    discarded_semantic_version = version.semantic_version
+    if playbook.current_version_id == version.id:
+        playbook.current_version_id = fallback.id if fallback is not None else None
+        playbook.updated_at = datetime.now(UTC)
+
+    await db.execute(
+        delete(PlaybookEvidenceLink).where(
+            PlaybookEvidenceLink.playbook_version_id == discarded_id
+        )
+    )
+    await db.delete(version)
+
+    if (
+        _should_embed_draft(playbook)
+        and fallback is not None
+        and playbook.current_version_id == fallback.id
+    ):
+        from contextedge.services.playbook_embedding import embed_playbook
+
+        await embed_playbook(db, playbook, fallback)
+    elif playbook.lifecycle_state == "approved" and newest_published is not None:
+        from contextedge.services.playbook_embedding import embed_playbook
+
+        # Restore the published fingerprint as the main embedding.
+        await embed_playbook(db, playbook, newest_published)
+
+    await append_operational_event(
+        db,
+        tenant_id=user.tenant_id,
+        actor_id=user.user_id,
+        entity_type="playbook_version",
+        entity_id=discarded_id,
+        event_type="playbook.version_discarded",
+        payload={
+            "playbook_id": str(playbook.id),
+            "semantic_version": discarded_semantic_version,
+            "current_version_id": (
+                str(playbook.current_version_id) if playbook.current_version_id else None
+            ),
+        },
+    )
+    await log_audit_event(
+        db,
+        tenant_id=user.tenant_id,
+        actor_id=user.user_id,
+        actor_email=user.email,
+        action="playbook.version_discarded",
+        resource_type="playbook_version",
+        resource_id=str(discarded_id),
+        details={"playbook_id": str(playbook.id)},
+    )
 
 
 @router.get(

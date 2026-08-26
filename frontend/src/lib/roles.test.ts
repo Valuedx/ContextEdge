@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   SETTINGS_TABS,
   canEditAutomationMode,
+  canEditPlaybook,
   canSeeNav,
   canTransitionPlaybook,
   hasRole,
@@ -15,6 +16,15 @@ describe("hasRole", () => {
     expect(hasRole(["tenant_admin"], "knowledge_manager")).toBe(true);
     expect(hasRole(["platform_super_admin"], "analyst")).toBe(true);
     expect(hasRole(["analyst"], "domain_admin")).toBe(false);
+  });
+});
+
+describe("canEditPlaybook", () => {
+  it("matches the knowledge_manager API gate, including tenant admin", () => {
+    expect(canEditPlaybook(["knowledge_manager"])).toBe(true);
+    expect(canEditPlaybook(["tenant_admin"])).toBe(true);
+    expect(canEditPlaybook(["playbook_reviewer"])).toBe(false);
+    expect(canEditPlaybook(["analyst"])).toBe(false);
   });
 });
 

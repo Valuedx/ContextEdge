@@ -26,6 +26,31 @@ function _tokenRoles(): string[] {
   }
 }
 
+export class ApiError extends Error {
+  status: number;
+  code?: string;
+  detail?: unknown;
+  currentRevision?: number;
+  updatedAt?: string;
+
+  constructor(message: string, status: number, detail?: unknown) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+    this.detail = detail;
+    if (detail && typeof detail === "object") {
+      const d = detail as {
+        code?: unknown;
+        current_revision?: unknown;
+        updated_at?: unknown;
+      };
+      if (typeof d.code === "string") this.code = d.code;
+      if (typeof d.current_revision === "number") this.currentRevision = d.current_revision;
+      if (typeof d.updated_at === "string") this.updatedAt = d.updated_at;
+    }
+  }
+}
+
 class ApiClient {
   private baseUrl?: string;
 
@@ -91,12 +116,14 @@ class ApiClient {
               : JSON.stringify(d),
           )
           .join("; ");
+      } else if (detail != null && typeof detail === "object" && "message" in detail) {
+        message = String((detail as { message: unknown }).message);
       } else if (detail != null) {
         message = JSON.stringify(detail);
       } else {
         message = `Request failed: ${res.status}`;
       }
-      throw new Error(message);
+      throw new ApiError(message, res.status, detail);
     }
 
     if (res.status === 204) return undefined as T;

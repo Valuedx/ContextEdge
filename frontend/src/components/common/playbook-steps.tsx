@@ -17,7 +17,7 @@
 
 import { useState } from "react";
 
-import { AlertTriangle, ArrowRight, FileText, Layers, Lightbulb } from "lucide-react";
+import { AlertTriangle, ArrowRight, FileText, Layers, Lightbulb, PencilLine } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 
@@ -44,6 +44,7 @@ export interface PlaybookStep {
   grounding_status?: string;
   step_classification?: string;
   reason?: string;
+  human_edited?: boolean;
 }
 
 // Step kinds carry different risk. A remediation step changes the
@@ -147,6 +148,15 @@ export function PlaybookSteps({
                     >
                       <Lightbulb className="h-3 w-3" />
                       Best Practice (Non-Grounded)
+                    </span>
+                  )}
+                  {step.human_edited && (
+                    <span
+                      className="inline-flex items-center gap-1 rounded border border-orange-200 bg-orange-50 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-orange-800 dark:border-orange-500/40 dark:bg-orange-500/10 dark:text-orange-300"
+                      title="A knowledge manager edited this grounded step after generation. Citations are unchanged."
+                    >
+                      <PencilLine className="h-3 w-3" />
+                      Edited
                     </span>
                   )}
                   {step.evidence_quality && (

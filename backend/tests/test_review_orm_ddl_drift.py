@@ -61,8 +61,10 @@ def _collect_constraint_markers() -> set[tuple[str, str]]:
 
 
 # Snapshot of every ``ondelete=`` / ``unique=True`` / ``UniqueConstraint``
-# occurrence across the models directory as of migration 0029. Each
-# entry is (filename, normalised line snippet) produced by
+# occurrence across the models directory. Last regenerated after
+# ``0093_playbook_version_editing`` so copilot / tenant-mixin / nav
+# markers that shipped with their CREATE TABLE migrations are included.
+# Each entry is (filename, normalised line snippet) produced by
 # ``_collect_constraint_markers`` verbatim. Regenerate via:
 #
 #     python -c "from tests.test_review_orm_ddl_drift import \
@@ -81,212 +83,280 @@ def _collect_constraint_markers() -> set[tuple[str, str]]:
 # constraint listed below is either part of a CREATE TABLE in 0029
 # (no ALTER needed) or covered by an explicit ALTER TABLE block with
 # IF EXISTS guards in 0029.
-_EXPECTED_MARKERS: set[tuple[str, str]] = {
-    # knowledge_supersession_proposals is a brand-new table (0065 CREATE
-    # TABLE), so the constraints ship with the table and no ALTER is needed.
-    ('knowledge_supersession.py',
-     'ForeignKey("evidence_items.id", ondelete="CASCADE"),'),
-    ('knowledge_supersession.py',
-     'UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"),'),
-    ('knowledge_supersession.py',
-     'UniqueConstraint( "tenant_id", "predecessor_evidence_id", '
-     '"successor_evidence_id", name="uq_knowledge_supersession_pair", ),'),
-    # rollback_plans + escalations are brand-new tables (0063 CREATE TABLE).
-    ('remediation.py', 'ForeignKey("execution_runs.id", ondelete="CASCADE"),'),
-    ('remediation.py', 'ForeignKey("execution_runs.id", ondelete="SET NULL"),'),
-    ('remediation.py', 'ForeignKey("resolution_sessions.id", ondelete="SET NULL"),'),
-    ('remediation.py', 'ForeignKey("verification_assessments.id", ondelete="SET NULL"),'),
-    ('remediation.py',
-     'UUID(as_uuid=True), ForeignKey("decisions.id", ondelete="SET NULL"), nullable=True'),
-    ('remediation.py', 'UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"),'),
-    # execution_runs.rolls_back_run_id is a NEW FK on an EXISTING table, so it
-    # needs an ALTER — 0063 issues create_foreign_key for exactly this.
-    ('execution.py', 'ForeignKey("execution_runs.id", ondelete="SET NULL"),'),
-    # trust_profiles is a brand-new table (0062 CREATE TABLE).
-    ('trust.py', 'UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"),'),
-    ('trust.py',
-     'UniqueConstraint( "tenant_id", "agent_ref", "action_type", "resource_class", '
-     '"environment", "business_criticality", name="uq_trust_profiles_scope", ),'),
-    # verification_assessments + verification_observations are brand-new
-    # tables (0061 CREATE TABLE).
-    ('verification.py', 'ForeignKey("execution_runs.id", ondelete="CASCADE"),'),
-    ('verification.py', 'ForeignKey("verification_assessments.id", ondelete="CASCADE"),'),
-    ('verification.py', 'UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"),'),
-    ('verification.py',
-     'UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False'),
-    # execution_attempts is a brand-new table (0060 CREATE TABLE).
-    ('attempt.py', 'ForeignKey("execution_step_runs.id", ondelete="CASCADE"),'),
-    ('attempt.py',
-     'UUID(as_uuid=True), ForeignKey("skills.id", ondelete="SET NULL"), nullable=True'),
-    ('attempt.py', 'UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"),'),
-    ('attempt.py',
-     'UniqueConstraint( "step_run_id", "attempt_number", '
-     'name="uq_execution_attempts_step_number" ),'),
-    # skills + execution_contracts are brand-new tables (0058 CREATE TABLE).
-    # execution_contract_id is RESTRICT on purpose: deleting the contract a
-    # live skill runs under would strip its timeout and idempotency
-    # guarantees, which is not a thing to allow by cascade.
-    ('skill.py', 'ForeignKey("execution_contracts.id", ondelete="RESTRICT"),'),
-    ('skill.py', 'UUID(as_uuid=True), ForeignKey("skills.id", ondelete="SET NULL"), nullable=True'),
-    ('skill.py', 'UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"),'),
-    ('skill.py',
-     'UniqueConstraint("tenant_id", "name", name="uq_execution_contracts_tenant_name"),'),
-    ('skill.py',
-     'UniqueConstraint("tenant_id", "skill_key", "version", name="uq_skills_key_version"),'),
-    # policy_checks is a brand-new table (0056 CREATE TABLE), so no ALTER
-    # migration is needed for these two — see this test's own guidance.
-    ('policy.py', 'ForeignKey("tenant_policies.id", ondelete="SET NULL"),'),
-    ('policy.py',
-     'UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False'),
-    ('action_policy.py', 'ForeignKey("action_policies.id", ondelete="CASCADE"),'),
-    ('action_policy.py', 'ForeignKey("decisions.id", ondelete="CASCADE"),'),
-    ('action_policy.py', 'ForeignKey("entities.id", ondelete="SET NULL"),'),
-    ('action_policy.py',
-     'UniqueConstraint( "decision_id", "action_policy_id", '
-     'name="uq_decision_action_policies_decision_policy", ),'),
-    ('case_outcome.py', 'ForeignKey("case_outcomes.id", ondelete="CASCADE"),'),
-    ('case_outcome.py', 'ForeignKey("fix_patterns.id", ondelete="CASCADE"),'),
-    ('case_outcome.py',
-     'ForeignKey("resolution_sessions.id", ondelete="CASCADE"),'),
-    ('case_outcome.py',
-     'UniqueConstraint( "case_outcome_id", "fix_pattern_id", "result", '
-     'name="uq_case_outcome_fix_patterns_outcome_fix_result", ),'),
-    ('claim.py', 'ForeignKey("claims.id", ondelete="CASCADE"),'),
-    ('claim.py', 'ForeignKey("decisions.id", ondelete="CASCADE"),'),
-    ('claim.py', 'ForeignKey("evidence_items.id", ondelete="CASCADE"),'),
-    ('claim.py', 'ForeignKey("resolution_sessions.id", ondelete="CASCADE"),'),
-    ('claim.py',
-     'UniqueConstraint( "decision_id", "evidence_id", '
-     'name="uq_decision_evidence_pair" ),'),
-    ('claim.py',
-     'UniqueConstraint( "decision_id", "claim_id", "use_type", '
-     'name="uq_decision_claims_decision_claim_use", ),'),
-    ('claim.py',
-     'UniqueConstraint("claim_id", "evidence_id", '
-     'name="uq_claim_evidence_pair"),'),
-    ('decision.py', 'ForeignKey("decisions.id", ondelete="CASCADE"),'),
-    ('entity.py',
-     'UniqueConstraint( "tenant_id", "entity_type", "external_system", '
-     '"external_id", name="uq_entities_tenant_type_system_external_id", ),'),
-    ('episode.py', 'ForeignKey("canonical_identities.id", ondelete="CASCADE"),'),
-    ('episode.py', 'ForeignKey("evidence_items.id", ondelete="CASCADE"),'),
-    # uq_identity_aliases_tenant_strong — partial unique index created in
-    # migration 0033; mirrored into IdentityAlias.__table_args__ so
-    # metadata-built schemas enforce strong-alias tenant uniqueness too.
-    # case_bridge.py (migration 0038): ticket-number bridging membership
-    # model — identifiers, memberships, pending mentions.
-    ('case_bridge.py', 'ForeignKey("evidence_items.id", ondelete="CASCADE"),'),
-    ('case_bridge.py',
-     'UniqueConstraint( "evidence_id", "canonical_case_id", name="uq_evidence_case_membership" ),'),
-    ('case_bridge.py',
-     'UniqueConstraint( "evidence_id", "normalized_value", name="uq_pending_mention" ),'),
-    ('case_bridge.py',
-     'UniqueConstraint( "tenant_id", "source_system", "normalized_value", name="uq_case_identifiers_tenant_system_value", ),'),
-    # correlation_suggestion.py (migration 0039): gated semantic
-    # suggestions — normalized evidence pair, reviewer decision.
-    ('correlation_suggestion.py', 'ForeignKey("evidence_items.id", ondelete="CASCADE"),'),
-    ('correlation_suggestion.py',
-     'UniqueConstraint( "evidence_id_low", "evidence_id_high", name="uq_correlation_suggestion_pair" ),'),
-    # fleet_group.py (migration 0048): fleet grouping suggestions.
-    ('fleet_group.py', 'ForeignKey("evidence_items.id", ondelete="SET NULL"),'),
-    ('fleet_group.py',
-     'UniqueConstraint("tenant_id", "change_ref", name="uq_fleet_group_change"),'),
-    # fix_cohort.py (migration 0047): per-cohort outcome counters.
-    ('fix_cohort.py', 'ForeignKey("fix_patterns.id", ondelete="CASCADE"),'),
-    ('fix_cohort.py',
-     'UniqueConstraint( "fix_pattern_id", "cohort_type", "cohort_key", name="uq_fix_cohort" ),'),
-    # fix_applicability.py (migration 0046): applicability rules.
-    ('fix_applicability.py', 'ForeignKey("fix_patterns.id", ondelete="CASCADE"),'),
-    # issue_signature.py (migration 0045): problem fingerprints.
-    ('issue_signature.py', 'ForeignKey("error_signatures.id", ondelete="SET NULL"),'),
-    ('issue_signature.py', 'ForeignKey("episodes.id", ondelete="CASCADE"),'),
-    ('issue_signature.py', 'ForeignKey("issue_signatures.id", ondelete="CASCADE"),'),
-    # Covered by 0054_error_signature_unique (ALTER on the existing table —
-    # nothing wrote to error_signatures before the D1 fingerprinting pass).
-    ('error_signature.py',
-     'UniqueConstraint("tenant_id", "signature_key", name="uq_error_signature_key"),'),
-    ('issue_signature.py',
-     'UniqueConstraint("tenant_id", "signature_key", name="uq_issue_signature_key"),'),
-    ('issue_signature.py',
-     'UniqueConstraint( "episode_id", "issue_signature_id", name="uq_episode_issue_signature" ),'),
-    # situation.py (migration 0074): operational situations and their
-    # membership/impact/change-candidate tables. The unique markers are the
-    # idempotency constraints that make retrying the evaluator safe; all are
-    # on tables the same migration CREATEs, so no ALTER is owed.
-    ('situation.py', 'unique=True,'),
-    # knowledge_case.py (migration 0072): documented resolutions as their own
-    # object, so a source's claim can never be counted as an observed
-    # outcome. Both markers are on tables the same migration CREATEs, so no
-    # ALTER is owed — nothing existed to tighten.
-    ('knowledge_case.py', 'ForeignKey("knowledge_cases.id", ondelete="CASCADE"),'),
-    ('knowledge_case.py', 'unique=True,'),
-    # thread_topic.py (migration 0044): per-thread topic state.
-    ('thread_topic.py', 'ForeignKey("threads.id", ondelete="CASCADE"),'),
-    ('thread_topic.py', 'UniqueConstraint("thread_id", name="uq_thread_topic"),'),
-    # entity_class.py (migration 0042): global class taxonomy.
-    ('entity_class.py',
-     'UniqueConstraint("canonical_key", name="uq_entity_classes_key"),'),
-    ('episode.py', 'unique=True,'),
-    # episode_evidence_links (migration 0037): normalized episode↔evidence
-    # provenance added in the P0 cluster-materialization work.
-    ('episode.py', 'ForeignKey("episodes.id", ondelete="CASCADE"),'),
-    ('episode.py',
-     'UniqueConstraint("episode_id", "evidence_id", name="uq_episode_evidence"),'),
-    # identity_merge_proposals (migration 0052): a brand-new table, so
-    # the constraint arrives with its CREATE TABLE rather than an ALTER.
-    # It is what makes a reviewer's rejection durable — without it a
-    # scheduled reconciliation re-raises every rejected pair forever.
-    ('episode.py',
-     'UniqueConstraint( "tenant_id", "primary_identity_id", '
-     '"duplicate_identity_id", name="uq_identity_merge_proposal_pair", ),'),
-    # The CorrelationEdge source/target FK lines were re-wrapped in the
-    # 2026-08 lint-debt cleanup: multi-line mapped_column style puts the
-    # ForeignKey on its own line, whose fingerprint matches the generic
-    # episode.py entry above. No constraint change — pure reformatting.
-    ('error_signature.py', 'ForeignKey("entities.id", ondelete="SET NULL"),'),
-    ('error_signature.py',
-     'ForeignKey("error_signatures.id", ondelete="SET NULL"),'),
-    ('error_signature.py', 'ForeignKey("patterns.id", ondelete="SET NULL"),'),
-    ('error_signature.py', 'ForeignKey("playbooks.id", ondelete="SET NULL"),'),
-    ('evidence.py', 'ForeignKey("tenant_policies.id", ondelete="SET NULL"),'),
-    ('evidence.py', 'ForeignKey("evidence_items.id", ondelete="CASCADE"),'),
-    # evidence_chunks.evidence_id FK — created in 0030's CREATE TABLE; the
-    # mapped_column was reformatted (c02d164) so the marker is the wrapped line.
-    ('evidence.py',
-     'UUID(as_uuid=True), ForeignKey("evidence_items.id", ondelete="CASCADE"), '
-     'nullable=False'),
-    ('execution.py', 'ForeignKey("decisions.id", ondelete="SET NULL"),'),
-    ('execution.py', 'ForeignKey("resolution_sessions.id", ondelete="SET NULL"),'),
-    ('execution.py',
-     'UUID(as_uuid=True), ForeignKey("execution_runs.id", ondelete="CASCADE"),'),
-    ('execution.py',
-     'UUID(as_uuid=True), ForeignKey("execution_step_runs.id", '
-     'ondelete="CASCADE"),'),
-    ('pattern.py', 'ForeignKey("evidence_items.id", ondelete="CASCADE"),'),
-    ('pattern.py', 'ForeignKey("domains.id", ondelete="CASCADE"),'),
-    ('pattern.py', 'ForeignKey("playbook_versions.id", ondelete="CASCADE"),'),
-    ('pattern.py', 'ForeignKey("tenants.id", ondelete="CASCADE"),'),
-    ('pattern.py', 'unique=True,'),
-    ('playbook.py', 'ForeignKey("evidence_items.id", ondelete="SET NULL"),'),
-    ('playbook.py', 'ForeignKey("tenant_policies.id", ondelete="SET NULL"),'),
-    ('playbook.py',
-     'UniqueConstraint( "playbook_id", "semantic_version", '
-     'name="uq_playbook_versions_playbook_semantic_version", ),'),
-    ('playbook.py',
-     'UniqueConstraint( "tenant_id", "stable_key", '
-     'name="uq_playbooks_tenant_stable_key", ),'),
-    ('session.py', 'ForeignKey("decisions.id", ondelete="CASCADE"),'),
-    ('session.py', 'ForeignKey("entities.id", ondelete="SET NULL"),'),
-    ('session.py', 'ForeignKey("resolution_sessions.id", ondelete="CASCADE"),'),
-    ('session.py', 'unique=True,'),
-    ('source.py',
-     'UUID(as_uuid=True), ForeignKey("tenant_policies.id", ondelete="SET NULL"), '
-     'nullable=True'),
-    ('tenant.py', 'ForeignKey("tenants.id", ondelete="CASCADE"),'),
-    ('tenant.py',
-     'slug: Mapped[str] = mapped_column(String(100), unique=True, nullable=False, '
-     'index=True)'),
-}
+_EXPECTED_MARKERS: set[tuple[str, str]] = {('action_policy.py', 'ForeignKey("action_policies.id", ondelete="CASCADE"),'),
+ ('action_policy.py', 'ForeignKey("decisions.id", ondelete="CASCADE"),'),
+ ('action_policy.py', 'ForeignKey("entities.id", ondelete="SET NULL"),'),
+ ('action_policy.py',
+  'UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, '
+  'index=True'),
+ ('action_policy.py',
+  'UniqueConstraint( "decision_id", "action_policy_id", '
+  'name="uq_decision_action_policies_decision_policy", ),'),
+ ('attempt.py', 'ForeignKey("execution_step_runs.id", ondelete="CASCADE"),'),
+ ('attempt.py',
+  'UUID(as_uuid=True), ForeignKey("skills.id", ondelete="SET NULL"), nullable=True'),
+ ('attempt.py', 'UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"),'),
+ ('attempt.py',
+  'UniqueConstraint( "step_run_id", "attempt_number", '
+  'name="uq_execution_attempts_step_number" ),'),
+ ('audit.py', 'ForeignKey("tenants.id", ondelete="CASCADE"),'),
+ ('base.py', 'ForeignKey("tenants.id", ondelete="CASCADE"),'),
+ ('case_bridge.py', 'ForeignKey("evidence_items.id", ondelete="CASCADE"),'),
+ ('case_bridge.py',
+  'UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, '
+  'index=True'),
+ ('case_bridge.py',
+  'UniqueConstraint( "evidence_id", "canonical_case_id", '
+  'name="uq_evidence_case_membership" ),'),
+ ('case_bridge.py',
+  'UniqueConstraint( "evidence_id", "normalized_value", name="uq_pending_mention" ),'),
+ ('case_bridge.py',
+  'UniqueConstraint( "tenant_id", "source_system", "normalized_value", '
+  'name="uq_case_identifiers_tenant_system_value", ),'),
+ ('case_outcome.py', 'ForeignKey("case_outcomes.id", ondelete="CASCADE"),'),
+ ('case_outcome.py', 'ForeignKey("fix_patterns.id", ondelete="CASCADE"),'),
+ ('case_outcome.py', 'ForeignKey("resolution_sessions.id", ondelete="CASCADE"),'),
+ ('case_outcome.py',
+  'UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, '
+  'index=True'),
+ ('case_outcome.py',
+  'UniqueConstraint( "case_outcome_id", "fix_pattern_id", "result", '
+  'name="uq_case_outcome_fix_patterns_outcome_fix_result", ),'),
+ ('claim.py', 'ForeignKey("claims.id", ondelete="CASCADE"),'),
+ ('claim.py', 'ForeignKey("decisions.id", ondelete="CASCADE"),'),
+ ('claim.py', 'ForeignKey("evidence_items.id", ondelete="CASCADE"),'),
+ ('claim.py', 'ForeignKey("resolution_sessions.id", ondelete="CASCADE"),'),
+ ('claim.py',
+  'UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, '
+  'index=True'),
+ ('claim.py',
+  'UniqueConstraint( "decision_id", "claim_id", "use_type", '
+  'name="uq_decision_claims_decision_claim_use", ),'),
+ ('claim.py',
+  'UniqueConstraint( "decision_id", "evidence_id", name="uq_decision_evidence_pair" '
+  '),'),
+ ('claim.py',
+  'UniqueConstraint("claim_id", "evidence_id", name="uq_claim_evidence_pair"),'),
+ ('copilot.py', 'ForeignKey("copilot_conversations.id", ondelete="CASCADE"),'),
+ ('copilot.py', 'ForeignKey("tenants.id", ondelete="CASCADE"),'),
+ ('copilot.py', 'ForeignKey("users.id", ondelete="CASCADE"),'),
+ ('copilot.py', 'ForeignKey("users.id", ondelete="SET NULL"),'),
+ ('copilot.py',
+  'UniqueConstraint("conversation_id", "seq", '
+  'name="uq_copilot_messages_conversation_seq"),'),
+ ('copilot.py',
+  'UniqueConstraint("tenant_id", "id", name="uq_copilot_conversations_tenant_id_id"),'),
+ ('copilot.py',
+  'UniqueConstraint("tenant_id", "id", name="uq_copilot_login_events_tenant_id_id"),'),
+ ('copilot.py',
+  'UniqueConstraint("tenant_id", "id", name="uq_copilot_messages_tenant_id_id"),'),
+ ('copilot.py',
+  'UniqueConstraint("tenant_id", "id", name="uq_copilot_usage_events_tenant_id_id"),'),
+ ('correlation_suggestion.py', 'ForeignKey("evidence_items.id", ondelete="CASCADE"),'),
+ ('correlation_suggestion.py',
+  'UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, '
+  'index=True'),
+ ('correlation_suggestion.py',
+  'UniqueConstraint( "evidence_id_low", "evidence_id_high", '
+  'name="uq_correlation_suggestion_pair" ),'),
+ ('decision.py', 'ForeignKey("decisions.id", ondelete="CASCADE"),'),
+ ('decision.py',
+  'UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, '
+  'index=True,'),
+ ('entity.py',
+  'UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, '
+  'index=True'),
+ ('entity.py',
+  'UniqueConstraint( "tenant_id", "entity_type", "external_system", "external_id", '
+  'name="uq_entities_tenant_type_system_external_id", ),'),
+ ('entity_class.py',
+  'UniqueConstraint("canonical_key", name="uq_entity_classes_key"),'),
+ ('episode.py', 'ForeignKey("canonical_identities.id", ondelete="CASCADE"),'),
+ ('episode.py', 'ForeignKey("episodes.id", ondelete="CASCADE"),'),
+ ('episode.py', 'ForeignKey("evidence_items.id", ondelete="CASCADE"),'),
+ ('episode.py', 'ForeignKey("tenants.id", ondelete="CASCADE"),'),
+ ('episode.py',
+  'UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False'),
+ ('episode.py',
+  'UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, '
+  'index=True'),
+ ('episode.py',
+  'UniqueConstraint( "tenant_id", "primary_identity_id", "duplicate_identity_id", '
+  'name="uq_identity_merge_proposal_pair", ),'),
+ ('episode.py',
+  'UniqueConstraint("episode_id", "evidence_id", name="uq_episode_evidence"),'),
+ ('episode.py', 'unique=True,'),
+ ('error_signature.py', 'ForeignKey("entities.id", ondelete="SET NULL"),'),
+ ('error_signature.py', 'ForeignKey("error_signatures.id", ondelete="SET NULL"),'),
+ ('error_signature.py', 'ForeignKey("patterns.id", ondelete="SET NULL"),'),
+ ('error_signature.py', 'ForeignKey("playbooks.id", ondelete="SET NULL"),'),
+ ('error_signature.py',
+  'UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, '
+  'index=True'),
+ ('error_signature.py',
+  'UniqueConstraint("tenant_id", "signature_key", name="uq_error_signature_key"),'),
+ ('evaluation.py',
+  'UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, '
+  'index=True'),
+ ('evaluation.py',
+  'UniqueConstraint( "tenant_id", "id", '
+  'name="uq_ranking_calibration_configs_tenant_id_id" ),'),
+ ('evaluation.py',
+  'UniqueConstraint("tenant_id", "id", name="uq_runtime_match_records_tenant_id_id"),'),
+ ('evaluation.py',
+  'UniqueConstraint("tenant_id", "match_id", '
+  'name="uq_runtime_match_records_tenant_match"),'),
+ ('events.py', 'ForeignKey("tenants.id", ondelete="CASCADE"),'),
+ ('evidence.py', 'ForeignKey("evidence_items.id", ondelete="CASCADE"),'),
+ ('evidence.py', 'ForeignKey("tenant_policies.id", ondelete="SET NULL"),'),
+ ('evidence.py',
+  'UUID(as_uuid=True), ForeignKey("evidence_items.id", ondelete="CASCADE"), '
+  'nullable=False'),
+ ('evidence.py',
+  'UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, '
+  'index=True'),
+ ('execution.py', 'ForeignKey("decisions.id", ondelete="SET NULL"),'),
+ ('execution.py', 'ForeignKey("execution_runs.id", ondelete="SET NULL"),'),
+ ('execution.py', 'ForeignKey("resolution_sessions.id", ondelete="SET NULL"),'),
+ ('execution.py',
+  'UUID(as_uuid=True), ForeignKey("execution_runs.id", ondelete="CASCADE"),'),
+ ('execution.py',
+  'UUID(as_uuid=True), ForeignKey("execution_step_runs.id", ondelete="CASCADE"),'),
+ ('execution.py',
+  'UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, '
+  'index=True,'),
+ ('fix_applicability.py', 'ForeignKey("fix_patterns.id", ondelete="CASCADE"),'),
+ ('fix_applicability.py',
+  'UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, '
+  'index=True'),
+ ('fix_cohort.py', 'ForeignKey("fix_patterns.id", ondelete="CASCADE"),'),
+ ('fix_cohort.py',
+  'UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, '
+  'index=True'),
+ ('fix_cohort.py',
+  'UniqueConstraint( "tenant_id", "fix_pattern_id", "cohort_type", "cohort_key", '
+  'name="uq_fix_cohort", ),'),
+ ('fleet_group.py', 'ForeignKey("evidence_items.id", ondelete="SET NULL"),'),
+ ('fleet_group.py',
+  'UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, '
+  'index=True'),
+ ('fleet_group.py',
+  'UniqueConstraint("tenant_id", "change_ref", name="uq_fleet_group_change"),'),
+ ('issue_signature.py', 'ForeignKey("episodes.id", ondelete="CASCADE"),'),
+ ('issue_signature.py', 'ForeignKey("error_signatures.id", ondelete="SET NULL"),'),
+ ('issue_signature.py', 'ForeignKey("issue_signatures.id", ondelete="CASCADE"),'),
+ ('issue_signature.py',
+  'UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, '
+  'index=True'),
+ ('issue_signature.py',
+  'UniqueConstraint( "episode_id", "issue_signature_id", '
+  'name="uq_episode_issue_signature" ),'),
+ ('issue_signature.py',
+  'UniqueConstraint("tenant_id", "signature_key", name="uq_issue_signature_key"),'),
+ ('knowledge_case.py', 'ForeignKey("knowledge_cases.id", ondelete="CASCADE"),'),
+ ('knowledge_case.py',
+  'UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, '
+  'index=True'),
+ ('knowledge_case.py', 'unique=True,'),
+ ('knowledge_supersession.py', 'ForeignKey("evidence_items.id", ondelete="CASCADE"),'),
+ ('knowledge_supersession.py',
+  'UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"),'),
+ ('knowledge_supersession.py',
+  'UniqueConstraint( "tenant_id", "predecessor_evidence_id", "successor_evidence_id", '
+  'name="uq_knowledge_supersession_pair", ),'),
+ ('pattern.py', 'ForeignKey("domains.id", ondelete="CASCADE"),'),
+ ('pattern.py', 'ForeignKey("evidence_items.id", ondelete="CASCADE"),'),
+ ('pattern.py', 'ForeignKey("evidence_items.id", ondelete="SET NULL"),'),
+ ('pattern.py', 'ForeignKey("playbook_versions.id", ondelete="CASCADE"),'),
+ ('pattern.py', 'ForeignKey("tenants.id", ondelete="CASCADE"),'),
+ ('pattern.py',
+  'UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, '
+  'index=True'),
+ ('pattern.py', 'unique=True,'),
+ ('playbook.py', 'ForeignKey("evidence_items.id", ondelete="SET NULL"),'),
+ ('playbook.py', 'ForeignKey("negative_knowledge_items.id", ondelete="CASCADE"),'),
+ ('playbook.py', 'ForeignKey("playbook_versions.id", ondelete="SET NULL"),'),
+ ('playbook.py', 'ForeignKey("tenant_policies.id", ondelete="SET NULL"),'),
+ ('playbook.py', 'ForeignKey("tenants.id", ondelete="CASCADE"),'),
+ ('playbook.py',
+  'UUID(as_uuid=True), ForeignKey("playbooks.id", ondelete="CASCADE"), nullable=False'),
+ ('playbook.py',
+  'UniqueConstraint( "playbook_id", "semantic_version", '
+  'name="uq_playbook_versions_playbook_semantic_version", ),'),
+ ('playbook.py',
+  'UniqueConstraint( "tenant_id", "id", '
+  'name="uq_playbook_negative_knowledge_tenant_id_id" ),'),
+ ('playbook.py',
+  'UniqueConstraint( "tenant_id", "playbook_id", "negative_knowledge_id", '
+  'name="uq_pb_nk_tenant_playbook_item", ),'),
+ ('playbook.py',
+  'UniqueConstraint( "tenant_id", "stable_key", name="uq_playbooks_tenant_stable_key", '
+  '),'),
+ ('policy.py', 'ForeignKey("tenant_policies.id", ondelete="SET NULL"),'),
+ ('policy.py',
+  'UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False'),
+ ('policy.py',
+  'UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, '
+  'index=True'),
+ ('remediation.py', 'ForeignKey("execution_runs.id", ondelete="CASCADE"),'),
+ ('remediation.py', 'ForeignKey("execution_runs.id", ondelete="SET NULL"),'),
+ ('remediation.py', 'ForeignKey("resolution_sessions.id", ondelete="SET NULL"),'),
+ ('remediation.py', 'ForeignKey("verification_assessments.id", ondelete="SET NULL"),'),
+ ('remediation.py',
+  'UUID(as_uuid=True), ForeignKey("decisions.id", ondelete="SET NULL"), nullable=True'),
+ ('remediation.py',
+  'UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"),'),
+ ('session.py', 'ForeignKey("decisions.id", ondelete="CASCADE"),'),
+ ('session.py', 'ForeignKey("entities.id", ondelete="SET NULL"),'),
+ ('session.py', 'ForeignKey("resolution_sessions.id", ondelete="CASCADE"),'),
+ ('session.py', 'ForeignKey("tenants.id", ondelete="CASCADE"),'),
+ ('session.py', 'unique=True,'),
+ ('situation.py',
+  'UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, '
+  'index=True'),
+ ('situation.py', 'unique=True,'),
+ ('skill.py', 'ForeignKey("execution_contracts.id", ondelete="RESTRICT"),'),
+ ('skill.py',
+  'UUID(as_uuid=True), ForeignKey("skills.id", ondelete="SET NULL"), nullable=True'),
+ ('skill.py', 'UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"),'),
+ ('skill.py',
+  'UniqueConstraint("tenant_id", "name", name="uq_execution_contracts_tenant_name"),'),
+ ('skill.py',
+  'UniqueConstraint("tenant_id", "skill_key", "version", '
+  'name="uq_skills_key_version"),'),
+ ('source.py',
+  'UUID(as_uuid=True), ForeignKey("tenant_policies.id", ondelete="SET NULL"), '
+  'nullable=True'),
+ ('source.py',
+  'UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, '
+  'index=True'),
+ ('tenant.py', 'ForeignKey("tenants.id", ondelete="CASCADE"),'),
+ ('tenant.py',
+  'UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, '
+  'index=True'),
+ ('tenant.py',
+  'UniqueConstraint("tenant_id", "username", name="uq_users_tenant_username"),'),
+ ('tenant.py',
+  '__table_args__ = (UniqueConstraint("role", "href", '
+  'name="uq_role_nav_access_role_href"),)'),
+ ('tenant.py',
+  'slug: Mapped[str] = mapped_column(String(100), unique=True, nullable=False, '
+  'index=True)'),
+ ('thread_topic.py', 'ForeignKey("threads.id", ondelete="CASCADE"),'),
+ ('thread_topic.py',
+  'UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, '
+  'index=True'),
+ ('thread_topic.py', 'UniqueConstraint("thread_id", name="uq_thread_topic"),'),
+ ('trust.py', 'UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"),'),
+ ('trust.py',
+  'UniqueConstraint( "tenant_id", "agent_ref", "action_type", "resource_class", '
+  '"environment", "business_criticality", name="uq_trust_profiles_scope", ),'),
+ ('verification.py', 'ForeignKey("execution_runs.id", ondelete="CASCADE"),'),
+ ('verification.py', 'ForeignKey("verification_assessments.id", ondelete="CASCADE"),'),
+ ('verification.py',
+  'UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"),'),
+ ('verification.py',
+  'UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False')}
 
 
 def test_no_new_constraint_tightening_without_migration():
