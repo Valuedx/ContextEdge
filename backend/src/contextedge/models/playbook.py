@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import Computed, DateTime, Float, ForeignKey, String, Text, UniqueConstraint, func
+from sqlalchemy import CheckConstraint, Computed, DateTime, Float, ForeignKey, String, Text, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -53,6 +53,10 @@ class Playbook(Base, TenantScopedMixin):
             "stable_key",
             name="uq_playbooks_tenant_stable_key",
         ),
+        CheckConstraint(
+            "risk_tier IN ('minimal', 'low', 'medium', 'high', 'critical', 'restricted')",
+            name="ck_playbooks_risk_tier",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -83,13 +87,14 @@ class Playbook(Base, TenantScopedMixin):
         ),
         deferred=True,
     )
-    # Semantic fingerprint of title + description + the current version's
-    # trigger conditions and step titles (migration 0035). "Current" is the
-    # latest-created version — create_playbook_version repoints
-    # current_version_id immediately, before review. Nullable: a
-    # playbook with no embedding simply doesn't appear in semantic seeds
-    # and falls back to FTS. Written by services/playbook_embedding.py.
+    # Semantic fingerprint of title + description + the newest
+    # *published* version's trigger conditions and step titles
+    # (migration 0035). Unpublished drafts pointed at by
+    # current_version_id are not embedded. Nullable: a playbook with no
+    # embedding simply doesn't appear in semantic seeds and falls back
+    # to FTS. Written by services/playbook_embedding.py.
     embedding = mapped_column(Vector(3072), nullable=True)
+    lexical_search_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     lifecycle_state: Mapped[str] = mapped_column(
         String(30),
         default="candidate",
@@ -120,6 +125,39 @@ class Playbook(Base, TenantScopedMixin):
 
     versions: Mapped[list["PlaybookVersion"]] = relationship(back_populates="playbook")
     approvals: Mapped[list["PlaybookApproval"]] = relationship(back_populates="playbook")
+
+
+class PlaybookNegativeKnowledge(Base, TenantOwnedMixin):
+    """Explicit playbook↔negative-knowledge link (N8)."""
+
+    __tablename__ = "playbook_negative_knowledge"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id", "id", name="uq_playbook_negative_knowledge_tenant_id_id"
+        ),
+        UniqueConstraint(
+            "tenant_id",
+            "playbook_id",
+            "negative_knowledge_id",
+            name="uq_pb_nk_tenant_playbook_item",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    playbook_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("playbooks.id", ondelete="CASCADE"), nullable=False
+    )
+    playbook_version_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), nullable=True
+    )
+    negative_knowledge_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("negative_knowledge_items.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
 
 
 class PlaybookVersion(Base, TenantOwnedMixin):

@@ -111,6 +111,7 @@ def test_maf_profile_clamps_server_maximums():
     assert budget.max_relationships == 120
     assert budget.max_characters == 30_000
     assert budget.max_depth == 3
+    assert MAF_V1.type_reservations["playbook"] == 2
 
 
 def test_unknown_projection_profile_is_rejected():
@@ -219,6 +220,85 @@ def test_selector_reserves_characters_for_relationships():
     assert subset.usage.relationships >= 1
     assert subset.usage.nodes >= 2
     assert "max_characters" in subset.truncation_reasons
+
+
+def test_selector_reserves_playbook_slots_before_relevance_fill():
+    """G4.1: a hub of evidence must not push playbooks off the budget."""
+    repository = FakeRepository()
+    extra = [uuid4() for _ in range(8)]
+    playbook_a, playbook_b = uuid4(), uuid4()
+    for eid in extra:
+        repository.nodes[f"evidence:{eid}"] = FakeRepository._node(
+            "evidence", eid, "hub evidence"
+        )
+    repository.nodes[f"playbook:{playbook_a}"] = FakeRepository._node(
+        "playbook", playbook_a, "Playbook A"
+    )
+    repository.nodes[f"playbook:{playbook_b}"] = FakeRepository._node(
+        "playbook", playbook_b, "Playbook B"
+    )
+
+    orig_load = repository.load_edges
+
+    async def load_edges(frontier, scope, as_of):
+        edges = list(await orig_load(frontier, scope, as_of))
+        keys = {node.key for node in frontier}
+        if f"session:{repository.session_id}" in keys:
+            for eid in extra:
+                edges.append(
+                    GraphEdgeRecord(
+                        source=GraphNodeRef(type="session", id=repository.session_id),
+                        target=GraphNodeRef(type="evidence", id=eid),
+                        type="based_on",
+                        weight=1.0,
+                        confidence=1.0,
+                    )
+                )
+            edges.append(
+                GraphEdgeRecord(
+                    source=GraphNodeRef(type="session", id=repository.session_id),
+                    target=GraphNodeRef(type="playbook", id=playbook_a),
+                    type="derived_from",
+                    weight=0.2,
+                    confidence=0.5,
+                )
+            )
+            edges.append(
+                GraphEdgeRecord(
+                    source=GraphNodeRef(type="session", id=repository.session_id),
+                    target=GraphNodeRef(type="playbook", id=playbook_b),
+                    type="derived_from",
+                    weight=0.2,
+                    confidence=0.5,
+                )
+            )
+        return edges
+
+    repository.load_edges = load_edges  # type: ignore[method-assign]
+    scope = AgentGraphAccessScope(
+        tenant_id=uuid4(),
+        principal_id=uuid4(),
+        principal_type="user",
+    )
+    subset = asyncio.run(
+        AgentGraphSelector().select(
+            repository,
+            AgentGraphRequest(
+                query="root cause",
+                max_depth=2,
+                budget=AgentGraphBudget(
+                    max_nodes=6,
+                    max_relationships=40,
+                    max_depth=2,
+                    max_characters=50_000,
+                ),
+            ),
+            scope,
+            MAF_V1,
+        )
+    )
+    types = {node.type for node in subset.nodes}
+    assert "playbook" in types
 
 
 def test_as_of_requires_offset_and_rejects_future_values():

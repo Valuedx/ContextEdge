@@ -36,6 +36,7 @@ class ContextGraphMAFPlugin:
         cohort_client: CohortClient | None = None,
         edge_proposal_client: EdgeProposalClient | None = None,
         writeback: Any | None = None,
+        playbook_client: Any | None = None,
     ):
         # F1 write-back reaches the provider through the bundle — before
         # this, the flywheel was constructible only by bypassing the
@@ -83,3 +84,16 @@ class ContextGraphMAFPlugin:
             self.tools.append(self.cohort_toolset.get_cohort_shared_attributes)
         if self.edge_proposal_toolset is not None:
             self.tools.append(self.edge_proposal_toolset.propose_dependency)
+        self.playbook_toolset = None
+        if playbook_client is not None:
+            from contextedge.integrations.maf.playbook_tools import PlaybookTools
+
+            self.playbook_toolset = PlaybookTools(playbook_client)
+            self.tools.extend(
+                [
+                    self.playbook_toolset.match_playbooks,
+                    self.playbook_toolset.get_playbook,
+                    self.playbook_toolset.check_trigger_conditions,
+                    self.playbook_toolset.get_negative_knowledge,
+                ]
+            )

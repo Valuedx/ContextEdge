@@ -34,9 +34,10 @@ class RuntimeMemoryContext:
     short_term: dict[str, Any]
     long_term: dict[str, Any]
     reasoning: dict[str, Any]
+    case_frame: Any | None = None
 
     def filters_payload(self) -> dict[str, Any]:
-        return {
+        payload = {
             "memory_classes": [SHORT_TERM_MEMORY, LONG_TERM_MEMORY, REASONING_MEMORY],
             "memory_summary": {
                 SHORT_TERM_MEMORY: self.short_term,
@@ -44,6 +45,15 @@ class RuntimeMemoryContext:
                 REASONING_MEMORY: self.reasoning,
             },
         }
+        if self.case_frame is not None:
+            payload["case_frame"] = {
+                "symptom_text": getattr(self.case_frame, "symptom_text", "")[:500],
+                "lexical_term_count": len(getattr(self.case_frame, "lexical_terms", []) or []),
+                "identifier_count": len(
+                    getattr(self.case_frame, "identifier_tokens", []) or []
+                ),
+            }
+        return payload
 
 
 def _dedupe_terms(values: list[str | None]) -> list[str]:
@@ -280,11 +290,22 @@ async def build_runtime_memory_context(
         "decision_count": len(recent_decisions),
         "recent_decisions": recent_decision_summaries,
     }
+    from contextedge.services.case_frame_service import build_case_frame, resolve_case_frame
+
+    case_frame = build_case_frame(
+        symptoms=list(symptoms),
+        entities=list(entities),
+        context=context,
+        domain_id=domain_id,
+        query_text=query_text,
+    )
+    case_frame = await resolve_case_frame(db, tenant_id, case_frame)
     return RuntimeMemoryContext(
         query_text=query_text,
         short_term=short_term,
         long_term=long_term,
         reasoning=reasoning,
+        case_frame=case_frame,
     )
 
 

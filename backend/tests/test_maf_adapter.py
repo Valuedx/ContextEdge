@@ -82,6 +82,8 @@ async def test_provider_injects_attributed_context():
     assert client.requests[0].profile == "maf.v1"
     assert context.instructions[0][0] == provider.source_id
     assert "Payment incident" in context.instructions[0][1]
+    assert "grounding_status" in context.instructions[0][1]
+    assert client.requests[0].budget.max_nodes == 60
 
 
 @pytest.mark.asyncio
@@ -168,7 +170,11 @@ async def test_tool_returns_structured_error_for_missing_seed_keys():
     assert client.requests == []
 
 
-def test_http_client_rejects_plain_http_by_default():
+def test_http_playbook_client_rejects_plain_http_by_default():
+    from contextedge.integrations.maf.playbook_client import HttpPlaybookRetrievalClient
+
+    with pytest.raises(ValueError, match="https"):
+        HttpPlaybookRetrievalClient("http://contextedge.internal", bearer_token="t")
     from contextedge.integrations.maf.client import HttpContextGraphClient
 
     with pytest.raises(ValueError, match="https"):
@@ -209,6 +215,17 @@ def test_plugin_without_optional_clients_registers_core_tool_only():
     assert plugin.cohort_toolset is None
     assert plugin.edge_proposal_toolset is None
     assert len(plugin.tools) == 1
+
+
+def test_plugin_registers_playbook_tools():
+    from contextedge.integrations.maf.plugin import ContextGraphMAFPlugin
+
+    plugin = ContextGraphMAFPlugin(StubClient(), playbook_client=object())
+    names = {t.name for t in plugin.tools}
+    assert "match_playbooks" in names
+    assert "get_playbook" in names
+    assert "check_trigger_conditions" in names
+    assert "get_negative_knowledge" in names
 
 
 def test_plugin_threads_writeback_to_the_provider():

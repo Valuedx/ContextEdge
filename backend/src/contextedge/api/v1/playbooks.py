@@ -614,7 +614,11 @@ async def create_version(
         raise HTTPException(status_code=409, detail=str(e)) from e
     from contextedge.services.playbook_embedding import embed_playbook
 
-    await embed_playbook(db, playbook, version)
+    # Approved playbooks keep the published-version fingerprint until
+    # this draft is published. Embedding it here would make semantic
+    # search match unpublished steps (N3).
+    if playbook.lifecycle_state != "approved":
+        await embed_playbook(db, playbook, version)
     return version
 
 
@@ -721,6 +725,9 @@ async def rollback_playbook(
     if playbook.lifecycle_state == "approved":
         version.published_at = version.published_at or datetime.now(UTC)
         version.published_by = version.published_by or user.user_id
+        from contextedge.services.playbook_embedding import embed_playbook
+
+        await embed_playbook(db, playbook, version)
     return version
 
 

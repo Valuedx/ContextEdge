@@ -5,6 +5,7 @@ from sqlalchemy import select
 
 from contextedge.deps import AuthUser, DbSession
 from contextedge.models.pattern import NegativeKnowledgeItem
+from contextedge.models.playbook import Playbook, PlaybookNegativeKnowledge, PlaybookVersion
 from contextedge.schemas.review import (
     NegativeKnowledgeCreate,
     NegativeKnowledgeResponse,
@@ -51,6 +52,52 @@ async def create_negative_knowledge(
     )
     db.add(item)
     await db.flush()
+    playbook_id = body.playbook_id
+    version_id = body.playbook_version_id
+    if version_id is not None and playbook_id is None:
+        version = (
+            await db.execute(
+                select(PlaybookVersion).where(
+                    PlaybookVersion.id == version_id,
+                    PlaybookVersion.tenant_id == user.tenant_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if version is not None:
+            playbook_id = version.playbook_id
+    if playbook_id is not None:
+        playbook = (
+            await db.execute(
+                select(Playbook).where(
+                    Playbook.id == playbook_id,
+                    Playbook.tenant_id == user.tenant_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if playbook is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="playbook_id does not belong to this tenant",
+            )
+        existing = (
+            await db.execute(
+                select(PlaybookNegativeKnowledge).where(
+                    PlaybookNegativeKnowledge.tenant_id == user.tenant_id,
+                    PlaybookNegativeKnowledge.playbook_id == playbook_id,
+                    PlaybookNegativeKnowledge.negative_knowledge_id == item.id,
+                )
+            )
+        ).scalar_one_or_none()
+        if existing is None:
+            db.add(
+                PlaybookNegativeKnowledge(
+                    tenant_id=user.tenant_id,
+                    playbook_id=playbook_id,
+                    playbook_version_id=version_id,
+                    negative_knowledge_id=item.id,
+                )
+            )
+            await db.flush()
     await db.refresh(item)
     return item
 

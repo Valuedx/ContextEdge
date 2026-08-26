@@ -58,13 +58,13 @@ async def test_transition_to_approved_publishes_current_version():
     db.flush.assert_awaited()
     event_mock.assert_awaited_once()
     promote_mock.assert_awaited_once()
-    # NULL embedding at approve time (pre-0035 row or transient embed
-    # failure) is repaired with the version being approved.
+    # Approve always re-embeds the published version so a v2 rewrite
+    # cannot keep the v1 fingerprint (N3).
     embed_mock.assert_awaited_once_with(db, playbook, version)
 
 
 @pytest.mark.asyncio
-async def test_transition_to_approved_skips_embed_when_already_present():
+async def test_transition_to_approved_reembeds_when_already_present():
     version_id = uuid4()
     playbook = SimpleNamespace(
         id=uuid4(),
@@ -95,7 +95,7 @@ async def test_transition_to_approved_skips_embed_when_already_present():
     ):
         await transition_playbook(db, playbook, "approved", uuid4())
 
-    embed_mock.assert_not_awaited()  # no provider spend on the human path
+    embed_mock.assert_awaited_once_with(db, playbook, version)
 
 
 @pytest.mark.asyncio
@@ -292,6 +292,7 @@ async def test_transition_invalidates_runtime_match_cache_for_same_tenant():
     with (
         patch("contextedge.services.playbook_service.append_operational_event", AsyncMock()),
         patch("contextedge.services.playbook_service.promote_playbook_memory", AsyncMock()),
+        patch("contextedge.services.playbook_embedding.embed_playbook", AsyncMock()),
     ):
         await transition_playbook(
             db, playbook, "approved", uuid4(), comments=None, redis=redis,
@@ -328,6 +329,7 @@ async def test_transition_without_redis_still_works():
     with (
         patch("contextedge.services.playbook_service.append_operational_event", AsyncMock()),
         patch("contextedge.services.playbook_service.promote_playbook_memory", AsyncMock()),
+        patch("contextedge.services.playbook_embedding.embed_playbook", AsyncMock()),
     ):
         result = await transition_playbook(
             db, playbook, "approved", uuid4(), comments=None, redis=None,

@@ -19,21 +19,15 @@ from contextedge.graph.agent.profiles import get_projection_profile
 from contextedge.graph.agent.repository import SQLAlchemyAgentGraphRepository
 from contextedge.graph.agent.selector import AgentGraphSelector
 from contextedge.models.tenant import Domain
+from contextedge.search.risk_policy import effective_max_risk_tier
 from contextedge.services.event_log_service import append_operational_event
 
 logger = structlog.get_logger(__name__)
 
 
-def _risk_cap(user: CurrentUser) -> str:
-    if (
-        user.has_role("platform_super_admin")
-        or user.has_role("tenant_admin")
-        or user.has_role("domain_admin")
-        or user.has_role("knowledge_manager")
-        or user.principal_type == "service_account"
-    ):
-        return "high"
-    return "medium"
+def _risk_cap(user: CurrentUser) -> str | None:
+    """Same cap as ``/runtime/match`` (``effective_max_risk_tier``)."""
+    return effective_max_risk_tier(user)
 
 
 async def build_agent_graph_scope(

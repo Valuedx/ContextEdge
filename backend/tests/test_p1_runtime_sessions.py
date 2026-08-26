@@ -60,6 +60,7 @@ async def test_runtime_match_with_session_records_trace():
         patch.object(runtime, "rank_playbooks", AsyncMock(return_value=ranked)),
         patch.object(runtime, "append_trace_event", AsyncMock(return_value=SimpleNamespace(id=uuid4()))) as trace_mock,
         patch.object(runtime, "append_operational_event", AsyncMock()) as event_mock,
+        patch.object(runtime, "persist_runtime_match", AsyncMock()),
     ):
         response = await runtime.runtime_match(
             request=request,
@@ -108,6 +109,7 @@ async def test_runtime_match_without_session_skips_trace_write():
         patch.object(runtime, "rank_playbooks", AsyncMock(return_value=ranked)),
         patch.object(runtime, "append_trace_event", AsyncMock()) as trace_mock,
         patch.object(runtime, "append_operational_event", AsyncMock()) as event_mock,
+        patch.object(runtime, "persist_runtime_match", AsyncMock()),
     ):
         response = await runtime.runtime_match(
             request=request,

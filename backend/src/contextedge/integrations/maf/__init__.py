@@ -28,13 +28,22 @@ __all__ = [
     "EdgeProposalClient",
     "EdgeProposalTools",
     "HttpContextGraphClient",
+    "HttpPlaybookRetrievalClient",
     "InProcessCohortClient",
     "InProcessContextGraphClient",
     "InProcessEdgeProposalClient",
+    "InProcessPlaybookRetrievalClient",
+    "PlaybookRetrievalClient",
+    "PlaybookTools",
 ]
 
 # Framework-backed names (need the MAF extra), resolved lazily.
-_LAZY_TOOL_EXPORTS = ("CohortTools", "ContextGraphTools", "EdgeProposalTools")
+_LAZY_TOOL_EXPORTS = (
+    "CohortTools",
+    "ContextGraphTools",
+    "EdgeProposalTools",
+    "PlaybookTools",
+)
 
 
 def __getattr__(name: str) -> Any:
@@ -46,7 +55,19 @@ def __getattr__(name: str) -> Any:
         from contextedge.integrations.maf.provider import ContextGraphProvider
 
         return ContextGraphProvider
+    if name in {
+        "PlaybookRetrievalClient",
+        "InProcessPlaybookRetrievalClient",
+        "HttpPlaybookRetrievalClient",
+    }:
+        from contextedge.integrations.maf import playbook_client
+
+        return getattr(playbook_client, name)
     if name in _LAZY_TOOL_EXPORTS:
+        if name == "PlaybookTools":
+            from contextedge.integrations.maf.playbook_tools import PlaybookTools
+
+            return PlaybookTools
         from contextedge.integrations.maf import tools
 
         return getattr(tools, name)

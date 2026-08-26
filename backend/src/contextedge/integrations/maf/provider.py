@@ -3,16 +3,28 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Callable
 from typing import Any
 
 import structlog
 
-from contextedge.graph.agent.contracts import AgentGraphRequest
+from contextedge.graph.agent.contracts import AgentGraphBudget, AgentGraphRequest, GraphNodeRef
 from contextedge.integrations.maf._compat import ContextProvider
 from contextedge.integrations.maf.client import ContextGraphClient
+from contextedge.services.case_frame_service import CaseFrame, build_case_frame
 
 logger = structlog.get_logger(__name__)
+
+_CHOSEN_RE = re.compile(
+    r"chosen_playbook_version_id\s*=\s*([0-9a-fA-F-]{36}|none)",
+    re.IGNORECASE,
+)
+_CITED_RE = re.compile(r"cited_node_keys\s*=\s*(.+)$", re.IGNORECASE | re.MULTILINE)
+_APPLICABILITY_RE = re.compile(
+    r"applicability\s*=\s*([a-z_]+)",
+    re.IGNORECASE,
+)
 
 
 def _message_text(message: Any) -> str:
@@ -23,6 +35,62 @@ def _message_text(message: Any) -> str:
     if isinstance(content, str):
         return content
     return str(message)
+
+
+def _default_request(query: str) -> AgentGraphRequest:
+    return AgentGraphRequest(
+        query=query,
+        profile="maf.v1",
+        max_depth=3,
+        budget=AgentGraphBudget(
+            max_nodes=60,
+            max_relationships=120,
+            max_depth=3,
+            max_characters=30_000,
+        ),
+    )
+
+
+def _frame_from_state(state: dict[str, Any]) -> CaseFrame | None:
+    raw = state.get("case_frame")
+    if isinstance(raw, CaseFrame):
+        return raw
+    if isinstance(raw, dict):
+        return build_case_frame(
+            symptoms=list(raw.get("symptoms") or []),
+            entities=list(raw.get("entities") or raw.get("lexical_terms") or []),
+            context=raw.get("context"),
+            environment=raw.get("environment") or {},
+            query_text=raw.get("symptom_text") or raw.get("query_text"),
+        )
+    return None
+
+
+def _grounding_status(subset: Any) -> str:
+    if not getattr(subset, "nodes", None):
+        return "no_precedent"
+    if getattr(subset, "truncated", False) or getattr(subset, "warnings", None):
+        return "weak"
+    return "grounded"
+
+
+def _parse_used_citations(text: str) -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    chosen = _CHOSEN_RE.search(text)
+    if chosen:
+        value = chosen.group(1)
+        out["chosen_playbook_version_id"] = None if value.lower() == "none" else value
+    cited = _CITED_RE.search(text)
+    if cited:
+        raw = cited.group(1).strip()
+        if raw.lower() in {"none", ""}:
+            out["cited_node_keys"] = []
+        else:
+            out["cited_node_keys"] = [part.strip() for part in raw.split(",") if part.strip()][:40]
+    apply_m = _APPLICABILITY_RE.search(text)
+    if apply_m:
+        out["applicability"] = apply_m.group(1).lower()
+    return out
 
 
 class ContextGraphProvider(ContextProvider):
@@ -37,9 +105,7 @@ class ContextGraphProvider(ContextProvider):
     ):
         super().__init__(self.source_id)
         self.client = client
-        self.request_factory = request_factory or (
-            lambda query: AgentGraphRequest(query=query, profile="maf.v1")
-        )
+        self.request_factory = request_factory or _default_request
         # F1 (roadmap): optional DecisionWritebackClient. When present,
         # after_run records the diagnostic trail as an agent-authored
         # decision — the flywheel that lets the NEXT agent facing the
@@ -60,16 +126,42 @@ class ContextGraphProvider(ContextProvider):
             exclude_sources={self.source_id},
             include_input=True,
         )
-        query = "\n".join(_message_text(message) for message in messages[-4:])
-        if not query.strip():
+        transcript = "\n".join(_message_text(message) for message in messages[-4:])
+        frame = _frame_from_state(state)
+        if frame is None and transcript.strip():
+            # Long conversations must degrade (truncate), never drop graph
+            # context: the case frame caps symptom_text at 4k.
+            frame = build_case_frame(query_text=transcript)
+        query = (frame.symptom_text if frame else transcript).strip()
+        if not query:
             return
-        # Keep the most recent text within the contract's 4,000-char cap —
-        # otherwise long conversations raise inside the client call and
-        # permanently lose graph context. Request construction stays outside
-        # the try so contract bugs surface instead of logging as
-        # "unavailable"; only the transport/authorization call fails soft.
         query = " ".join(query.split())[-4_000:]
         request = self.request_factory(query)
+        if frame is not None:
+            updates: dict[str, Any] = {
+                "entities": frame.lexical_terms[:20],
+            }
+            seeds: list[GraphNodeRef] = []
+            if frame.error_signature_id:
+                seeds.append(
+                    GraphNodeRef(type="error_signature", id=frame.error_signature_id)
+                )
+            if frame.issue_signature_id:
+                seeds.append(
+                    GraphNodeRef(type="issue_signature", id=frame.issue_signature_id)
+                )
+            for entity_id in frame.ci_entity_ids[:8]:
+                seeds.append(GraphNodeRef(type="entity", id=entity_id))
+            if seeds:
+                updates["seeds"] = seeds
+            if request.budget is None:
+                updates["budget"] = AgentGraphBudget(
+                    max_nodes=60,
+                    max_relationships=120,
+                    max_depth=3,
+                    max_characters=30_000,
+                )
+            request = request.model_copy(update=updates)
         try:
             subset = await self.client.get_agent_subset(request)
         except Exception as exc:
@@ -78,31 +170,36 @@ class ContextGraphProvider(ContextProvider):
                 error_type=type(exc).__name__,
             )
             return
-        if not subset.nodes:
-            return
+        grounding = _grounding_status(subset)
         # Stash the projection identity for after_run's write-back: the
         # decision record cites WHICH projection informed the answer.
         state["contextedge_projection"] = {
             "query": query[:2_000],
             "projection_id": str(getattr(subset, "projection_id", "")),
             "cited_nodes": [n.key for n in subset.nodes[:40]],
+            "grounding_status": grounding,
+            "warnings": list(getattr(subset, "warnings", None) or []),
+            "truncation_reasons": list(getattr(subset, "truncation_reasons", None) or []),
         }
         payload = subset.model_dump(
             mode="json",
-            exclude={
-                "projection_id",
-                "generated_at",
-                "usage",
-                "warnings",
-                "truncation_reasons",
-            },
+            exclude={"projection_id", "generated_at", "usage"},
         )
+        payload["grounding_status"] = grounding
+        no_precedent_note = ""
+        if grounding == "no_precedent":
+            no_precedent_note = (
+                "\nNo operational precedent was retrieved; say so rather than "
+                "proposing steps.\n"
+            )
         # Graph node labels/summaries originate in tickets, chat, and email —
         # untrusted text. Fence it so it enters the model as reference data,
         # never as instructions.
         context.extend_instructions(
             self.source_id,
             f"ContextEdge Context Graph reference data ({subset.profile}).\n"
+            f"grounding_status={grounding}\n"
+            f"{no_precedent_note}"
             "<untrusted-data>\n"
             f"{json.dumps(payload, separators=(',', ':'), ensure_ascii=True)}\n"
             "</untrusted-data>\n"
@@ -144,9 +241,23 @@ class ContextGraphProvider(ContextProvider):
                 answer = ""
         if not answer.strip():
             return
-        # Structured provenance: every node the projection cited becomes
-        # a checkable reference on the decision record, so "what informed
-        # this diagnosis" is queryable instead of buried in a snapshot.
+        used = _parse_used_citations(answer)
+        if state.get("chosen_playbook_version_id"):
+            used["chosen_playbook_version_id"] = str(state["chosen_playbook_version_id"])
+        if state.get("cited_node_keys"):
+            used["cited_node_keys"] = list(state["cited_node_keys"])[:40]
+        if state.get("applicability"):
+            used["applicability"] = state["applicability"]
+        if "cited_node_keys" in used:
+            projection["cited_nodes"] = used["cited_node_keys"]
+        if "chosen_playbook_version_id" in used:
+            projection["chosen_playbook_version_id"] = used["chosen_playbook_version_id"]
+        if "applicability" in used:
+            projection["applicability"] = used["applicability"]
+        if state.get("selection_margin") is not None:
+            projection["selection_margin"] = state["selection_margin"]
+        # Structured provenance: cite what was used, falling back to the
+        # offered projection only when the agent did not name keys.
         evidence_refs = []
         for key in (projection.get("cited_nodes") or [])[:40]:
             ntype, _, nid = str(key).partition(":")

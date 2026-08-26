@@ -4,6 +4,7 @@ import uuid
 from fastapi import APIRouter, HTTPException, Query, Request, status
 from sqlalchemy import select
 
+from contextedge.config import settings
 from contextedge.deps import AuthUser, DbSession
 from contextedge.models.evaluation import RetrievalFeedback
 from contextedge.models.playbook import Playbook, PlaybookVersion
@@ -18,15 +19,45 @@ from contextedge.schemas.playbook import (
     RuntimeMatchResult,
 )
 from contextedge.schemas.review import RetrievalFeedbackResponse
-from contextedge.search.hybrid_ranker import rank_playbooks
-from contextedge.search.risk_policy import risk_within_cap
+from contextedge.search.hybrid_ranker import RankedPlaybook, rank_playbooks
+from contextedge.search.risk_policy import effective_max_risk_tier, risk_within_cap
 from contextedge.services.event_log_service import append_operational_event
 from contextedge.services.memory_service import build_runtime_memory_context
+from contextedge.services.retrieval_feedback_service import (
+    persist_runtime_match,
+    record_feedback,
+)
 from contextedge.services.session_service import append_trace_event
 
 router = APIRouter()
 
 MATCH_CACHE_TTL_SEC = 3600
+
+
+def _to_match_result(r: RankedPlaybook) -> RuntimeMatchResult:
+    return RuntimeMatchResult(
+        playbook_id=r.playbook.id,
+        playbook_title=r.playbook.title,
+        stable_key=r.playbook.stable_key,
+        match_score=round(r.score, 4),
+        confidence=round(r.confidence, 4),
+        retrieval_score=round(r.score, 4),
+        playbook_confidence=round(r.playbook_confidence, 4),
+        freshness_status=r.freshness_status,
+        evidence_count=r.evidence_count,
+        risk_tier=r.playbook.risk_tier,
+        automation_mode=r.playbook.automation_mode,
+        scoring_breakdown=r.breakdown,
+        playbook_version_id=r.playbook_version_id,
+        semantic_version=r.semantic_version,
+        applicability=r.applicability,
+        applicability_factors=r.applicability_factors,
+        applicability_differences=r.applicability_differences,
+        confidence_calibrated=(
+            round(r.confidence_calibrated, 4) if r.confidence_calibrated is not None else None
+        ),
+        selection_margin=r.selection_margin,
+    )
 
 
 def _service_token_domain_allowlist(user: AuthUser) -> list[uuid.UUID] | None:
@@ -41,15 +72,7 @@ def _service_token_domain_allowlist(user: AuthUser) -> list[uuid.UUID] | None:
 
 def _effective_max_risk_tier(user: AuthUser) -> str | None:
     """Cap playbook risk tier returned at runtime based on caller role."""
-    if user.has_role("platform_super_admin") or user.has_role("tenant_admin"):
-        return None
-    if user.has_role("domain_admin"):
-        return None
-    if user.has_role("knowledge_manager"):
-        return "high"
-    if user.principal_type == "service_account":
-        return "high"
-    return "medium"
+    return effective_max_risk_tier(user)
 
 
 async def _resolve_runtime_published_version(
@@ -126,6 +149,12 @@ async def runtime_match(
         ),
     }
     filters_applied.update(memory_context.filters_payload())
+    if settings.ranking_shadow_mode:
+        filters_applied = {
+            **filters_applied,
+            "shadow_mode": True,
+            "shadow_policy": "log_fused_serve_linear",
+        }
 
     ranked = await rank_playbooks(
         db,
@@ -137,27 +166,12 @@ async def runtime_match(
         max_risk_tier=max_risk,
         allowed_domain_ids=sa_domains,
         caller_roles=user.roles,
+        case_frame=getattr(memory_context, "case_frame", None),
+        environment=body.environment,
     )
 
     match_id = str(uuid.uuid4())
-    results = []
-    for r in ranked:
-        results.append(
-            RuntimeMatchResult(
-                playbook_id=r.playbook.id,
-                playbook_title=r.playbook.title,
-                stable_key=r.playbook.stable_key,
-                match_score=round(r.score, 4),
-                confidence=round(r.confidence, 4),
-                retrieval_score=round(r.score, 4),
-                playbook_confidence=round(r.playbook_confidence, 4),
-                freshness_status=r.freshness_status,
-                evidence_count=r.evidence_count,
-                risk_tier=r.playbook.risk_tier,
-                automation_mode=r.playbook.automation_mode,
-                scoring_breakdown=r.breakdown,
-            )
-        )
+    results = [_to_match_result(r) for r in ranked]
 
     fallback = None
     if not results or (results and results[0].confidence < 0.3):
@@ -237,6 +251,27 @@ async def runtime_match(
     except Exception:
         pass
 
+    try:
+        await persist_runtime_match(
+            db,
+            tenant_id=user.tenant_id,
+            match_id=match_id,
+            query_frame={
+                "query_text": query_text,
+                "symptoms": body.symptoms,
+                "entities": body.entities,
+                "environment": body.environment,
+                "session_id": str(body.session_id) if body.session_id else None,
+            },
+            ranked_results=[m.model_dump(mode="json") for m in results],
+            filters_applied=filters_applied,
+            calibrated_confidence=(
+                results[0].confidence_calibrated if results else None
+            ),
+        )
+    except Exception:
+        pass
+
     return RuntimeMatchResponse(
         match_id=match_id,
         session_id=body.session_id,
@@ -273,6 +308,10 @@ async def get_runtime_playbook(
     db: DbSession,
     user: AuthUser,
     version: str | None = None,
+    version_id: uuid.UUID | None = Query(
+        None,
+        description="When set, return this exact published version (agent pin).",
+    ),
     domain_id: uuid.UUID | None = Query(
         None,
         description=(
@@ -326,7 +365,18 @@ async def get_runtime_playbook(
             )
 
     ver: PlaybookVersion | None = None
-    if version:
+    if version_id is not None:
+        vq = await db.execute(
+            select(PlaybookVersion).where(
+                PlaybookVersion.id == version_id,
+                PlaybookVersion.playbook_id == playbook.id,
+                PlaybookVersion.published_at.is_not(None),
+            )
+        )
+        ver = vq.scalar_one_or_none()
+        if not ver:
+            raise HTTPException(status_code=404, detail="Published playbook version not found")
+    elif version:
         vq = await db.execute(
             select(PlaybookVersion)
             .where(
@@ -356,16 +406,16 @@ async def get_runtime_playbook(
 )
 async def submit_feedback(body: FeedbackSubmission, db: DbSession, user: AuthUser):
     """Submit structured feedback on a runtime match result."""
-    feedback = RetrievalFeedback(
+    feedback = await record_feedback(
+        db,
         tenant_id=user.tenant_id,
         match_id=body.match_id,
         playbook_id=body.playbook_id,
+        playbook_version_id=body.playbook_version_id,
         feedback_type=body.feedback_type,
         details=body.details,
         submitted_by=user.user_id,
     )
-    db.add(feedback)
-    await db.flush()
     return MutationAckResponse(status="feedback_recorded", id=str(feedback.id))
 
 

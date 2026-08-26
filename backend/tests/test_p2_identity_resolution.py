@@ -10,6 +10,8 @@ from contextedge.models.episode import Episode
 from contextedge.models.episode import CorrelationEdge
 from contextedge.models.evidence import EvidenceItem
 from contextedge.search.hybrid_ranker import rank_playbooks
+from contextedge.search.playbook_candidates import CandidateSet
+from contextedge.services.playbook_applicability import ApplicabilityVerdict
 from contextedge.services.correlation_service import correlate_evidence_item
 from contextedge.services.episode_service import create_episodes_from_evidence
 from contextedge.services.identity_service import link_evidence_identities
@@ -285,21 +287,56 @@ async def test_rank_playbooks_identity_signal_boosts_score():
         expiry_at=None,
         last_validated_at=datetime.now(timezone.utc),
     )
-    version = SimpleNamespace(id=uuid4(), playbook_confidence=0.7)
-    db = SimpleNamespace(
-        execute=AsyncMock(return_value=_ScalarsResult([playbook])),
-        get=AsyncMock(return_value=version),
+    version = SimpleNamespace(
+        id=uuid4(),
+        playbook_confidence=0.7,
+        trigger_conditions={},
+        conflicts=None,
+        semantic_version="1.0.0",
     )
+    candidates = CandidateSet(
+        playbooks={playbook_id: playbook},
+        arm_ranks={"r1_embedding": [playbook_id]},
+    )
+    db = SimpleNamespace(execute=AsyncMock())
 
     with (
+        patch(
+            "contextedge.search.hybrid_ranker.generate_playbook_candidates",
+            AsyncMock(return_value=candidates),
+        ),
         patch(
             "contextedge.search.hybrid_ranker._latest_published_versions",
             AsyncMock(return_value={playbook.id: version}),
         ),
-        patch("contextedge.search.hybrid_ranker._graph_score_for_playbook", AsyncMock(return_value=0.0)),
-        patch("contextedge.search.hybrid_ranker._identity_score_for_playbook", AsyncMock(return_value=1.0)),
-        patch("contextedge.search.hybrid_ranker._negative_penalty_for_playbook", AsyncMock(return_value=0.0)),
-        patch("contextedge.search.hybrid_ranker.resolve_identity_ids_for_terms", AsyncMock(return_value={uuid4()})),
+        patch(
+            "contextedge.search.hybrid_ranker.resolve_identity_ids_for_terms",
+            AsyncMock(return_value={uuid4()}),
+        ),
+        patch(
+            "contextedge.search.hybrid_ranker._batch_graph_counts",
+            AsyncMock(return_value={playbook_id: 0}),
+        ),
+        patch(
+            "contextedge.search.hybrid_ranker._batch_identity_hits",
+            AsyncMock(return_value={playbook_id: 1}),
+        ),
+        patch(
+            "contextedge.search.hybrid_ranker._batch_contradiction_counts",
+            AsyncMock(return_value={playbook_id: 0}),
+        ),
+        patch(
+            "contextedge.search.hybrid_ranker._batch_precedent_counts",
+            AsyncMock(return_value={playbook_id: 0}),
+        ),
+        patch(
+            "contextedge.search.hybrid_ranker._batch_evidence_link_counts",
+            AsyncMock(return_value={playbook_id: 0}),
+        ),
+        patch(
+            "contextedge.search.hybrid_ranker.evaluate_trigger_conditions",
+            lambda *a, **k: ApplicabilityVerdict(level="unvalidated"),
+        ),
     ):
         ranked = await rank_playbooks(
             db,

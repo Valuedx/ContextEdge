@@ -186,6 +186,7 @@ celery_app = Celery(
         "contextedge.workers.cmdb_tasks",
         # Post-action verification sweep (0036).
         "contextedge.workers.verification_tasks",
+        "contextedge.workers.ranking_calibration_tasks",
     ],
 )
 
@@ -311,6 +312,11 @@ celery_app.conf.update(
             "schedule": 86400.0,
             "args": ("all",),
         },
+        "recalibrate-ranking-nightly": {
+            "task": "evaluation.recalibrate_ranking",
+            "schedule": 86400.0,
+            "args": ("all",),
+        },
         "mine-decision-patterns-daily": {
             "task": "evaluation.mine_decision_patterns",
             "schedule": 86400.0,
@@ -380,6 +386,11 @@ celery_app.conf.update(
             "task": "evaluation.ai_review_episodes",
             "schedule": 3600.0,
             "args": ("all",),
+        },
+        "backfill-playbook-embeddings-nightly": {
+            "task": "evaluation.backfill_playbook_embeddings",
+            "schedule": 86400.0,
+            "args": ("all", 200, True),
         },
     },
 )

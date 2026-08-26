@@ -27,6 +27,7 @@ from contextedge.models.playbook import Playbook, PlaybookVersion
 from contextedge.models.policy import TenantPolicy
 from contextedge.models.session import ResolutionSession
 from contextedge.models.tenant import User
+from contextedge.search.risk_policy import risk_within_cap
 from contextedge.services.evidence_typing import KNOWLEDGE_EVIDENCE_TYPES
 from contextedge.services.knowledge_lifecycle import is_current
 
@@ -52,9 +53,6 @@ NODE_MODELS: dict[str, type[Any]] = {
     "case_outcome": CaseOutcome,
     "issue_signature": IssueSignature,
 }
-
-_RISK_ORDER = {"low": 0, "medium": 1, "high": 2, "restricted": 3}
-
 
 def _value(value: Any) -> Any:
     if value is None or isinstance(value, (str, int, bool)):
@@ -141,11 +139,11 @@ def node_is_visible(
         return False
 
     if node_type == "playbook":
-        if obj.lifecycle_state != "approved" or obj.current_version_id is None:
+        if obj.lifecycle_state != "approved":
             return False
         if obj.expiry_at is not None and obj.expiry_at <= datetime.now(UTC):
             return False
-        if _RISK_ORDER.get(obj.risk_tier, 99) > _RISK_ORDER.get(scope.playbook_risk_cap, 2):
+        if not risk_within_cap(obj.risk_tier, scope.playbook_risk_cap):
             return False
     elif node_type == "pattern" and not obj.active_flag:
         return False

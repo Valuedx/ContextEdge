@@ -65,6 +65,11 @@ class Settings(BaseSettings):
     # its own measure-first A/B (KNOWN_GAPS).
     pattern_model: str = "vertex_ai/gemini-2.5-flash"
     playbook_model: str = "vertex_ai/gemini-3.7-flash"
+    # Diagnose rationale is an interactive operator-facing call. It must
+    # not share the extraction lane: that lane is often pointed at a local
+    # OpenAI-compatible model for bulk jobs, and a dead local server then
+    # silently skips rationale (diagnose.llm_rationale_skipped).
+    diagnose_model: str = "vertex_ai/gemini-2.5-flash"
 
     # Per-task locations
     classification_location: str = "global"
@@ -72,6 +77,7 @@ class Settings(BaseSettings):
     pattern_location: str = "global"
     playbook_location: str = "global"
     embedding_location: str = "global"
+    diagnose_location: str = "global"
     location: str = "global"  # global fallback
 
     # Google Cloud
@@ -241,6 +247,15 @@ class Settings(BaseSettings):
     # via ``register_prompt(..., default=True)``. See
     # ``contextedge/ai/prompts/__init__.py`` for resolution precedence.
     tenant_prompt_variants_json: str = "{}"
+
+    # Serve the fused ranker (always) and optionally log a shadow copy of
+    # the result. Dual-path serving of the pre-RRF ranker is gone; the
+    # flag is a cutover/observe switch for SupportCopilot adoption.
+    ranking_shadow_mode: bool = False
+    # New surface; nothing in SupportCopilot consumes it. Default on so
+    # evals and integration tests can hit it; disable in production if
+    # the tenant is not ready.
+    agent_diagnose_enabled: bool = True
 
 
 settings = Settings()

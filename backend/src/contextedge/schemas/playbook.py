@@ -11,6 +11,16 @@ from pydantic import (
 
 from contextedge.models.execution import ACTION_TYPES, SAFETY_CLASSES
 from contextedge.models.playbook import AUTOMATION_MODES
+from contextedge.search.risk_policy import PLAYBOOK_RISK_TIERS
+
+
+def _validate_risk_tier(value: str) -> str:
+    normalized = value.lower().strip()
+    if normalized not in PLAYBOOK_RISK_TIERS:
+        raise ValueError(
+            f"risk_tier must be one of {PLAYBOOK_RISK_TIERS}, got {value!r}"
+        )
+    return normalized
 
 
 def _validate_automation_mode(value: str) -> str:
@@ -216,6 +226,11 @@ class PlaybookCreate(BaseModel):
     pattern_id: UUID | None = None
     approval_policy_id: UUID | None = None
 
+    @field_validator("risk_tier")
+    @classmethod
+    def _check_risk_tier(cls, value: str) -> str:
+        return _validate_risk_tier(value)
+
     @field_validator("automation_mode")
     @classmethod
     def _check_automation_mode(cls, value: str) -> str:
@@ -229,6 +244,13 @@ class PlaybookUpdate(BaseModel):
     automation_mode: str | None = None
     approval_policy_id: UUID | None = None
     reviewer_user_id: UUID | None = None
+
+    @field_validator("risk_tier")
+    @classmethod
+    def _check_risk_tier(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        return _validate_risk_tier(value)
 
     @field_validator("automation_mode")
     @classmethod
@@ -301,6 +323,13 @@ class RuntimeMatchResult(BaseModel):
     risk_tier: str
     automation_mode: str
     scoring_breakdown: dict | None = None
+    playbook_version_id: UUID | None = None
+    semantic_version: str | None = None
+    applicability: str | None = None
+    applicability_factors: list[str] | None = None
+    applicability_differences: list[str] | None = None
+    confidence_calibrated: float | None = None
+    selection_margin: float | None = None
 
 
 class RuntimeMatchResponse(BaseModel):
@@ -328,6 +357,7 @@ class RuntimeExplainResponse(BaseModel):
 class FeedbackSubmission(BaseModel):
     match_id: str | None = None
     playbook_id: UUID | None = None
+    playbook_version_id: UUID | None = None
     feedback_type: str
     details: dict = Field(default_factory=dict)
 

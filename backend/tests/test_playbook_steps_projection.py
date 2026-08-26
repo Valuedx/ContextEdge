@@ -2,6 +2,7 @@
 current version's bounded steps and trigger conditions, so the agent can
 act on it without a second round-trip."""
 
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 from uuid import uuid4
@@ -35,6 +36,7 @@ def _version(**kw):
         ),
         rollback_notes=kw.get("rollback_notes", "Reinstall the previous certificate"),
         playbook_confidence=kw.get("playbook_confidence", 0.82),
+        published_at=kw.get("published_at", datetime.now(UTC)),
     )
 
 
@@ -120,14 +122,20 @@ def _scalars_result(values):
     return result
 
 
-async def _hydrate_one(playbook, versions):
-    db = SimpleNamespace(
-        execute=AsyncMock(
-            side_effect=[_scalars_result([playbook]), _scalars_result(versions)]
-            if versions is not None
-            else [_scalars_result([playbook])]
-        )
-    )
+async def _hydrate_one(playbook, versions, fallback_versions=None):
+    remaining = [
+        _scalars_result([playbook]),
+        _scalars_result(versions if versions is not None else []),
+    ]
+    if fallback_versions is not None:
+        remaining.append(_scalars_result(fallback_versions))
+
+    async def execute(_stmt):
+        if remaining:
+            return remaining.pop(0)
+        return _scalars_result([])
+
+    db = SimpleNamespace(execute=AsyncMock(side_effect=execute))
     repo = SQLAlchemyAgentGraphRepository(db)
     with patch(
         "contextedge.graph.agent.repository.resolve_excluded_access_policy_ids",
@@ -181,6 +189,34 @@ async def test_missing_version_row_still_hydrates_playbook():
     (node,) = hydrated.values()
     assert node.label == "SSO Certificate Remediation"
     assert "steps" not in node.facts
+
+
+@pytest.mark.asyncio
+async def test_unpublished_current_falls_back_to_newest_published():
+    """N1: an approved playbook whose current_version_id is a draft must
+    project the newest published version, not the unreviewed steps."""
+    tenant_id = uuid4()
+    playbook = _playbook_row(uuid4(), tenant_id)
+    draft = _version(
+        id=playbook.current_version_id,
+        playbook_id=playbook.id,
+        semantic_version="2.0.0",
+        published_at=None,
+        steps=[{"title": "UNREVIEWED DRAFT wipe the endpoint"}],
+    )
+    published = _version(
+        playbook_id=playbook.id,
+        semantic_version="1.0.0",
+        steps=[{"title": "Restart VPN from published runbook"}],
+    )
+
+    hydrated, db = await _hydrate_one(playbook, [draft], fallback_versions=[published])
+
+    (node,) = hydrated.values()
+    assert node.facts["semantic_version"] == "1.0.0"
+    assert "Restart VPN" in node.facts["steps"][0]
+    assert "UNREVIEWED" not in "".join(node.facts["steps"])
+    assert db.execute.await_count == 3
 
 
 def test_version_facts_survive_corrupt_steps_shape():

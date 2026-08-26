@@ -19,6 +19,10 @@ class AgentGraphProjectionProfile:
     hop_decay: float = 0.72
     relationship_weights: dict[str, float] = field(default_factory=dict)
     relationship_metadata: dict[str, frozenset[str]] = field(default_factory=dict)
+    # Per-type admission quotas applied before relevance-ordered fill.
+    # Keys are node types; values are how many of the highest-relevance
+    # nodes of that type (plus ancestor chains) are reserved.
+    type_reservations: dict[str, int] = field(default_factory=dict)
 
     def clamp_budget(
         self,
@@ -234,6 +238,9 @@ MAF_V1 = AgentGraphProjectionProfile(
         "invalidated_fix": frozenset({"result"}),
         "partially_validated_fix": frozenset({"result"}),
     },
+    # Matches the hydrator step-list budget at hydrators.py ~196: maf.v1
+    # reserves 2 playbook nodes so those bounded step lists actually land.
+    type_reservations={"playbook": 2, "pattern": 2},
 )
 
 PROFILES = MappingProxyType({MAF_V1.name: MAF_V1})

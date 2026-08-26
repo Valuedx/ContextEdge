@@ -48,7 +48,13 @@ from contextedge.models.episode import (
     IdentityAlias,
 )
 from contextedge.models.error_signature import ErrorSignature, FixPattern
-from contextedge.models.evaluation import EvaluationDataset, EvaluationRun, RetrievalFeedback
+from contextedge.models.evaluation import (
+    EvaluationDataset,
+    EvaluationRun,
+    RetrievalFeedback,
+    RuntimeMatchRecord,
+    RankingCalibrationConfig,
+)
 from contextedge.models.events import Notification, OperationalEvent
 from contextedge.models.evidence import AttachmentArtifact, EvidenceItem, RawEvidenceObject, Thread
 from contextedge.models.execution import (
@@ -78,6 +84,7 @@ from contextedge.models.playbook import (
     Playbook,
     PlaybookApproval,
     PlaybookEvidenceLink,
+    PlaybookNegativeKnowledge,
     PlaybookVersion,
 )
 from contextedge.models.policy import (
@@ -155,6 +162,7 @@ __all__ = [
     "SITUATION_TYPES", "SITUATION_STATES", "EVIDENCE_ROLES", "MEMBERSHIP_STATUSES",
     "IMPACT_ROLES", "CHANGE_CANDIDATE_STATUSES", "TEMPORAL_RELATIONS",
     "Playbook", "PlaybookVersion", "PlaybookEvidenceLink", "PlaybookApproval",
+    "PlaybookNegativeKnowledge",
     "ResolutionSession", "DecisionTraceEvent", "CaseLink",
     "Decision", "DecisionOption", "DecisionOutcome",
     "ExecutionRun", "ExecutionStepRun", "ToolInvocation", "ApprovalRequest",
@@ -165,7 +173,8 @@ __all__ = [
     "KnowledgeSupersessionProposal", "SUPERSESSION_STATUSES",
     "RollbackPlan", "Escalation", "ROLLBACK_PLAN_STATUSES",
     "ESCALATION_STATUSES", "ESCALATION_PRIORITIES",
-    "EvaluationDataset", "EvaluationRun", "RetrievalFeedback",
+    "EvaluationDataset", "EvaluationRun", "RetrievalFeedback", "RuntimeMatchRecord",
+    "RankingCalibrationConfig",
     "POLICY_TYPES", "TenantPolicy", "POLICY_CHECK_RESULTS", "PolicyCheck",
     "Skill", "ExecutionContract", "INTERFACE_TYPES", "IDEMPOTENCY_MODES",
     "CONCURRENCY_POLICIES", "RETRY_BACKOFFS", "SKILL_STATUSES",

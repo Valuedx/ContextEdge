@@ -131,7 +131,7 @@ class AgentGraphAccessScope:
     workspace_ids: tuple[UUID, ...] = ()
     domain_id: UUID | None = None
     allowed_domain_ids: tuple[UUID, ...] | None = None
-    playbook_risk_cap: str = "high"
+    playbook_risk_cap: str | None = "high"
 
 
 @dataclass(slots=True)

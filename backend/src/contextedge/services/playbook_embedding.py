@@ -3,9 +3,10 @@
 A playbook's title/description rarely contains the symptom vocabulary an
 engineer (or agent) actually types — "users can't log in" lives in trigger
 conditions and step text, not in "Renew VPN certificate and restart
-RADIUS". The embedding text therefore combines the playbook row with its
-current version (the latest-created one — ``create_playbook_version``
-repoints ``current_version_id`` immediately, before review):
+RADIUS". The embedding text therefore combines the playbook row with a
+**published** version (newest published, matching /runtime/match — not the
+unpublished ``current_version_id`` pointer that ``create_playbook_version``
+repoints immediately, before review):
 title + description + trigger conditions + step titles.
 
 Best-effort by design: an embedding failure leaves the column NULL and
@@ -16,6 +17,7 @@ precedent. Never let an embedding provider error break a playbook write.
 from __future__ import annotations
 
 import structlog
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from contextedge.models.playbook import Playbook, PlaybookVersion
@@ -76,6 +78,35 @@ def build_playbook_embedding_text(
     return " ".join(" ".join(parts).split())[:MAX_EMBED_CHARS]
 
 
+async def resolve_published_playbook_version(
+    db: AsyncSession,
+    playbook: Playbook,
+) -> PlaybookVersion | None:
+    """Newest published version, preferring ``current_version_id`` when published.
+
+    Same rule as ``/runtime/playbooks/{key}`` so the semantic fingerprint
+    cannot track an unreviewed draft.
+    """
+    if playbook.current_version_id:
+        cur = await db.get(PlaybookVersion, playbook.current_version_id)
+        if (
+            cur is not None
+            and cur.published_at is not None
+            and cur.playbook_id == playbook.id
+        ):
+            return cur
+    result = await db.execute(
+        select(PlaybookVersion)
+        .where(
+            PlaybookVersion.playbook_id == playbook.id,
+            PlaybookVersion.published_at.is_not(None),
+        )
+        .order_by(PlaybookVersion.published_at.desc())
+        .limit(1)
+    )
+    return result.scalar_one_or_none()
+
+
 async def embed_playbook(
     db: AsyncSession,
     playbook: Playbook,
@@ -86,12 +117,18 @@ async def embed_playbook(
     must never depend on the embedding provider."""
     from contextedge.ai.provider import generate_embedding
 
-    if version is None and playbook.current_version_id is not None:
-        version = await db.get(PlaybookVersion, playbook.current_version_id)
+    if version is None:
+        version = await resolve_published_playbook_version(db, playbook)
+        if version is None and playbook.current_version_id is not None:
+            # Candidate with no published version yet: fingerprint the
+            # current draft so the first approve is not the first
+            # semantic write.
+            version = await db.get(PlaybookVersion, playbook.current_version_id)
 
     text = build_playbook_embedding_text(playbook, version)
     if not text.strip():
         return False
+    playbook.lexical_search_text = text
     try:
         playbook.embedding = await generate_embedding(
             text, tenant_id=playbook.tenant_id, db=db

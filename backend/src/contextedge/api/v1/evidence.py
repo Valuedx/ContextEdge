@@ -113,6 +113,9 @@ async def search_evidence(
     offset: int = Query(0, ge=0),
 ):
     excluded_policy_ids = await resolve_excluded_access_policy_ids(db, user.tenant_id, user.roles)
+    # Query() defaults are FastAPI metadata objects when this handler is
+    # invoked outside the router (unit tests). Only a real string is a filter.
+    external_id = external_id.strip() if isinstance(external_id, str) else None
 
     if query and query.strip() and not external_id:
         from contextedge.search.pg_fts import search_evidence_fts

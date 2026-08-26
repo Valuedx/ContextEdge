@@ -50,6 +50,8 @@ class NegativeKnowledgeCreate(BaseModel):
     failure_reason: str | None = None
     status: str = Field("ineffective", min_length=1, max_length=30)
     evidence_refs: list | None = None
+    playbook_id: UUID | None = None
+    playbook_version_id: UUID | None = None
 
 
 class NegativeKnowledgeUpdate(BaseModel):
@@ -195,6 +197,7 @@ class RetrievalFeedbackResponse(BaseModel):
     tenant_id: UUID
     match_id: str | None
     playbook_id: UUID | None
+    playbook_version_id: UUID | None = None
     feedback_type: str
     details: dict | None
     submitted_by: UUID | None

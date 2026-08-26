@@ -847,6 +847,71 @@ class SQLAlchemyAgentGraphRepository:
             for row in rows
         ]
 
+    async def _published_versions_for_playbooks(self, rows) -> dict:
+        """Resolve the published version each playbook should project.
+
+        Prefer ``current_version_id`` when that version is published;
+        otherwise the newest published version. Mirrors
+        ``runtime._resolve_runtime_published_version`` so the agent is
+        never shown an unreviewed draft (N1).
+        """
+        from contextedge.models.playbook import PlaybookVersion
+
+        current_ids = [row.current_version_id for row in rows if row.current_version_id]
+        current_by_id: dict = {}
+        if current_ids:
+            versions = (
+                (
+                    await self.db.execute(
+                        select(PlaybookVersion).where(
+                            PlaybookVersion.id.in_(current_ids)
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            current_by_id = {v.id: v for v in versions}
+
+        resolved: dict = {}
+        fallback_ids: list = []
+        for row in rows:
+            cur = (
+                current_by_id.get(row.current_version_id)
+                if row.current_version_id
+                else None
+            )
+            if (
+                cur is not None
+                and cur.published_at is not None
+                and cur.playbook_id == row.id
+            ):
+                resolved[row.id] = cur
+            else:
+                fallback_ids.append(row.id)
+
+        if fallback_ids:
+            fallback_rows = (
+                (
+                    await self.db.execute(
+                        select(PlaybookVersion)
+                        .where(
+                            PlaybookVersion.playbook_id.in_(fallback_ids),
+                            PlaybookVersion.published_at.is_not(None),
+                        )
+                        .order_by(
+                            PlaybookVersion.playbook_id,
+                            PlaybookVersion.published_at.desc(),
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            for version in fallback_rows:
+                resolved.setdefault(version.playbook_id, version)
+        return resolved
+
     async def hydrate_nodes(
         self,
         nodes: Sequence[GraphNodeRef],
@@ -873,11 +938,12 @@ class SQLAlchemyAgentGraphRepository:
             )
             rows = (await self.db.execute(query)).scalars().all()
 
-            # Playbook nodes carry their current version's steps and
-            # trigger conditions (bounded — see hydrators caps): a
-            # playbook the agent can't see the steps of forces a second
-            # round-trip or a guess. Batch-loaded, one query per
-            # projection regardless of playbook count.
+            # Playbook nodes carry a *published* version's steps and
+            # trigger conditions (bounded — see hydrators caps). Prefer
+            # current_version_id when it is published; otherwise the
+            # newest published version — same rule as /runtime/playbooks.
+            # Batch-loaded, at most two version queries per projection
+            # regardless of playbook count.
             # Episode steps, batch-loaded for the same reason playbook
             # versions are: one query per projection regardless of episode
             # count, and never a lazy load (this session is async — a lazy
@@ -898,22 +964,9 @@ class SQLAlchemyAgentGraphRepository:
                     for step in step_rows:
                         steps_map[step.episode_id].append(step)
 
-            version_map: dict = {}
+            version_by_playbook: dict = {}
             if node_type == "playbook":
-                from contextedge.models.playbook import PlaybookVersion
-
-                version_ids = [
-                    row.current_version_id for row in rows if row.current_version_id
-                ]
-                if version_ids:
-                    versions = (
-                        await self.db.execute(
-                            select(PlaybookVersion).where(
-                                PlaybookVersion.id.in_(version_ids)
-                            )
-                        )
-                    ).scalars().all()
-                    version_map = {v.id: v for v in versions}
+                version_by_playbook = await self._published_versions_for_playbooks(rows)
 
             for row in rows:
                 if not node_is_visible(
@@ -927,7 +980,7 @@ class SQLAlchemyAgentGraphRepository:
                 if node_type == "episode":
                     node.facts.update(episode_step_facts(steps_map.get(row.id, [])))
                 if node_type == "playbook":
-                    version = version_map.get(row.current_version_id)
+                    version = version_by_playbook.get(row.id)
                     # playbook_id check: a stale/corrupt current_version_id
                     # pointing at another playbook's version must not leak
                     # that version's steps here.

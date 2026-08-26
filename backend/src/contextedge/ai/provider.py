@@ -50,6 +50,7 @@ MODEL_ROUTING = {
     "embedding": settings.default_embedding_model,
     "pattern": settings.pattern_model,
     "playbook": settings.playbook_model,
+    "diagnose": settings.diagnose_model,
 }
 
 LOCATION_ROUTING = {
@@ -58,6 +59,7 @@ LOCATION_ROUTING = {
     "pattern": settings.pattern_location,
     "playbook": settings.playbook_location,
     "embedding": settings.embedding_location,
+    "diagnose": settings.diagnose_location,
 }
 
 

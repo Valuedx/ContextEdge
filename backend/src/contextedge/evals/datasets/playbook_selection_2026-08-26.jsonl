@@ -1,0 +1,11 @@
+// Playbook-selection golden set (Phase 1). One JSON object per line; `//` lines ignored.
+//
+// Required fields:
+//   symptoms, entities, expected_playbook_stable_key
+// Optional (exercise the same filters /runtime/match applies):
+//   context, session_id, domain_id, max_risk_tier, caller_roles, split (train|holdout)
+//
+// Floor is ≥120 labelled tickets with a 30% holdout that is never tuned on.
+// This file currently holds a schema placeholder only — Phase 0 found 0
+// retrieval_feedback rows, so the set cannot be mined and must be authored.
+{"id": "schema", "symptoms": ["users cannot log in to the VPN"], "entities": ["vpn-gw-east-01"], "context": "authentication failures across all clients", "expected_playbook_stable_key": "pb-acme-vpn-cert", "domain_id": null, "max_risk_tier": "high", "caller_roles": ["analyst"], "split": "train", "notes": "Placeholder schema case. Replace before treating numbers as a baseline."}

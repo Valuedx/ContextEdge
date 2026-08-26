@@ -156,12 +156,15 @@ class AgentGraphSelector:
             chain.reverse()
             return chain
 
-        for key in ordered_keys:
+        def try_admit(key: str) -> str | None:
+            """Admit ``key`` and its ancestor chain. Returns a truncation
+            reason on reject, or None on success / already-selected."""
+            nonlocal character_count
             pending = [item for item in chain_for(key) if item not in selected]
+            if not pending:
+                return None
             if len(selected) + len(pending) > budget.max_nodes:
-                if "max_nodes" not in truncation_reasons:
-                    truncation_reasons.append("max_nodes")
-                continue
+                return "max_nodes"
             additions: list[tuple[str, AgentGraphNode, int]] = []
             for item in pending:
                 raw = hydrated[item]
@@ -184,12 +187,47 @@ class AgentGraphSelector:
                 additions.append((item, node, len(node.model_dump_json())))
             addition_chars = sum(item[2] for item in additions)
             if character_count + addition_chars > node_character_budget:
-                if "max_characters" not in truncation_reasons:
-                    truncation_reasons.append("max_characters")
-                continue
+                return "max_characters"
             for item, node, size in additions:
                 selected[item] = node
                 character_count += size
+            return None
+
+        reserved_order: list[str] = []
+        reserved_seen: set[str] = set()
+        for node_type, quota in profile.type_reservations.items():
+            typed = [
+                key for key in ordered_keys if hydrated[key].ref.type == node_type
+            ]
+            for key in typed[: max(0, int(quota))]:
+                if key not in reserved_seen:
+                    reserved_seen.add(key)
+                    reserved_order.append(key)
+
+        chars_exhausted = False
+        for key in reserved_order:
+            reason = try_admit(key)
+            if reason is None:
+                continue
+            if reason not in truncation_reasons:
+                truncation_reasons.append(reason)
+            if reason == "max_characters":
+                chars_exhausted = True
+                break
+
+        if not chars_exhausted:
+            for key in ordered_keys:
+                if key in selected:
+                    continue
+                reason = try_admit(key)
+                if reason is None:
+                    continue
+                if reason not in truncation_reasons:
+                    truncation_reasons.append(reason)
+                if reason == "max_characters":
+                    # G4.2: stop so a later, lower-relevance node cannot
+                    # overtake one that did not fit.
+                    break
 
         relationships: list[AgentGraphRelationship] = []
         ordered_edges = sorted(

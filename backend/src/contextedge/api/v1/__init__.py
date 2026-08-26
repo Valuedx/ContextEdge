@@ -37,6 +37,7 @@ from contextedge.api.v1 import (  # noqa: E402, F401
     users,
     nav_access,
     workspaces,
+    agent,
 )
 
 router.include_router(auth.router, prefix="/auth", tags=["auth"])
@@ -55,6 +56,7 @@ router.include_router(patterns.router, prefix="/patterns", tags=["patterns"])
 router.include_router(playbooks.router, prefix="/playbooks", tags=["playbooks"])
 router.include_router(sessions.router, prefix="/sessions", tags=["sessions"])
 router.include_router(runtime.router, prefix="/runtime", tags=["runtime"])
+router.include_router(agent.router, prefix="/agent", tags=["agent"])
 router.include_router(evaluations.router, prefix="/evaluations", tags=["evaluations"])
 router.include_router(policies.router, prefix="/policies", tags=["policies"])
 router.include_router(
