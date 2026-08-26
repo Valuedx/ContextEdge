@@ -37,17 +37,14 @@ export default function LoginPage() {
     <div className="flex min-h-screen items-center justify-center bg-background px-4 py-10">
       <Card className="relative w-full max-w-md border-t-4 border-t-action bg-card shadow-lg">
         <CardHeader className="space-y-2 text-center">
-          <div className="flex justify-center">
+          <div className="flex justify-center pb-2">
             <BrandLockup />
           </div>
-          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-muted-foreground">
-            ContextGraph Console
-          </p>
-          <CardTitle className="text-xl font-semibold text-foreground">
-            Sign in to ContextEdge
+          <CardTitle className="text-lg font-semibold text-foreground">
+            Sign in to your account
           </CardTitle>
           <p className="text-sm text-muted-foreground">
-            Sign in with your username. Do not use an email address.
+            Enter your username to continue. Do not use an email address.
           </p>
         </CardHeader>
         <CardContent>
