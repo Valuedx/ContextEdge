@@ -19,10 +19,8 @@ import { buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { api } from "@/lib/api";
-import type { Episode, EvidenceItem, Playbook, Source } from "@/lib/types";
+import type { OverviewStats, Playbook } from "@/lib/types";
 import { cn } from "@/lib/utils";
-
-const LIMIT = "200";
 
 function StatTile({
   label,
@@ -106,35 +104,30 @@ export default function OverviewPage() {
   const overview = useQuery({
     queryKey: ["overview-stats"],
     queryFn: async () => {
-      const [sources, evidence, episodes, playbooks] = await Promise.all([
-        api.get<Source[]>("/sources", { limit: LIMIT }),
-        api.get<EvidenceItem[]>("/evidence", { limit: LIMIT }),
-        api.get<Episode[]>("/episodes", { limit: LIMIT }),
-        api.get<Playbook[]>("/playbooks", { limit: LIMIT }),
+      const [stats, playbooks] = await Promise.all([
+        api.get<OverviewStats>("/overview/stats"),
+        api.get<Playbook[]>("/playbooks", { limit: "20" }),
       ]);
-      return { sources, evidence, episodes, playbooks };
+      return { stats, playbooks };
     },
   });
 
-  const data = overview.data;
-  const capNote = "(up to 200 each)";
+  const stats = overview.data?.stats;
+  const playbooks = overview.data?.playbooks ?? [];
 
-  const connectedSources =
-    data?.sources.filter((s) => s.auth_status === "connected").length ?? 0;
-  const pendingEpisodes =
-    data?.episodes.filter((e) => e.reviewer_state === "pending_review").length ?? 0;
-  const approvedPlaybooks =
-    data?.playbooks.filter((p) => p.lifecycle_state === "approved").length ?? 0;
-  const candidatePlaybooks =
-    data?.playbooks.filter(
-      (p) => p.lifecycle_state === "candidate" || p.lifecycle_state === "under_review"
-    ).length ?? 0;
+  const activeSources = stats?.active_sources ?? 0;
+  const connectedSources = stats?.connected_sources ?? 0;
+  const totalEvidence = stats?.total_evidence ?? 0;
+  const totalEpisodes = stats?.total_episodes ?? 0;
+  const pendingEpisodes = stats?.pending_episodes ?? 0;
+  const approvedPlaybooks = stats?.approved_playbooks ?? 0;
+  const candidatePlaybooks = stats?.candidate_playbooks ?? 0;
 
   const driftRows =
-    data?.playbooks
+    playbooks
       .map((pb) => ({ pb, reason: playbookNeedsAttention(pb) }))
       .filter((x) => x.reason !== null)
-      .slice(0, 8) ?? [];
+      .slice(0, 8);
 
   return (
     <div className="space-y-8">
@@ -154,37 +147,37 @@ export default function OverviewPage() {
           <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
             <StatTile
               label="Active sources"
-              value={String(data?.sources.length ?? 0)}
-              hint={`${connectedSources} connected · ${capNote}`}
+              value={activeSources.toLocaleString()}
+              hint={`${connectedSources.toLocaleString()} connected`}
               icon={Database}
             />
             <StatTile
               label="Evidence items"
-              value={String(data?.evidence.length ?? 0)}
-              hint={capNote}
+              value={totalEvidence.toLocaleString()}
+              hint="Tickets & primary records"
               icon={FileSearch}
             />
             <StatTile
               label="Episodes"
-              value={String(data?.episodes.length ?? 0)}
-              hint={`${pendingEpisodes} pending review · ${capNote}`}
+              value={totalEpisodes.toLocaleString()}
+              hint={`${pendingEpisodes.toLocaleString()} pending review`}
               icon={GitBranch}
             />
             <StatTile
               label="Approved playbooks"
-              value={String(approvedPlaybooks)}
-              hint={`${candidatePlaybooks} in candidate / review`}
+              value={approvedPlaybooks.toLocaleString()}
+              hint={`${candidatePlaybooks.toLocaleString()} in candidate / review`}
               icon={BookOpen}
             />
             <StatTile
               label="Pending reviews"
-              value={String(pendingEpisodes + candidatePlaybooks)}
+              value={(pendingEpisodes + candidatePlaybooks).toLocaleString()}
               hint="Episodes + playbook candidates"
               icon={AlertTriangle}
             />
             <StatTile
               label="Healthy syncs"
-              value={String(connectedSources)}
+              value={connectedSources.toLocaleString()}
               hint="Sources with connected auth"
               icon={CheckCircle}
             />

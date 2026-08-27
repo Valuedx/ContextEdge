@@ -1003,3 +1003,13 @@ export interface CopilotConversationMessage {
 export interface CopilotConversationDetail extends CopilotConversationListItem {
   messages: CopilotConversationMessage[];
 }
+
+export interface OverviewStats {
+  active_sources: number;
+  connected_sources: number;
+  total_evidence: number;
+  total_episodes: number;
+  pending_episodes: number;
+  approved_playbooks: number;
+  candidate_playbooks: number;
+}

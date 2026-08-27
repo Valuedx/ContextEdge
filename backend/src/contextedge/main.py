@@ -44,17 +44,26 @@ def _cors_origins() -> list[str]:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     import anyio
+
     app.state.redis = aioredis.from_url(settings.redis_url, decode_responses=True)
     app.state.object_store_ok = False
-    try:
-        # ensure_bucket is synchronous (boto3), offload to thread to prevent event loop blocking
-        await anyio.to_thread.run_sync(ensure_bucket)
-        app.state.object_store_ok = True
-        logger.info("object_store_bucket_ready", bucket=settings.minio_bucket)
-    except Exception as exc:
-        logger.warning("object_store_bucket_check_failed", error=str(exc))
+
+    async def _init_object_store():
+        try:
+            # ensure_bucket is synchronous (boto3), offload to thread to prevent event loop blocking
+            await anyio.to_thread.run_sync(ensure_bucket)
+            app.state.object_store_ok = True
+            logger.info("object_store_bucket_ready", bucket=settings.minio_bucket)
+        except asyncio.CancelledError:
+            pass
+        except Exception as exc:
+            logger.warning("object_store_bucket_check_failed", error=str(exc))
+
+    object_store_task = asyncio.create_task(_init_object_store())
     logger.info("startup", database=settings.database_url.split("@")[-1])
     yield
+    if not object_store_task.done():
+        object_store_task.cancel()
     await app.state.redis.close()
     logger.info("shutdown")
 
