@@ -23,18 +23,31 @@ if settings.google_api_key:
     logger.debug("google_api_key_configured")
 
 # Support Vertex AI via service account
-if settings.google_application_credentials:
-    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = settings.google_application_credentials
+_creds_path = (settings.google_application_credentials or "").strip()
+if _creds_path:
+    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = _creds_path
     # Set global fallback; per-task location is applied dynamically
     # before each call via get_location_for_task().
     os.environ["VERTEX_LOCATION"] = settings.location
     if settings.google_cloud_project:
         os.environ["VERTEX_PROJECT"] = settings.google_cloud_project
-    logger.debug(
+    _creds_exists = os.path.isfile(_creds_path)
+    logger.info(
         "vertex_ai_credentials_configured",
-        path=settings.google_application_credentials,
+        path=_creds_path,
+        file_exists=_creds_exists,
         fallback_location=settings.location,
     )
+    if not _creds_exists:
+        logger.error(
+            "vertex_ai_credentials_file_missing",
+            path=_creds_path,
+            hint=(
+                "The host file is not visible to this process. If the API "
+                "runs in Docker, bind-mount GOOGLE_APPLICATION_CREDENTIALS "
+                "into the container."
+            ),
+        )
 else:
     logger.debug("vertex_ai_credentials_not_found")
 

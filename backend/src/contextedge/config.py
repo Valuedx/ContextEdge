@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -51,6 +51,16 @@ class Settings(BaseSettings):
     google_api_key: str = ""
     google_application_credentials: str = ""
     default_llm_provider: str = "vertex_ai"
+
+    @field_validator("google_application_credentials", mode="before")
+    @classmethod
+    def _strip_credentials_path(cls, value: object) -> object:
+        # Windows-edited .env files often leave a trailing \\r; google.auth
+        # then looks for "...google_creds.json\\r" and reports "not found"
+        # even when the host file exists.
+        if isinstance(value, str):
+            return value.strip().strip("\"'").replace("\r", "")
+        return value
 
     # Per-task models
     default_classification_model: str = "vertex_ai/gemini-2.5-flash"
