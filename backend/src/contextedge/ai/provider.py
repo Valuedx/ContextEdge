@@ -77,7 +77,7 @@ LOCATION_ROUTING = {
 
 
 def get_model_for_task(task: str) -> str:
-    return MODEL_ROUTING.get(task, settings.default_extraction_model)
+    return _litellm_model_id(MODEL_ROUTING.get(task, settings.default_extraction_model))
 
 
 def get_location_for_task(task: str) -> str:
@@ -104,6 +104,22 @@ def _is_vertex_model(model: str | None) -> bool:
         and bool(settings.google_application_credentials)
         and name.startswith("gemini-")
     )
+
+
+def _litellm_model_id(model: str | None) -> str:
+    """LiteLLM routes Vertex on the ``vertex_ai/`` prefix.
+
+    Bare ``gemini-3.7-flash`` ids still authenticate with the Vertex
+    adapter when credentials are set, but several Gemini 3 features
+    (thinking, json_object) mis-route without the prefix. Always send
+    the explicit Vertex id when this deployment is on Vertex.
+    """
+    name = (model or "").strip()
+    if not name or name.startswith(("vertex_ai/", "gemini/", "openai/", "anthropic/", "azure/")):
+        return name
+    if _is_vertex_model(name):
+        return f"vertex_ai/{name}"
+    return name
 
 
 def _vertex_litellm_kwargs(task: str, model: str | None) -> dict[str, str]:
@@ -239,7 +255,7 @@ async def llm_complete(
       the artifact does not exist yet, and its own
       ``generation_provenance`` column is the record for that direction.
     """
-    model = model or get_model_for_task(task)
+    model = _litellm_model_id(model or get_model_for_task(task))
 
     # Per-tenant daily budget enforcement. When a tenant has a
     # ``tenant_llm_budgets`` row and the current-day usage has hit the
@@ -323,9 +339,12 @@ async def llm_complete(
     kwargs: dict[str, Any] = {
         "model": model,
         "messages": messages,
-        "temperature": temperature,
         "max_tokens": effective_max_tokens,
     }
+    # Gemini 3+ warns that temperature < 1.0 degrades reasoning and can
+    # loop; LiteLLM defaults it to 1.0 when omitted.
+    if "gemini-3" not in model.lower():
+        kwargs["temperature"] = temperature
     if response_format:
         kwargs["response_format"] = response_format
 
@@ -394,8 +413,15 @@ async def llm_complete(
             else:
                 raise
         return response.choices[0].message.content or ""
-    except Exception:
+    except Exception as exc:
         outcome = "error"
+        logger.error(
+            "llm.complete_failed",
+            model=model,
+            task=task,
+            error_type=type(exc).__name__,
+            error=str(exc)[:800],
+        )
         raise
     finally:
         duration_ms = int((time.perf_counter() - start) * 1000)

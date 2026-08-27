@@ -1343,11 +1343,19 @@ async def generate_playbook(
         await db.refresh(playbook)
         return playbook
 
-    except Exception:
+    except Exception as exc:
         logger.exception(
             "playbook_generation_failed",
             tenant_id=str(user.tenant_id),
             pattern_id=str(body.pattern_id),
+            error_type=type(exc).__name__,
+            error=str(exc)[:800],
         )
         await db.rollback()
-        raise HTTPException(status_code=500, detail="Playbook generation failed")
+        detail = str(exc).strip() or type(exc).__name__
+        if len(detail) > 400:
+            detail = detail[:400] + "…"
+        raise HTTPException(
+            status_code=502,
+            detail=f"Playbook generation failed: {detail}",
+        ) from exc
