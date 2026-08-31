@@ -50,7 +50,7 @@ function StepCard({
   });
 
   return (
-    <div className="rounded-lg border p-4 text-sm">
+    <div className="rounded-lg border bg-card p-4 text-sm shadow-sm">
       <div className="flex flex-wrap items-center gap-2">
         <span className="font-mono text-xs text-muted-foreground">#{step.step_order}</span>
         <span className="rounded bg-muted px-2 py-0.5 text-xs">{step.step_type}</span>

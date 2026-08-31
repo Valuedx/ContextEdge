@@ -365,7 +365,15 @@ export default function SourceDetailPage() {
                     disabled={!canDiscover}
                   >
                     <SelectTrigger id="retention-policy" className="w-full max-w-md">
-                      <SelectValue placeholder="None" />
+                      <SelectValue placeholder="None">
+                        {(value: string | null) => {
+                          if (!value || value === POLICY_NONE) return "None";
+                          const named = (policiesData?.retention_policies ?? []).find((p) => p.id === value);
+                          return named
+                            ? `${named.name}${named.is_active ? "" : " (inactive)"}`
+                            : "Selected policy";
+                        }}
+                      </SelectValue>
                     </SelectTrigger>
                     <SelectContent>
                       <SelectItem value={POLICY_NONE}>None</SelectItem>
@@ -388,7 +396,15 @@ export default function SourceDetailPage() {
                     disabled={!canDiscover}
                   >
                     <SelectTrigger id="classification-policy" className="w-full max-w-md">
-                      <SelectValue placeholder="None" />
+                      <SelectValue placeholder="None">
+                        {(value: string | null) => {
+                          if (!value || value === POLICY_NONE) return "None";
+                          const named = (policiesData?.classification_policies ?? []).find((p) => p.id === value);
+                          return named
+                            ? `${named.name}${named.is_active ? "" : " (inactive)"}`
+                            : "Selected policy";
+                        }}
+                      </SelectValue>
                     </SelectTrigger>
                     <SelectContent>
                       <SelectItem value={POLICY_NONE}>None</SelectItem>

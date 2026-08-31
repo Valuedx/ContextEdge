@@ -18,14 +18,46 @@ function SelectGroup({ className, ...props }: SelectPrimitive.Group.Props) {
   )
 }
 
-function SelectValue({ className, ...props }: SelectPrimitive.Value.Props) {
+function SelectValue({ className, placeholder, children, ...props }: SelectPrimitive.Value.Props) {
   return (
     <SelectPrimitive.Value
       data-slot="select-value"
       className={cn("flex flex-1 text-left", className)}
+      placeholder={placeholder}
       {...props}
-    />
+    >
+      {children ?? ((value: unknown) => formatClosedSelectValue(value, placeholder))}
+    </SelectPrimitive.Value>
   )
+}
+
+/** Closed trigger falls back to the raw value because the popup unmounts. */
+const CLOSED_SELECT_LABELS: Record<string, string> = {
+  kb_article: "KB Article",
+  slack_message: "Slack",
+  teams_message: "Teams",
+  zoho_desk: "Zoho Desk",
+  servicenow: "ServiceNow",
+  possibly_relevant: "Possibly Relevant",
+  not_relevant: "Not Relevant",
+  warn: "Warn (allow, log event)",
+  block: "Block (raise exception)",
+}
+
+function formatClosedSelectValue(
+  value: unknown,
+  placeholder?: React.ReactNode,
+): React.ReactNode {
+  if (value == null || value === "" || value === "__none__" || value === "none") {
+    return placeholder ?? "None"
+  }
+  if (typeof value !== "string") return String(value)
+  if (value === "all") return placeholder ?? "All"
+  if (CLOSED_SELECT_LABELS[value]) return CLOSED_SELECT_LABELS[value]
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)) {
+    return value
+  }
+  return value.replace(/_/g, " ").replace(/\b\w/g, (char) => char.toUpperCase())
 }
 
 function SelectTrigger({

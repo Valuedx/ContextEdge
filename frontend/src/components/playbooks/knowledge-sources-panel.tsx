@@ -15,6 +15,13 @@
 import Link from "next/link";
 
 import { ApplicabilityBadge } from "@/components/common/applicability";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
 import type { PlaybookKnowledgeRef, PlaybookVersion } from "@/lib/types";
 
 function versionMismatchLine(doc: PlaybookKnowledgeRef): string | null {
@@ -35,24 +42,28 @@ export function KnowledgeSourcesPanel({ version }: { version: PlaybookVersion })
     const count = refs?.knowledge_ids?.length ?? 0;
     if (count === 0) {
       return (
-        <div className="rounded-lg border border-dashed p-4">
-          <h3 className="text-sm font-semibold">Approved knowledge used</h3>
-          <p className="mt-1 text-xs text-muted-foreground">
-            None. This playbook reflects observed practice only — no KB
-            article or SOP was matched to the pattern.
-          </p>
-        </div>
+        <Card className="border-dashed shadow-none">
+          <CardHeader>
+            <CardTitle>Approved knowledge used</CardTitle>
+            <CardDescription className="text-xs">
+              None. This playbook reflects observed practice only — no KB
+              article or SOP was matched to the pattern.
+            </CardDescription>
+          </CardHeader>
+        </Card>
       );
     }
     return (
-      <div className="rounded-lg border p-4">
-        <h3 className="text-sm font-semibold">Approved knowledge used</h3>
-        <p className="mt-1 text-xs text-muted-foreground">
-          {count} document{count === 1 ? "" : "s"}. Applicability was not
-          recorded for this version, so whether they match this
-          environment is unknown here.
-        </p>
-      </div>
+      <Card>
+        <CardHeader>
+          <CardTitle>Approved knowledge used</CardTitle>
+          <CardDescription className="text-xs">
+            {count} document{count === 1 ? "" : "s"}. Applicability was not
+            recorded for this version, so whether they match this
+            environment is unknown here.
+          </CardDescription>
+        </CardHeader>
+      </Card>
     );
   }
 
@@ -61,34 +72,34 @@ export function KnowledgeSourcesPanel({ version }: { version: PlaybookVersion })
   ).length;
 
   return (
-    <div className="rounded-lg border p-4 space-y-3">
-      <div>
-        <h3 className="text-sm font-semibold">
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex flex-wrap items-center gap-2">
           Approved knowledge used
           {flagged > 0 && (
-            <span className="ml-2 rounded-full bg-amber-500/20 px-2 py-0.5 text-[10px] font-medium">
+            <span className="rounded-full bg-amber-500/20 px-2 py-0.5 text-[10px] font-medium">
               {flagged} flagged
             </span>
           )}
-        </h3>
-        <p className="mt-1 text-xs text-muted-foreground">
+        </CardTitle>
+        <CardDescription className="text-xs">
           What the organisation says should be done, as matched to this
           pattern. A flagged document still informed the playbook — it was
           ranked lower, not withheld.
-        </p>
+        </CardDescription>
         {ticketVersion ? (
-          <p className="mt-2 text-xs">
+          <p className="text-xs text-foreground">
             Ticket product version used at generation:{" "}
             <span className="font-medium">AutomationEdge {ticketVersion}</span>
           </p>
         ) : (
-          <p className="mt-2 text-xs text-muted-foreground">
+          <p className="text-xs text-muted-foreground">
             Ticket product version was not recorded for this generation.
           </p>
         )}
-      </div>
+      </CardHeader>
 
-      <div className="space-y-2">
+      <CardContent className="space-y-2">
         {knowledge.map((doc) => {
           const mismatch = versionMismatchLine(doc);
           return (
@@ -137,7 +148,7 @@ export function KnowledgeSourcesPanel({ version }: { version: PlaybookVersion })
             </div>
           );
         })}
-      </div>
-    </div>
+      </CardContent>
+    </Card>
   );
 }

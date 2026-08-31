@@ -7,7 +7,6 @@ import {
   SelectContent,
   SelectItem,
   SelectTrigger,
-  SelectValue,
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 
@@ -57,9 +56,11 @@ export function PlaybookMetaEditor({
       <div>
         <Label>Risk tier</Label>
         <Select value={value.risk_tier} onValueChange={(v) => set({ risk_tier: v ?? "medium" })}>
-          <SelectTrigger className="mt-1">
-            <SelectValue />
-          </SelectTrigger>
+            <SelectTrigger className="mt-1 w-full">
+              <span className="truncate capitalize">
+                {value.risk_tier.replace(/_/g, " ")}
+              </span>
+            </SelectTrigger>
           <SelectContent>
             {RISK_TIERS.map((tier) => (
               <SelectItem key={tier} value={tier}>

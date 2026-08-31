@@ -9,7 +9,6 @@ import {
   SelectContent,
   SelectItem,
   SelectTrigger,
-  SelectValue,
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { STEP_TYPES, mergeStepEdit, type EditableStep } from "@/lib/playbook-steps";
@@ -23,6 +22,11 @@ const ACTION_TYPES = [
   "approval",
   "manual",
 ];
+
+function prettyEnum(value: string | null | undefined): string {
+  if (!value || value === "__none__") return "None";
+  return value.replace(/_/g, " ");
+}
 
 export function PlaybookStepEditor({
   step,
@@ -62,7 +66,11 @@ export function PlaybookStepEditor({
             onValueChange={(v) => set({ type: v ?? "remediation" })}
           >
             <SelectTrigger className="mt-1 w-full">
-              <SelectValue />
+              <span className="truncate capitalize">
+                {prettyEnum(
+                  typeof step.type === "string" && step.type ? step.type : "remediation",
+                )}
+              </span>
             </SelectTrigger>
             <SelectContent>
               {STEP_TYPES.map((type) => (
@@ -145,9 +153,11 @@ export function PlaybookStepEditor({
                 set({ safety_class: !v || v === "__none__" ? null : v })
               }
             >
-              <SelectTrigger className="mt-1 w-full">
-                <SelectValue />
-              </SelectTrigger>
+            <SelectTrigger className="mt-1 w-full">
+              <span className="truncate capitalize">
+                {prettyEnum(typeof step.safety_class === "string" ? step.safety_class : null)}
+              </span>
+            </SelectTrigger>
               <SelectContent>
                 <SelectItem value="__none__">None</SelectItem>
                 {SAFETY_CLASSES.map((value) => (
@@ -166,9 +176,11 @@ export function PlaybookStepEditor({
                 set({ action_type: !v || v === "__none__" ? null : v })
               }
             >
-              <SelectTrigger className="mt-1 w-full">
-                <SelectValue />
-              </SelectTrigger>
+            <SelectTrigger className="mt-1 w-full">
+              <span className="truncate capitalize">
+                {prettyEnum(typeof step.action_type === "string" ? step.action_type : null)}
+              </span>
+            </SelectTrigger>
               <SelectContent>
                 <SelectItem value="__none__">None</SelectItem>
                 {ACTION_TYPES.map((value) => (

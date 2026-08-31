@@ -156,7 +156,7 @@ export default function ContradictionsPage() {
         <Label className="text-xs shrink-0">Show</Label>
         <Select value={statusFilter} onValueChange={(v) => { setStatusFilter(v ?? "open"); pg.reset(); }}>
           <SelectTrigger className="w-40">
-            <SelectValue />
+            <SelectValue placeholder="All" />
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="all">All</SelectItem>

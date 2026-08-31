@@ -111,7 +111,7 @@ export default function AuditPage() {
           <Label className="text-xs">Action type</Label>
           <Select value={actionFilter} onValueChange={(v) => setActionFilter(v ?? "all")}>
             <SelectTrigger className="w-56">
-              <SelectValue />
+              <SelectValue placeholder="All actions" />
             </SelectTrigger>
             <SelectContent>
               {ACTION_TYPES.map((a) => (

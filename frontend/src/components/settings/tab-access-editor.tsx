@@ -85,8 +85,10 @@ export function TabAccessEditor() {
         <div>
           <Label htmlFor="tab-access-role">Role</Label>
           <Select value={role} onValueChange={(value) => setRole(value ?? "analyst")}>
-            <SelectTrigger id="tab-access-role" className="mt-1 max-w-sm">
-              <SelectValue />
+            <SelectTrigger id="tab-access-role" className="mt-1 w-full max-w-sm">
+              <SelectValue>
+                {(value: string | null) => ROLE_LABELS[value ?? ""] ?? roleLabel(value ?? "")}
+              </SelectValue>
             </SelectTrigger>
             <SelectContent>
               {data.roles.map((value) => (

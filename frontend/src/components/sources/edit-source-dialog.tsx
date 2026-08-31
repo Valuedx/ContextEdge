@@ -114,7 +114,7 @@ export function EditSourceDialog({
                 value={syncMode}
                 onValueChange={(value) => setSyncMode(value ?? "")}
               >
-                <SelectTrigger>
+                <SelectTrigger className="w-full">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -133,7 +133,7 @@ export function EditSourceDialog({
               value={isActive ? "active" : "inactive"}
               onValueChange={(value) => setIsActive(value === "active")}
             >
-              <SelectTrigger>
+              <SelectTrigger className="w-full">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>

@@ -18,7 +18,15 @@ import { StatusBadge } from "@/components/common/status-badge";
 import { Button } from "@/components/ui/button";
 import { PlaybookSteps } from "@/components/common/playbook-steps";
 import { PlaybookLifecycleActions } from "@/components/common/playbook-lifecycle-actions";
-import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Card,
+  CardAction,
+  CardContent,
+  CardDescription,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
 import {
   Dialog,
   DialogContent,
@@ -31,7 +39,6 @@ import {
   SelectContent,
   SelectItem,
   SelectTrigger,
-  SelectValue,
 } from "@/components/ui/select";
 import { Label } from "@/components/ui/label";
 import { PlaybookEditor } from "@/components/playbooks/playbook-editor";
@@ -496,109 +503,128 @@ function GovernancePanel({ playbook }: { playbook: Playbook }) {
   const previewPolicy =
     approvalPolicies.find((p) => p.id === policySelection) ?? boundPolicy;
 
+  const selectedModeValue = pendingMode ?? playbook.automation_mode;
+  const selectedModeLabel =
+    AUTOMATION_MODES.find((m) => m.value === selectedModeValue)?.label ??
+    selectedModeValue.replace(/_/g, " ");
+  const selectedPolicyLabel =
+    policySelection === NO_POLICY
+      ? "None"
+      : approvalPolicies.find((p) => p.id === policySelection)?.name ??
+        boundPolicy?.name ??
+        "Selected policy";
+  const policyRules = previewPolicy ? describePolicy(previewPolicy.config) : [];
+
   return (
-    <div className="rounded-lg border p-4 space-y-4">
-      <div>
-        <h3 className="text-sm font-semibold">Governance</h3>
-        <p className="mt-1 text-xs text-muted-foreground">
+    <Card>
+      <CardHeader>
+        <CardTitle>Governance</CardTitle>
+        <CardDescription className="text-xs">
           {editable
             ? "Whether this playbook may act on a real system, and who must approve when it does."
             : "Whether this playbook may act on a real system, and who must approve when it does. Only a tenant administrator can change these."}
-        </p>
-      </div>
+        </CardDescription>
+      </CardHeader>
 
-      <div className="grid gap-4 sm:grid-cols-2">
-        <div className="space-y-2">
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="text-xs text-muted-foreground">Automation</span>
-            <StatusBadge status={playbook.automation_mode} />
-          </div>
-          {currentMode && (
-            <p className="text-xs text-muted-foreground">{currentMode.detail}</p>
-          )}
-          {editable && (
-            <div>
-              <Label htmlFor="automation-mode" className="text-xs">
-                Change to
-              </Label>
-              <Select
-                value={pendingMode ?? playbook.automation_mode}
-                onValueChange={(v) => setPendingMode(v ?? null)}
-              >
-                <SelectTrigger id="automation-mode" className="mt-1">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {AUTOMATION_MODES.map((mode) => (
-                    <SelectItem key={mode.value} value={mode.value}>
-                      {mode.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+      <CardContent>
+        <div className="grid items-stretch gap-6 sm:grid-cols-2">
+          <div className="flex min-w-0 flex-col gap-3">
+            <div className="flex min-h-7 flex-wrap items-center gap-2">
+              <span className="text-xs font-medium text-muted-foreground">Automation</span>
+              <StatusBadge status={playbook.automation_mode} />
             </div>
-          )}
-        </div>
-
-        <div className="space-y-2">
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="text-xs text-muted-foreground">Approval policy</span>
-            {playbook.approval_policy_id ? (
-              <span className="rounded border px-1.5 py-0.5 text-[11px]">
-                {boundPolicy?.name ?? "attached"}
-              </span>
-            ) : (
-              <span className="text-xs">
-                None — role and automation mode alone decide gating
-              </span>
+            <p className="min-h-8 flex-1 text-xs leading-5 text-muted-foreground">
+              {currentMode?.detail ?? "\u00a0"}
+            </p>
+            {editable && (
+              <div className="space-y-1.5">
+                <Label htmlFor="automation-mode" className="text-xs font-medium text-muted-foreground">
+                  Change to
+                </Label>
+                <Select
+                  value={selectedModeValue}
+                  onValueChange={(v) => setPendingMode(v ?? null)}
+                >
+                  <SelectTrigger id="automation-mode" size="sm" className="w-full">
+                    <span className="truncate">{selectedModeLabel}</span>
+                  </SelectTrigger>
+                  <SelectContent>
+                    {AUTOMATION_MODES.map((mode) => (
+                      <SelectItem key={mode.value} value={mode.value}>
+                        {mode.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
             )}
           </div>
-          {editable && (
-            <div>
-              <Label htmlFor="approval-policy" className="text-xs">
-                Bind policy
-              </Label>
-              <Select
-                value={policySelection}
-                onValueChange={(v) => setPendingPolicy(v ?? NO_POLICY)}
-              >
-                <SelectTrigger id="approval-policy" className="mt-1">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value={NO_POLICY}>None</SelectItem>
-                  {approvalPolicies.map((policy) => (
-                    <SelectItem key={policy.id} value={policy.id}>
-                      {policy.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+
+          <div className="flex min-w-0 flex-col gap-3">
+            <div className="flex min-h-7 flex-wrap items-center gap-2">
+              <span className="text-xs font-medium text-muted-foreground">Approval policy</span>
+              {playbook.approval_policy_id ? (
+                <span className="rounded-md border bg-muted/50 px-1.5 py-0.5 text-[11px] font-medium">
+                  {boundPolicy?.name ?? "Attached"}
+                </span>
+              ) : (
+                <span className="rounded-md border bg-muted/50 px-1.5 py-0.5 text-[11px] font-medium">
+                  None
+                </span>
+              )}
             </div>
-          )}
-          {/* What binding it actually does. A policy name alone tells a
-              reviewer nothing about the rules they are switching on. */}
-          {previewPolicy && describePolicy(previewPolicy.config).length > 0 && (
-            <ul className="space-y-0.5">
-              {describePolicy(previewPolicy.config).map((rule) => (
-                <li key={rule} className="text-xs text-muted-foreground">
-                  • {rule}
-                </li>
-              ))}
-            </ul>
-          )}
-          {editable && approvalPolicies.length === 0 && (
-            <p className="text-xs text-muted-foreground">
-              No active approval policies exist yet — create one on the
-              Policies page.
-            </p>
-          )}
+            <div className="min-h-8 flex-1 space-y-0.5">
+              {policyRules.length > 0 ? (
+                <ul className="space-y-0.5">
+                  {policyRules.map((rule) => (
+                    <li key={rule} className="text-xs leading-5 text-muted-foreground">
+                      {rule}
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="text-xs leading-5 text-muted-foreground">
+                  Role and automation mode alone decide gating.
+                </p>
+              )}
+            </div>
+            {editable && (
+              <div className="space-y-1.5">
+                <Label htmlFor="approval-policy" className="text-xs font-medium text-muted-foreground">
+                  Bind policy
+                </Label>
+                <Select
+                  value={policySelection}
+                  onValueChange={(v) => setPendingPolicy(v ?? NO_POLICY)}
+                >
+                  <SelectTrigger id="approval-policy" size="sm" className="w-full">
+                    <span className="truncate">{selectedPolicyLabel}</span>
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value={NO_POLICY}>None</SelectItem>
+                    {approvalPolicies.map((policy) => (
+                      <SelectItem key={policy.id} value={policy.id}>
+                        {policy.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {approvalPolicies.length === 0 && (
+                  <p className="text-xs leading-5 text-muted-foreground">
+                    No active approval policies exist yet — create one on the
+                    Policies page.
+                  </p>
+                )}
+              </div>
+            )}
+          </div>
         </div>
-      </div>
+      </CardContent>
 
       {editable && (
-        <div className="flex items-center gap-2">
+        <CardFooter className="justify-start gap-3 bg-transparent px-4 py-3">
           <Button
+            size="sm"
             disabled={mut.isPending || (!modeChanged && !policyChanged)}
             onClick={apply}
           >
@@ -606,13 +632,13 @@ function GovernancePanel({ playbook }: { playbook: Playbook }) {
             Apply
           </Button>
           {modeChanged && (
-            <span className="text-xs text-muted-foreground">
+            <span className="text-xs leading-5 text-muted-foreground">
               {AUTOMATION_MODES.find((m) => m.value === pendingMode)?.detail}
             </span>
           )}
-        </div>
+        </CardFooter>
       )}
-    </div>
+    </Card>
   );
 }
 
@@ -625,47 +651,50 @@ function ConflictsPanel({ version }: { version: PlaybookVersion }) {
   // check was performed and passed.
   if (conflicts === null || conflicts === undefined) {
     return (
-      <div className="rounded-lg border border-dashed p-4">
-        <h3 className="text-sm font-semibold">Documented vs. observed</h3>
-        <p className="mt-1 text-xs text-muted-foreground">
-          Not assessed — this version was generated before approved
-          knowledge was compared against observed practice.
-        </p>
-      </div>
+      <Card className="border-dashed shadow-none">
+        <CardHeader>
+          <CardTitle>Documented vs. observed</CardTitle>
+          <CardDescription className="text-xs">
+            Not assessed — this version was generated before approved
+            knowledge was compared against observed practice.
+          </CardDescription>
+        </CardHeader>
+      </Card>
     );
   }
 
   if (conflicts.length === 0) {
     return (
-      <div className="rounded-lg border p-4">
-        <h3 className="text-sm font-semibold">Documented vs. observed</h3>
-        <p className="mt-1 text-xs text-muted-foreground">
-          No disagreement found between the approved procedure and what
-          engineers actually did.
-        </p>
-      </div>
+      <Card>
+        <CardHeader>
+          <CardTitle>Documented vs. observed</CardTitle>
+          <CardDescription className="text-xs">
+            No disagreement found between the approved procedure and what
+            engineers actually did.
+          </CardDescription>
+        </CardHeader>
+      </Card>
     );
   }
 
   return (
-    <div className="rounded-lg border border-amber-500/40 bg-amber-500/5 p-4 space-y-3">
-      <div>
-        <h3 className="text-sm font-semibold">
+    <Card className="border-amber-500/40 bg-amber-500/5">
+      <CardHeader>
+        <CardTitle className="flex flex-wrap items-center gap-2">
           Documented vs. observed
-          <span className="ml-2 rounded-full bg-amber-500/20 px-2 py-0.5 text-[10px] font-medium">
+          <span className="rounded-full bg-amber-500/20 px-2 py-0.5 text-[10px] font-medium">
             {conflicts.length} to review
           </span>
-        </h3>
-        <p className="mt-1 text-xs text-muted-foreground">
+        </CardTitle>
+        <CardDescription className="text-xs">
           The generator did not choose between these. Preferring the SOP
           ignores runs that succeeded doing something else; preferring
           practice deletes a safeguard.
-        </p>
-      </div>
-
-      <div className="space-y-3">
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3">
         {conflicts.map((conflict, index) => (
-          <div key={index} className="rounded-md border bg-background p-3 space-y-2">
+          <div key={index} className="space-y-2 rounded-md border bg-background p-3">
             {conflict.topic && (
               <p className="text-sm font-medium">{conflict.topic}</p>
             )}
@@ -704,8 +733,8 @@ function ConflictsPanel({ version }: { version: PlaybookVersion }) {
             )}
           </div>
         ))}
-      </div>
-    </div>
+      </CardContent>
+    </Card>
   );
 }
 

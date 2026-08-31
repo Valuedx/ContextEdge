@@ -349,7 +349,9 @@ function ManageUserRolesDialog({ user, onClose }: { user: User; onClose: () => v
           <div className="flex gap-2">
             <Select value={role} onValueChange={(value) => setRole(value ?? "analyst")}>
               <SelectTrigger id="new-user-role" className="flex-1">
-                <SelectValue />
+                <SelectValue>
+                  {(value: string | null) => roleLabel(value ?? "")}
+                </SelectValue>
               </SelectTrigger>
               <SelectContent>
                 {roleOptions.map((option) => (
@@ -524,8 +526,10 @@ function NewUserDialog({
         <div>
           <Label>Role</Label>
           <Select value={role} onValueChange={(value) => setRole(value ?? "analyst")}>
-            <SelectTrigger className="mt-1">
-              <SelectValue />
+            <SelectTrigger className="mt-1 w-full">
+              <SelectValue>
+                {(value: string | null) => roleLabel(value ?? "")}
+              </SelectValue>
             </SelectTrigger>
             <SelectContent>
               {roleOptions.map((option) => (

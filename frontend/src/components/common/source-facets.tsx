@@ -7,6 +7,15 @@
  * Empty means the source left those fields blank, not that nobody looked.
  */
 
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import { cn } from "@/lib/utils";
+
 const LABELS: Record<string, string> = {
   version: "Product version",
   ticket_number: "Ticket number",
@@ -45,37 +54,44 @@ export function SourceFacetsPanel({
   className?: string;
 }) {
   const entries = statedEntries(facets ?? undefined);
-  const container = className ?? "rounded-lg border p-4";
 
   if (entries.length === 0) {
     return (
-      <div className={className ?? "rounded-lg border border-dashed p-4"}>
-        <h3 className="text-sm font-semibold">What the source recorded</h3>
-        <p className="mt-1 text-xs text-muted-foreground">
-          No product version, ticket number, or environment on this row.
-          The source left those fields blank — they were not inferred.
-        </p>
-      </div>
+      <Card className={cn("border-dashed shadow-none", className)}>
+        <CardHeader className="border-b pb-3">
+          <CardTitle className="text-sm font-bold uppercase tracking-wider text-muted-foreground">
+            What the source recorded
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="pt-4">
+          <p className="text-xs leading-5 text-muted-foreground">
+            No product version, ticket number, or environment on this row.
+            The source left those fields blank — they were not inferred.
+          </p>
+        </CardContent>
+      </Card>
     );
   }
 
   return (
-    <div className={`${container} space-y-3`}>
-      <div>
-        <h3 className="text-sm font-semibold">What the source recorded</h3>
-        <p className="mt-1 text-xs text-muted-foreground">
+    <Card className={className}>
+      <CardHeader className="border-b pb-3">
+        <CardTitle className="text-sm font-bold uppercase tracking-wider text-muted-foreground">
+          What the source recorded
+        </CardTitle>
+        <CardDescription className="text-xs">
           Copied from the ticket at ingest, including onto related mail-thread
           messages. Blank fields stay blank rather than being guessed.
-        </p>
-      </div>
-      <dl className="grid gap-2 text-sm sm:grid-cols-2">
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3.5 pt-4 text-sm">
         {entries.map(([label, value]) => (
-          <div key={label} className="flex items-baseline justify-between gap-2">
-            <dt className="text-xs text-muted-foreground">{label}</dt>
-            <dd className="font-medium">{value}</dd>
+          <div key={label} className="flex items-center justify-between gap-3">
+            <span className="text-muted-foreground">{label}</span>
+            <span className="text-right font-medium text-foreground">{value}</span>
           </div>
         ))}
-      </dl>
-    </div>
+      </CardContent>
+    </Card>
   );
 }

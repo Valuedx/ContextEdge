@@ -233,7 +233,7 @@ export default function NegativeKnowledgePage() {
         <Label className="text-xs shrink-0">Filter by status</Label>
         <Select value={statusFilter} onValueChange={(v) => { setStatusFilter(v ?? "all"); pg.reset(); }}>
           <SelectTrigger className="w-48">
-            <SelectValue />
+            <SelectValue placeholder="All" />
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="all">All</SelectItem>

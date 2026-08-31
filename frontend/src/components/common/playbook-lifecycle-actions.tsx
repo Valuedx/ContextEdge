@@ -165,8 +165,10 @@ export function PlaybookLifecycleActions({
               <div>
                 <Label htmlFor={`state-${playbook.id}`}>New state</Label>
                 <Select value={newState} onValueChange={(value) => setNewState(value ?? "")}>
-                  <SelectTrigger id={`state-${playbook.id}`} className="mt-1">
-                    <SelectValue />
+                  <SelectTrigger id={`state-${playbook.id}`} className="mt-1 w-full">
+                    <SelectValue>
+                      {(value: string | null) => lifecycleStateLabel(value ?? "")}
+                    </SelectValue>
                   </SelectTrigger>
                   <SelectContent>
                     {available.map((state) => (

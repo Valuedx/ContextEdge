@@ -465,8 +465,14 @@ function RejectDialog({
               value={code}
               onValueChange={(v) => setCode(v as RejectionReasonCode)}
             >
-              <SelectTrigger>
-                <SelectValue />
+              <SelectTrigger className="w-full">
+                <SelectValue>
+                  {(value: string | null) =>
+                    value
+                      ? (REJECTION_REASON_LABELS[value as RejectionReasonCode] ?? value)
+                      : "Select a reason"
+                  }
+                </SelectValue>
               </SelectTrigger>
               <SelectContent>
                 {REJECTION_REASON_CODES.map((c) => (
@@ -629,8 +635,14 @@ function ModifyDialog({
               value={code}
               onValueChange={(v) => setCode(v as RejectionReasonCode)}
             >
-              <SelectTrigger>
-                <SelectValue />
+              <SelectTrigger className="w-full">
+                <SelectValue>
+                  {(value: string | null) =>
+                    value
+                      ? (REJECTION_REASON_LABELS[value as RejectionReasonCode] ?? value)
+                      : "Select a reason"
+                  }
+                </SelectValue>
               </SelectTrigger>
               <SelectContent>
                 {REJECTION_REASON_CODES.map((c) => (

@@ -182,9 +182,9 @@ export default function EvidenceDetailPage() {
       />
 
       {/* Primary Grid: Ticket Provenance & Linked Knowledge Context */}
-      <div className="grid gap-6 md:grid-cols-2">
+      <div className="grid items-stretch gap-6 md:grid-cols-2">
         {/* Card 1: Ticket Details & Provenance */}
-        <Card>
+        <Card className="h-full">
           <CardHeader className="border-b pb-3">
             <CardTitle className="flex items-center gap-2 text-sm font-bold uppercase tracking-wider text-muted-foreground">
               <FileText className="h-4 w-4 text-primary" />
@@ -259,7 +259,7 @@ export default function EvidenceDetailPage() {
         </Card>
 
         {/* Card 2: Linked Knowledge Graph Context (Episode & Pattern) */}
-        <Card className="flex flex-col justify-between">
+        <Card className="flex h-full flex-col">
           <CardHeader className="border-b pb-3">
             <CardTitle className="flex items-center gap-2 text-sm font-bold uppercase tracking-wider text-muted-foreground">
               <Sparkles className="h-4 w-4 text-primary" />
@@ -317,15 +317,9 @@ export default function EvidenceDetailPage() {
       {/* Where this article applies. Knowledge only — a ticket does not
           have an applicability, it has an environment. */}
       {KNOWLEDGE_EVIDENCE_TYPES.has(item.evidence_type) ? (
-        <ApplicabilityPanel
-          applicability={item.applicability}
-          className="rounded-lg border bg-card p-4 text-card-foreground"
-        />
+        <ApplicabilityPanel applicability={item.applicability} />
       ) : (
-        <SourceFacetsPanel
-          facets={item.source_facets}
-          className="rounded-lg border bg-card p-4 text-card-foreground"
-        />
+        <SourceFacetsPanel facets={item.source_facets} />
       )}
 
       {/* Main Ticket Body / Raw Payload Container */}
@@ -424,16 +418,16 @@ export default function EvidenceDetailPage() {
               Access Control & Retrieval Policy (Governance)
             </CardTitle>
           </CardHeader>
-          <CardContent className="space-y-4 pt-1">
+          <CardContent className="pt-1">
             {!policyListOk ? (
               <div className="text-sm text-muted-foreground">
                 <span>Assigned Policy ID:</span>{" "}
                 <span className="font-mono text-xs text-foreground">{item.access_policy_id ?? "None"}</span>
               </div>
             ) : (
-              <div className="flex flex-col sm:flex-row sm:items-center gap-4">
-                <div className="space-y-1 flex-1 max-w-md">
-                  <Label htmlFor="evidence-access-policy" className="text-xs text-muted-foreground">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
+                <div className="min-w-0 flex-1 space-y-1.5">
+                  <Label htmlFor="evidence-access-policy" className="text-xs font-medium text-muted-foreground">
                     Select Access Retrieval Policy
                   </Label>
                   <Select
@@ -441,8 +435,16 @@ export default function EvidenceDetailPage() {
                     onValueChange={(v) => setDraftAccess(v === POLICY_NONE ? null : (v ?? null))}
                     disabled={!canEditPolicy}
                   >
-                    <SelectTrigger id="evidence-access-policy">
-                      <SelectValue placeholder="None" />
+                    <SelectTrigger id="evidence-access-policy" className="w-full" size="sm">
+                      <SelectValue placeholder="None (Unrestricted)">
+                        {(value: string | null) => {
+                          if (!value || value === POLICY_NONE) return "None (Unrestricted)";
+                          const named = (policiesData?.access_policies ?? []).find((p) => p.id === value);
+                          return named
+                            ? `${named.name}${named.is_active ? "" : " (inactive)"}`
+                            : "Selected policy";
+                        }}
+                      </SelectValue>
                     </SelectTrigger>
                     <SelectContent>
                       <SelectItem value={POLICY_NONE}>None (Unrestricted)</SelectItem>
@@ -458,7 +460,6 @@ export default function EvidenceDetailPage() {
                   <Button
                     type="button"
                     size="sm"
-                    className="sm:mt-5"
                     disabled={!accessDirty || patchAccessMut.isPending}
                     onClick={() => patchAccessMut.mutate()}
                   >

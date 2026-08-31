@@ -622,7 +622,11 @@ export default function AdminCostPage() {
             disabled={!!syncRunId}
           >
             <SelectTrigger className="w-[180px]">
-              <SelectValue />
+              <SelectValue>
+                {(value: string | null) =>
+                  WINDOW_OPTIONS.find((option) => option.value === value)?.label ?? value
+                }
+              </SelectValue>
             </SelectTrigger>
             <SelectContent>
               {WINDOW_OPTIONS.map((o) => (

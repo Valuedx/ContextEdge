@@ -22,6 +22,14 @@
  */
 
 import type { EvidenceApplicability } from "@/lib/types";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import { cn } from "@/lib/utils";
 
 /**
  * Evidence types that carry an applicability. Mirrors
@@ -63,14 +71,17 @@ export function ApplicabilityBadge({ verdict }: { verdict?: string }) {
   );
 }
 
-function Facet({ label, values }: { label: string; values: string[] }) {
+function FacetRow({ label, values }: { label: string; values: string[] }) {
   if (values.length === 0) return null;
   return (
-    <div>
-      <span className="text-muted-foreground">{label}</span>
-      <div className="mt-1 flex flex-wrap gap-1">
+    <div className="flex items-start justify-between gap-3">
+      <span className="pt-0.5 text-muted-foreground">{label}</span>
+      <div className="flex flex-wrap justify-end gap-1">
         {values.map((value) => (
-          <span key={value} className="rounded border px-1.5 py-0.5 text-[11px]">
+          <span
+            key={value}
+            className="rounded border bg-muted/50 px-1.5 py-0.5 text-[11px] font-medium"
+          >
             {value}
           </span>
         ))}
@@ -111,20 +122,24 @@ export function ApplicabilityPanel({
   className,
 }: {
   applicability?: EvidenceApplicability | null;
-  /** Container styling, so a page with its own palette can theme it. */
+  /** Extra classes on the card, so a page with its own palette can theme it. */
   className?: string;
 }) {
-  const container = className ?? "rounded-lg border p-4";
-
   if (applicability === null || applicability === undefined) {
     return (
-      <div className={className ?? "rounded-lg border border-dashed p-4"}>
-        <h3 className="text-sm font-semibold">Where this applies</h3>
-        <p className="mt-1 text-xs text-muted-foreground">
-          Not extracted — this document was ingested before applicability
-          was read, or it is not knowledge content.
-        </p>
-      </div>
+      <Card className={cn("border-dashed shadow-none", className)}>
+        <CardHeader className="border-b pb-3">
+          <CardTitle className="text-sm font-bold uppercase tracking-wider text-muted-foreground">
+            Where this applies
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="pt-4">
+          <p className="text-xs leading-5 text-muted-foreground">
+            Not extracted — this document was ingested before applicability
+            was read, or it is not knowledge content.
+          </p>
+        </CardContent>
+      </Card>
     );
   }
 
@@ -142,44 +157,37 @@ export function ApplicabilityPanel({
       0 || deployment !== null;
 
   return (
-    <div className={`${container} space-y-3`}>
-      <div>
-        <h3 className="text-sm font-semibold">Where this applies</h3>
-        <p className="mt-1 text-xs text-muted-foreground">
+    <Card className={className}>
+      <CardHeader className="border-b pb-3">
+        <CardTitle className="text-sm font-bold uppercase tracking-wider text-muted-foreground">
+          Where this applies
+        </CardTitle>
+        <CardDescription className="text-xs">
           {stated
             ? "Used to rank this document against an incident's environment. A mismatch demotes it and shows why; it is never hidden."
             : "This document states no component, deployment or version constraints — treated as broadly applicable rather than as applying nowhere."}
-        </p>
-      </div>
-
-      {stated && (
-        <div className="grid gap-3 text-xs sm:grid-cols-2">
-          <Facet label="Component" values={components} />
-          {deployment && (
-            <div>
-              <span className="text-muted-foreground">Deployment</span>
-              <div className="mt-1">
-                <span className="rounded border px-1.5 py-0.5 text-[11px]">
-                  {deployment}
-                </span>
-              </div>
-            </div>
-          )}
-          <Facet label="Version" values={versions} />
-          <Facet label="Environment" values={environments} />
-          <Facet label="Platform" values={platforms} />
-        </div>
-      )}
-
-      {applicability.extracted_by === "rules" && (
-        // Worth surfacing: the lexical fallback measurably misreads
-        // licence versions and IP addresses as product versions, so a
-        // reviewer should weigh these facets less than a model's reading.
-        <p className="text-[11px] text-muted-foreground">
-          Read by pattern matching rather than by a model — less reliable
-          on version and deployment.
-        </p>
-      )}
-    </div>
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3.5 pt-4 text-sm">
+        {stated && (
+          <>
+            <FacetRow label="Component" values={components} />
+            {deployment && <FacetRow label="Deployment" values={[deployment]} />}
+            <FacetRow label="Version" values={versions} />
+            <FacetRow label="Environment" values={environments} />
+            <FacetRow label="Platform" values={platforms} />
+          </>
+        )}
+        {applicability.extracted_by === "rules" && (
+          // Worth surfacing: the lexical fallback measurably misreads
+          // licence versions and IP addresses as product versions, so a
+          // reviewer should weigh these facets less than a model's reading.
+          <p className="text-[11px] leading-5 text-muted-foreground">
+            Read by pattern matching rather than by a model — less reliable
+            on version and deployment.
+          </p>
+        )}
+      </CardContent>
+    </Card>
   );
 }
