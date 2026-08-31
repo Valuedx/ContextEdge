@@ -90,9 +90,39 @@ async def get_pipeline_health(db: AsyncSession, tenant_id: uuid.UUID) -> dict[st
         await db.execute(
             text("""
             select
-              (select count(*) from evidence_items where tenant_id = :t) as evidence,
+              -- Parent records only. Hydrated replies are typed thread_message
+              -- and listed under the ticket's conversation, not as evidence —
+              -- same contract as GET /evidence and /overview/stats. Counting
+              -- them here made ~11k thread lines read as "evidence".
               (select count(*) from evidence_items
                  where tenant_id = :t
+                   and evidence_type <> 'thread_message') as evidence,
+              (select count(*) from evidence_items
+                 where tenant_id = :t
+                   and evidence_type = 'thread_message') as thread_messages,
+              (select count(*) from evidence_items
+                 where tenant_id = :t
+                   and evidence_type = 'ticket') as tickets,
+              (select count(*) from evidence_items
+                 where tenant_id = :t
+                   and evidence_type = 'kb_article') as kb_articles,
+              (select count(*) from threads where tenant_id = :t) as threads,
+              (select count(*) from threads
+                 where tenant_id = :t
+                   and hydration_status = 'complete') as threads_hydrated,
+              (select count(*) from threads
+                 where tenant_id = :t
+                   and hydration_status <> 'complete') as threads_pending,
+              (select count(*) from threads
+                 where tenant_id = :t
+                   and created_at > now() - interval '10 minutes') as threads_10min,
+              (select count(*) from evidence_items
+                 where tenant_id = :t
+                   and evidence_type = 'thread_message'
+                   and created_at > now() - interval '10 minutes') as thread_messages_10min,
+              (select count(*) from evidence_items
+                 where tenant_id = :t
+                   and evidence_type <> 'thread_message'
                    and created_at > now() - interval '10 minutes') as evidence_10min,
               (select count(*) from evidence_items
                  where tenant_id = :t and embedding is not null) as embedded,
@@ -222,11 +252,18 @@ async def get_pipeline_health(db: AsyncSession, tenant_id: uuid.UUID) -> dict[st
 
     alerts: list[dict[str, str]] = []
     if stalled_at and counts["evidence"] > 0:
+        stage_plain = {
+            "evidence": "tickets and articles",
+            "correlations": "linked tickets",
+            "episodes": "incidents",
+            "patterns": "patterns",
+            "playbooks": "playbooks",
+        }.get(stalled_at, stalled_at)
         alerts.append({
             "level": "warning",
             "message": (
-                f"The graph chain stops at '{stalled_at}': every stage after it "
-                f"is waiting on work that has not been produced."
+                f"The pipeline has not produced any {stage_plain} yet. "
+                f"Everything after that step is waiting."
             ),
         })
 
@@ -251,11 +288,9 @@ async def get_pipeline_health(db: AsyncSession, tenant_id: uuid.UUID) -> dict[st
             alerts.append({
                 "level": "warning",
                 "message": (
-                    f"None of the {counts['identities']:,} active identities are "
-                    f"'resolved' or 'verified', and identity correlation only "
-                    f"trusts those. New identities are created 'provisional', so "
-                    f"until some are promoted no correlations form — and without "
-                    f"correlations, no episodes."
+                    f"{counts['identities']:,} systems and people are on file, but "
+                    f"none have been confirmed yet. Until some are marked resolved, "
+                    f"tickets cannot be linked — and without links, no incidents form."
                 ),
             })
     backlog = queues.get("extraction", 0)
@@ -263,14 +298,14 @@ async def get_pipeline_health(db: AsyncSession, tenant_id: uuid.UUID) -> dict[st
         alerts.append({
             "level": "warning",
             "message": (
-                f"{backlog:,} tasks queued on the extraction lane. Anything sharing "
-                f"that lane waits behind all of them."
+                f"{backlog:,} tickets are waiting to be read. Other work on that "
+                f"lane waits in the same line."
             ),
         })
     if counts["evidence_10min"] == 0 and backlog > 0:
         alerts.append({
             "level": "critical",
-            "message": "No evidence produced in 10 minutes while work is still queued.",
+            "message": "No new tickets arrived in the last 10 minutes, but work is still queued.",
         })
     # Empty queues with substantial in-flight work is the RECONSTRUCTION
     # phase, not idleness — say so, and name the number that proves the
@@ -281,29 +316,48 @@ async def get_pipeline_health(db: AsyncSession, tenant_id: uuid.UUID) -> dict[st
             alerts.append({
                 "level": "info",
                 "message": (
-                    f"{in_flight:,} tasks are held in-flight by workers (debounced "
-                    f"reconstructions and other ETA holds). Queues reading empty "
-                    f"does not mean idle: {counts['episodes_10min']:,} episodes were "
-                    f"produced in the last 10 minutes."
+                    f"Workers are rebuilding {in_flight:,} conversations right now. "
+                    f"Empty waiting lines are normal in this phase — "
+                    f"{counts['episodes_10min']:,} incidents were built in the last "
+                    f"10 minutes."
                 ),
             })
         elif counts["evidence_10min"] == 0:
             alerts.append({
                 "level": "critical",
                 "message": (
-                    f"{in_flight:,} tasks are held in-flight but nothing — no "
-                    f"evidence, no episodes — was produced in 10 minutes. The "
-                    f"holding workers may be dead; their work will not resume on "
-                    f"its own."
+                    f"{in_flight:,} jobs are held by workers, but nothing new was "
+                    f"produced in 10 minutes. Those workers may have stalled and "
+                    f"will not resume on their own."
                 ),
             })
     if counts["embed_gap"] > 0:
         alerts.append({
             "level": "info",
             "message": (
-                f"{counts['embed_gap']:,} RELEVANT evidence items are not embedded "
-                f"yet, so they are invisible to vector search. (not_relevant items "
-                f"skip embedding by design and are not counted here.)"
+                f"{counts['embed_gap']:,} relevant tickets are not searchable yet. "
+                f"They still need to be indexed. Irrelevant tickets are skipped on "
+                f"purpose and are not counted here."
+            ),
+        })
+    pending_threads = int(counts.get("threads_pending") or 0)
+    thread_total = int(counts.get("threads") or 0)
+    if pending_threads > 50:
+        alerts.append({
+            "level": "info",
+            "message": (
+                f"{pending_threads:,} threads still need their replies fetched. "
+                f"{int(counts.get('threads_hydrated') or 0):,} of "
+                f"{thread_total:,} threads are complete."
+            ),
+        })
+    hydration_q = queues.get("hydration", 0)
+    if hydration_q > BACKLOG_ALERT_DEPTH:
+        alerts.append({
+            "level": "warning",
+            "message": (
+                f"{hydration_q:,} conversation-fetch jobs are waiting. "
+                f"Each finished job fills one thread with its replies."
             ),
         })
 

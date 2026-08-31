@@ -28,23 +28,43 @@ import {
   Activity,
   AlertTriangle,
   ArrowRight,
+  BookOpen,
+  CheckCircle2,
   Database,
+  FileText,
   Gauge,
   Info,
   Layers,
+  Loader,
+  MessageSquare,
+  MessagesSquare,
   Timer,
   XCircle,
 } from "lucide-react";
 
 import { PageHeader } from "@/components/common/page-header";
 import { Badge } from "@/components/ui/badge";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 interface PipelineHealth {
   counts: {
     evidence: number;
+    tickets?: number;
+    kb_articles?: number;
+    thread_messages?: number;
+    threads?: number;
+    threads_hydrated?: number;
+    threads_pending?: number;
+    threads_10min?: number;
+    thread_messages_10min?: number;
     evidence_10min: number;
     embedded: number;
     embed_gap: number;
@@ -74,8 +94,12 @@ interface PipelineHealth {
 
 function formatNumber(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M`;
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
-  return n.toString();
+  if (n >= 10_000) return `${(n / 1_000).toFixed(1)}k`;
+  return n.toLocaleString();
+}
+
+function formatCount(n: number): string {
+  return n.toLocaleString();
 }
 
 function formatMs(ms: number): string {
@@ -90,6 +114,84 @@ function formatDuration(seconds: number): string {
   const hours = Math.floor(seconds / 3600);
   const minutes = Math.round((seconds % 3600) / 60);
   return `~${hours}h ${minutes}m`;
+}
+
+const STAGE_LABELS: Record<string, { title: string; hint: string }> = {
+  evidence: { title: "Evidence", hint: "Tickets and articles ingested" },
+  threads: { title: "Threads", hint: "Mail/chat on tickets only — not KB articles" },
+  messages: { title: "Messages", hint: "Replies stored on those threads" },
+  correlations: { title: "Links", hint: "Related evidence tied together" },
+  episodes: { title: "Incidents", hint: "Timelines built from those links" },
+  patterns: { title: "Patterns", hint: "Issues that keep coming back" },
+  playbooks: { title: "Playbooks", hint: "Guided procedures" },
+};
+
+const QUEUE_LABELS: Record<string, string> = {
+  extraction: "Reading tickets",
+  correlation: "Linking related tickets",
+  embedding: "Making searchable",
+  hydration: "Fetching threads",
+  pattern: "Finding recurrences",
+  evaluation: "Quality checks",
+  sync: "Source sync",
+  default: "Other jobs",
+};
+
+const CALL_LABELS: Record<string, string> = {
+  relevance: "Ticket relevance",
+  episode: "Incident reconstruction",
+  episode_review: "Incident review",
+  playbook: "Playbook writing",
+  pattern: "Pattern clustering",
+  identity: "Identity matching",
+  identity_adjudication: "Identity review",
+  identity_reconciliation: "Identity merge",
+  decision: "Decision tracing",
+  contradiction: "Contradiction check",
+  knowledge_applicability: "KB applicability",
+  message_function: "Message role",
+  issue_signature: "Issue signature",
+};
+
+function friendlyName(map: Record<string, string>, key: string): string {
+  if (map[key]) return map[key];
+  return key.replace(/_/g, " ").replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+function Stat({
+  value,
+  label,
+  hint,
+  exact,
+}: {
+  value: string | number;
+  label: string;
+  hint?: string;
+  exact?: boolean;
+}) {
+  return (
+    <div className="min-w-0">
+      <div className="text-2xl font-semibold tabular-nums tracking-tight">
+        {typeof value === "number"
+          ? exact
+            ? formatCount(value)
+            : formatNumber(value)
+          : value}
+      </div>
+      <div className="mt-0.5 text-xs font-medium text-foreground">{label}</div>
+      {hint ? (
+        <div className="mt-0.5 text-[11px] leading-4 text-muted-foreground">{hint}</div>
+      ) : null}
+    </div>
+  );
+}
+
+function StepNum({ n }: { n: number }) {
+  return (
+    <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-primary/15 text-[10px] font-semibold text-primary">
+      {n}
+    </span>
+  );
 }
 
 /**
@@ -186,7 +288,7 @@ export default function PipelineHealthPage() {
       <div className="space-y-6">
         <PageHeader
           title="Pipeline health"
-          description="Queue depth, throughput and how far the graph has been built."
+          description="How ingest is progressing — waiting work, speed, and how far tickets have become playbooks."
         />
         <Card>
           <CardContent className="py-10 text-center text-sm text-muted-foreground">
@@ -201,12 +303,38 @@ export default function PipelineHealthPage() {
   // Only relevant items count as "awaiting": not_relevant rows skip
   // embedding by design (the relevance gate's cost short-circuit).
   const embedGap = counts.embed_gap;
+  const evidenceCount = counts.evidence;
+  const ticketCount = counts.tickets ?? 0;
+  const kbCount = counts.kb_articles ?? 0;
+  const threadCount = counts.threads ?? 0;
+  const threadMessages = counts.thread_messages ?? 0;
+  const threadsHydrated = counts.threads_hydrated ?? 0;
+  const threadsPending = counts.threads_pending ?? 0;
+  const threads10min = counts.threads_10min ?? 0;
+  const threadMessages10min = counts.thread_messages_10min ?? 0;
+  const hydrationQueue = queues.hydration ?? 0;
+  const hydrationPct = threadCount > 0 ? Math.min(100, (threadsHydrated / threadCount) * 100) : 0;
+  const avgMessages =
+    threadCount > 0 ? Math.round((threadMessages / threadCount) * 10) / 10 : 0;
+  const ticketsWithThreadPct =
+    ticketCount > 0 ? Math.round((threadCount / ticketCount) * 100) : 0;
+  const otherEvidence = Math.max(0, evidenceCount - ticketCount - kbCount);
+
+  let statusLabel = "Caught up";
+  let statusHint = "No meaningful backlog. The pipeline is idle or handling a slow trickle.";
+  if (data.stalled_at && evidenceCount > 0) {
+    statusLabel = `Waiting on ${STAGE_LABELS[data.stalled_at]?.title ?? data.stalled_at}`;
+    statusHint = `Later steps cannot run until ${STAGE_LABELS[data.stalled_at]?.title ?? data.stalled_at} produces work.`;
+  } else if (remaining !== undefined && remaining > 10) {
+    statusLabel = "Processing";
+    statusHint = `${formatNumber(remaining)} jobs still in line.`;
+  }
 
   return (
     <div className="space-y-6">
       <PageHeader
         title="Pipeline health"
-        description="Queue depth, throughput and how far the graph has actually been built."
+        description="Follow one path: Evidence lands, its Thread is fetched, Messages are stored on that thread, then incidents and playbooks are built."
       />
 
       {data.alerts.length > 0 && (
@@ -232,108 +360,293 @@ export default function PipelineHealthPage() {
         </div>
       )}
 
-      {/* The run projection: what's left, how fast it's draining, when it
-          lands, what it will cost. Rate is measured in THIS tab from poll
-          deltas, so it reflects the pipeline as currently staffed. */}
+      <div className="flex flex-wrap items-center gap-3 rounded-lg border bg-card px-4 py-3 shadow-sm">
+        <Badge
+          variant="outline"
+          className={cn(
+            "text-xs",
+            statusLabel === "Caught up" && "border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300",
+            statusLabel === "Processing" && "border-sky-500/40 bg-sky-500/10 text-sky-700 dark:text-sky-300",
+            statusLabel.startsWith("Waiting") && "border-amber-500/40 bg-amber-500/10 text-amber-800 dark:text-amber-300",
+          )}
+        >
+          {statusLabel}
+        </Badge>
+        <p className="text-sm text-muted-foreground">{statusHint}</p>
+      </div>
+
       <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2 text-base">
-            <Timer className="h-4 w-4" />
-            Run projection
+        <CardHeader className="border-b pb-3">
+          <CardTitle className="flex items-center gap-2">
+            <Timer className="h-4 w-4 text-primary" />
+            What's left
           </CardTitle>
+          <CardDescription className="text-xs">
+            Jobs still waiting, how fast they finish, and the time and cost that implies.
+          </CardDescription>
         </CardHeader>
-        <CardContent>
+        <CardContent className="pt-4">
           {remaining !== undefined && remaining <= 10 ? (
             <p className="text-sm text-muted-foreground">
-              No meaningful backlog — the pipeline is idle or serving steady-state
-              trickle. Burn last hour: ${data.spend_last_hour_usd.toFixed(2)}.
+              Nothing waiting. Spent ${data.spend_last_hour_usd.toFixed(2)} in the last hour.
             </p>
           ) : (
-            <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
-              <div>
-                <div className="text-2xl font-semibold tabular-nums">
-                  {formatNumber(remaining ?? 0)}
-                </div>
-                <div className="text-xs text-muted-foreground">
-                  tasks remaining (queued + in flight)
-                </div>
-              </div>
-              <div>
-                <div className="text-2xl font-semibold tabular-nums">
-                  {!drain.warmedUp
+            <div className="grid grid-cols-2 gap-x-6 gap-y-4 md:grid-cols-4">
+              <Stat value={remaining ?? 0} label="Jobs still waiting" hint="Queued plus being processed" />
+              <Stat
+                value={
+                  !drain.warmedUp
                     ? "…"
                     : drain.perMinute !== null && drain.perMinute > 0
                       ? drain.perMinute.toFixed(1)
-                      : "0"}
-                </div>
-                <div className="text-xs text-muted-foreground">
-                  drain rate / min{" "}
-                  {!drain.warmedUp && "(measuring — needs a minute of samples)"}
-                  {drain.warmedUp &&
-                    drain.perMinute !== null &&
-                    drain.perMinute <= 0 &&
-                    "(backlog holding or growing)"}
-                </div>
-              </div>
-              <div>
-                <div className="text-2xl font-semibold tabular-nums">
-                  {drain.warmedUp && drain.perMinute !== null && drain.perMinute > 0
+                      : "0"
+                }
+                label="Jobs finished / min"
+                hint={
+                  !drain.warmedUp
+                    ? "Measuring — needs about a minute"
+                    : drain.perMinute !== null && drain.perMinute <= 0
+                      ? "Backlog is not shrinking"
+                      : undefined
+                }
+              />
+              <Stat
+                value={
+                  drain.warmedUp && drain.perMinute !== null && drain.perMinute > 0
                     ? formatDuration(((remaining ?? 0) / drain.perMinute) * 60)
-                    : "—"}
-                </div>
-                <div className="text-xs text-muted-foreground">
-                  estimated time to complete
-                </div>
-              </div>
-              <div>
-                <div className="text-2xl font-semibold tabular-nums">
-                  {drain.warmedUp && drain.perMinute !== null && drain.perMinute > 0
+                    : "—"
+                }
+                label="Time left"
+              />
+              <Stat
+                value={
+                  drain.warmedUp && drain.perMinute !== null && drain.perMinute > 0
                     ? `$${(
                         data.spend_last_hour_usd *
                         ((remaining ?? 0) / drain.perMinute / 60)
                       ).toFixed(2)}`
-                    : `$${data.spend_last_hour_usd.toFixed(2)}/hr`}
-                </div>
-                <div className="text-xs text-muted-foreground">
-                  {drain.warmedUp && drain.perMinute !== null && drain.perMinute > 0
-                    ? `projected cost to finish (at $${data.spend_last_hour_usd.toFixed(2)}/hr)`
-                    : "burn rate, last hour"}
-                </div>
-              </div>
+                    : `$${data.spend_last_hour_usd.toFixed(2)}/hr`
+                }
+                label={
+                  drain.warmedUp && drain.perMinute !== null && drain.perMinute > 0
+                    ? "Cost to finish"
+                    : "Spent last hour"
+                }
+                hint={
+                  drain.warmedUp && drain.perMinute !== null && drain.perMinute > 0
+                    ? `At $${data.spend_last_hour_usd.toFixed(2)}/hr`
+                    : undefined
+                }
+              />
             </div>
           )}
         </CardContent>
       </Card>
 
-      {/* The graph chain. Each stage feeds the next, so it is drawn as a flow
-          rather than five cards — the point is which link is empty. */}
       <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2 text-base">
-            <Layers className="h-4 w-4" />
-            Graph chain
+        <CardHeader className="border-b pb-3">
+          <CardTitle className="flex items-center gap-2">
+            <MessagesSquare className="h-4 w-4 text-primary" />
+            Step 1 — Evidence, threads, and messages
           </CardTitle>
+          <CardDescription className="text-xs">
+            Three layers on a Zoho ticket: the ticket itself (Evidence), the email
+            thread on it (Thread), and each reply in that thread (Messages). KB
+            articles are Evidence too, but they do not get a Thread.
+          </CardDescription>
         </CardHeader>
-        <CardContent>
-          <div className="flex flex-wrap items-center gap-1">
-            {data.graph_chain.map((stage, i) => (
+        <CardContent className="space-y-5 pt-4">
+          <div className="rounded-lg border border-dashed bg-muted/20 px-4 py-3 text-xs leading-5 text-muted-foreground">
+            <p className="font-medium text-foreground">How to read these numbers</p>
+            <ul className="mt-2 list-inside list-disc space-y-1">
+              <li>
+                <span className="font-medium text-foreground">Evidence</span> — parent
+                records only (tickets, KB articles, and any other ingested types). Use the
+                breakdown row below for live counts. Replies are not included.
+              </li>
+              <li>
+                <span className="font-medium text-foreground">Threads</span> — mail or
+                chat on tickets only. Compare to the ticket count, not total Evidence.
+                KB articles do not get a Thread.
+              </li>
+              <li>
+                <span className="font-medium text-foreground">Messages</span> — each
+                reply stored inside a Thread. Also not Evidence.
+              </li>
+            </ul>
+          </div>
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-stretch">
+            <div className="flex min-w-0 flex-1 items-start gap-3 rounded-lg border bg-muted/30 p-3">
+              <StepNum n={1} />
+              <FileText className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
+              <Stat
+                value={evidenceCount}
+                label="Evidence"
+                exact
+                hint={
+                  typeof counts.tickets === "number" || typeof counts.kb_articles === "number"
+                    ? "Live split in the row below — same list as the Evidence tab"
+                    : "Same list as the Evidence tab"
+                }
+              />
+            </div>
+            <ArrowRight className="hidden h-4 w-4 shrink-0 self-center text-muted-foreground lg:block" />
+            <div className="flex min-w-0 flex-1 items-start gap-3 rounded-lg border border-primary/25 bg-primary/5 p-3">
+              <StepNum n={2} />
+              <MessagesSquare className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
+              <Stat
+                value={threadCount}
+                label="Threads"
+                exact
+                hint={
+                  ticketCount > 0
+                    ? threadCount > ticketCount
+                      ? `${formatCount(ticketCount)} tickets in Evidence · ${formatCount(threadCount)} Threads (can exceed tickets after re-sync)`
+                      : `${ticketsWithThreadPct}% of tickets have a Thread · KB articles are not included`
+                    : "Mail or chat conversation on a ticket — not on KB articles"
+                }
+              />
+            </div>
+            <ArrowRight className="hidden h-4 w-4 shrink-0 self-center text-muted-foreground lg:block" />
+            <div className="flex min-w-0 flex-1 items-start gap-3 rounded-lg border bg-muted/30 p-3">
+              <StepNum n={3} />
+              <MessageSquare className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
+              <Stat
+                value={threadMessages}
+                label="Messages"
+                exact
+                hint={
+                  avgMessages
+                    ? `${avgMessages} Messages on a typical Thread — not counted as Evidence`
+                    : "Replies stored on those Threads, not as Evidence"
+                }
+              />
+            </div>
+          </div>
+
+          <div className="grid gap-3 text-sm sm:grid-cols-2 lg:grid-cols-4">
+            <div className="flex items-center justify-between gap-2 rounded-md border bg-muted/20 px-3 py-2">
+              <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                <FileText className="h-3.5 w-3.5" />
+                Tickets
+              </span>
+              <span className="tabular-nums font-medium">
+                {typeof counts.tickets === "number" ? formatCount(ticketCount) : "—"}
+              </span>
+            </div>
+            <div className="flex items-center justify-between gap-2 rounded-md border bg-muted/20 px-3 py-2">
+              <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                <BookOpen className="h-3.5 w-3.5" />
+                KB articles
+              </span>
+              <span className="tabular-nums font-medium">
+                {typeof counts.kb_articles === "number" ? formatCount(kbCount) : "—"}
+              </span>
+            </div>
+            {otherEvidence > 0 ? (
+              <div className="flex items-center justify-between gap-2 rounded-md border bg-muted/20 px-3 py-2">
+                <span className="text-xs text-muted-foreground">Other evidence</span>
+                <span className="tabular-nums font-medium">{formatCount(otherEvidence)}</span>
+              </div>
+            ) : null}
+            <div className="flex items-center justify-between gap-2 rounded-md border bg-muted/20 px-3 py-2">
+              <span className="text-xs text-muted-foreground">Evidence total</span>
+              <span className="tabular-nums font-medium">{formatCount(evidenceCount)}</span>
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
+              <span className="flex items-center gap-1.5 text-muted-foreground">
+                {threadsPending === 0 ? (
+                  <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" />
+                ) : (
+                  <Loader className="h-3.5 w-3.5 text-sky-600" />
+                )}
+                Threads fully fetched
+              </span>
+              <span className="tabular-nums font-medium">
+                {formatCount(threadsHydrated)} of {formatCount(threadCount)}
+                {threadCount > 0 ? ` (${Math.round(hydrationPct)}%)` : ""}
+                {threadsPending > 0 ? ` · ${formatCount(threadsPending)} still loading` : ""}
+              </span>
+            </div>
+            <div className="h-2 overflow-hidden rounded-full bg-muted">
+              <div
+                className="h-full rounded-full bg-primary"
+                style={{ width: `${hydrationPct}%` }}
+              />
+            </div>
+            {(threadsPending > 0 || hydrationQueue > 0) && (
+              <p className="text-[11px] leading-4 text-muted-foreground">
+                Fetching threads is the hydration waiting line
+                {hydrationQueue > 0
+                  ? ` — ${formatCount(hydrationQueue)} jobs in that line now.`
+                  : "."}{" "}
+                Each finished job fills one Thread with its Messages.
+              </p>
+            )}
+          </div>
+
+          <div className="grid gap-3 text-sm sm:grid-cols-3">
+            <div className="flex items-center justify-between gap-2 rounded-md border px-3 py-2">
+              <span className="text-xs text-muted-foreground">New Evidence / 10 min</span>
+              <span className="tabular-nums font-medium">{formatCount(data.throughput_per_10min)}</span>
+            </div>
+            <div className="flex items-center justify-between gap-2 rounded-md border px-3 py-2">
+              <span className="text-xs text-muted-foreground">New Threads / 10 min</span>
+              <span className="tabular-nums font-medium">{formatCount(threads10min)}</span>
+            </div>
+            <div className="flex items-center justify-between gap-2 rounded-md border px-3 py-2">
+              <span className="text-xs text-muted-foreground">New Messages / 10 min</span>
+              <span className="tabular-nums font-medium">{formatCount(threadMessages10min)}</span>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader className="border-b pb-3">
+          <CardTitle className="flex items-center gap-2">
+            <Layers className="h-4 w-4 text-primary" />
+            Step 2 — What Evidence becomes
+          </CardTitle>
+          <CardDescription className="text-xs">
+            After Threads and Messages are fetched from Evidence, related items are
+            linked, then incidents, patterns, and playbooks are built. The first empty
+            box is where work has stopped.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="pt-4">
+          <div className="flex flex-wrap items-stretch gap-1">
+            {[
+              ...data.graph_chain.slice(0, 1),
+              { stage: "threads", count: threadCount },
+              { stage: "messages", count: threadMessages },
+              ...data.graph_chain.slice(1),
+            ].map((stage, i, chain) => (
               <div key={stage.stage} className="flex items-center gap-1">
                 <div
                   className={cn(
-                    "min-w-[7.5rem] rounded-lg border px-3 py-2",
+                    "min-w-[9rem] rounded-lg border px-3 py-2.5",
                     stage.count === 0
                       ? "border-amber-500/60 bg-amber-500/10"
-                      : "border-border bg-muted/40",
+                      : stage.stage === "threads" || stage.stage === "messages"
+                        ? "border-primary/25 bg-primary/5"
+                        : "border-border bg-muted/40",
                   )}
                 >
                   <div className="text-xl font-semibold tabular-nums">
-                    {formatNumber(stage.count)}
+                    {formatCount(stage.count)}
                   </div>
-                  <div className="text-xs capitalize text-muted-foreground">
-                    {stage.stage}
+                  <div className="text-xs font-medium text-foreground">
+                    {STAGE_LABELS[stage.stage]?.title ?? stage.stage}
+                  </div>
+                  <div className="text-[11px] leading-4 text-muted-foreground">
+                    {STAGE_LABELS[stage.stage]?.hint ?? ""}
                   </div>
                 </div>
-                {i < data.graph_chain.length - 1 && (
+                {i < chain.length - 1 && (
                   <ArrowRight className="h-4 w-4 shrink-0 text-muted-foreground" />
                 )}
               </div>
@@ -341,37 +654,47 @@ export default function PipelineHealthPage() {
           </div>
           {data.stalled_at && (
             <p className="mt-3 text-sm text-muted-foreground">
-              Nothing downstream of{" "}
-              <span className="font-medium text-foreground">{data.stalled_at}</span>{" "}
-              can be produced until that stage does.
+              Nothing after{" "}
+              <span className="font-medium text-foreground">
+                {STAGE_LABELS[data.stalled_at]?.title ?? data.stalled_at}
+              </span>{" "}
+              can be built until that step produces work.
             </p>
           )}
         </CardContent>
       </Card>
 
-      <div className="grid gap-4 md:grid-cols-2">
-        {/* Queues — the view that was missing when the pipeline stalled. */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-base">
-              <Database className="h-4 w-4" />
-              Queue depth
+      <div className="grid items-stretch gap-4 md:grid-cols-2">
+        <Card className="h-full">
+          <CardHeader className="border-b pb-3">
+            <CardTitle className="flex items-center gap-2">
+              <Database className="h-4 w-4 text-primary" />
+              Waiting lines
             </CardTitle>
+            <CardDescription className="text-xs">
+              Jobs in the same line wait their turn. “Fetching threads” fills
+              Threads and Messages above.
+            </CardDescription>
           </CardHeader>
-          <CardContent>
+          <CardContent className="pt-4">
             {Object.keys(queues).length === 0 ? (
               <p className="text-sm text-muted-foreground">
-                Broker unreachable — queue depths unavailable.
+                Could not read waiting lines. The job broker may be down.
               </p>
             ) : (
-              <div className="space-y-2">
+              <div className="space-y-2.5">
                 {Object.entries(queues).map(([name, depth]) => (
                   <div
                     key={name}
                     className="flex items-center justify-between gap-3 text-sm"
                   >
-                    <span className="font-mono text-xs text-muted-foreground">
-                      {name}
+                    <span className="w-44 shrink-0 text-xs text-muted-foreground">
+                      {QUEUE_LABELS[name] ?? friendlyName({}, name)}
+                      {name === "hydration" && threadsPending > 0 ? (
+                        <span className="mt-0.5 block text-[10px] leading-3">
+                          {formatCount(threadsPending)} threads still loading
+                        </span>
+                      ) : null}
                     </span>
                     <div className="flex flex-1 items-center gap-2">
                       <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
@@ -393,13 +716,9 @@ export default function PipelineHealthPage() {
                 ))}
               </div>
             )}
-            {/* In-flight is work DELIVERED to workers but unfinished —
-                including every debounced reconstruction held to its ETA.
-                During the reconstruction phase this is where ALL remaining
-                work lives, and the queues above legitimately read zero. */}
             <div className="mt-3 flex items-center justify-between gap-3 border-t pt-3 text-sm">
-              <span className="font-mono text-xs text-muted-foreground">
-                in flight (held by workers)
+              <span className="text-xs text-muted-foreground">
+                Being processed now
               </span>
               <span
                 className={cn(
@@ -411,63 +730,39 @@ export default function PipelineHealthPage() {
               </span>
             </div>
             <p className="mt-3 text-xs text-muted-foreground">
-              Tasks sharing a lane run in order, so a fast task queued behind a
-              long backlog waits for all of it. Empty queues with work in
-              flight means workers are holding debounced tasks, not idling.
+              An empty line with work still being processed means workers are
+              finishing held jobs, not sitting idle.
             </p>
           </CardContent>
         </Card>
 
-        {/* Throughput + latency, side by side: slow and starved look identical
-            unless you can see both at once. */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-base">
-              <Gauge className="h-4 w-4" />
-              Throughput and latency
+        <Card className="h-full">
+          <CardHeader className="border-b pb-3">
+            <CardTitle className="flex items-center gap-2">
+              <Gauge className="h-4 w-4 text-primary" />
+              Speed (last 10 minutes)
             </CardTitle>
+            <CardDescription className="text-xs">
+              How much landed recently, and how long AI calls took.
+            </CardDescription>
           </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="grid grid-cols-3 gap-3">
-              <div>
-                <div className="text-2xl font-semibold tabular-nums">
-                  {data.throughput_per_10min}
-                </div>
-                <div className="text-xs text-muted-foreground">
-                  evidence / 10 min
-                </div>
-              </div>
-              <div>
-                <div className="text-2xl font-semibold tabular-nums">
-                  {data.episodes_per_10min}
-                </div>
-                <div className="text-xs text-muted-foreground">
-                  episodes / 10 min
-                </div>
-              </div>
-              <div>
-                <div className="text-2xl font-semibold tabular-nums">
-                  {latency.calls}
-                </div>
-                <div className="text-xs text-muted-foreground">
-                  model calls / 10 min
-                </div>
-              </div>
+          <CardContent className="space-y-4 pt-4">
+            <div className="grid grid-cols-2 gap-x-6 gap-y-4 sm:grid-cols-4">
+              <Stat value={data.throughput_per_10min} label="Evidence" hint="Tickets & articles" exact />
+              <Stat value={threads10min} label="Threads" hint="Conversations started" exact />
+              <Stat value={threadMessages10min} label="Thread messages" hint="Replies fetched" exact />
+              <Stat value={data.episodes_per_10min} label="Incidents" hint="Timelines built" exact />
             </div>
-            <div className="grid grid-cols-3 gap-3 border-t pt-3">
+            <div className="grid grid-cols-2 gap-3 border-t pt-3 sm:grid-cols-4">
               {[
-                { label: "p50", value: latency.p50_ms },
-                { label: "p95", value: latency.p95_ms },
-                { label: "max", value: latency.max_ms },
+                { label: "AI calls", value: String(latency.calls) },
+                { label: "Typical AI time", value: formatMs(latency.p50_ms) },
+                { label: "Slow cases", value: formatMs(latency.p95_ms) },
+                { label: "Longest", value: formatMs(latency.max_ms) },
               ].map((m) => (
                 <div key={m.label}>
-                  <div className="flex items-center gap-1 text-lg font-semibold tabular-nums">
-                    <Timer className="h-3.5 w-3.5 text-muted-foreground" />
-                    {formatMs(m.value)}
-                  </div>
-                  <div className="text-xs uppercase tracking-wide text-muted-foreground">
-                    {m.label} latency
-                  </div>
+                  <div className="text-lg font-semibold tabular-nums">{m.value}</div>
+                  <div className="text-xs text-muted-foreground">{m.label}</div>
                 </div>
               ))}
             </div>
@@ -475,34 +770,39 @@ export default function PipelineHealthPage() {
         </Card>
       </div>
 
-      <div className="grid gap-4 md:grid-cols-2">
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-base">
-              <Activity className="h-4 w-4" />
-              Latency by call (last hour)
+      <div className="grid items-stretch gap-4 md:grid-cols-2">
+        <Card className="h-full">
+          <CardHeader className="border-b pb-3">
+            <CardTitle className="flex items-center gap-2">
+              <Activity className="h-4 w-4 text-primary" />
+              AI work (last hour)
             </CardTitle>
+            <CardDescription className="text-xs">
+              Which steps the model ran, how often, and how long they typically took.
+            </CardDescription>
           </CardHeader>
-          <CardContent>
+          <CardContent className="pt-4">
             {data.by_call_60min.length === 0 ? (
               <p className="text-sm text-muted-foreground">
-                No model calls in the last hour.
+                No AI calls in the last hour.
               </p>
             ) : (
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead>
-                    <tr className="border-b text-left text-xs uppercase tracking-wide text-muted-foreground">
-                      <th className="pb-2 font-medium">Call</th>
+                    <tr className="border-b text-left text-xs text-muted-foreground">
+                      <th className="pb-2 font-medium">Step</th>
                       <th className="pb-2 text-right font-medium">Calls</th>
-                      <th className="pb-2 text-right font-medium">p50</th>
+                      <th className="pb-2 text-right font-medium">Typical time</th>
                       <th className="pb-2 text-right font-medium">Tokens</th>
                     </tr>
                   </thead>
                   <tbody>
                     {data.by_call_60min.map((row) => (
                       <tr key={row.call} className="border-b last:border-0">
-                        <td className="py-2 font-mono text-xs">{row.call}</td>
+                        <td className="py-2 text-xs">
+                          {CALL_LABELS[row.call] ?? friendlyName({}, row.call)}
+                        </td>
                         <td className="py-2 text-right tabular-nums">
                           {row.calls}
                         </td>
@@ -521,49 +821,66 @@ export default function PipelineHealthPage() {
           </CardContent>
         </Card>
 
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Corpus</CardTitle>
+        <Card className="h-full">
+          <CardHeader className="border-b pb-3">
+            <CardTitle className="text-base">Also stored</CardTitle>
+            <CardDescription className="text-xs">
+              Search index, people and systems, and incident review. Thread replies
+              are not mixed into evidence.
+            </CardDescription>
           </CardHeader>
-          <CardContent>
-            <div className="grid grid-cols-2 gap-4">
-              {[
-                { label: "Raw objects", value: counts.raw_objects },
-                { label: "Evidence", value: counts.evidence },
-                { label: "Embedded", value: counts.embedded },
-                { label: "Active identities", value: counts.identities },
-              ].map((m) => (
-                <div key={m.label}>
-                  <div className="text-xl font-semibold tabular-nums">
-                    {formatNumber(m.value)}
-                  </div>
-                  <div className="text-xs text-muted-foreground">{m.label}</div>
-                </div>
-              ))}
+          <CardContent className="space-y-3.5 pt-4 text-sm">
+            <div className="flex items-center justify-between gap-3">
+              <span className="text-xs text-muted-foreground">Tickets</span>
+              <span className="tabular-nums font-medium">
+                {typeof counts.tickets === "number" ? formatCount(ticketCount) : "—"}
+              </span>
             </div>
-            <div className="mt-4 space-y-2 border-t pt-3 text-sm">
-              <div className="flex items-center justify-between">
-                <span className="text-xs text-muted-foreground">
-                  chunks embedded
-                </span>
-                <span className="tabular-nums">
-                  {formatNumber(counts.chunks_embedded)} /{" "}
-                  {formatNumber(counts.chunks_total)}
-                </span>
-              </div>
-              <div className="flex items-center justify-between">
-                <span className="text-xs text-muted-foreground">
-                  episodes pending review / approved
-                </span>
-                <span className="tabular-nums">
-                  {formatNumber(counts.episodes_pending)} /{" "}
-                  {formatNumber(counts.episodes_approved)}
-                </span>
-              </div>
+            <div className="flex items-center justify-between gap-3">
+              <span className="text-xs text-muted-foreground">KB articles</span>
+              <span className="tabular-nums font-medium">
+                {typeof counts.kb_articles === "number" ? formatCount(kbCount) : "—"}
+              </span>
+            </div>
+            <div className="flex items-center justify-between gap-3 border-b pb-3">
+              <span className="text-xs text-muted-foreground">Evidence total</span>
+              <span className="tabular-nums font-medium">{formatCount(evidenceCount)}</span>
+            </div>
+            <div className="flex items-center justify-between gap-3">
+              <span className="text-xs text-muted-foreground">Threads</span>
+              <span className="tabular-nums font-medium">{formatCount(threadCount)}</span>
+            </div>
+            <div className="flex items-center justify-between gap-3 border-b pb-3">
+              <span className="text-xs text-muted-foreground">Messages</span>
+              <span className="tabular-nums font-medium">{formatCount(threadMessages)}</span>
+            </div>
+            <div className="flex items-center justify-between gap-3">
+              <span className="text-xs text-muted-foreground">Raw objects fetched</span>
+              <span className="tabular-nums font-medium">{formatNumber(counts.raw_objects)}</span>
+            </div>
+            <div className="flex items-center justify-between gap-3">
+              <span className="text-xs text-muted-foreground">People & systems</span>
+              <span className="tabular-nums font-medium">{formatNumber(counts.identities)}</span>
+            </div>
+            <div className="flex items-center justify-between gap-3">
+              <span className="text-xs text-muted-foreground">Searchable (indexed)</span>
+              <span className="tabular-nums font-medium">{formatNumber(counts.embedded)}</span>
+            </div>
+            <div className="flex items-center justify-between gap-3">
+              <span className="text-xs text-muted-foreground">Text chunks indexed</span>
+              <span className="tabular-nums font-medium">
+                {formatNumber(counts.chunks_embedded)} / {formatNumber(counts.chunks_total)}
+              </span>
+            </div>
+            <div className="flex items-center justify-between gap-3">
+              <span className="text-xs text-muted-foreground">Incidents awaiting review / approved</span>
+              <span className="tabular-nums font-medium">
+                {formatNumber(counts.episodes_pending)} / {formatNumber(counts.episodes_approved)}
+              </span>
             </div>
             {embedGap > 0 && (
-              <Badge variant="outline" className="mt-4">
-                {formatNumber(embedGap)} relevant items awaiting embedding
+              <Badge variant="outline" className="mt-1">
+                {formatNumber(embedGap)} relevant items still waiting to be searchable
               </Badge>
             )}
           </CardContent>
