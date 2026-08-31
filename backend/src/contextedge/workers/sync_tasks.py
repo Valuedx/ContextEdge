@@ -79,3 +79,39 @@ def run_incremental_sync(self, source_id: str, source_object_id: str, tenant_id:
         return run_async(work)
     except Exception as exc:
         raise self.retry(exc=exc) from exc
+
+
+@celery_app.task(
+    name="sync.refresh_official_knowledge",
+)
+def refresh_official_knowledge(tenant_id: str = "all"):
+    """Weekly: new/changed Zoho KB articles plus official version catalog."""
+    from contextedge.services.official_kb_catalog import run_official_knowledge_refresh
+    from contextedge.services.sync_ingestion_queue import queue_normalize_raw_objects
+    from contextedge.workers.chunk_tasks import chunk_evidence_task
+
+    async def work(db):
+        return await run_official_knowledge_refresh(
+            db,
+            tenant_id,
+            enqueue_article_sync=lambda source_id, object_id, tid: run_incremental_sync.delay(
+                source_id, object_id, tid
+            ),
+        )
+
+    summary = run_async(work)
+    for tid, raw_ids in summary.get("normalize") or []:
+        queue_normalize_raw_objects(
+            [uuid.UUID(item) for item in raw_ids],
+            uuid.UUID(tid),
+        )
+    for tid, evidence_ids in summary.get("rechunk") or []:
+        for evidence_id in evidence_ids:
+            chunk_evidence_task.delay(evidence_id, tid)
+    return {
+        "sources": summary.get("sources"),
+        "article_syncs_queued": summary.get("article_syncs_queued"),
+        "latest_official_release": summary.get("latest_official_release"),
+        "catalog": summary.get("catalog"),
+        "errors": summary.get("errors"),
+    }

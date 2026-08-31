@@ -65,6 +65,11 @@ Config (``source_config``, all optional):
   ingest list rows only (summary-level, no body). Cheaper, much worse
   retrieval; off by default.
 - ``max_pages`` — page budget per sync invocation (default 20).
+- ``official_kb`` — optional weekly public-catalog refresh:
+  ``{"enabled": true, "current_version": "8.2.3"}``. ``current_version``
+  is the patch this estate's tickets record, distinct from the docs
+  portal latest (detected live). Set ``enabled: false`` to skip the
+  public pages while still incrementally syncing Desk articles.
 """
 
 from __future__ import annotations

@@ -47,7 +47,9 @@ _THREAD_SOURCE_TYPES = frozenset({"gmail", "teams"})
 # *document-structure* chunker (markdown heading hierarchy, log-event
 # boundaries), and a knowledge-base article is exactly that shape —
 # authored sections whose boundaries beat a character-count split.
-_DOCUMENT_EVIDENCE_TYPES = frozenset({"kb_article"})
+_DOCUMENT_EVIDENCE_TYPES = frozenset(
+    {"kb_article", "sop", "documentation", "runbook"}
+)
 
 
 def _register_chunkers() -> None:

@@ -196,3 +196,115 @@ async def ensure_thread_for_evidence(
     evidence.thread_id = thread.id
     await db.flush()
     return thread.id
+
+
+# Facets a ticket owns and related evidence (mail thread, comments) should
+# inherit when they do not already state them. Version is the load-bearing
+# one for playbook/KB matching; ticket_number is how those rows join back
+# to the case without a Zoho-specific field name.
+_INHERITED_TICKET_FACET_KEYS = ("version", "ticket_number")
+
+
+def merge_inherited_ticket_facets(
+    target: dict | None, ticket_facets: dict | None
+) -> dict:
+    """Copy ticket version/number onto related evidence.
+
+    Never overwrites a value the related row already has — a message that
+    somehow carries its own version keeps it. Empty ticket facets are a
+    no-op, not a wipe.
+    """
+    out = dict(target or {})
+    source = ticket_facets or {}
+    for key in _INHERITED_TICKET_FACET_KEYS:
+        value = source.get(key)
+        if value and not out.get(key):
+            out[key] = value
+    return out
+
+
+async def sync_related_ticket_facets(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    evidence: EvidenceItem,
+) -> int:
+    """Keep ticket version on every evidence row of the same case.
+
+    Generic: any connector that attaches conversation evidence to the
+    same thread as the ticket. The ticket is the source of truth. Related
+    rows inherit missing ``version`` / ``ticket_number``; a later ticket
+    update propagates to siblings that still lack them.
+
+    Fail-soft: a lookup problem must not fail ingest.
+    """
+    try:
+        if evidence.evidence_type == "ticket":
+            return await _propagate_ticket_facets_along_thread(db, tenant_id, evidence)
+        return 1 if await _inherit_ticket_facets_from_thread(db, tenant_id, evidence) else 0
+    except Exception:  # noqa: BLE001
+        return 0
+
+
+async def _ticket_on_thread(
+    db: AsyncSession, tenant_id: uuid.UUID, thread_id: uuid.UUID
+) -> EvidenceItem | None:
+    return (
+        await db.execute(
+            select(EvidenceItem).where(
+                EvidenceItem.tenant_id == tenant_id,
+                EvidenceItem.thread_id == thread_id,
+                EvidenceItem.evidence_type == "ticket",
+            ).limit(1)
+        )
+    ).scalar_one_or_none()
+
+
+async def _inherit_ticket_facets_from_thread(
+    db: AsyncSession, tenant_id: uuid.UUID, evidence: EvidenceItem
+) -> bool:
+    from contextedge.services.evidence_typing import KNOWLEDGE_EVIDENCE_TYPES
+
+    if evidence.evidence_type in KNOWLEDGE_EVIDENCE_TYPES:
+        return False
+    if evidence.thread_id is None:
+        return False
+    current = evidence.source_facets if isinstance(evidence.source_facets, dict) else {}
+    if all(current.get(key) for key in _INHERITED_TICKET_FACET_KEYS):
+        return False
+    ticket = await _ticket_on_thread(db, tenant_id, evidence.thread_id)
+    if ticket is None:
+        return False
+    merged = merge_inherited_ticket_facets(current, ticket.source_facets)
+    if merged == current:
+        return False
+    evidence.source_facets = merged
+    return True
+
+
+async def _propagate_ticket_facets_along_thread(
+    db: AsyncSession, tenant_id: uuid.UUID, ticket: EvidenceItem
+) -> int:
+    from contextedge.services.evidence_typing import KNOWLEDGE_EVIDENCE_TYPES
+
+    ticket_facets = ticket.source_facets if isinstance(ticket.source_facets, dict) else {}
+    if ticket.thread_id is None or not ticket_facets.get("version"):
+        return 0
+    rows = (
+        await db.execute(
+            select(EvidenceItem).where(
+                EvidenceItem.tenant_id == tenant_id,
+                EvidenceItem.thread_id == ticket.thread_id,
+                EvidenceItem.id != ticket.id,
+                EvidenceItem.evidence_type.notin_(tuple(KNOWLEDGE_EVIDENCE_TYPES)),
+            )
+        )
+    ).scalars().all()
+    written = 0
+    for related in rows:
+        current = related.source_facets if isinstance(related.source_facets, dict) else {}
+        merged = merge_inherited_ticket_facets(current, ticket_facets)
+        if merged == current:
+            continue
+        related.source_facets = merged
+        written += 1
+    return written

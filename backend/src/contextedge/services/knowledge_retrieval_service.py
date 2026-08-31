@@ -33,6 +33,7 @@ events.
 
 from __future__ import annotations
 
+import re
 import uuid
 from dataclasses import dataclass, field
 from typing import Any
@@ -55,6 +56,11 @@ MAX_KNOWLEDGE_DOCS = 5
 # Sections per document. A long SOP has many; the ones that matter for a
 # procedure are the ones the pattern's own language matched.
 MAX_SECTIONS_PER_DOC = 6
+# Fetch extra candidate chunks before choosing what reaches the prompt. A
+# pure semantic top-N often returns overview/problem sections and misses the
+# lower-ranked procedure, validation, prerequisite, or rollback sections that
+# should drive a product-specific playbook.
+SECTION_SELECTION_OVERSAMPLE = 3
 # Minimum similarity to write a pattern -> document edge. See
 # persist_knowledge_links for how this was measured and why it is much
 # stricter than the threshold used to seed a projection.
@@ -73,6 +79,12 @@ KNOWLEDGE_LINK_MIN_SIMILARITY = 0.75
 # too weak to assert as a graph edge is also too weak to write into a
 # procedure a reviewer is asked to approve.
 MAX_DISTANCE = round(1.0 - KNOWLEDGE_LINK_MIN_SIMILARITY, 2)
+# Embedding distance is the fetch. Stored product version only re-ranks:
+# a matching-version article should beat a slightly closer embedding of a
+# different release. It must never drop the older article — that KB is
+# often still the full procedure for this ticket, and the playbook has to
+# say so rather than omit it.
+VERSION_MATCH_RANK = 0.82
 # How much of an article to scan for applicability facets.
 #
 # This was 6000 and that number was invented rather than measured. On the
@@ -148,6 +160,7 @@ class KnowledgeSection:
     page: int | None = None
     chunk_kind: str = "heading_section"
     distance: float = 1.0
+    purpose: str = "context"
     # True when any part of this section came from a model reading an
     # image rather than from parsed text. Surfaced to the generator so a
     # paraphrase is never presented as the SOP's exact wording.
@@ -166,6 +179,13 @@ class KnowledgeDocument:
     # different release is reviewable as such.
     applicability_notes: list[str] = field(default_factory=list)
     applicability_verdict: str = "unknown"
+    # Product version stamped on the KB row at ingest
+    # (``source_facets.version`` / ``applicability.product_versions``), and
+    # the ticket version this retrieval was matched against. Carried into
+    # the prompt so a step that follows a different-release article says so.
+    product_version: str | None = None
+    ticket_version: str | None = None
+    version_conflict: tuple[str, str] | None = None
     # Empirical support (F4): has this procedure ever actually worked? None
     # when it has never been computed, which ranks and reads as neutral.
     support: str | None = None
@@ -182,16 +202,42 @@ class KnowledgeDocument:
             # Surfaced, not hidden: the generator should be able to say the
             # procedure is disputed rather than quote it as settled.
             header += " — SUPPORT WARNING: this procedure has a mixed run record"
-        if self.applicability_verdict == "mismatch":
+        if self.version_conflict:
+            kb_ver, ticket_ver = self.version_conflict
+            header += (
+                f" — PRODUCT VERSION MISMATCH: this KB is for AutomationEdge "
+                f"{kb_ver}; the ticket is {ticket_ver}. Use the full procedure. "
+                f"Every step that follows this article MUST say in the step text "
+                f"that it is based on the {kb_ver} KB (ticket is {ticket_ver})."
+            )
+        elif self.product_version and self.ticket_version:
+            header += (
+                f" — PRODUCT VERSION: AutomationEdge {self.product_version} "
+                f"(matches ticket {self.ticket_version})"
+            )
+        elif self.product_version:
+            header += f" — PRODUCT VERSION: AutomationEdge {self.product_version}"
+        elif self.ticket_version:
+            header += (
+                " — PRODUCT VERSION: not stated on this article "
+                f"(ticket is {self.ticket_version}; treat as version-agnostic)"
+            )
+        if self.applicability_verdict == "mismatch" and not self.version_conflict:
             header += " — APPLICABILITY WARNING: " + "; ".join(
                 self.applicability_notes
             )
-        elif self.applicability_notes:
+        elif self.applicability_notes and not self.version_conflict:
             header += " — " + "; ".join(self.applicability_notes)
-        lines = [header]
+        lines = [
+            header,
+            "  Use ACTION, PREREQUISITE, VALIDATION, and ROLLBACK sections as "
+            "required playbook guidance unless they conflict with observed evidence.",
+        ]
         for section in self.sections:
+            purpose = section.purpose.upper()
             location = section.section_ref or "—"
             marker = " (read from an image)" if section.model_derived else ""
+            location = f"{purpose} {location}"
             lines.append(f"  § {location}{marker}: {section.text.strip()[:800]}")
         return "\n".join(lines)
 
@@ -220,7 +266,40 @@ def build_retrieval_query(
             value = episode.get(key)
             if isinstance(value, str) and value.strip():
                 parts.append(value.strip())
+        for step in episode.get("steps") or []:
+            text = step.get("text") if isinstance(step, dict) else step
+            if isinstance(text, str) and text.strip():
+                parts.append(text.strip())
+        for snippet in episode.get("thread_solutions") or []:
+            if isinstance(snippet, str) and snippet.strip():
+                parts.append(snippet.strip())
     return "\n".join(p for p in parts if p.strip())[:4000]
+
+
+def _fill_article_version_from_stored_facets(
+    evidence,
+    article,
+    parse_version_spec,
+    platform_key: str,
+    platform_version,
+) -> None:
+    """Prefer the version ingest already wrote on the row.
+
+    Playbook fetch must not re-parse titles or filter by a hardcoded
+    version list. If applicability already has a platform version, keep
+    it. Otherwise take ``source_facets.version`` that ingest stamped.
+    """
+    if platform_version(article):
+        return
+    facets = getattr(evidence, "source_facets", None)
+    raw = facets.get("version") if isinstance(facets, dict) else None
+    if not raw:
+        return
+    spec = parse_version_spec(str(raw), allow_major_only=True)
+    if spec is None:
+        return
+    article.product_versions[platform_key] = spec.raw
+    article.versions.add(spec.raw)
 
 
 async def retrieve_knowledge_for_pattern(
@@ -258,10 +337,10 @@ async def retrieve_knowledge_for_pattern(
 
     # Both come from this tenant's own entity graph, so applicability
     # works for whatever they actually run rather than for one hardcoded
-    # product, and against the release in the environment the incident
-    # occurred in rather than a single tenant-wide "our version". Empty
-    # values degrade to version/platform matching on prose alone —
-    # today's behaviour, not wrong answers.
+    # product, and against the release stored on the closed ticket rather
+    # than a single tenant-wide "our version". Candidates themselves are
+    # always embedding-nearest neighbours — version is a stored facet
+    # used to rank and label, never a hardcoded fetch list.
     vocabulary = await tenant_vocabulary(db, tenant_id)
     inventory = await tenant_environment_inventory(db, tenant_id)
 
@@ -307,9 +386,12 @@ async def _retrieve(
     )
 
     from contextedge.services.knowledge_applicability_service import (
+        PLATFORM_KEY,
+        _platform_version,
         applicability_from_payload,
         compare,
         extract_applicability,
+        parse_version_spec,
     )
 
     documents: list[KnowledgeDocument] = []
@@ -351,24 +433,13 @@ async def _retrieve(
         distance *= support_factor
         document.best_distance = distance
 
-        # Applicability RE-RANKS; it never filters. An article written for
-        # an older release is often the only guidance that exists for a
-        # problem, and dropping it leaves the reviewer with nothing and no
-        # indication anything was withheld. A mismatch pushes it down and
-        # travels with it as a warning.
+        # Fetch is embedding similarity. Stored product version (ingest
+        # stamped ``applicability`` / ``source_facets.version``) only
+        # re-ranks and labels. An older KB that is still the full procedure
+        # for this ticket must reach the generator with the version gap
+        # named, not be dropped by a hardcoded version filter.
         if target is not None:
-            # getattr, because the search may hand back a partial
-            # projection. Reading an absent column threw, and the outer
-            # handler turned that into an empty result — a knowledge
-            # retrieval that silently returns nothing is the one failure
-            # mode this whole module exists to prevent.
             try:
-                # The stored extraction is a model's reading of the whole
-                # article, done once at ingest. The lexical path is the
-                # fallback for anything ingested before extraction
-                # existed, or whose extraction failed — measurably worse
-                # (it read licence versions and IP addresses as product
-                # versions) but far better than ranking blind.
                 stored = getattr(evidence, "applicability", None)
                 if isinstance(stored, dict) and stored:
                     article = applicability_from_payload(stored)
@@ -378,14 +449,23 @@ async def _retrieve(
                         f"{evidence.title or ''}\n{body[:APPLICABILITY_SCAN_CHARS]}",
                         vocabulary,
                     )
+                _fill_article_version_from_stored_facets(
+                    evidence, article, parse_version_spec, PLATFORM_KEY, _platform_version
+                )
                 match = compare(article, target)
+                kb_version = _platform_version(article)
+                ticket_ver = _platform_version(target)
+                if not ticket_ver and target.versions:
+                    ticket_ver = sorted(target.versions)[-1]
+                document.product_version = kb_version
+                document.ticket_version = ticket_ver
+                document.version_conflict = match.version_conflict
+                if ticket_ver and kb_version and match.version_conflict is None:
+                    distance *= VERSION_MATCH_RANK
                 document.best_distance = distance * match.rank_penalty
                 document.applicability_verdict = match.verdict
                 document.applicability_notes = match.notes()
             except Exception as exc:  # noqa: BLE001
-                # One awkward document must not cost the caller the whole
-                # result set. It keeps its semantic rank and simply
-                # carries no applicability opinion.
                 logger.warning(
                     "knowledge_retrieval.applicability_failed",
                     evidence_id=str(evidence.id),
@@ -449,6 +529,135 @@ async def _apply_supersession(
             document.superseded = True
 
 
+_SECTION_PURPOSE_KEYWORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    (
+        "rollback",
+        (
+            "rollback",
+            "roll back",
+            "revert",
+            "restore",
+            "undo",
+            "backout",
+            "back out",
+        ),
+    ),
+    (
+        "validation",
+        (
+            "validate",
+            "validation",
+            "verify",
+            "verification",
+            "expected result",
+            "expected outcome",
+            "test",
+            "confirm",
+            "health check",
+            "post-check",
+            "post check",
+        ),
+    ),
+    (
+        "prerequisite",
+        (
+            "prerequisite",
+            "pre-requisite",
+            "before you begin",
+            "required",
+            "requirement",
+            "supported version",
+            "applies to",
+            "dependency",
+            "permission",
+        ),
+    ),
+    (
+        "action",
+        (
+            "step",
+            "procedure",
+            "resolution",
+            "solution",
+            "configure",
+            "restart",
+            "run ",
+            "execute",
+            "install",
+            "update",
+            "enable",
+            "disable",
+            "open ",
+            "select ",
+            "click ",
+            "change ",
+        ),
+    ),
+)
+
+_COMMANDISH_RE = re.compile(
+    r"(\b[a-z][\w.-]+\s+(-{1,2}[\w-]+|/[A-Za-z0-9_.-]+|[A-Za-z]:\\)|"
+    r"`[^`]+`|\b[A-Z_]{3,}\b=|\.(properties|conf|xml|yaml|yml|json)\b)"
+)
+
+
+def _section_purpose(chunk: Any) -> str:
+    text = f"{getattr(chunk, 'parent_section', '') or ''}\n{getattr(chunk, 'text', '') or ''}"
+    lower = text[:1600].lower()
+    for purpose, keywords in _SECTION_PURPOSE_KEYWORDS:
+        if any(keyword in lower for keyword in keywords):
+            return purpose
+    if _COMMANDISH_RE.search(text[:1600]):
+        return "action"
+    return "context"
+
+
+def _section_priority(chunk: Any) -> int:
+    purpose = _section_purpose(chunk)
+    return {
+        "rollback": 5,
+        "validation": 4,
+        "prerequisite": 3,
+        "action": 3,
+        "context": 0,
+    }.get(purpose, 0)
+
+
+def _select_prompt_sections(chunks: list[Any]) -> list[Any]:
+    """Choose the sections that should reach playbook generation.
+
+    Keep the closest semantic hit for topical context, then promote procedural
+    chunks from the oversampled set. Finally restore document order so a
+    multi-step procedure reads naturally in the prompt.
+    """
+    if len(chunks) <= MAX_SECTIONS_PER_DOC:
+        return chunks
+
+    selected: list[Any] = [chunks[0]]
+    seen = {id(chunks[0])}
+    ranked = sorted(
+        enumerate(chunks[1:], start=1),
+        key=lambda item: (-_section_priority(item[1]), item[0]),
+    )
+    for _, chunk in ranked:
+        if len(selected) >= MAX_SECTIONS_PER_DOC:
+            break
+        if id(chunk) in seen or _section_priority(chunk) <= 0:
+            continue
+        selected.append(chunk)
+        seen.add(id(chunk))
+
+    for chunk in chunks:
+        if len(selected) >= MAX_SECTIONS_PER_DOC:
+            break
+        if id(chunk) in seen:
+            continue
+        selected.append(chunk)
+        seen.add(id(chunk))
+
+    return sorted(selected, key=lambda chunk: getattr(chunk, "chunk_index", 0))
+
+
 async def _attach_sections(
     db: AsyncSession,
     tenant_id: uuid.UUID,
@@ -483,7 +692,12 @@ async def _attach_sections(
         else:
             stmt = stmt.order_by(EvidenceChunk.chunk_index)
 
-        chunks = (await db.execute(stmt.limit(MAX_SECTIONS_PER_DOC))).scalars().all()
+        chunks = (
+            await db.execute(
+                stmt.limit(MAX_SECTIONS_PER_DOC * SECTION_SELECTION_OVERSAMPLE)
+            )
+        ).scalars().all()
+        chunks = _select_prompt_sections(list(chunks))
 
         if not chunks:
             # No chunks (short document, or chunking failed). The body is
@@ -502,6 +716,7 @@ async def _attach_sections(
                 section_ref=chunk.parent_section,
                 page=(chunk.chunk_metadata or {}).get("page"),
                 chunk_kind=chunk.chunk_kind,
+                purpose=_section_purpose(chunk),
                 model_derived=_is_model_derived(chunk),
             )
             for chunk in chunks
@@ -633,3 +848,38 @@ def format_knowledge_block(documents: list[KnowledgeDocument]) -> str:
     return "\n\n".join(
         document.to_prompt_block(index + 1) for index, document in enumerate(documents)
     )
+
+
+def knowledge_refs_payload(
+    documents: list[KnowledgeDocument],
+    *,
+    ticket_version: str | None = None,
+) -> dict[str, Any]:
+    """Provenance blob persisted on the generated playbook version.
+
+    The generator sees these documents; the version must record the same
+    set (and the ticket AE version used to filter them) so a reviewer
+    can open the SOPs and see which release they were matched against.
+    """
+    payload: dict[str, Any] = {
+        "knowledge_ids": [str(document.evidence_id) for document in documents],
+        "knowledge": [
+            {
+                "evidence_id": str(document.evidence_id),
+                "title": document.title,
+                "evidence_type": document.evidence_type,
+                "applicability_verdict": document.applicability_verdict,
+                "applicability_notes": document.applicability_notes,
+                "product_version": document.product_version,
+                "version_mismatch": (
+                    list(document.version_conflict)
+                    if document.version_conflict
+                    else None
+                ),
+            }
+            for document in documents
+        ],
+    }
+    if ticket_version:
+        payload["ticket_version"] = ticket_version
+    return payload

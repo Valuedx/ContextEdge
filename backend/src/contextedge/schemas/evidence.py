@@ -60,6 +60,11 @@ class EvidenceItemDetail(EvidenceItemResponse):
     # distinguish "does not apply anywhere in particular" from "nobody
     # ever looked", so this stays nullable rather than defaulting to {}.
     applicability: dict | None = None
+    # Labels the source already recorded: product version, ticket number,
+    # environment, root cause. Empty for unmapped sources and for rows
+    # whose custom fields were blank — not the same as applicability,
+    # which is extracted from knowledge prose.
+    source_facets: dict = Field(default_factory=dict)
 
 
 class EvidenceAccessPolicyUpdate(BaseModel):

@@ -26,9 +26,12 @@ from contextedge.services.knowledge_applicability_service import (
     extract_applicability_llm,
     describe_target,
     extract_applicability,
+    extract_platform_versions,
     normalize_environment,
+    parse_version_spec,
     tenant_environment_inventory,
     tenant_vocabulary,
+    versions_compatible,
     versions_from_custom_fields,
 )
 
@@ -437,6 +440,11 @@ def test_version_comes_from_a_custom_field_by_name_shape():
     assert versions_from_custom_fields({"cf_app_build": "v8.0"}) == {"8.0"}
     assert versions_from_custom_fields({"cf_site": "Pune DC"}) == set()
     assert versions_from_custom_fields(None) == set()
+    assert versions_from_custom_fields(
+        {"cf_automation_egde_version_1": "7*"}
+    ) == {"7*"}
+    assert versions_from_custom_fields({"version": "8.x"}) == {"8.x"}
+    assert versions_from_custom_fields({"version": "8.*"}) == {"8.*"}
 
 
 def test_an_explicitly_configured_field_wins():
@@ -576,6 +584,39 @@ async def test_a_non_dict_response_is_rejected():
         "contextedge.ai.provider.llm_complete_json", AsyncMock(return_value=["nope"])
     ):
         assert await extract_applicability_llm("t", "b") is None
+
+
+def test_zoho_major_wildcards_parse_and_match_the_same_major():
+    assert parse_version_spec("7*").major == 7
+    assert parse_version_spec("7*").wildcard is True
+    assert parse_version_spec("8.x").wildcard is True
+    assert parse_version_spec("V8.*").raw == "8.*"
+    assert versions_compatible("7.6.3", "7*") is True
+    assert versions_compatible("8.2.3", "7*") is False
+    assert versions_compatible("8.x", "8.2.4") is True
+    assert versions_compatible("8.4.0", "8.2.3") is False
+
+
+def test_ticket_ae_version_is_compared_against_kb_ae_version():
+    """Ticket field is ``_platform``; KB articles often name ``ae``."""
+    ticket = describe_target(custom_fields={"version": "7*"})
+    article = Applicability(product_versions={"ae": "7.6.3"})
+    assert compare(article, ticket).version_conflict is None
+    mismatch = compare(Applicability(product_versions={"ae": "8.2.3"}), ticket)
+    assert mismatch.verdict == MISMATCH
+    assert mismatch.version_conflict == ("8.2.3", "7*")
+
+
+def test_affected_version_heading_becomes_platform_version():
+    found = extract_platform_versions(
+        "Unable to Sync Web GUI Plugin in Version 7.x",
+        "### Affected Version\n7.x\n### Resolution Steps\nRestart the agent.",
+    )
+    assert found["_platform"] in {"7.x", "7*"}
+    roundtrip = applicability_from_payload(
+        {"product_versions": {"_platform": "8*"}, "components": []}
+    )
+    assert roundtrip.product_versions["_platform"] == "8*"
 
 
 # --- safe degradation --------------------------------------------------------

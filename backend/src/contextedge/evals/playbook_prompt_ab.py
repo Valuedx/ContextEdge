@@ -17,6 +17,10 @@ default** — steps 6.3 -> 5.5 at 62 -> 61 refs (tighter, not thinner),
 grounded share 0.79 -> 0.94, language grade 4.67 -> 5.0, rollback 6/6 and
 latency 16.6s on both.
 
+Note: this paragraph records the 2026-08-19 decision. v7 later inherited v6
+and added KB action coverage, so v6 is no longer necessarily the active
+registry default.
+
 Two negative results worth not re-litigating:
 
 1. **The judge's ``logic_flaws`` count is too noisy to decide on.** It read

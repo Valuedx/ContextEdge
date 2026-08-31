@@ -27,6 +27,7 @@ from contextedge.services.evidence_normalization import (
     evidence_body_from_payload,
     evidence_content_hash_from_payload,
     evidence_title_from_payload,
+    sync_related_ticket_facets,
 )
 from contextedge.services.evidence_typing import (
     KNOWLEDGE_EVIDENCE_TYPES,
@@ -40,7 +41,7 @@ from contextedge.services.message_filter import (
     message_noise_reason,
 )
 from contextedge.services.redaction_service import redact, redact_evidence_fields
-from contextedge.services.source_facets import applicability_from_facets, derive_facets
+from contextedge.services.source_facets import applicability_from_facets, derive_all_facets
 from contextedge.workers.asyncio_runner import run_async
 from contextedge.workers.celery_app import celery_app
 from contextedge.workers.chunk_tasks import chunk_evidence_task, embed_chunks_batch_task
@@ -234,7 +235,7 @@ async def _normalize(db: AsyncSession, raw_object_id: str, tenant_id: uuid.UUID)
         # Facets are filled in as the ticket is worked — the root cause is
         # typically typed when it is resolved, long after first ingest, and
         # without touching the description the content hash covers.
-        refreshed_facets = derive_facets(
+        refreshed_facets = derive_all_facets(
             payload, (getattr(await db.get(Source, raw.source_id), "config", None) or {}).get(
                 "facet_fields"
             ) if raw.source_id else None
@@ -265,6 +266,7 @@ async def _normalize(db: AsyncSession, raw_object_id: str, tenant_id: uuid.UUID)
             await ensure_thread_for_evidence(
                 db, tenant_id=tenant_id, evidence=existing, payload=payload,
             )
+        await sync_related_ticket_facets(db, tenant_id, existing)
         try:
             embedded = await _ensure_embedding(db, existing)
         except Exception as embed_exc:
@@ -341,7 +343,7 @@ async def _normalize(db: AsyncSession, raw_object_id: str, tenant_id: uuid.UUID)
     # evidence on any unexpected source shape, never crash the ingest.
     src = await db.get(Source, raw.source_id) if raw.source_id else None
     source_domain_ids = list(getattr(src, "domain_ids", None) or [])
-    facets = derive_facets(payload, (getattr(src, "config", None) or {}).get("facet_fields"))
+    facets = derive_all_facets(payload, (getattr(src, "config", None) or {}).get("facet_fields"))
     ev = EvidenceItem(
         tenant_id=tenant_id,
         source_id=raw.source_id,
@@ -413,6 +415,7 @@ async def _normalize(db: AsyncSession, raw_object_id: str, tenant_id: uuid.UUID)
     await ensure_thread_for_evidence(
         db, tenant_id=tenant_id, evidence=ev, payload=payload,
     )
+    await sync_related_ticket_facets(db, tenant_id, ev)
     attachments = await register_attachment_artifacts(
         db,
         tenant_id=tenant_id,
@@ -474,7 +477,7 @@ async def _normalize(db: AsyncSession, raw_object_id: str, tenant_id: uuid.UUID)
         # Belongs here rather than in the caller: it is per-evidence
         # follow-up on the same object the classifier just read, it is
         # skipped for non-knowledge types, and it never raises.
-        await _extract_applicability(db, ev, tenant_id)
+        await _extract_applicability(db, ev, tenant_id, payload)
     except Exception as cls_exc:
         # Classifier failure shouldn't block ingestion — fall through to the
         # full path as the pre-flip behaviour did.
@@ -683,7 +686,16 @@ async def _classify(db: AsyncSession, evidence_id: str, tenant_id: uuid.UUID) ->
                 error=str(claim_exc),
             )
 
-    await _extract_applicability(db, ev, tenant_id)
+    payload: dict = {}
+    if ev.raw_object_ref:
+        raw = await db.get(RawEvidenceObject, ev.raw_object_ref)
+        if raw is not None:
+            try:
+                payload = await load_raw_payload(raw) or {}
+            except ValueError:
+                payload = {}
+
+    await _extract_applicability(db, ev, tenant_id, payload)
 
     await db.flush()
     return {
@@ -701,8 +713,34 @@ async def _classify(db: AsyncSession, evidence_id: str, tenant_id: uuid.UUID) ->
     }
 
 
+def _merge_kb_platform_version(ev: EvidenceItem) -> None:
+    """Stamp the AE platform version from title/Affected Version onto the
+    article so playbook retrieval can rank and label version-wise from
+    stored facets. Fetch itself stays embedding-based.
+    """
+    from contextedge.services.knowledge_applicability_service import (
+        PLATFORM_KEY,
+        extract_platform_versions,
+    )
+
+    platform = extract_platform_versions(ev.title, ev.body_text)
+    if not platform:
+        return
+    payload = dict(ev.applicability or {})
+    products = dict(payload.get("product_versions") or {})
+    for key, version in platform.items():
+        products.setdefault(key, version)
+    payload["product_versions"] = products
+    ev.applicability = payload
+    version = platform.get(PLATFORM_KEY) or next(iter(platform.values()))
+    facets = dict(ev.source_facets or {})
+    if version and not facets.get("version"):
+        facets["version"] = version
+        ev.source_facets = facets
+
+
 async def _extract_applicability(
-    db: AsyncSession, ev: EvidenceItem, tenant_id: uuid.UUID
+    db: AsyncSession, ev: EvidenceItem, tenant_id: uuid.UUID, payload: dict | None = None
 ) -> None:
     """Read and persist where a knowledge article applies.
 
@@ -720,37 +758,48 @@ async def _extract_applicability(
         extract_applicability_llm,
     )
 
-    if ev.evidence_type not in KNOWLEDGE_EVIDENCE_TYPES or ev.applicability:
+    if ev.evidence_type not in KNOWLEDGE_EVIDENCE_TYPES:
         return
 
-    # What the source states beats what a model infers from the same text —
-    # and skips the call entirely. `extract_applicability_llm` costs ~7,200
-    # tokens; a stated environment and version cost nothing and were typed
-    # by someone who knew.
-    stated = applicability_from_facets(getattr(ev, "source_facets", None))
-    if stated:
-        ev.applicability = stated
-        logger.info(
-            "applicability.from_source_facets",
-            evidence_id=str(ev.id),
-            facets=sorted(stated),
-        )
+    # Official catalog pages list many releases on purpose. Running the
+    # article extractor on them would invent a single product_version
+    # (often the docs-portal latest) and then retrieval would mismatch
+    # every ticket that is not on that line.
+    payload = payload or {}
+    if payload.get("catalog_key") or payload.get("_connector_object_type") == "official_catalog":
+        if not ev.applicability:
+            ev.applicability = {"extracted_by": "catalog", "product_versions": {}}
+        facets = dict(ev.source_facets or {})
+        if payload.get("catalog_key") and not facets.get("catalog_key"):
+            facets["catalog_key"] = payload["catalog_key"]
+            ev.source_facets = facets
         return
 
-    try:
-        facets = await extract_applicability_llm(
-            ev.title, ev.body_text, tenant_id=tenant_id, db=db
-        )
-    except Exception as exc:  # noqa: BLE001
-        logger.warning(
-            "applicability.extract_failed",
-            evidence_id=str(ev.id),
-            error_type=type(exc).__name__,
-        )
-        return
+    if not ev.applicability:
+        stated = applicability_from_facets(getattr(ev, "source_facets", None))
+        if stated:
+            ev.applicability = stated
+            logger.info(
+                "applicability.from_source_facets",
+                evidence_id=str(ev.id),
+                facets=sorted(stated),
+            )
+        else:
+            try:
+                facets = await extract_applicability_llm(
+                    ev.title, ev.body_text, tenant_id=tenant_id, db=db
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "applicability.extract_failed",
+                    evidence_id=str(ev.id),
+                    error_type=type(exc).__name__,
+                )
+                facets = None
+            if facets is not None:
+                ev.applicability = facets.to_payload()
 
-    if facets is not None:
-        ev.applicability = facets.to_payload()
+    _merge_kb_platform_version(ev)
 
 
 # Reconstruction debounce: in a busy incident channel every message

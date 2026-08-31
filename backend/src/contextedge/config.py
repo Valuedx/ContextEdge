@@ -268,6 +268,14 @@ class Settings(BaseSettings):
     agent_diagnose_enabled: bool = True
     copilot_message_retention_days: int = Field(default=180, ge=1, le=3650)
 
+    # Weekly public KB / official-version catalog refresh. Article bodies
+    # still come from Zoho Desk incremental sync; this flag only gates the
+    # extra public pages (docs portal, versions-life, compatibility PDF).
+    official_kb_refresh_enabled: bool = True
+    # Running AE patch this estate's tickets record (Zoho CF), e.g. 8.2.3.
+    # Distinct from the docs-portal latest (detected live, currently 8.5).
+    official_kb_estate_version: str = "8.2.3"
+
 
 settings = Settings()
 

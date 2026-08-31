@@ -41,6 +41,8 @@ def _chunk(elements, title=None):
 def test_knowledge_evidence_routes_to_the_document_chunker():
     assert get_chunker("local_file", "kb_article").name == "document"
     assert get_chunker("servicenow", "kb_article").name == "document"
+    assert get_chunker("zoho_desk", "documentation").name == "document"
+    assert get_chunker("zoho_desk", "sop").name == "document"
     # Unchanged for everything else.
     assert get_chunker("servicenow", "incident").name == "ticket"
     assert get_chunker("gmail", "message").name == "thread"

@@ -1272,13 +1272,22 @@ async def generate_playbook(
 
     # 2. Call AI Generator
     try:
-        ep_summaries = []
-        for ep in episodes:
-            ep_summaries.append({
-                "title": ep.title,
-                "root_cause": ep.root_cause_summary,
-                "outcome": ep.final_outcome
-            })
+        from contextedge.services.episode_service import (
+            evidence_ids_for_episodes,
+            playbook_episode_summaries,
+        )
+        from contextedge.services.knowledge_applicability_service import (
+            ticket_version_custom_fields,
+        )
+        from contextedge.services.knowledge_retrieval_service import (
+            knowledge_refs_payload,
+            persist_knowledge_links,
+            retrieve_knowledge_for_pattern,
+        )
+
+        ep_summaries = await playbook_episode_summaries(
+            db, user.tenant_id, list(episodes)
+        )
 
         nk_r = await db.execute(
             select(NegativeKnowledgeItem).where(
@@ -1291,15 +1300,56 @@ async def generate_playbook(
             for row in nk_r.scalars().all()
         ]
 
+        evidence_ref_ids = await evidence_ids_for_episodes(
+            db, user.tenant_id, episode_ids
+        )
+        version_fields = await ticket_version_custom_fields(
+            db, user.tenant_id, evidence_ref_ids
+        )
+        knowledge = await retrieve_knowledge_for_pattern(
+            db,
+            user.tenant_id,
+            pattern_title=pattern.title,
+            pattern_description=pattern.description,
+            episode_summaries=ep_summaries,
+            custom_fields=version_fields or None,
+        )
+        await persist_knowledge_links(
+            db, user.tenant_id, pattern.id, knowledge, domain_id=pattern.domain_id
+        )
+        logger.info(
+            "playbook.knowledge_retrieved",
+            tenant_id=str(user.tenant_id),
+            pattern_id=str(pattern.id),
+            documents=len(knowledge),
+            sections=sum(len(k.sections) for k in knowledge),
+            ticket_version=(version_fields or {}).get("version"),
+        )
+
         candidate = await generate_playbook_candidate(
             pattern.title,
             pattern.description or "",
             len(episodes),
             ep_summaries,
             negative_knowledge,
+            knowledge_sources=knowledge,
             tenant_id=user.tenant_id,
             db=db,
         )
+
+        # Provenance is assembled here, not left to the model: the LLM
+        # cites [kb-N] in steps but does not emit knowledge_ids, and
+        # forwarding the candidate dict whole used to persist a playbook
+        # that had used KB in the prompt with no record of which articles.
+        candidate["evidence_refs"] = {
+            "evidence_ids": evidence_ref_ids,
+            "episode_ids": [str(eid) for eid in episode_ids],
+            "pattern_id": str(pattern.id),
+            **knowledge_refs_payload(
+                knowledge,
+                ticket_version=(version_fields or {}).get("version"),
+            ),
+        }
 
         # 3. Create Playbook Shell
         stable_key = f"pb-{uuid_mod.uuid4().hex[:12]}"

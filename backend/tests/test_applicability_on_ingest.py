@@ -23,7 +23,7 @@ def test_normalize_extracts_applicability():
     is that the call is present on it at all."""
     source = inspect.getsource(extraction_tasks._normalize)
 
-    assert "_extract_applicability(db, ev, tenant_id)" in source
+    assert "_extract_applicability(db, ev, tenant_id, payload)" in source
 
 
 def test_manual_reclassification_still_extracts_applicability():
@@ -31,7 +31,8 @@ def test_manual_reclassification_still_extracts_applicability():
     classification by hand is how a stale article gets refreshed."""
     source = inspect.getsource(extraction_tasks._classify)
 
-    assert "_extract_applicability(db, ev, tenant_id)" in source
+    assert "_extract_applicability(db, ev, tenant_id, payload)" in source
+    assert "load_raw_payload" in source
 
 
 def test_extractor_skips_non_knowledge_and_already_populated():
@@ -40,7 +41,8 @@ def test_extractor_skips_non_knowledge_and_already_populated():
     applicability is never re-billed."""
     source = inspect.getsource(extraction_tasks._extract_applicability)
 
-    assert "KNOWLEDGE_EVIDENCE_TYPES or ev.applicability" in source
+    assert "not in KNOWLEDGE_EVIDENCE_TYPES" in source
+    assert "if not ev.applicability:" in source
     assert "return" in source
 
 
@@ -54,3 +56,13 @@ def test_stated_facets_short_circuit_the_model_call():
     llm_at = source.index("extract_applicability_llm(")
 
     assert stated_at < llm_at
+
+
+def test_official_catalog_does_not_call_the_article_extractor():
+    """A version-list page is not an article. Extracting it would stamp
+    one release and mismatch every ticket that is not on that line."""
+    source = inspect.getsource(extraction_tasks._extract_applicability)
+    assert "official_catalog" in source
+    catalog_at = source.index("official_catalog")
+    llm_at = source.index("extract_applicability_llm(")
+    assert catalog_at < llm_at

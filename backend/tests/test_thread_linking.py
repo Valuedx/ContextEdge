@@ -181,3 +181,55 @@ def test_jira_thread_id_is_issue_key():
         thread_id="PROJ-123",
     )
     assert ev.thread_id == "PROJ-123"
+
+
+def test_related_evidence_inherits_ticket_version_without_overwriting():
+    from contextedge.services.evidence_normalization import (
+        merge_inherited_ticket_facets,
+    )
+
+    ticket = {"version": "8.2.3", "ticket_number": "245390"}
+    assert merge_inherited_ticket_facets({}, ticket) == ticket
+    assert merge_inherited_ticket_facets({"version": "7*"}, ticket) == {
+        "version": "7*",
+        "ticket_number": "245390",
+    }
+    assert merge_inherited_ticket_facets({"version": "8.2.3"}, {}) == {"version": "8.2.3"}
+
+
+@pytest.mark.asyncio
+async def test_thread_message_inherits_version_from_the_ticket_on_its_thread():
+    from contextedge.services.evidence_normalization import (
+        _inherit_ticket_facets_from_thread,
+    )
+
+    tenant_id = uuid4()
+    thread_id = uuid4()
+    ticket = SimpleNamespace(
+        evidence_type="ticket",
+        thread_id=thread_id,
+        source_facets={"version": "8.2.3", "ticket_number": "245390"},
+    )
+    message = SimpleNamespace(
+        evidence_type="thread_message",
+        thread_id=thread_id,
+        source_facets={},
+    )
+    db = SimpleNamespace(
+        execute=AsyncMock(return_value=_scalar_one_or_none_result(ticket)),
+    )
+    assert await _inherit_ticket_facets_from_thread(db, tenant_id, message) is True
+    assert message.source_facets["version"] == "8.2.3"
+    assert message.source_facets["ticket_number"] == "245390"
+
+
+def test_normalize_calls_ticket_facet_sync_after_thread_link():
+    import inspect
+
+    from contextedge.workers import extraction_tasks
+
+    source = inspect.getsource(extraction_tasks._normalize)
+    assert "sync_related_ticket_facets" in source
+    assert source.index("ensure_thread_for_evidence") < source.index(
+        "sync_related_ticket_facets"
+    )

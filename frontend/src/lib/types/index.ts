@@ -185,6 +185,12 @@ export interface EvidenceItemDetail extends EvidenceItem {
    * which means it was read and stated no constraints.
    */
   applicability?: EvidenceApplicability | null;
+  /**
+   * Labels the source already recorded: product version, ticket number,
+   * environment. Empty when the source maps none or left the fields blank.
+   * Distinct from applicability, which is extracted from knowledge prose.
+   */
+  source_facets?: Record<string, string>;
 }
 
 export interface EpisodeAiReview {
@@ -319,6 +325,14 @@ export interface PlaybookKnowledgeRef {
   /** "applies" | "unknown" | "mismatch" */
   applicability_verdict?: string;
   applicability_notes?: string[];
+  /** AE version stamped on the KB at ingest. Absent when the article is version-agnostic. */
+  product_version?: string | null;
+  /**
+   * `[kbVersion, ticketVersion]` when the article was written for a
+   * different major than the ticket this playbook was generated from.
+   * Null when they match or either side is unstated.
+   */
+  version_mismatch?: [string, string] | null;
 }
 
 export interface PlaybookEvidenceRefs {
@@ -328,6 +342,8 @@ export interface PlaybookEvidenceRefs {
   knowledge_ids?: string[];
   /** Absent on versions generated before applicability was recorded. */
   knowledge?: PlaybookKnowledgeRef[];
+  /** Ticket AE version used at generation. Absent on older versions. */
+  ticket_version?: string | null;
 }
 
 export interface PlaybookConflict {

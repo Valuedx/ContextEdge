@@ -419,5 +419,93 @@ register_prompt(
         system=_V6_SYSTEM,
         user_template=_V3_USER,
     ),
+)
+
+
+# v7 - stronger use of AutomationEdge KB action guidance.
+#
+# v6 received approved knowledge, but the retriever could still surface a
+# descriptive section while the model wrote a generic support-engineering
+# action. The retrieval layer now labels ACTION / PREREQUISITE / VALIDATION /
+# ROLLBACK sections; v7 makes those labels binding for generation. A generated
+# playbook must either include the KB-required item with a citation, or surface
+# why it cannot be used as a conflict/mismatch for reviewer attention.
+_V7_SYSTEM = _V6_SYSTEM + """
+13. Treat labelled KB sections as a coverage checklist:
+    - ACTION: include the product-specific action as a playbook step with
+      the KB source_ref, preserving exact AutomationEdge component names,
+      plugin names, paths, settings, commands, and UI labels from the source.
+    - PREREQUISITE: include it before the dependent action, or add a
+      requires_review conflict if observed practice skipped it.
+    - VALIDATION: include it as an explicit check after the related action;
+      do not hide it inside expected_outcome when the KB states a separate
+      validation activity.
+    - ROLLBACK: include it in rollback_notes or as a final rollback step when
+      the KB gives concrete rollback work.
+14. Before finalizing, compare the steps against every supplied KB ACTION,
+    PREREQUISITE, VALIDATION, and ROLLBACK section. If any required item is
+    missing, add it or record a conflict explaining why the reviewer must
+    decide. A product-specific KB instruction should not disappear just
+    because no episode performed it.
+15. Prefer AutomationEdge product language from KB over generic phrasing.
+    Name the exact product area or plugin when the KB supplies it. Use generic
+    best-practice wording only when neither KB nor episodes identify the
+    product-specific action."""
+
+register_prompt(
+    Prompt(
+        name="playbook",
+        version="v7",
+        system=_V7_SYSTEM,
+        user_template=_V3_USER,
+    ),
+)
+
+
+# v8 — product-version labels on KB (2026-08-31).
+# Retrieval is embedding-nearest, then stored KB version (source_facets /
+# applicability) re-ranks. A different-release article is still fetched —
+# it is often the full procedure that still applies — and the prompt must
+# make the generator name that gap on the step, not hide it in source_refs.
+_V8_SYSTEM = _V7_SYSTEM + """
+16. When a supplied KB is labelled PRODUCT VERSION MISMATCH, still use the
+    full procedure. In every step that follows that article, say so in the
+    step text itself: "Based on KB for AutomationEdge <kb-version> (this
+    ticket is <ticket-version>): ..." Do not hide the version gap in
+    source_refs only — an engineer running the playbook must see it on
+    the step. When the KB matches the ticket version, do not add that
+    caveat. When the KB states no version, treat it as version-agnostic."""
+
+register_prompt(
+    Prompt(
+        name="playbook",
+        version="v8",
+        system=_V8_SYSTEM,
+        user_template=_V3_USER,
+    ),
+)
+
+
+# v9 — mail-thread solutions under each episode, used together with KB.
+# v8 still only received episode title / root cause / outcome, so a
+# working fix written in the ticket email thread never reached generation
+# unless it had been compressed into those two fields. Observed steps and
+# thread excerpts now sit under [ep-N]; the model must use them and KB.
+_V9_SYSTEM = _V8_SYSTEM + """
+17. Use BOTH sources. Approved KB is what should be done. Under each
+    [ep-N], "Observed steps (from mail thread)" and "Mail-thread solution"
+    are what actually resolved the ticket. Include that working solution
+    as grounded playbook steps citing the episode. Do not generate from
+    KB alone when an episode records a working mail-thread solution, and
+    do not ignore a KB safeguard the mail thread skipped — record a
+    conflict if they disagree."""
+
+register_prompt(
+    Prompt(
+        name="playbook",
+        version="v9",
+        system=_V9_SYSTEM,
+        user_template=_V3_USER,
+    ),
     default=True,
 )

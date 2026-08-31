@@ -2,6 +2,7 @@ import uuid
 
 import structlog
 from celery import Celery
+from celery.schedules import crontab
 from celery.signals import before_task_publish, task_postrun, task_prerun, worker_ready
 
 from contextedge.config import settings
@@ -396,6 +397,15 @@ celery_app.conf.update(
         "purge-copilot-message-bodies-daily": {
             "task": "evaluation.purge_copilot_message_bodies",
             "schedule": 86400.0,
+            "args": ("all",),
+        },
+        # Public KB + official version catalog. Incremental Desk article
+        # sync already runs every 15 minutes; this weekly pass catches a
+        # missed beat and refreshes pages the Desk API does not serve
+        # (docs portal current release, versions-life, compatibility PDF).
+        "refresh-official-knowledge-weekly": {
+            "task": "sync.refresh_official_knowledge",
+            "schedule": crontab(hour=2, minute=30, day_of_week=1),
             "args": ("all",),
         },
     },

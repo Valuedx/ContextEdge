@@ -12,7 +12,7 @@ from contextedge.ai.generators import playbook_generator
 from contextedge.ai.provenance import GENERATION_PROVENANCE_KEY
 from contextedge.ai.provider import generate_embedding
 from contextedge.graph.builder import ensure_edge, link_node_to_identities
-from contextedge.models.episode import Episode, EpisodeEvidenceLink
+from contextedge.models.episode import Episode
 from contextedge.models.pattern import NegativeKnowledgeItem, Pattern, PatternEvidenceLink
 from contextedge.models.playbook import Playbook
 from contextedge.models.tenant import User
@@ -20,6 +20,10 @@ from contextedge.services.identity_service import identity_ids_from_refs
 from contextedge.services.pattern_service import (
     add_episode_to_pattern,
     create_pattern_from_episodes,
+)
+from contextedge.services.episode_service import (
+    evidence_ids_for_episodes,
+    playbook_episode_summaries,
 )
 from contextedge.services.playbook_service import create_playbook_version
 from contextedge.workers.asyncio_runner import run_async
@@ -91,41 +95,8 @@ def _effective_risk_tier(llm_risk_tier, steps) -> str:
     return floor
 
 
-async def _evidence_ids_for_episodes(
-    db, tenant_id: uuid.UUID, episode_ids: list[uuid.UUID]
-) -> list[str]:
-    """Evidence grounding a set of episodes, via the 0037 link table.
-
-    Returns sorted string ids so the generated ``evidence_refs`` blob is
-    deterministic across runs — a regenerated playbook version should
-    differ because the evidence changed, not because a set iterated in a
-    different order.
-
-    Falls back to the episodes' JSONB ``evidence_ids`` for episodes
-    written before 0037, which have no link rows: the normalized table is
-    the source of truth going forward, but a pre-0037 episode still has
-    real grounding and dropping it would silently narrow provenance.
-    """
-    if not episode_ids:
-        return []
-
-    rows = await db.execute(
-        select(EpisodeEvidenceLink.evidence_id).where(
-            EpisodeEvidenceLink.tenant_id == tenant_id,
-            EpisodeEvidenceLink.episode_id.in_(episode_ids),
-        )
-    )
-    found = {str(eid) for eid in rows.scalars().all() if eid}
-
-    if not found:
-        legacy = await db.execute(
-            select(Episode.evidence_ids).where(Episode.id.in_(episode_ids))
-        )
-        for blob in legacy.scalars().all():
-            if isinstance(blob, list):
-                found.update(str(v) for v in blob if v)
-
-    return sorted(found)
+# Re-export: tests and older callers imported this from the worker.
+_evidence_ids_for_episodes = evidence_ids_for_episodes
 
 
 async def _linked_episode_ids(db, tenant_id: uuid.UUID) -> set[uuid.UUID]:
@@ -520,19 +491,7 @@ def generate_playbook_candidate(self, pattern_id: str, tenant_id: str):
 
         er = await db.execute(select(Episode).where(Episode.id.in_(ep_ids)))
         episodes = list(er.scalars().all())
-        summaries = [
-            {
-                # Carried so a generated step citing [ep-N] resolves to a
-                # real episode rather than a label. Without it the
-                # citation validates (the label was supplied) but points
-                # at nothing a reviewer can open.
-                "id": str(ep.id),
-                "title": ep.title,
-                "root_cause": ep.root_cause_summary,
-                "outcome": ep.final_outcome,
-            }
-            for ep in episodes[:12]
-        ]
+        summaries = await playbook_episode_summaries(db, tid, episodes)
 
         nk_r = await db.execute(
             select(NegativeKnowledgeItem).where(
@@ -551,24 +510,24 @@ def generate_playbook_candidate(self, pattern_id: str, tenant_id: str):
         # than an incident title — "Laptop Wi-Fi not working" matches
         # nothing useful; "Intel AX201 Code 10 driver rollback" matches
         # the article that documents it.
+        from contextedge.services.knowledge_applicability_service import (
+            ticket_version_custom_fields,
+        )
         from contextedge.services.knowledge_retrieval_service import (
+            knowledge_refs_payload,
+            persist_knowledge_links,
             retrieve_knowledge_for_pattern,
         )
 
+        version_fields = await ticket_version_custom_fields(db, tid, evidence_ref_ids)
         knowledge = await retrieve_knowledge_for_pattern(
             db,
             tid,
             pattern_title=pattern.title,
             pattern_description=pattern.description,
             episode_summaries=summaries,
+            custom_fields=version_fields or None,
         )
-        # Record what retrieval just discovered. Without this the match is
-        # spent on one prompt and forgotten, and the document stays
-        # unreachable by traversal for every later projection.
-        from contextedge.services.knowledge_retrieval_service import (
-            persist_knowledge_links,
-        )
-
         links_written = await persist_knowledge_links(
             db, tid, pid, knowledge, domain_id=pattern.domain_id
         )
@@ -579,6 +538,7 @@ def generate_playbook_candidate(self, pattern_id: str, tenant_id: str):
             documents=len(knowledge),
             sections=sum(len(k.sections) for k in knowledge),
             links_written=links_written,
+            ticket_version=(version_fields or {}).get("version"),
         )
 
         llm = await playbook_generator.generate_playbook_candidate(
@@ -654,29 +614,10 @@ def generate_playbook_candidate(self, pattern_id: str, tenant_id: str):
                 # asking "which SOP does this implement" needs that
                 # distinction preserved rather than flattened into one
                 # evidence list.
-                "knowledge_ids": [str(k.evidence_id) for k in knowledge],
-                # The applicability verdict as it stood when this version
-                # was generated. Persisted rather than recomputed on
-                # read, for two reasons: the estate moves (an article
-                # that matched production's release stops matching after
-                # an upgrade), and a reviewer auditing THIS version needs
-                # what the generator was actually told, not what the
-                # comparison would say today.
-                #
-                # Without it the reviewer sees which SOPs a playbook
-                # cites but not that one of them was flagged as written
-                # for a release they do not run — a warning that was
-                # computed, shown to the model, and then discarded.
-                "knowledge": [
-                    {
-                        "evidence_id": str(k.evidence_id),
-                        "title": k.title,
-                        "evidence_type": k.evidence_type,
-                        "applicability_verdict": k.applicability_verdict,
-                        "applicability_notes": k.applicability_notes,
-                    }
-                    for k in knowledge
-                ],
+                **knowledge_refs_payload(
+                    knowledge,
+                    ticket_version=(version_fields or {}).get("version"),
+                ),
             },
             # Where the documented procedure and observed practice
             # disagree. Persisted rather than resolved: preferring the

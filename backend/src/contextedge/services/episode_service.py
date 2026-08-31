@@ -15,6 +15,212 @@ from contextedge.models.evidence import EvidenceItem
 logger = structlog.get_logger()
 
 
+async def evidence_ids_for_episodes(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    episode_ids: list[uuid.UUID],
+) -> list[str]:
+    """Evidence grounding a set of episodes, via the 0037 link table.
+
+    Returns sorted string ids so a generated ``evidence_refs`` blob is
+    deterministic across runs — a regenerated playbook version should
+    differ because the evidence changed, not because a set iterated in a
+    different order.
+
+    Falls back to the episodes' JSONB ``evidence_ids`` for episodes
+    written before 0037, which have no link rows: the normalized table is
+    the source of truth going forward, but a pre-0037 episode still has
+    real grounding and dropping it would silently narrow provenance.
+    """
+    if not episode_ids:
+        return []
+
+    rows = await db.execute(
+        select(EpisodeEvidenceLink.evidence_id).where(
+            EpisodeEvidenceLink.tenant_id == tenant_id,
+            EpisodeEvidenceLink.episode_id.in_(episode_ids),
+        )
+    )
+    found = {str(eid) for eid in rows.scalars().all() if eid}
+
+    if not found:
+        legacy = await db.execute(
+            select(Episode.evidence_ids).where(Episode.id.in_(episode_ids))
+        )
+        for blob in legacy.scalars().all():
+            if isinstance(blob, list):
+                found.update(str(v) for v in blob if v)
+
+    return sorted(found)
+
+
+MAX_PLAYBOOK_EPISODES = 12
+MAX_STEPS_PER_EPISODE = 8
+MAX_STEP_TEXT = 400
+MAX_THREAD_SOLUTIONS = 3
+MAX_THREAD_SNIPPET = 600
+_SOLUTION_STEP_TYPES = frozenset(
+    {
+        "remediation",
+        "action",
+        "outcome",
+        "failed_step",
+        "diagnostic",
+        "observation",
+    }
+)
+
+
+def _excerpt_thread_solution(text: str | None, limit: int = MAX_THREAD_SNIPPET) -> str:
+    """Mail-thread fixes sit at the bottom of the quote chain.
+
+    Head-only slicing was how those solutions disappeared; take the tail.
+    """
+    cleaned = " ".join((text or "").split())
+    if not cleaned:
+        return ""
+    if len(cleaned) <= limit:
+        return cleaned
+    return cleaned[-limit:]
+
+
+def thread_solutions_from_messages(
+    messages: list[tuple[str | None, str | None]],
+) -> list[str]:
+    """Pick the solution-bearing mail-thread excerpts, in time order.
+
+    ``messages`` is ``(body_text, body_summary)`` chronological. Prefer
+    items that already carry a resolution signal; if the thread never
+    used those words, the last messages are still the usual place the
+    fix was written.
+    """
+    from contextedge.services.resolution_signal_service import (
+        text_has_resolution_signal,
+    )
+
+    excerpts: list[str] = []
+    signalled: list[str] = []
+    for body, summary in messages:
+        text = _excerpt_thread_solution(body) or _excerpt_thread_solution(summary)
+        if not text:
+            continue
+        excerpts.append(text)
+        blob = f"{body or ''}\n{summary or ''}"
+        if text_has_resolution_signal(blob):
+            signalled.append(text)
+    chosen = signalled or excerpts[-2:]
+    # Preserve chronological order and drop duplicate paste-forwards.
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for text in excerpts:
+        if text not in chosen or text in seen:
+            continue
+        seen.add(text)
+        ordered.append(text)
+        if len(ordered) >= MAX_THREAD_SOLUTIONS:
+            break
+    return ordered
+
+
+def playbook_steps_from_rows(rows: list) -> list[dict]:
+    """Solution-bearing episode steps reconstructed from the mail thread."""
+    usable = [row for row in rows if str(getattr(row, "text", "") or "").strip()]
+    preferred = [
+        row for row in usable if getattr(row, "step_type", "") in _SOLUTION_STEP_TYPES
+    ]
+    if len(preferred) < 3:
+        extra = [row for row in usable if row not in preferred]
+        preferred = preferred + extra
+    preferred = sorted(preferred, key=lambda row: int(getattr(row, "step_order", 0) or 0))
+    out: list[dict] = []
+    for row in preferred[:MAX_STEPS_PER_EPISODE]:
+        item = {
+            "type": str(getattr(row, "step_type", "") or "action"),
+            "text": str(row.text).strip()[:MAX_STEP_TEXT],
+        }
+        observation = str(getattr(row, "observation", None) or "").strip()
+        if observation:
+            item["observation"] = observation[:200]
+        out.append(item)
+    return out
+
+
+async def playbook_episode_summaries(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    episodes: list,
+    *,
+    limit: int = MAX_PLAYBOOK_EPISODES,
+) -> list[dict]:
+    """Episode payloads for playbook generation: title plus the mail-thread
+    solution, not just the summary.
+
+    Playbooks were being generated from ``root_cause`` / ``final_outcome``
+    only. The working procedure lives in episode steps (reconstructed
+    from the ticket mail thread) and in the thread messages themselves.
+    Both belong *under* the episode so the generator uses them together
+    with KB, rather than as a separate source that crowds the prompt.
+    """
+    chosen = [ep for ep in (episodes or []) if ep is not None][:limit]
+    if not chosen:
+        return []
+
+    ep_ids = [ep.id for ep in chosen]
+    step_rows = (
+        await db.execute(
+            select(EpisodeStep)
+            .where(
+                EpisodeStep.tenant_id == tenant_id,
+                EpisodeStep.episode_id.in_(ep_ids),
+            )
+            .order_by(EpisodeStep.episode_id, EpisodeStep.step_order)
+        )
+    ).scalars().all()
+    steps_by_episode: dict[uuid.UUID, list] = {}
+    for row in step_rows:
+        steps_by_episode.setdefault(row.episode_id, []).append(row)
+
+    thread_rows = (
+        await db.execute(
+            select(
+                EpisodeEvidenceLink.episode_id,
+                EvidenceItem.body_text,
+                EvidenceItem.body_summary,
+            )
+            .join(EvidenceItem, EvidenceItem.id == EpisodeEvidenceLink.evidence_id)
+            .where(
+                EpisodeEvidenceLink.tenant_id == tenant_id,
+                EpisodeEvidenceLink.episode_id.in_(ep_ids),
+                EvidenceItem.evidence_type == "thread_message",
+            )
+            .order_by(
+                EpisodeEvidenceLink.episode_id,
+                EvidenceItem.created_at_source.asc().nulls_last(),
+                EvidenceItem.ingested_at.asc(),
+            )
+        )
+    ).all()
+    threads_by_episode: dict[uuid.UUID, list[tuple[str | None, str | None]]] = {}
+    for episode_id, body, summary in thread_rows:
+        threads_by_episode.setdefault(episode_id, []).append((body, summary))
+
+    summaries: list[dict] = []
+    for ep in chosen:
+        summaries.append(
+            {
+                "id": str(ep.id),
+                "title": ep.title,
+                "root_cause": ep.root_cause_summary,
+                "outcome": ep.final_outcome,
+                "steps": playbook_steps_from_rows(steps_by_episode.get(ep.id) or []),
+                "thread_solutions": thread_solutions_from_messages(
+                    threads_by_episode.get(ep.id) or []
+                ),
+            }
+        )
+    return summaries
+
+
 async def _resolve_primary_case_ref(
     db: AsyncSession,
     tenant_id: uuid.UUID,

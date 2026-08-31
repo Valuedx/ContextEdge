@@ -37,13 +37,7 @@ async def generate_playbook_candidate(
     Episodes are labelled ``[ep-N]`` so steps can cite them the same way
     they cite ``[kb-N]`` knowledge sections.
     """
-    summaries_text = ""
-    for i, ep in enumerate(episode_summaries[:10]):
-        summaries_text += f"\n[ep-{i + 1}] {ep.get('title', 'Untitled')}"
-        if ep.get("root_cause"):
-            summaries_text += f"\n   Root cause: {ep['root_cause']}"
-        if ep.get("outcome"):
-            summaries_text += f"\n   Outcome: {ep['outcome']}"
+    summaries_text = format_episode_summaries(episode_summaries)
 
     neg_text = (
         "\n".join(f"- {nk}" for nk in negative_knowledge[:20])
@@ -101,6 +95,50 @@ BEST_PRACTICE_REASON = (
     "Generated from industry/support engineering best practices; "
     "not explicitly present in the source."
 )
+
+
+def format_episode_summaries(episode_summaries: list[dict] | None) -> str:
+    """Render episodes for the playbook prompt, including the mail-thread
+    solution under each ``[ep-N]``.
+
+    Title / root cause / outcome alone was how a working email-thread
+    fix never reached generation. Observed steps and thread excerpts
+    stay under the episode so KB remains a distinct normative input.
+    """
+    if not episode_summaries:
+        return "None found. Base the playbook on approved knowledge only."
+    blocks: list[str] = []
+    for index, episode in enumerate(episode_summaries[:10], start=1):
+        lines = [f"[ep-{index}] {episode.get('title') or 'Untitled'}"]
+        if episode.get("root_cause"):
+            lines.append(f"   Root cause: {episode['root_cause']}")
+        if episode.get("outcome"):
+            lines.append(f"   Outcome: {episode['outcome']}")
+        steps = episode.get("steps") or []
+        if isinstance(steps, list) and steps:
+            lines.append("   Observed steps (from mail thread):")
+            for step in steps:
+                if isinstance(step, dict):
+                    kind = step.get("type") or "action"
+                    text = str(step.get("text") or "").strip()
+                    observation = str(step.get("observation") or "").strip()
+                else:
+                    kind, text, observation = "action", str(step).strip(), ""
+                if not text:
+                    continue
+                line = f"     - [{kind}] {text}"
+                if observation:
+                    line += f" (observed: {observation})"
+                lines.append(line)
+        snippets = episode.get("thread_solutions") or []
+        if isinstance(snippets, list) and snippets:
+            lines.append("   Mail-thread solution:")
+            for snippet in snippets:
+                text = str(snippet or "").strip()
+                if text:
+                    lines.append(f"     {text}")
+        blocks.append("\n".join(lines))
+    return "\n\n".join(blocks) if blocks else "None found. Base the playbook on approved knowledge only."
 
 
 def _unreachable_orders(orders: set[int], points: list[dict]) -> set[int]:

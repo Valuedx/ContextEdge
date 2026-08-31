@@ -17,7 +17,9 @@ import pytest
 from contextedge.services.case_state import derive_case_state, is_resolved
 from contextedge.services.source_facets import (
     applicability_from_facets,
+    derive_all_facets,
     derive_facets,
+    derive_knowledge_facets,
 )
 
 _ZOHO_FACET_FIELDS = {
@@ -131,6 +133,88 @@ def test_top_level_custom_fields_are_found_too():
     """Zoho nests under `cf`; other connectors put them at the top level."""
     payload = _ticket(cf={}, incident_cause="Disk full")
     assert derive_facets(payload, {"root_cause": "incident_cause"}) == {"root_cause": "Disk full"}
+
+
+def test_kb_article_metadata_becomes_facets():
+    payload = {
+        "record_kind": "kb_article",
+        "category_name": "REST Plugin",
+        "status": "Published",
+        "web_url": "https://support.automationedge.com/portal/en/kb/articles/x",
+        "locale": "en",
+        "updated_at": "2026-08-03T05:12:05.000Z",
+        "reviewed_at": "2026-08-04T05:12:05.000Z",
+        "tags": ["workflow import", "AutomationEdge Server"],
+    }
+
+    facets = derive_knowledge_facets(payload)
+
+    assert facets["knowledge_category"] == "REST Plugin"
+    assert facets["knowledge_status"] == "Published"
+    assert facets["knowledge_url"].startswith("https://support.automationedge.com")
+    assert facets["knowledge_locale"] == "en"
+    assert facets["knowledge_updated_at"] == "2026-08-03T05:12:05.000Z"
+    assert facets["knowledge_reviewed_at"] == "2026-08-04T05:12:05.000Z"
+    assert facets["knowledge_tags"] == "workflow import, AutomationEdge Server"
+
+
+def test_all_facets_keeps_ticket_config_and_adds_kb_metadata():
+    payload = {
+        "record_kind": "kb_article",
+        "category_name": "Office 365 email plugin",
+        "cf": {"cf_enhancement": "AE Server"},
+    }
+
+    assert derive_all_facets(payload, {"component": "cf_enhancement"}) == {
+        "component": "AE Server",
+        "knowledge_category": "Office 365 email plugin",
+    }
+
+
+def test_ticket_number_is_recorded_as_a_facet():
+    """Related evidence joins back to the case by this number, not a
+    Zoho-specific custom field name."""
+    payload = _ticket(ticket_number="245390", cf={"cf_automation_egde_version_1": "8.2.3"})
+    facets = derive_all_facets(payload, _ZOHO_FACET_FIELDS)
+    assert facets["ticket_number"] == "245390"
+    assert facets["version"] == "8.2.3"
+
+
+def test_kb_articles_do_not_get_a_ticket_number_facet():
+    payload = {
+        "record_kind": "kb_article",
+        "number": "KB001",
+        "category_name": "Agent",
+    }
+    assert "ticket_number" not in derive_all_facets(payload, None)
+
+
+def test_kb_urls_and_tag_lists_are_not_cut_at_the_ticket_facet_limit():
+    """Ticket facets cap at 120 chars. A Zoho article URL on this corpus
+    is routinely longer than that; truncating it on re-ingest would drop
+    the slug and make the stored link unusable."""
+    url = (
+        "https://support.automationedge.com/portal/en/kb/articles/"
+        + "service-now-plugin-json-payload-error-when-using-newline-characters"
+    )
+    tags = [
+        "workflow import on ae server",
+        "workflow import",
+        "AutomationEdge Server",
+        "REST Plugin",
+        "ServiceNow worknotes newline",
+    ]
+    payload = {
+        "record_kind": "kb_article",
+        "web_url": url,
+        "tags": tags,
+    }
+
+    facets = derive_knowledge_facets(payload)
+
+    assert facets["knowledge_url"] == url
+    assert len(facets["knowledge_url"]) > 120
+    assert facets["knowledge_tags"] == ", ".join(tags)
 
 
 # =========================================================================

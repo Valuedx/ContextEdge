@@ -106,6 +106,40 @@ def test_the_list_response_carries_the_record_number():
     assert "source_reference" in EvidenceItemDetail.model_fields
 
 
+def test_evidence_detail_surfaces_source_facets():
+    """Ticket AE version and inherited ticket number live in
+    ``source_facets``. If the detail schema drops that column, the UI
+    cannot show which release a ticket (or its mail thread) ran on."""
+    from contextedge.schemas.evidence import EvidenceItemDetail
+
+    assert "source_facets" in EvidenceItemDetail.model_fields
+    parsed = EvidenceItemDetail.model_validate(
+        {
+            "id": "00000000-0000-0000-0000-000000000001",
+            "tenant_id": "00000000-0000-0000-0000-000000000002",
+            "source_id": "00000000-0000-0000-0000-000000000003",
+            "evidence_type": "ticket",
+            "title": "Licence",
+            "body_text": None,
+            "body_summary": None,
+            "relevance_state": "operational",
+            "relevance_score": None,
+            "created_at_source": None,
+            "ingested_at": "2026-08-31T00:00:00Z",
+            "created_at": "2026-08-31T00:00:00Z",
+            "workspace_id": None,
+            "domain_id": None,
+            "source_object_id": None,
+            "thread_id": None,
+            "sensitivity_label": None,
+            "canonical_entity_refs": None,
+            "source_facets": {"version": "8.2.3", "ticket_number": "245390"},
+        }
+    )
+    assert parsed.source_facets["version"] == "8.2.3"
+    assert parsed.source_facets["ticket_number"] == "245390"
+
+
 def test_the_page_costs_one_query_not_one_per_row():
     """The list is capped at 200. An N+1 here would be 200 round trips
     to render a table column."""

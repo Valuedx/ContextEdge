@@ -53,6 +53,13 @@ async def build_inputs(db, pattern):
     """Assemble generator inputs exactly the way pattern_tasks does."""
     from contextedge.models.episode import Episode
     from contextedge.models.pattern import PatternEvidenceLink
+    from contextedge.services.episode_service import (
+        evidence_ids_for_episodes,
+        playbook_episode_summaries,
+    )
+    from contextedge.services.knowledge_applicability_service import (
+        ticket_version_custom_fields,
+    )
     from contextedge.services.knowledge_retrieval_service import (
         retrieve_knowledge_for_pattern,
     )
@@ -63,14 +70,13 @@ async def build_inputs(db, pattern):
     ep_ids = [ln.episode_id for ln in lr.scalars().all() if ln.episode_id]
     er = await db.execute(select(Episode).where(Episode.id.in_(ep_ids)))
     episodes = list(er.scalars().all())
-    summaries = [
-        {"id": str(ep.id), "title": ep.title,
-         "root_cause": ep.root_cause_summary, "outcome": ep.final_outcome}
-        for ep in episodes[:12]
-    ]
+    summaries = await playbook_episode_summaries(db, TEN, episodes)
+    evidence_ids = await evidence_ids_for_episodes(db, TEN, ep_ids)
+    version_fields = await ticket_version_custom_fields(db, TEN, evidence_ids)
     knowledge = await retrieve_knowledge_for_pattern(
         db, TEN, pattern_title=pattern.title,
         pattern_description=pattern.description, episode_summaries=summaries,
+        custom_fields=version_fields or None,
     )
     return summaries, knowledge
 

@@ -141,6 +141,149 @@ _VERSION_FIELD_RE = re.compile(
     re.IGNORECASE,
 )
 _LOOSE_VERSION_RE = re.compile(r"^\s*v?(\d+\.\d+(?:\.\d+)?)\s*$", re.IGNORECASE)
+# Zoho pick-lists on this corpus use major wildcards as well as dotted
+# releases: "7*", "8*", "8.x", "8.*", "V8.*". A regex that requires
+# major.minor silently drops the field the ticket already stated.
+_VERSION_SPEC_RE = re.compile(
+    r"^\s*v?(?P<major>\d+)"
+    r"(?:\.(?P<minor>\d+)(?:\.(?P<patch>\d+))?|\.(?P<wild>[xX*])|(?P<star>[*xX]))?"
+    r"\s*$",
+    re.IGNORECASE,
+)
+# "Affected Version: 7.x", "in Version 7.x", "for Version 6.1.0",
+# titles like "(V8.*)". Bare "version 91.0" is Chrome/Java/Tomcat and
+# must not become the AutomationEdge platform version.
+_PLATFORM_VERSION_IN_TEXT_RE = re.compile(
+    r"(?:affected\s+versions?|applies\s+to|supported\s+versions?|"
+    r"automation\s*edge\s+version|ae\s+version|in\s+version|for\s+version)"
+    r"\s*[:\-]?\s*\(?v?(?P<spec>\d+\.\*|\d+\.x|\d+\*|\d+\.\d+(?:\.\d+)?)\)?",
+    re.IGNORECASE,
+)
+_PAREN_WILDCARD_VERSION_RE = re.compile(
+    r"\((?:v)?(?P<spec>\d+\.\*|\d+\.x|\d+\*)\)",
+    re.IGNORECASE,
+)
+_AE_PLATFORM_MAJORS = frozenset({5, 6, 7, 8})
+
+# Product keys that mean the AutomationEdge platform version on the ticket
+# custom field, not a bundled component that numbers itself independently.
+_PLATFORM_VERSION_KEYS = frozenset(
+    {
+        "_platform",
+        "platform",
+        "ae",
+        "automationedge",
+        "automation edge",
+        "ae server",
+        "automationedge server",
+    }
+)
+
+
+@dataclass(frozen=True, slots=True)
+class VersionSpec:
+    """A dotted release or a major wildcard (``7*`` / ``8.x``)."""
+
+    major: int
+    minor: int | None = None
+    patch: int | None = None
+    wildcard: bool = False
+    raw: str = ""
+
+    def as_tuple(self) -> tuple[int, ...]:
+        parts = [self.major]
+        if self.minor is not None:
+            parts.append(self.minor)
+        if self.patch is not None:
+            parts.append(self.patch)
+        return tuple(parts)
+
+
+def parse_version_spec(
+    value: str | None, *, allow_major_only: bool = False
+) -> VersionSpec | None:
+    """Parse ``8.2.3``, ``7*``, ``8.x``, ``V8.*``. ``None`` if not a version.
+
+    Bare ``7`` is accepted only from a dedicated version field — in prose
+    it is usually a count, a step number, or an error code.
+    """
+    if value is None:
+        return None
+    raw = str(value).strip()
+    match = _VERSION_SPEC_RE.match(raw)
+    if not match:
+        return None
+    major = int(match.group("major"))
+    wild = bool(match.group("wild") or match.group("star"))
+    minor_raw = match.group("minor")
+    patch_raw = match.group("patch")
+    if minor_raw is None and not wild and not allow_major_only:
+        return None
+    if raw[:1] in "vV" and len(raw) > 1 and raw[1].isdigit():
+        raw = raw[1:]
+    return VersionSpec(
+        major=major,
+        minor=int(minor_raw) if minor_raw is not None else None,
+        patch=int(patch_raw) if patch_raw is not None else None,
+        wildcard=wild or (minor_raw is None),
+        raw=raw,
+    )
+
+
+def versions_compatible(article: str | None, ticket: str | None) -> bool | None:
+    """Whether an article version may be used for a ticket version.
+
+    ``None`` if either side is unstated or unparseable — silence is not a
+    mismatch. Same major with a wildcard (``7*`` vs ``7.6.3``) matches.
+    Different majors never match. An exact article newer than the ticket
+    does not match (the steps may not exist yet). An older article in the
+    same major still matches.
+    """
+    article_spec = parse_version_spec(article, allow_major_only=True)
+    ticket_spec = parse_version_spec(ticket, allow_major_only=True)
+    if article_spec is None or ticket_spec is None:
+        return None
+    if article_spec.major != ticket_spec.major:
+        return False
+    if article_spec.wildcard or ticket_spec.wildcard:
+        return True
+    article_tuple = _pad_version(article_spec.as_tuple())
+    ticket_tuple = _pad_version(ticket_spec.as_tuple())
+    if article_tuple > ticket_tuple:
+        return False
+    return True
+
+
+def _pad_version(parts: tuple[int, ...], width: int = 3) -> tuple[int, ...]:
+    if len(parts) >= width:
+        return parts[:width]
+    return parts + (0,) * (width - len(parts))
+
+
+def extract_platform_versions(title: str | None, body: str | None) -> dict[str, str]:
+    """AE platform version stated in a title or Affected Version section."""
+    text = f"{title or ''}\n{(body or '')[:40_000]}"
+    found: str | None = None
+    for match in (
+        *_PLATFORM_VERSION_IN_TEXT_RE.finditer(text),
+        *_PAREN_WILDCARD_VERSION_RE.finditer(text),
+    ):
+        spec = parse_version_spec(match.group("spec"), allow_major_only=False)
+        if spec is None or spec.major not in _AE_PLATFORM_MAJORS:
+            continue
+        found = spec.raw
+        break
+    if found is None:
+        return {}
+    return {PLATFORM_KEY: found}
+
+
+def _platform_version(applicability: Applicability) -> str | None:
+    for key in _PLATFORM_VERSION_KEYS:
+        value = applicability.product_versions.get(key)
+        if value:
+            return value
+    return None
 
 # Words that precede a version but name nothing — without this,
 # "upgraded to 7.5.1" yields the product "upgraded".
@@ -469,9 +612,9 @@ async def tenant_environment_inventory(db, tenant_id) -> dict[str, dict[str, str
             else None,
             os_version,
         ):
-            found = _LOOSE_VERSION_RE.match(str(candidate or ""))
-            if found:
-                version = found.group(1)
+            spec = parse_version_spec(str(candidate or ""), allow_major_only=True)
+            if spec:
+                version = spec.raw
                 break
         if version is None:
             continue
@@ -545,6 +688,10 @@ def extract_applicability(
             continue
         product_versions[named[0]] = version
         versions.add(version)
+
+    for key, platform_version in extract_platform_versions(None, raw).items():
+        product_versions.setdefault(key, platform_version)
+        versions.add(platform_version)
 
     return Applicability(
         components=components,
@@ -627,10 +774,14 @@ def applicability_from_payload(payload: dict) -> Applicability:
             return {}
         out = {}
         for product, version in raw.items():
-            token = normalize_component(str(product))
-            found = _LOOSE_VERSION_RE.match(str(version or ""))
-            if token and found:
-                out[token] = found.group(1)
+            raw_key = str(product).strip()
+            if raw_key in _PLATFORM_VERSION_KEYS or normalize_component(raw_key) == "platform":
+                token = PLATFORM_KEY
+            else:
+                token = normalize_component(raw_key)
+            spec = parse_version_spec(str(version or ""), allow_major_only=True)
+            if token and spec:
+                out[token] = spec.raw
         return out
 
     def _terms(key: str, allowed: set[str] | None = None) -> set[str]:
@@ -662,10 +813,31 @@ def applicability_from_payload(payload: dict) -> Applicability:
 
 
 def _version_tuple(version: str) -> tuple[int, ...] | None:
-    try:
-        return tuple(int(part) for part in version.split(".")[:3])
-    except (ValueError, IndexError):
+    spec = parse_version_spec(version, allow_major_only=True)
+    if spec is None:
         return None
+    return _pad_version(spec.as_tuple())
+
+
+def _record_version_mismatch(
+    match: ApplicabilityMatch, article_raw: str, target_raw: str
+) -> None:
+    article_spec = parse_version_spec(article_raw, allow_major_only=True)
+    target_spec = parse_version_spec(target_raw, allow_major_only=True)
+    ahead = False
+    penalty = 1.2
+    if (
+        article_spec
+        and target_spec
+        and not article_spec.wildcard
+        and not target_spec.wildcard
+        and _pad_version(article_spec.as_tuple()) > _pad_version(target_spec.as_tuple())
+    ):
+        penalty, ahead = 1.35, True
+    match.version_conflict = (article_raw, target_raw)
+    match.version_ahead_of_environment = ahead
+    match.verdict = MISMATCH
+    match.rank_penalty *= penalty
 
 
 def compare(article: Applicability, target: Applicability) -> ApplicabilityMatch:
@@ -773,28 +945,36 @@ def compare(article: Applicability, target: Applicability) -> ApplicabilityMatch
         & set(target.product_versions)
     ) - match.version_range_checked
     for product in sorted(shared):
-        article_version = _version_tuple(article.product_versions[product])
-        target_version = _version_tuple(target.product_versions[product])
-        if article_version is None or target_version is None:
+        article_raw = article.product_versions[product]
+        target_raw = target.product_versions[product]
+        compatible = versions_compatible(article_raw, target_raw)
+        if compatible is None:
             continue
-        if article_version == target_version:
+        if compatible:
+            if match.verdict == UNKNOWN:
+                match.verdict = APPLIES
             continue
-
-        if article_version > target_version:
-            penalty, ahead = 1.35, True
-        elif article_version[0] != target_version[0]:
-            penalty, ahead = 1.2, False
-        else:
-            continue  # article behind within the same major: still applies
-
-        match.version_conflict = (
-            article.product_versions[product],
-            target.product_versions[product],
-        )
-        match.version_ahead_of_environment = ahead
-        match.verdict = MISMATCH
-        match.rank_penalty *= penalty
+        _record_version_mismatch(match, article_raw, target_raw)
         break
+
+    # Ticket AE version is stored under ``_platform``; KB articles often
+    # name it ``ae`` / ``automationedge``. Those keys do not overlap, so
+    # the same-product loop above would never compare them — and a 7*
+    # ticket would be handed an 8.x article.
+    if match.version_conflict is None:
+        article_plat = _platform_version(article)
+        target_plat = _platform_version(target)
+        shared_platform = bool(
+            set(article.product_versions)
+            & set(target.product_versions)
+            & _PLATFORM_VERSION_KEYS
+        )
+        if article_plat and target_plat and not shared_platform:
+            compatible = versions_compatible(article_plat, target_plat)
+            if compatible is False:
+                _record_version_mismatch(match, article_plat, target_plat)
+            elif compatible is True and match.verdict == UNKNOWN:
+                match.verdict = APPLIES
 
     # Environment is a weak demoter on purpose. Most articles name an
     # environment incidentally ("in production you would also...") rather
@@ -841,16 +1021,16 @@ def versions_from_custom_fields(
 
     if explicit_field:
         value = custom_fields.get(explicit_field)
-        found = _LOOSE_VERSION_RE.match(str(value or ""))
-        return {found.group(1)} if found else set()
+        spec = parse_version_spec(str(value or ""), allow_major_only=True)
+        return {spec.raw} if spec else set()
 
     out: set[str] = set()
     for name, value in custom_fields.items():
         if not _VERSION_FIELD_RE.search(str(name)):
             continue
-        found = _LOOSE_VERSION_RE.match(str(value or ""))
-        if found:
-            out.add(found.group(1))
+        spec = parse_version_spec(str(value or ""), allow_major_only=True)
+        if spec:
+            out.add(spec.raw)
     return out
 
 
@@ -984,3 +1164,53 @@ def describe_target(
         ] = chosen
 
     return applicability
+
+
+async def ticket_version_custom_fields(
+    db, tenant_id, evidence_ids: list | None
+) -> dict[str, str]:
+    """Closed-ticket AE version, taken from ``source_facets`` already stored
+    at ingest. Ticket rows win. If the episode only linked the mail thread,
+    the version inherited onto those messages is used instead — same
+    number, no extra Zoho call.
+    """
+    if not evidence_ids:
+        return {}
+    import uuid as _uuid
+
+    from sqlalchemy import select
+
+    from contextedge.models.evidence import EvidenceItem
+
+    ids = []
+    for raw in evidence_ids:
+        try:
+            ids.append(raw if isinstance(raw, _uuid.UUID) else _uuid.UUID(str(raw)))
+        except (ValueError, TypeError, AttributeError):
+            continue
+    if not ids:
+        return {}
+    rows = (
+        await db.execute(
+            select(EvidenceItem.evidence_type, EvidenceItem.source_facets).where(
+                EvidenceItem.tenant_id == tenant_id,
+                EvidenceItem.id.in_(ids),
+            )
+        )
+    ).all()
+    ticket_counts: dict[str, int] = {}
+    inherited_counts: dict[str, int] = {}
+    for evidence_type, facets in rows:
+        value = (facets or {}).get("version") if isinstance(facets, dict) else None
+        if not value:
+            continue
+        spec = parse_version_spec(str(value), allow_major_only=True)
+        if spec is None:
+            continue
+        bucket = ticket_counts if evidence_type == "ticket" else inherited_counts
+        bucket[spec.raw] = bucket.get(spec.raw, 0) + 1
+    counts = ticket_counts or inherited_counts
+    if not counts:
+        return {}
+    chosen = max(counts.items(), key=lambda item: (item[1], item[0]))[0]
+    return {"version": chosen}

@@ -58,6 +58,8 @@ _OBJECT_TYPE_MAP: dict[tuple[str, str], str] = {
     # entries keep the derivation correct if that is ever removed.
     ("zoho_desk", "tickets"): "ticket",
     ("zoho_desk", "articles"): "kb_article",
+    # Weekly public catalog (docs portal, versions-life, compatibility PDF).
+    ("zoho_desk", "official_catalog"): "documentation",
     # Conversational sources
     ("teams", "channel_message"): "chat_message",
     ("gmail", "email_thread"): "email",

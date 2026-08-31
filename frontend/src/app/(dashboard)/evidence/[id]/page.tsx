@@ -15,6 +15,7 @@ import {
   ApplicabilityPanel,
   KNOWLEDGE_EVIDENCE_TYPES,
 } from "@/components/common/applicability";
+import { SourceFacetsPanel } from "@/components/common/source-facets";
 import { StatusBadge } from "@/components/common/status-badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -315,9 +316,14 @@ export default function EvidenceDetailPage() {
 
       {/* Where this article applies. Knowledge only — a ticket does not
           have an applicability, it has an environment. */}
-      {KNOWLEDGE_EVIDENCE_TYPES.has(item.evidence_type) && (
+      {KNOWLEDGE_EVIDENCE_TYPES.has(item.evidence_type) ? (
         <ApplicabilityPanel
           applicability={item.applicability}
+          className="rounded-lg border bg-card p-4 text-card-foreground"
+        />
+      ) : (
+        <SourceFacetsPanel
+          facets={item.source_facets}
           className="rounded-lg border bg-card p-4 text-card-foreground"
         />
       )}

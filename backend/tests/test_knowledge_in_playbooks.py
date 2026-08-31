@@ -24,8 +24,11 @@ from contextedge.services.knowledge_retrieval_service import (
     MAX_DISTANCE,
     KnowledgeDocument,
     KnowledgeSection,
+    _section_purpose,
+    _select_prompt_sections,
     build_retrieval_query,
     format_knowledge_block,
+    knowledge_refs_payload,
     retrieve_knowledge_for_pattern,
 )
 from contextedge.services.playbook_service import (
@@ -84,6 +87,26 @@ def test_query_is_bounded_and_tolerates_missing_parts():
         episode_summaries=[{"root_cause": "r" * 10_000}],
     )
     assert len(long) <= 4000
+
+
+def test_retrieval_query_includes_mail_thread_solution_under_episode():
+    query = build_retrieval_query(
+        pattern_title="Agent stopped",
+        pattern_description=None,
+        episode_summaries=[
+            {
+                "title": "Agent unknown state",
+                "root_cause": "stale PID",
+                "outcome": "restarted",
+                "steps": [
+                    {"type": "remediation", "text": "Restarted AE agent service"}
+                ],
+                "thread_solutions": ["Resolved by deleting the PID file"],
+            }
+        ],
+    )
+    assert "Restarted AE agent service" in query
+    assert "PID file" in query
 
 
 # --- retrieval filtering -----------------------------------------------------
@@ -160,6 +183,115 @@ async def test_retrieval_failure_degrades_to_no_knowledge():
     assert docs == []
 
 
+@pytest.mark.asyncio
+async def test_embedding_fetch_keeps_older_kb_and_labels_version_gap():
+    """Fetch is embedding-nearest, not a hardcoded version query.
+
+    A 7* ticket still receives the 8.x article when it is a close
+    semantic neighbour — that KB may be the full procedure still in use
+    — but matching stored version ranks first, and the mismatch is
+    labelled so the playbook can name it on the step.
+    """
+    keep = SimpleNamespace(
+        id=uuid.uuid4(),
+        title="Fix on 7.x",
+        evidence_type="kb_article",
+        knowledge_state="published",
+        applicability={"product_versions": {"_platform": "7*"}, "components": []},
+        source_facets={"version": "7*"},
+        body_text="Affected Version: 7.x",
+    )
+    other_major = SimpleNamespace(
+        id=uuid.uuid4(),
+        title="Fix on 8.x",
+        evidence_type="kb_article",
+        knowledge_state="published",
+        applicability={"product_versions": {"ae": "8.2.3"}, "components": []},
+        source_facets={"version": "8.2.3"},
+        body_text="Affected Version: 8.2.3",
+    )
+    unversioned = SimpleNamespace(
+        id=uuid.uuid4(),
+        title="Generic plugin timeout",
+        evidence_type="kb_article",
+        knowledge_state="published",
+        applicability={"product_versions": {}, "components": []},
+        source_facets={},
+        body_text="Restart the plugin.",
+    )
+
+    with (
+        patch(
+            "contextedge.search.vector_search.search_evidence_semantic",
+            AsyncMock(
+                return_value=[(other_major, 0.1), (keep, 0.12), (unversioned, 0.14)]
+            ),
+        ),
+        patch(
+            "contextedge.services.knowledge_retrieval_service._attach_sections",
+            AsyncMock(),
+        ),
+    ):
+        docs = await retrieve_knowledge_for_pattern(
+            SimpleNamespace(),
+            uuid.uuid4(),
+            pattern_title="Plugin timeout",
+            custom_fields={"version": "7*"},
+        )
+
+    assert [d.title for d in docs] == [
+        "Fix on 7.x",
+        "Fix on 8.x",
+        "Generic plugin timeout",
+    ]
+    matched, mismatched, agnostic = docs
+    assert matched.product_version == "7*"
+    assert matched.ticket_version == "7*"
+    assert matched.version_conflict is None
+    assert mismatched.version_conflict == ("8.2.3", "7*")
+    assert agnostic.product_version is None
+    block = format_knowledge_block([mismatched])
+    assert "PRODUCT VERSION MISMATCH" in block
+    assert "8.2.3" in block
+    assert "7*" in block
+    assert "based on the 8.2.3 KB" in block
+
+
+@pytest.mark.asyncio
+async def test_stored_source_facets_version_is_used_without_reparse():
+    """Ingest already wrote source_facets.version. Retrieval must use
+    that stored facet rather than a hardcoded version fetch."""
+    article = SimpleNamespace(
+        id=uuid.uuid4(),
+        title="Agent unknown state",
+        evidence_type="kb_article",
+        knowledge_state="published",
+        applicability={},
+        source_facets={"version": "8*"},
+        body_text="Restart the agent.",
+    )
+    with (
+        patch(
+            "contextedge.search.vector_search.search_evidence_semantic",
+            AsyncMock(return_value=[(article, 0.1)]),
+        ),
+        patch(
+            "contextedge.services.knowledge_retrieval_service._attach_sections",
+            AsyncMock(),
+        ),
+    ):
+        docs = await retrieve_knowledge_for_pattern(
+            SimpleNamespace(),
+            uuid.uuid4(),
+            pattern_title="Agent unknown",
+            custom_fields={"version": "8.2.3"},
+        )
+    assert len(docs) == 1
+    assert docs[0].product_version == "8*"
+    assert docs[0].ticket_version == "8.2.3"
+    assert docs[0].version_conflict is None
+
+
 # --- prompt rendering --------------------------------------------------------
 
 
@@ -190,6 +322,52 @@ def test_image_read_sections_are_marked_as_paraphrase():
     assert "read from an image" in format_knowledge_block([doc])
 
 
+def test_knowledge_block_labels_procedural_section_purpose():
+    doc = _doc(
+        sections=[
+            KnowledgeSection(
+                text="Restart the AutomationEdge Agent service.",
+                section_ref="Resolution",
+                purpose="action",
+            ),
+            KnowledgeSection(
+                text="Verify the request leaves NEW state.",
+                section_ref="Validation",
+                purpose="validation",
+            ),
+        ]
+    )
+    block = format_knowledge_block([doc])
+    assert "Use ACTION, PREREQUISITE, VALIDATION, and ROLLBACK" in block
+    assert "ACTION" in block
+    assert "VALIDATION" in block
+
+
+def test_action_sections_are_promoted_from_oversampled_chunks():
+    """A semantically close overview should not crowd the procedure out of
+    the prompt. Product-specific action/check sections are what make the
+    generated playbook exact instead of generic."""
+    chunks = [
+        SimpleNamespace(chunk_index=0, parent_section="Overview", text="Agent issue"),
+        SimpleNamespace(chunk_index=1, parent_section="Background", text="About agents"),
+        SimpleNamespace(chunk_index=2, parent_section="Symptoms", text="Requests stay new"),
+        SimpleNamespace(chunk_index=3, parent_section="Notes", text="General information"),
+        SimpleNamespace(chunk_index=4, parent_section="History", text="Old details"),
+        SimpleNamespace(chunk_index=5, parent_section="Scope", text="AE server"),
+        SimpleNamespace(
+            chunk_index=6,
+            parent_section="Resolution",
+            text="Restart the AutomationEdge Agent service.",
+        ),
+    ]
+
+    selected = _select_prompt_sections(chunks)
+
+    assert chunks[0] in selected
+    assert chunks[-1] in selected
+    assert _section_purpose(chunks[-1]) == "action"
+
+
 # --- generator wiring --------------------------------------------------------
 
 
@@ -216,6 +394,49 @@ async def test_knowledge_reaches_the_prompt_as_a_distinct_input():
     assert "Back up the certificate" in prompt
     # Episodes are labelled so steps can cite them the same way.
     assert "[ep-1]" in prompt
+
+
+@pytest.mark.asyncio
+async def test_mail_thread_solution_sits_under_the_episode_with_kb():
+    """Playbooks must use both sources: KB as what should be done, and
+    the mail-thread solution under the episode as what actually worked."""
+    with patch.object(
+        playbook_generator, "llm_complete_json", AsyncMock(return_value={})
+    ) as mock:
+        await playbook_generator.generate_playbook_candidate(
+            "Agent stopped",
+            "Unknown state",
+            1,
+            [
+                {
+                    "id": str(uuid.uuid4()),
+                    "title": "Agent unknown state",
+                    "root_cause": "stale PID file",
+                    "outcome": "agent running",
+                    "steps": [
+                        {
+                            "type": "remediation",
+                            "text": "Restarted the AutomationEdge Agent service",
+                        }
+                    ],
+                    "thread_solutions": [
+                        "Resolved by restarting the agent from services.msc; queue drained."
+                    ],
+                }
+            ],
+            [],
+            knowledge_sources=[_doc()],
+        )
+    prompt = mock.await_args.args[0]
+    assert "[kb-1]" in prompt
+    assert "[ep-1]" in prompt
+    assert "Observed steps (from mail thread)" in prompt
+    assert "Mail-thread solution:" in prompt
+    assert "Restarted the AutomationEdge Agent service" in prompt
+    assert "services.msc" in prompt
+    # Still distinct inputs — not folded into one blob.
+    assert "APPROVED KNOWLEDGE" in prompt
+    assert "EPISODES" in prompt
 
 
 @pytest.mark.asyncio
@@ -266,7 +487,7 @@ def test_default_prompt_instructs_the_model_to_surface_disagreement_not_resolve_
     from contextedge.ai.prompts import get_prompt
 
     prompt = get_prompt("playbook", None)
-    assert prompt.version == "v6"  # sequencing/economy/language (2026-08-19)
+    assert prompt.version == "v9"  # mail-thread solutions under episodes
     # Whitespace-normalized: the prompt is hard-wrapped, so asserting on
     # raw text would break whenever a line is reflowed â€” a failure that
     # says nothing about the contract being tested.
@@ -282,16 +503,38 @@ def test_default_prompt_instructs_the_model_to_surface_disagreement_not_resolve_
     assert "reproduce it EXACTLY" in system
     assert "NOWHERE in prose" in system
     assert "what observable result would confirm" in system
+    # v7 contract: labelled KB action/check/rollback sections are a coverage
+    # checklist for the final generated playbook.
+    assert "Treat labelled KB sections as a coverage checklist" in system
+    assert "product-specific action" in system
+    assert "If any required item is missing" in system
+    # v8 contract: a different-release KB is still used, and the step
+    # text itself names the KB product version vs the ticket version.
+    assert "PRODUCT VERSION MISMATCH" in system
+    assert "Based on KB for AutomationEdge" in system
+    # v9 contract: mail-thread solutions sit under each episode and are
+    # used together with KB, not instead of it.
+    assert "Use BOTH sources" in system
+    assert "Mail-thread solution" in system
 
 
 def test_earlier_prompt_versions_remain_registered_and_immutable():
     from contextedge.ai.prompts import list_prompt_versions
 
-    # v4 added: verbatim commands, no prompt labels in prose, unsourced
-    # steps must state their verification. v6 added: causal sequencing,
-    # minimal step set, plain language. Earlier versions stay for eval
-    # baselines and historical llm.usage attribution.
-    assert list_prompt_versions("playbook") == ["v1", "v2", "v3", "v4", "v5", "v6"]
+    # v8 added: name KB vs ticket product version on the step itself.
+    # Earlier versions stay for eval baselines and historical llm.usage
+    # attribution.
+    assert list_prompt_versions("playbook") == [
+        "v1",
+        "v2",
+        "v3",
+        "v4",
+        "v5",
+        "v6",
+        "v7",
+        "v8",
+        "v9",
+    ]
 
 
 # --- provenance --------------------------------------------------------------
@@ -303,7 +546,7 @@ def test_knowledge_links_are_written_with_their_own_type():
     to find every version citing an article that changed."""
     added = []
     db = SimpleNamespace(add=added.append)
-    version = SimpleNamespace(id=uuid.uuid4())
+    version = SimpleNamespace(id=uuid.uuid4(), tenant_id=uuid.uuid4())
     ev, ep, kb = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
 
     written = _materialize_evidence_links(
@@ -331,7 +574,7 @@ def test_a_knowledge_id_also_listed_as_evidence_is_not_duplicated():
     shared = uuid.uuid4()
     written = _materialize_evidence_links(
         db,
-        SimpleNamespace(id=uuid.uuid4()),
+        SimpleNamespace(id=uuid.uuid4(), tenant_id=uuid.uuid4()),
         {"evidence_ids": [str(shared)], "knowledge_ids": [str(shared)]},
     )
     assert written == 1
@@ -345,3 +588,89 @@ def test_conflicts_persist_on_the_version():
 
     assert "conflicts" in PlaybookVersion.__table__.columns
     assert PlaybookVersion.__table__.columns["conflicts"].nullable is True
+
+
+def test_knowledge_refs_payload_records_ids_and_ticket_version():
+    """The version blob must record the same articles the generator saw,
+    plus the ticket AE version used to filter them — otherwise a
+    reviewer cannot tell which release the playbook was matched against."""
+    doc = _doc()
+    payload = knowledge_refs_payload([doc], ticket_version="7*")
+    assert payload["knowledge_ids"] == [str(doc.evidence_id)]
+    assert payload["ticket_version"] == "7*"
+    assert payload["knowledge"][0]["title"] == doc.title
+    assert payload["knowledge"][0]["product_version"] is None
+    assert payload["knowledge"][0]["version_mismatch"] is None
+    assert "ticket_version" not in knowledge_refs_payload([doc])
+
+
+def test_knowledge_refs_payload_records_version_mismatch():
+    doc = _doc()
+    doc.product_version = "7*"
+    doc.ticket_version = "8.2.3"
+    doc.version_conflict = ("7*", "8.2.3")
+    payload = knowledge_refs_payload([doc], ticket_version="8.2.3")
+    assert payload["knowledge"][0]["product_version"] == "7*"
+    assert payload["knowledge"][0]["version_mismatch"] == ["7*", "8.2.3"]
+
+
+def test_api_generate_persists_retrieved_knowledge_not_model_evidence_refs():
+    """POST /playbooks/generate used to forward the LLM candidate whole.
+    The model cites [kb-N] in steps but does not emit knowledge_ids, so
+    those playbooks used KB in the prompt with no stored provenance."""
+    import inspect
+
+    from contextedge.api.v1 import playbooks
+
+    source = inspect.getsource(playbooks.generate_playbook)
+    assert "knowledge_refs_payload" in source
+    assert "evidence_ids_for_episodes" in source
+    assert "ticket_version_custom_fields" in source
+    assert 'candidate["evidence_refs"]' in source
+    assert "playbook_episode_summaries" in source
+
+
+def test_playbook_eval_passes_ticket_version_into_retrieval():
+    """A/B evals that skip the ticket version would score playbooks
+    generated with the wrong-major KB still in the prompt."""
+    import inspect
+
+    from contextedge.evals.playbook_model_ab import build_inputs
+
+    source = inspect.getsource(build_inputs)
+    assert "ticket_version_custom_fields" in source
+    assert "custom_fields=version_fields" in source
+    assert "playbook_episode_summaries" in source
+
+
+def test_thread_solutions_prefer_resolution_language_from_the_mail_tail():
+    from contextedge.services.episode_service import thread_solutions_from_messages
+
+    quotes = "On Mon, customer wrote: please look into this. " * 30
+    fix = "Resolved by restarting the agent from services.msc"
+    out = thread_solutions_from_messages(
+        [
+            ("please look into this", None),
+            (quotes + fix, None),
+        ]
+    )
+    assert len(out) == 1
+    assert "services.msc" in out[0]
+
+
+def test_playbook_steps_keep_mail_thread_remediation():
+    from contextedge.services.episode_service import playbook_steps_from_rows
+
+    rows = [
+        SimpleNamespace(
+            step_order=1, step_type="complaint", text="Agent is down", observation=None
+        ),
+        SimpleNamespace(
+            step_order=2,
+            step_type="remediation",
+            text="Restarted the AutomationEdge Agent service",
+            observation="Agent running",
+        ),
+    ]
+    steps = playbook_steps_from_rows(rows)
+    assert any(s["type"] == "remediation" and "Agent service" in s["text"] for s in steps)

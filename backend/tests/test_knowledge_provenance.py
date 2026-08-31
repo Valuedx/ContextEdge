@@ -61,6 +61,7 @@ def test_servicenow_record_kinds_are_distinguished(object_type, expected):
         ("sapphireims", "ticket", "ticket"),
         ("zoho_desk", "tickets", "ticket"),
         ("zoho_desk", "articles", "kb_article"),
+        ("zoho_desk", "official_catalog", "documentation"),
         ("teams", "channel_message", "chat_message"),
         ("gmail", "email_thread", "email"),
     ],
@@ -194,7 +195,7 @@ def test_evidence_refs_become_normalized_link_rows():
     paths and written by nothing, so playbook-scoped search inner-joined
     an empty table and returned zero rows every time."""
     db = _FakeSession()
-    version = SimpleNamespace(id=uuid.uuid4())
+    version = SimpleNamespace(id=uuid.uuid4(), tenant_id=uuid.uuid4())
     ev1, ev2, ep1 = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
 
     written = _materialize_evidence_links(
@@ -217,7 +218,7 @@ def test_link_materialization_is_tolerant_of_model_authored_shapes():
     fail version creation — losing a provenance row is recoverable,
     failing the write is not."""
     db = _FakeSession()
-    version = SimpleNamespace(id=uuid.uuid4())
+    version = SimpleNamespace(id=uuid.uuid4(), tenant_id=uuid.uuid4())
 
     assert _materialize_evidence_links(db, version, None) == 0
     assert _materialize_evidence_links(db, version, {}) == 0
@@ -235,7 +236,7 @@ def test_link_materialization_is_tolerant_of_model_authored_shapes():
 
 def test_link_materialization_dedupes_and_accepts_a_bare_list():
     db = _FakeSession()
-    version = SimpleNamespace(id=uuid.uuid4())
+    version = SimpleNamespace(id=uuid.uuid4(), tenant_id=uuid.uuid4())
     ev = uuid.uuid4()
     assert _materialize_evidence_links(db, version, [str(ev), str(ev)]) == 1
 
@@ -245,7 +246,7 @@ def test_link_materialization_is_bounded():
     from contextedge.services.playbook_service import MAX_EVIDENCE_LINKS
 
     db = _FakeSession()
-    version = SimpleNamespace(id=uuid.uuid4())
+    version = SimpleNamespace(id=uuid.uuid4(), tenant_id=uuid.uuid4())
     many = [str(uuid.uuid4()) for _ in range(MAX_EVIDENCE_LINKS + 50)]
     assert _materialize_evidence_links(db, version, {"evidence_ids": many}) == (
         MAX_EVIDENCE_LINKS
