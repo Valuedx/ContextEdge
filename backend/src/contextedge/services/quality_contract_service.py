@@ -13,6 +13,7 @@ from contextedge.quality.contract import (
     contract_hash,
     format_contract_obligations,
 )
+from contextedge.quality.context_loader import contract_snapshot_from_quality_contract
 from contextedge.quality.hashing import content_hash
 from contextedge.quality.pregeneration import PreGenerationResult, run_pregeneration_gates
 
@@ -42,6 +43,7 @@ class GenerationPreparation:
             "gate": self.gate.as_dict(),
             "artifact_type": self.contract.artifact_type,
             "outcome": str(self.gate.outcome),
+            "snapshot": contract_snapshot_from_quality_contract(self.contract),
         }
 
 

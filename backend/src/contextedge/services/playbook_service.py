@@ -261,6 +261,29 @@ async def transition_playbook(
                 "generation likely returned a truncated response."
             )
 
+    if new_state == "approved":
+        from contextedge.services.playbook_quality_service import (
+            assess_playbook,
+            is_enforcing,
+            publication_readiness,
+        )
+
+        version_for_gate = await _current_playbook_version(db, playbook)
+        if is_enforcing():
+            await assess_playbook(
+                db,
+                playbook,
+                version_for_gate,
+                origin="transition_approved",
+                actor_id=actor_id,
+            )
+            readiness = await publication_readiness(db, playbook, version_for_gate)
+            if not readiness.get("ready"):
+                reason = readiness.get("blocked_reason") or "quality_gate"
+                raise InvalidTransitionError(
+                    f"Cannot approve playbook: quality gate blocked ({reason})"
+                )
+
     playbook.lifecycle_state = new_state
 
     if new_state == "approved":
@@ -301,28 +324,22 @@ async def transition_playbook(
             "comments": comments,
         },
     )
-    # Quality assessment at the two boundaries where a human is making a
-    # claim about this content: sending it to review, and approving it.
-    #
-    # Shadow mode — this records a verdict, it does not gate the transition.
-    # The gate is Phase 5, and `publication_readiness` already computes the
-    # answer it will use, so switching it on is a call-site change here.
-    #
-    # `under_review` matters more than it looks. Approval is the boundary the
-    # plan is written around, but this tenant's whole corpus sits in
-    # `candidate` with nothing published, so review entry is where reviewer
-    # attention is actually being spent and where a finding can still change
-    # the outcome cheaply.
+    # Shadow mode — records a verdict without gating. Enforcing mode assesses
+    # and gates before the state change above; shadow still assesses here.
     if new_state in ("under_review", "approved"):
-        from contextedge.services.playbook_quality_service import assess_playbook
-
-        await assess_playbook(
-            db,
-            playbook,
-            approved_version,
-            origin=f"transition_{new_state}",
-            actor_id=actor_id,
+        from contextedge.services.playbook_quality_service import (
+            assess_playbook,
+            is_enforcing,
         )
+
+        if new_state == "under_review" or not is_enforcing():
+            await assess_playbook(
+                db,
+                playbook,
+                approved_version,
+                origin=f"transition_{new_state}",
+                actor_id=actor_id,
+            )
 
     if new_state == "approved" and approved_version is not None:
         await promote_playbook_memory(

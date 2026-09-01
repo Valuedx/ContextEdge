@@ -40,7 +40,6 @@ from contextedge.models.playbook_quality import (
 from contextedge.quality import (
     VALIDATOR_BUNDLE_VERSION,
     AssessmentOutcome,
-    ValidationContext,
     assess,
     build_content,
     error_outcome,
@@ -79,8 +78,12 @@ def _mode() -> str:
     when nobody made a decision, so the default is the safe one."""
     from contextedge.config import settings
 
-    mode = getattr(settings, "playbook_quality_mode", MODE_SHADOW)
+    mode = settings.playbook_quality_mode
     return mode if mode in (MODE_SHADOW, MODE_ENFORCING) else MODE_SHADOW
+
+
+def is_enforcing() -> bool:
+    return _mode() == MODE_ENFORCING
 
 
 async def _next_revision_number(
@@ -190,6 +193,8 @@ async def record_assessment(
     outcome: AssessmentOutcome,
     *,
     mode: str | None = None,
+    policy_pack_version: str | None = None,
+    ontology_version: str | None = None,
 ) -> PlaybookQualityAssessment:
     """Persist one assessment and its findings, superseding the previous one.
 
@@ -207,6 +212,8 @@ async def record_assessment(
         content_hash=revision.content_hash,
         quality_contract_hash=revision.quality_contract_hash,
         source_snapshot_hash=revision.source_snapshot_hash,
+        ontology_version=ontology_version,
+        policy_pack_version=policy_pack_version,
         validator_bundle_version=outcome.validator_bundle_version or VALIDATOR_BUNDLE_VERSION,
         evaluation_mode=mode or _mode(),
         overall_state=outcome.overall_state,
@@ -278,16 +285,28 @@ async def assess_playbook(
             quality_contract_hash=quality_contract_hash,
             source_snapshot_hash=source_snapshot_hash,
         )
-        contract = _contract_from_version(version)
-        context = ValidationContext(
+        from contextedge.quality.context_loader import (
+            build_validation_context,
+            load_assessment_context,
+        )
+
+        bundle = await load_assessment_context(db, playbook.tenant_id, version)
+        context = build_validation_context(
             content=revision.content,
             content_hash=revision.content_hash,
             playbook_id=str(playbook.id),
             tenant_id=str(playbook.tenant_id),
-            contract=contract,
+            bundle=bundle,
         )
         outcome = assess(context)
-        assessment = await record_assessment(db, playbook, revision, outcome)
+        assessment = await record_assessment(
+            db,
+            playbook,
+            revision,
+            outcome,
+            policy_pack_version=bundle.policy_pack_version,
+            ontology_version=bundle.ontology_version,
+        )
         logger.info(
             "playbook_quality.assessed",
             tenant_id=str(playbook.tenant_id),
@@ -444,6 +463,13 @@ async def invalidate_and_reassess(
     )
 
 
+def _contract_from_evidence_refs(refs: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Backward-compatible alias for tests and callers."""
+    from contextedge.quality.context_loader import contract_from_evidence_refs
+
+    return contract_from_evidence_refs(refs)
+
+
 def _contract_from_version(version: PlaybookVersion | None) -> dict[str, Any] | None:
     """Load the stored quality contract summary from evidence_refs, if any."""
     if version is None:
@@ -451,13 +477,7 @@ def _contract_from_version(version: PlaybookVersion | None) -> dict[str, Any] | 
     refs = version.evidence_refs
     if not isinstance(refs, dict):
         return None
-    qc = refs.get("quality_contract")
-    if not isinstance(qc, dict):
-        return None
-    artifact_type = qc.get("artifact_type")
-    if not artifact_type:
-        return None
-    return {"artifact_type": artifact_type, "outcome": qc.get("outcome"), "hash": qc.get("hash")}
+    return _contract_from_evidence_refs(refs)
 
 
 async def latest_assessment(

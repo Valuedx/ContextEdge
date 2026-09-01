@@ -97,6 +97,10 @@ class Settings(BaseSettings):
     # on this model (usage recorded against the model that served).
     llm_fallback_model: str | None = None
 
+    # Playbook quality: ``shadow`` records verdicts without blocking publication;
+    # ``enforcing`` blocks ``approved`` when ``publication_readiness`` is false.
+    playbook_quality_mode: str = "shadow"
+
     # --- Cost containment -------------------------------------------------
     # Every knob below bounds spend that is otherwise open-ended. Each one is
     # a ceiling, not a target: ordinary work stays well under all of them.
