@@ -1,4 +1,9 @@
-"""Load quality seed/routing data from JSON files (not Python literals)."""
+"""Load quality seed/routing data from JSON files (not Python literals).
+
+Product vocabulary and policy rules are **tenant data**. Defaults are empty
+templates; optional ``examples/<profile>/`` packs are for specific deployments
+only and are never loaded unless explicitly requested.
+"""
 
 from __future__ import annotations
 
@@ -8,11 +13,57 @@ from pathlib import Path
 from typing import Any
 
 _DATA_DIR = Path(__file__).resolve().parents[3] / "data" / "quality"
+_EXAMPLES_DIR = _DATA_DIR / "examples"
 
 
-@lru_cache(maxsize=8)
+def clear_quality_data_cache() -> None:
+    """Drop cached JSON after on-disk edits (scripts, hot reload)."""
+    load_quality_data.cache_clear()
+
+
+@lru_cache(maxsize=16)
 def load_quality_data(name: str) -> dict[str, Any]:
     path = _DATA_DIR / f"{name}.json"
+    return _read_json_object(path)
+
+
+def list_quality_profiles() -> list[str]:
+    if not _EXAMPLES_DIR.is_dir():
+        return []
+    return sorted(
+        entry.name
+        for entry in _EXAMPLES_DIR.iterdir()
+        if entry.is_dir() and (entry / "policy_pack.json").is_file()
+    )
+
+
+def load_policy_pack_payload(
+    *,
+    profile: str | None = None,
+    path: Path | str | None = None,
+) -> dict[str, Any]:
+    """Resolve policy pack JSON: explicit path > profile example > generic template."""
+    if path is not None:
+        return _read_json_object(Path(path))
+    if profile:
+        return _read_json_object(_EXAMPLES_DIR / profile / "policy_pack.json")
+    return load_quality_data("default_policy_pack")
+
+
+def load_ontology_payload(
+    *,
+    profile: str | None = None,
+    path: Path | str | None = None,
+) -> dict[str, Any]:
+    """Resolve ontology JSON: explicit path > profile example > generic template."""
+    if path is not None:
+        return _read_json_object(Path(path))
+    if profile:
+        return _read_json_object(_EXAMPLES_DIR / profile / "ontology.json")
+    return load_quality_data("default_ontology")
+
+
+def _read_json_object(path: Path) -> dict[str, Any]:
     with path.open(encoding="utf-8") as handle:
         payload = json.load(handle)
     if not isinstance(payload, dict):

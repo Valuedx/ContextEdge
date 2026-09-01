@@ -101,6 +101,10 @@ class Settings(BaseSettings):
     # ``enforcing`` blocks ``approved`` when ``publication_readiness`` is false.
     playbook_quality_mode: str = "shadow"
 
+    # Runtime retrieval (SupportCopilot): drop playbooks whose latest assessment
+    # is fail, error, stale, or out of date with live content.
+    playbook_runtime_quality_filter: bool = True
+
     # --- Cost containment -------------------------------------------------
     # Every knob below bounds spend that is otherwise open-ended. Each one is
     # a ceiling, not a target: ordinary work stays well under all of them.

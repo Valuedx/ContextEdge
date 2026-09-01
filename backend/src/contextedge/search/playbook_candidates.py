@@ -24,7 +24,7 @@ from contextedge.models.playbook import Playbook, PlaybookEvidenceLink, Playbook
 from contextedge.search.pg_fts import or_composed_websearch_tsquery, search_evidence_fts
 from contextedge.search.risk_policy import risk_within_cap
 from contextedge.search.vector_ops import halfvec_cosine_distance, tune_ann_recall
-from contextedge.services.case_frame_service import CaseFrame
+from contextedge.search.quality_filter import filter_runtime_eligible
 
 logger = structlog.get_logger()
 
@@ -130,6 +130,8 @@ async def generate_playbook_candidates(
         collected = {pid: collected[pid] for pid in order if pid in collected}
         for arm, ids in list(arm_ranks.items()):
             arm_ranks[arm] = [pid for pid in ids if pid in collected]
+
+    collected = await filter_runtime_eligible(db, tenant_id, collected)
 
     logger.info(
         "playbook_candidates.generated",

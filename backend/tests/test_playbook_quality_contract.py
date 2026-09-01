@@ -137,7 +137,7 @@ class TestQualityContract:
                     purpose="context",
                 ),
                 KnowledgeSection(
-                    text="Restart the AutomationEdge Agent service.",
+                    text="Restart the Widget Service.",
                     section_ref="Resolution",
                     purpose="action",
                     chunk_kind="procedure_step",
@@ -149,7 +149,7 @@ class TestQualityContract:
             episode_summaries=[{"id": "e1", "title": "Agent down", "steps": ["Restart agent"]}],
             knowledge=[doc],
         )
-        assert "Restart the AutomationEdge Agent service." in prep.contract.required_actions
+        assert "Restart the Widget Service." in prep.contract.required_actions
         assert not any("administrator must approve" in a for a in prep.contract.required_actions)
         assert prep.contract_hash == contract_hash(prep.contract)
         assert len(prep.contract_hash) == 64
@@ -263,27 +263,27 @@ def test_pregeneration_gate_blocks_on_source_conflicts():
 
 
 class TestMatchingPrecision:
-    def test_ps_alias_does_not_match_inside_steps(self):
+    def test_short_alias_does_not_match_inside_unrelated_words(self):
         from contextedge.quality.claim_match import contains_phrase, ontology_terms_present
         from contextedge.quality.validators.subject import validate as validate_subject
 
         ont = [
             {
-                "canonical_term": "Process Studio",
+                "canonical_term": "Design Console",
                 "term_kind": "component",
-                "aliases": ["PS", "Studio"],
+                "aliases": ["DC", "Studio"],
             }
         ]
-        assert not contains_phrase("Follow these steps to restart the agent", "PS")
-        assert "Process Studio" in ontology_terms_present(
-            "Open Process Studio and restart the agent", ont
+        assert not contains_phrase("Follow these records to restart the service", "DC")
+        assert "Design Console" in ontology_terms_present(
+            "Open Design Console and restart the service", ont
         )
 
         ctx = ValidationContext(
             content={
-                "title": "Agent restart",
+                "title": "Service restart",
                 "description": "",
-                "steps": [{"text": "Follow these steps to restart the agent"}],
+                "steps": [{"text": "Follow these records to restart the service"}],
             },
             content_hash="abc",
             playbook_id="p1",
@@ -300,19 +300,19 @@ class TestMatchingPrecision:
     def test_multi_word_ontology_term_detected_in_steps(self):
         from contextedge.quality.claim_match import ontology_terms_present
 
-        ont = [{"canonical_term": "AutomationEdge Agent", "aliases": ["AE Agent"]}]
+        ont = [{"canonical_term": "Widget Service", "aliases": ["WS"]}]
         found = ontology_terms_present(
-            "Restart the AutomationEdge agent service on vpn-gw-01", ont
+            "Restart the Widget Service on host-prod-01", ont
         )
-        assert "AutomationEdge Agent" in found
+        assert "Widget Service" in found
 
     def test_short_policy_rules_require_all_tokens(self):
         from contextedge.quality.policy_match import rule_matches_action
 
-        jar_rule = {"normalized_action": "change jar file"}
-        assert not rule_matches_action(jar_rule, "Change the config file on server")
-        assert rule_matches_action(jar_rule, "Change the jar file on server")
+        config_rule = {"normalized_action": "change config file"}
+        assert not rule_matches_action(config_rule, "Change the log file on server")
+        assert rule_matches_action(config_rule, "Change the config file on server")
 
-        reregister_rule = {"normalized_action": "re-register agent"}
-        assert not rule_matches_action(reregister_rule, "Re-running the agent workflow")
-        assert rule_matches_action(reregister_rule, "Re-register the agent now")
+        reregister_rule = {"normalized_action": "re-register service"}
+        assert not rule_matches_action(reregister_rule, "Re-running the service workflow")
+        assert rule_matches_action(reregister_rule, "Re-register the service now")

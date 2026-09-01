@@ -1,36 +1,6 @@
 {
-  "version": "ae-ontology-2026.09.01",
-  "owner": "AutomationEdge Support",
-  "terms": [
-    {
-      "canonical_term": "AutomationEdge Agent",
-      "term_kind": "component",
-      "aliases": ["AE Agent", "agent service"]
-    },
-    {
-      "canonical_term": "Process Studio",
-      "term_kind": "component",
-      "aliases": ["Studio", "PS"]
-    },
-    {
-      "canonical_term": "Web-GUI",
-      "term_kind": "component",
-      "aliases": ["web gui", "webgui"]
-    },
-    {
-      "canonical_term": "GUI-AutomationEdge",
-      "term_kind": "component",
-      "aliases": ["gui automationedge"]
-    },
-    {
-      "canonical_term": "ActiveMQ",
-      "term_kind": "component",
-      "aliases": ["active mq", "message broker"]
-    },
-    {
-      "canonical_term": "RADIUS",
-      "term_kind": "component",
-      "aliases": ["radius server"]
-    }
-  ]
+  "version": "tenant-template-1.0.0",
+  "owner": null,
+  "notes": "Generic tenant template. Terms are tenant-specific product vocabulary — load per tenant from JSON or API, not from application code.",
+  "terms": []
 }

@@ -15,17 +15,17 @@ class TestContractFromEvidenceRefs:
     def test_full_snapshot_roundtrip(self):
         contract = QualityContract(
             artifact_type=ArtifactType.PROCEDURAL,
-            primary_subject="agent restart",
-            required_actions=["Restart the agent service"],
-            observed_symptoms=["Agent offline"],
+            primary_subject="service restart",
+            required_actions=["Restart the primary service"],
+            observed_symptoms=["Service offline"],
         )
         snapshot = contract_snapshot_from_quality_contract(contract)
         refs = {"quality_contract": {"hash": "abc123", "snapshot": snapshot}}
         loaded = contract_from_evidence_refs(refs)
         assert loaded is not None
         assert loaded["artifact_type"] == ArtifactType.PROCEDURAL
-        assert loaded["primary_subject"] == "agent restart"
-        assert "Restart the agent service" in loaded["required_actions"]
+        assert loaded["primary_subject"] == "service restart"
+        assert "Restart the primary service" in loaded["required_actions"]
 
     def test_legacy_minimal_blob(self):
         refs = {
@@ -52,7 +52,7 @@ class TestBuildValidationContext:
         bundle = AssessmentContextBundle(
             contract={"artifact_type": "procedural", "required_actions": ["x"]},
             policy_rules=[{"normalized_action": "delete jar", "decision": "forbidden"}],
-            ontology_terms=[{"canonical_term": "AutomationEdge Agent", "aliases": []}],
+            ontology_terms=[{"canonical_term": "Widget Service", "aliases": []}],
             policy_pack_version="1.0.0",
             ontology_version="1.0.0",
         )
@@ -65,4 +65,4 @@ class TestBuildValidationContext:
         )
         assert ctx.contract["required_actions"] == ["x"]
         assert len(ctx.policy_rules) == 1
-        assert ctx.ontology_terms[0]["canonical_term"] == "AutomationEdge Agent"
+        assert ctx.ontology_terms[0]["canonical_term"] == "Widget Service"

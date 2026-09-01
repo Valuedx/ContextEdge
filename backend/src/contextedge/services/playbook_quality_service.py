@@ -285,6 +285,7 @@ async def assess_playbook(
             quality_contract_hash=quality_contract_hash,
             source_snapshot_hash=source_snapshot_hash,
         )
+        await _invalidate_if_validator_bundle_retired(db, playbook)
         from contextedge.quality.context_loader import (
             build_validation_context,
             load_assessment_context,
@@ -384,6 +385,45 @@ async def signal_quality_stale(
             playbook_id=str(playbook_id),
             reason=reason,
             origin=origin,
+        )
+        return 0
+
+
+async def _invalidate_if_validator_bundle_retired(
+    db: AsyncSession,
+    playbook: Playbook,
+) -> int:
+    """Mark open assessments stale when the validator bundle has changed.
+
+    Without this, a batch re-assess after a bundle bump mixes verdicts from
+    two validator sets — the triage report looks unified but is not.
+    """
+    try:
+        prior = await latest_assessment(db, playbook.tenant_id, playbook.id)
+        if prior is None or prior.superseded_at is not None:
+            return 0
+        if prior.validator_bundle_version == VALIDATOR_BUNDLE_VERSION:
+            return 0
+        count = await invalidate_assessments(
+            db,
+            playbook.tenant_id,
+            playbook.id,
+            reason=STALE_VALIDATOR_RETIRED,
+        )
+        if count:
+            logger.info(
+                "playbook_quality.validator_bundle_retired",
+                tenant_id=str(playbook.tenant_id),
+                playbook_id=str(playbook.id),
+                prior_bundle=prior.validator_bundle_version,
+                current_bundle=VALIDATOR_BUNDLE_VERSION,
+                assessments=count,
+            )
+        return count
+    except Exception:  # noqa: BLE001
+        logger.exception(
+            "playbook_quality.validator_bundle_retire_failed",
+            playbook_id=str(getattr(playbook, "id", None)),
         )
         return 0
 

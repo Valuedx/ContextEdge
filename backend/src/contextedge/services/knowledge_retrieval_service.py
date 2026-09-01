@@ -192,7 +192,16 @@ class KnowledgeDocument:
     # A reviewer accepted that something replaced this article (F4b).
     superseded: bool = False
 
-    def to_prompt_block(self, index: int) -> str:
+    def to_prompt_block(self, index: int, product_label: str | None = None) -> str:
+        """Render this document for the prompt.
+
+        ``product_label`` comes from the tenant's ontology and is absent for a
+        tenant that has not named its product. It used to be the literal string
+        "AutomationEdge" in this file, which meant every tenant's generation
+        prompt asserted a product they may not run — and the model, having no
+        other product name in its context, repeated it into the steps.
+        """
+        product = f"{product_label} " if product_label else ""
         header = f"[kb-{index}] {self.title} ({self.evidence_type})"
         if self.superseded:
             # Surfaced, not hidden: the generator should be able to say a
@@ -205,18 +214,18 @@ class KnowledgeDocument:
         if self.version_conflict:
             kb_ver, ticket_ver = self.version_conflict
             header += (
-                f" — PRODUCT VERSION MISMATCH: this KB is for AutomationEdge "
+                f" — PRODUCT VERSION MISMATCH: this KB is for {product}"
                 f"{kb_ver}; the ticket is {ticket_ver}. Use the full procedure. "
                 f"Every step that follows this article MUST say in the step text "
                 f"that it is based on the {kb_ver} KB (ticket is {ticket_ver})."
             )
         elif self.product_version and self.ticket_version:
             header += (
-                f" — PRODUCT VERSION: AutomationEdge {self.product_version} "
+                f" — PRODUCT VERSION: {product}{self.product_version} "
                 f"(matches ticket {self.ticket_version})"
             )
         elif self.product_version:
-            header += f" — PRODUCT VERSION: AutomationEdge {self.product_version}"
+            header += f" — PRODUCT VERSION: {product}{self.product_version}"
         elif self.ticket_version:
             header += (
                 " — PRODUCT VERSION: not stated on this article "
@@ -761,14 +770,21 @@ async def persist_knowledge_links(
     return written
 
 
-def format_knowledge_block(documents: list[KnowledgeDocument]) -> str:
+def format_knowledge_block(
+    documents: list[KnowledgeDocument], product_label: str | None = None
+) -> str:
     """Prompt rendering. ``"None found"`` when empty — an explicit
     absence, so the model does not invent normative sources to fill a
-    silent gap."""
+    silent gap.
+
+    ``product_label`` is the tenant's product name from its ontology; omitted,
+    version text carries no product name, which is the honest rendering for a
+    tenant that has not declared one."""
     if not documents:
         return "None found. Base the playbook on observed practice only."
     return "\n\n".join(
-        document.to_prompt_block(index + 1) for index, document in enumerate(documents)
+        document.to_prompt_block(index + 1, product_label)
+        for index, document in enumerate(documents)
     )
 
 

@@ -47,7 +47,7 @@ def _steps() -> list[dict]:
             "step_id": "s1",
             "order": 1,
             "type": "remediation",
-            "text": "Restart the AutomationEdge Agent service on the affected host.",
+            "text": "Restart the primary service on the affected host.",
         },
         {
             "step_id": "s2",

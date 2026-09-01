@@ -240,8 +240,10 @@ async def _normalize(db: AsyncSession, raw_object_id: str, tenant_id: uuid.UUID)
                 "facet_fields"
             ) if raw.source_id else None
         )
+        quality_stale_needed = False
         if refreshed_facets and refreshed_facets != (existing.source_facets or {}):
             existing.source_facets = {**(existing.source_facets or {}), **refreshed_facets}
+            quality_stale_needed = True
         refreshed_case = derive_case_state(payload)
         if refreshed_case is not None and refreshed_case != existing.case_state:
             logger.info(
@@ -260,6 +262,25 @@ async def _normalize(db: AsyncSession, raw_object_id: str, tenant_id: uuid.UUID)
                 now=refreshed_state,
             )
             existing.knowledge_state = refreshed_state
+            quality_stale_needed = True
+        if quality_stale_needed:
+            try:
+                from contextedge.services.quality_staleness_hooks import (
+                    signal_stale_for_evidence,
+                )
+
+                await signal_stale_for_evidence(
+                    db,
+                    tenant_id,
+                    [existing.id],
+                    origin="evidence_reingest",
+                )
+            except Exception as stale_exc:  # noqa: BLE001
+                logger.warning(
+                    "quality_stale_signal_failed",
+                    evidence_id=str(existing.id),
+                    error=str(stale_exc)[:200],
+                )
         if existing.created_at_source is None and source_ts:
             existing.created_at_source = source_ts
         if existing.thread_id is None:

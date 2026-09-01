@@ -51,6 +51,7 @@ Settings are loaded through `contextedge.config.Settings`, which reads the repo-
 | Retention | `RETENTION_PURGE_MODE` (`soft_purge`), `RETENTION_DEFAULT_DAYS` (365) |
 | Notifications | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_FROM`, `NOTIFICATION_WEBHOOK_URL` — all empty by default, so those channels are explicit no-ops |
 | Prompt A/B | `TENANT_PROMPT_VARIANTS_JSON` — `{"<tenant-uuid>": {"relevance": "v2"}}` |
+| Playbook quality | `PLAYBOOK_QUALITY_MODE` (`shadow` \| `enforcing`) — see [PLAYBOOK_QUALITY_READINESS_RUNNER.md](PLAYBOOK_QUALITY_READINESS_RUNNER.md) |
 | App | `APP_ENV`, `APP_DEBUG`, `APP_LOG_LEVEL`, `APP_CORS_ORIGINS`, `FRONTEND_URL` |
 
 Two settings fail fast at import time rather than misbehaving later, both when `APP_ENV` is not `development`: the default `JWT_SECRET_KEY` raises `RuntimeError` (`config.py:248-252`), and a missing or placeholder `FERNET_KEY` does the same, because source credentials encrypted under a throwaway key are unrecoverable (`config.py:254-264`).

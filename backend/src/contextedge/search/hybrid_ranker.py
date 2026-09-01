@@ -18,7 +18,7 @@ from contextedge.models.playbook import (
     PlaybookVersion,
 )
 from contextedge.search.fusion import rrf_max, rrf_scores
-from contextedge.search.playbook_candidates import generate_playbook_candidates
+from contextedge.search.quality_filter import filter_runtime_eligible
 from contextedge.services.case_frame_service import CaseFrame, build_case_frame
 from contextedge.services.identity_service import resolve_identity_ids_for_terms
 from contextedge.services.playbook_applicability import evaluate_trigger_conditions
@@ -357,6 +357,16 @@ async def rank_playbooks(
     now = datetime.now(UTC)
     ids = [pb.id for pb in playbooks]
     latest_versions = await _latest_published_versions(db, ids)
+    eligible_map = await filter_runtime_eligible(
+        db,
+        tenant_id,
+        {pb.id: pb for pb in playbooks},
+        versions_by_playbook=latest_versions,
+    )
+    playbooks = [eligible_map[pid] for pid in ids if pid in eligible_map]
+    if not playbooks:
+        return []
+    ids = [pb.id for pb in playbooks]
     identity_ids = await resolve_identity_ids_for_terms(db, tenant_id, entities or [])
     graph_counts = (
         await _batch_graph_counts(db, tenant_id, ids, domain_id) if shadow else {}

@@ -28,7 +28,7 @@ from contextedge.quality.states import (
 # Bumped whenever any validator's behaviour changes. Stamped on every
 # assessment so a result can be attributed to the code that produced it, and
 # so retiring a defective bundle can invalidate exactly its assessments.
-VALIDATOR_BUNDLE_VERSION = "qa-2026.09.01-p2"
+VALIDATOR_BUNDLE_VERSION = "qa-2026.09.01-p4"
 
 
 @dataclass(frozen=True)

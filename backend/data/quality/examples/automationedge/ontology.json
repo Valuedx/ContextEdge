@@ -1,0 +1,61 @@
+{
+  "version": "automationedge-ontology-2026.09.01",
+  "owner": "AutomationEdge Support",
+  "notes": "Example profile for AutomationEdge tenants only. Seed with: seed_quality_policy_pack.py --profile automationedge",
+  "terms": [
+    {
+      "term_kind": "product",
+      "canonical_term": "AutomationEdge",
+      "aliases": [
+        "AE"
+      ],
+      "notes": "Names the product for prompt wording. Exactly one term per ontology."
+    },
+    {
+      "canonical_term": "AutomationEdge Agent",
+      "term_kind": "component",
+      "aliases": [
+        "AE Agent",
+        "agent service"
+      ]
+    },
+    {
+      "canonical_term": "Process Studio",
+      "term_kind": "component",
+      "aliases": [
+        "Studio",
+        "PS"
+      ]
+    },
+    {
+      "canonical_term": "Web-GUI",
+      "term_kind": "component",
+      "aliases": [
+        "web gui",
+        "webgui"
+      ]
+    },
+    {
+      "canonical_term": "GUI-AutomationEdge",
+      "term_kind": "component",
+      "aliases": [
+        "gui automationedge"
+      ]
+    },
+    {
+      "canonical_term": "ActiveMQ",
+      "term_kind": "component",
+      "aliases": [
+        "active mq",
+        "message broker"
+      ]
+    },
+    {
+      "canonical_term": "RADIUS",
+      "term_kind": "component",
+      "aliases": [
+        "radius server"
+      ]
+    }
+  ]
+}

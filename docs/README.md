@@ -58,6 +58,7 @@
 | [MAF_CONTEXT_GRAPH_INTEGRATION.md](MAF_CONTEXT_GRAPH_INTEGRATION.md) | How the agent-facing graph projection is produced and consumed | AI Engineers |
 | [CONTEXT_GRAPH_WALKTHROUGH.md](CONTEXT_GRAPH_WALKTHROUGH.md) | Narrated walk through one incident becoming graph structure | Everyone |
 | [EXECUTIVE_TECHNICAL_SUMMARY.md](EXECUTIVE_TECHNICAL_SUMMARY.md) | Short technical summary for leadership | Leadership & PMs |
+| [PLAYBOOK_QUALITY_READINESS_RUNNER.md](PLAYBOOK_QUALITY_READINESS_RUNNER.md) | Tenant-scoped quality bootstrap, cache alignment, readiness checks (Process Studio–style create flow) | Backend & QA |
 
 ---
 

@@ -176,13 +176,12 @@ def test_all_migrated_prompt_families_registered():
         # v3 adds approved KB/SOP as a distinct input, step-level source
         # citations, and the conflicts block; v5 the grounded/best-practice
         # taxonomy; v6 causal sequencing, a minimal step set, and plain
-        # language; v7 makes labelled KB procedure/check/rollback sections
-        # a coverage checklist; v8 names KB vs ticket product version on
-        # the step when they differ; v9 puts mail-thread solutions under
-        # each episode and requires using them together with KB.
+        # language; v8 names KB vs ticket product version on the step when
+        # they differ; v9 puts mail-thread solutions under each episode;
+        # v10 removes the v7 KB checklist and v5 best-practice enumeration.
         # Superseded versions remain registered and immutable for eval
         # baselines.
-        "playbook": "v9",
+        "playbook": "v10",
         "contradiction": "v1",
     }
     for name, default_version in expected_defaults.items():

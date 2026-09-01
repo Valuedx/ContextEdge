@@ -422,18 +422,16 @@ register_prompt(
 )
 
 
-# v7 - stronger use of AutomationEdge KB action guidance.
+# v7 - KB coverage checklist (RETIRED from the default chain 2026-09-01).
 #
-# v6 received approved knowledge, but the retriever could still surface a
-# descriptive section while the model wrote a generic support-engineering
-# action. The retrieval layer now labels ACTION / PREREQUISITE / VALIDATION /
-# ROLLBACK sections; v7 makes those labels binding for generation. A generated
-# playbook must either include the KB-required item with a citation, or surface
-# why it cannot be used as a conflict/mismatch for reviewer attention.
+# Pre-generation gates and the Source-Derived Quality Contract now bind
+# obligations before the LLM runs. Keeping rules 13-15 in the active prompt
+# chain caused checklist filler the quality validators then had to reject.
+# v7 remains registered for historical A/B baselines only — v8+ build from v6.
 _V7_SYSTEM = _V6_SYSTEM + """
 13. Treat labelled KB sections as a coverage checklist:
     - ACTION: include the product-specific action as a playbook step with
-      the KB source_ref, preserving exact AutomationEdge component names,
+      the KB source_ref, preserving exact component names,
       plugin names, paths, settings, commands, and UI labels from the source.
     - PREREQUISITE: include it before the dependent action, or add a
       requires_review conflict if observed practice skipped it.
@@ -447,7 +445,7 @@ _V7_SYSTEM = _V6_SYSTEM + """
     missing, add it or record a conflict explaining why the reviewer must
     decide. A product-specific KB instruction should not disappear just
     because no episode performed it.
-15. Prefer AutomationEdge product language from KB over generic phrasing.
+15. Prefer product language from KB over generic phrasing.
     Name the exact product area or plugin when the KB supplies it. Use generic
     best-practice wording only when neither KB nor episodes identify the
     product-specific action."""
@@ -462,15 +460,13 @@ register_prompt(
 )
 
 
-# v8 — product-version labels on KB (2026-08-31).
-# Retrieval is embedding-nearest, then stored KB version (source_facets /
-# applicability) re-ranks. A different-release article is still fetched —
-# it is often the full procedure that still applies — and the prompt must
-# make the generator name that gap on the step, not hide it in source_refs.
-_V8_SYSTEM = _V7_SYSTEM + """
+# v8 — product-version labels on KB (2026-08-31). Builds from v6, not v7:
+# the quality contract carries KB obligations; the prompt must not duplicate
+# them as a second checklist.
+_V8_SYSTEM = _V6_SYSTEM + """
 16. When a supplied KB is labelled PRODUCT VERSION MISMATCH, still use the
     full procedure. In every step that follows that article, say so in the
-    step text itself: "Based on KB for AutomationEdge <kb-version> (this
+    step text itself: "Based on KB for <product> <kb-version> (this
     ticket is <ticket-version>): ..." Do not hide the version gap in
     source_refs only — an engineer running the playbook must see it on
     the step. When the KB matches the ticket version, do not add that
@@ -507,40 +503,15 @@ register_prompt(
         system=_V9_SYSTEM,
         user_template=_V3_USER,
     ),
-    default=True,
 )
 
 
-# v10 — best-practice steps become permitted, not mandated (2026-09-01).
+# v10 — default (2026-09-01): checklist purge + utility-based best practice.
 #
-# Registered, NOT default. v9 stays the default until the A/B in
-# evals/playbook_prompt_ab.py says otherwise; the point of the registry is
-# that a prompt change is a measured decision rather than a deploy.
-#
-# The problem: v5's rule 9 hands the model a thirteen-item checklist of
-# best-practice steps to add — "prerequisite validation, backup/rollback
-# preparation, checksum or antivirus verification, security validation,
-# version compatibility checks, file integrity verification, logging and
-# audit documentation…" — and then v6's rule 11 tells it to produce the
-# minimal complete set and emit no filler. The two rules pull in opposite
-# directions, and the AutomationEdge support review shows which one wins:
-#
-#   "Agent auto-update fails during JAR deletion in the lib directory —
-#    for this no need to check agent state"          (prerequisite validation)
-#   "Multipart file size limit exceeded — no need to check size, and
-#    [no need to] check the installed version … 8.1.0 or higher"
-#                                                    (version compatibility)
-#   "Errors regarding Log4j or conflicting plugin JARs during startup —
-#    no need to check log4j file"                    (file integrity)
-#
-# Three rejections, three items straight off the checklist. The generator was
-# doing exactly what it was told. Building a padding detector against output
-# the prompt requires is fighting yourself, so the enumeration goes.
-#
-# What replaces it is a test, not a list. A best-practice step has to earn
-# its place by naming the specific risk it removes for THIS issue — which is
-# the same utility standard the quality validator will apply, stated at the
-# point of generation so the two agree.
+# Promoted from shadow registration. v7's KB checklist is removed from the
+# active chain (v8/v9 build from v6). Pre-generation gates and the quality
+# contract bind obligations instead. Rule 9's enumerated best-practice list
+# is replaced with a utility test so generation and validators agree.
 _V10_SYSTEM = _V9_SYSTEM.replace(
     """   - Best practice: an important operational step no source states but
      an experienced support engineer would expect — prerequisite
@@ -571,6 +542,13 @@ if _V10_SYSTEM == _V9_SYSTEM:  # pragma: no cover - construction-time assertion
         "playbook prompt v10 failed to patch rule 9; the v5 text it edits has changed"
     )
 
+_V10_SYSTEM = _V10_SYSTEM + """
+18. When a QUALITY CONTRACT block is supplied in the user message, treat its
+    required_actions, preconditions, required_validations, and
+    rollback_obligations as binding coverage. Include each as a grounded step
+    with source_refs, or record an explicit conflict — do not add checklist
+    steps beyond what the contract and supplied sources require."""
+
 register_prompt(
     Prompt(
         name="playbook",
@@ -578,4 +556,5 @@ register_prompt(
         system=_V10_SYSTEM,
         user_template=_V3_USER,
     ),
+    default=True,
 )

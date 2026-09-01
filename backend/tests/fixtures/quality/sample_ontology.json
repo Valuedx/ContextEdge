@@ -1,0 +1,16 @@
+{
+  "version": "test-ontology-1.0.0",
+  "owner": "test",
+  "terms": [
+    {
+      "canonical_term": "Widget Service",
+      "term_kind": "component",
+      "aliases": ["WS", "widget svc"]
+    },
+    {
+      "canonical_term": "Design Console",
+      "term_kind": "component",
+      "aliases": ["Studio", "DC"]
+    }
+  ]
+}

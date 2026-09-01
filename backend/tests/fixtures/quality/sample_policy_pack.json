@@ -1,0 +1,18 @@
+{
+  "version": "test-pack-1.0.0",
+  "owner": "test",
+  "rules": [
+    {
+      "normalized_action": "change jar file",
+      "decision": "discouraged",
+      "alternative_action": "Use supported upgrade procedure.",
+      "source_kind": "test"
+    },
+    {
+      "normalized_action": "re-register agent",
+      "decision": "discouraged",
+      "alternative_action": "Verify configuration first.",
+      "source_kind": "test"
+    }
+  ]
+}

@@ -50,7 +50,30 @@ async def generate_playbook_candidate(
         format_knowledge_block,
     )
 
-    knowledge_text = format_knowledge_block(knowledge_sources or [])
+    # The product name is tenant vocabulary, so it comes from the tenant's
+    # ontology rather than from a literal in the retrieval code. Resolved here
+    # rather than at each call site: the worker and the manual endpoint have
+    # already drifted apart once, and a caller that forgets this would put a
+    # different tenant's product name in the prompt.
+    #
+    # None is fine. A tenant with no ontology gets "KB for 8.2.3" with no
+    # product name, which is accurate; inventing a default is the bug this
+    # replaces.
+    product_label: str | None = None
+    if db is not None and tenant_id is not None:
+        from contextedge.services.quality_policy_service import active_product_label
+
+        try:
+            resolved_tenant = (
+                tenant_id
+                if isinstance(tenant_id, _uuid.UUID)
+                else _uuid.UUID(str(tenant_id))
+            )
+            product_label = await active_product_label(db, resolved_tenant)
+        except Exception:  # noqa: BLE001 - wording must never stop generation
+            product_label = None
+
+    knowledge_text = format_knowledge_block(knowledge_sources or [], product_label)
 
     prompt = get_prompt("playbook", tenant_id)
     format_kwargs: dict[str, Any] = {

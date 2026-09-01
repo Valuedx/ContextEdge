@@ -603,6 +603,15 @@ async def delete_source(source_id: UUID, db: DbSession, user: AuthUser):
     evidence_ids = evidence_ids_q.scalars().all()
 
     if evidence_ids:
+        from contextedge.services.quality_staleness_hooks import signal_stale_for_evidence
+
+        await signal_stale_for_evidence(
+            db,
+            user.tenant_id,
+            list(evidence_ids),
+            origin="source_deleted",
+        )
+
         from contextedge.models.episode import CorrelationEdge
         from contextedge.models.evidence import AttachmentArtifact, EvidenceChunk
         from contextedge.models.knowledge_case import CaseLink
