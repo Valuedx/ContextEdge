@@ -262,8 +262,10 @@ export default function EvidencePage() {
         <Tabs
           value={relevanceFilter}
           onValueChange={(val) => {
-            setRelevanceFilter(val);
-            pg.reset();
+            if (val) {
+              setRelevanceFilter(val);
+              pg.reset();
+            }
           }}
           className="w-full sm:w-auto"
         >

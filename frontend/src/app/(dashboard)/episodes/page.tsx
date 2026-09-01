@@ -407,8 +407,10 @@ export default function EpisodesPage() {
         <Tabs
           value={reviewerTab}
           onValueChange={(val) => {
-            setReviewerTab(val);
-            pg.reset();
+            if (val) {
+              setReviewerTab(val);
+              pg.reset();
+            }
           }}
           className="w-full sm:w-auto"
         >
@@ -470,7 +472,7 @@ export default function EpisodesPage() {
           <Select
             value={statusFilter}
             onValueChange={(v) => {
-              setStatusFilter(v);
+              setStatusFilter(v ?? "all");
               pg.reset();
             }}
           >
@@ -487,9 +489,11 @@ export default function EpisodesPage() {
 
           <Select
             value={sortMode}
-            onValueChange={(v: "review_priority" | "newest") => {
-              setSortMode(v);
-              pg.reset();
+            onValueChange={(v) => {
+              if (v === "review_priority" || v === "newest") {
+                setSortMode(v);
+                pg.reset();
+              }
             }}
           >
             <SelectTrigger className="w-[150px] text-xs">

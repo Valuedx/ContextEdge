@@ -281,8 +281,10 @@ export default function PatternsPage() {
         <Tabs
           value={statusTab}
           onValueChange={(val) => {
-            setStatusTab(val);
-            pg.reset();
+            if (val) {
+              setStatusTab(val);
+              pg.reset();
+            }
           }}
           className="w-full sm:w-auto"
         >
@@ -296,7 +298,9 @@ export default function PatternsPage() {
 
         <Tabs
           value={viewMode}
-          onValueChange={setViewMode}
+          onValueChange={(val) => {
+            if (val) setViewMode(val);
+          }}
           className="w-full sm:w-auto"
         >
           <TabsList className="bg-black/[0.03] dark:bg-white/[0.04] p-1 border border-border/50">
