@@ -31,6 +31,9 @@ Usage:
     # Regenerate patterns that lack an active playbook (skip retire)
     python scripts/refresh_playbook_corpus.py --tenant <uuid> --regenerate-only --yes
 
+By default regeneration uses ``force=True`` so confidence and pre-generation
+gates do not skip patterns. Pass ``--respect-gates`` to restore skip behaviour.
+
 Exit code 0 on success, 1 on fatal error.
 """
 
@@ -147,6 +150,7 @@ def regenerate_for_patterns(
     *,
     dry_run: bool,
     limit: int | None,
+    force: bool,
 ) -> list[dict]:
     rows: list[dict] = []
     todo = patterns[:limit] if limit is not None else patterns
@@ -164,7 +168,9 @@ def regenerate_for_patterns(
         try:
             # Celery task body calls asyncio.run() — must not run inside another
             # active event loop (refresh script uses asyncio for DB retire/fetch).
-            result = generate_playbook_candidate.run(str(pattern.id), str(tenant_id))
+            result = generate_playbook_candidate.run(
+                str(pattern.id), str(tenant_id), force=force
+            )
         except Exception as exc:  # noqa: BLE001
             rows.append(
                 {
@@ -270,6 +276,7 @@ def run_refresh(
     assess: bool,
     limit: int | None,
     output: Path | None,
+    force: bool,
 ) -> int:
     report: dict = {
         "tenant_id": str(tenant_id),
@@ -302,6 +309,7 @@ def run_refresh(
             patterns,
             dry_run=dry_run,
             limit=limit,
+            force=force,
         )
         report["regeneration"] = regen_rows
         ok = sum(1 for r in regen_rows if r.get("status") == "ok")
@@ -361,6 +369,11 @@ def main() -> int:
         action="store_true",
         help="Skip batch assess after regeneration (default: assess when regenerating)",
     )
+    parser.add_argument(
+        "--respect-gates",
+        action="store_true",
+        help="Honor confidence floor and pre-generation skip gates during regeneration",
+    )
     parser.add_argument("--limit", type=int, default=None, help="Cap regeneration count")
     parser.add_argument("--output", type=Path, default=None, help="JSON report path")
     args = parser.parse_args()
@@ -378,6 +391,8 @@ def main() -> int:
             action.append(f"retire {','.join(retire_states)} playbooks")
         if not args.retire_only:
             action.append("regenerate from patterns (LLM)")
+            if not args.respect_gates:
+                action.append("force past skip gates")
         if assess:
             action.append("batch assess")
         print("Will:", ", ".join(action))
@@ -398,6 +413,7 @@ def main() -> int:
         assess=assess,
         limit=args.limit,
         output=args.output,
+        force=not args.respect_gates,
     )
 
 

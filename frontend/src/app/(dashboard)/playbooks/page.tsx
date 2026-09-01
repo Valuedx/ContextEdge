@@ -40,6 +40,8 @@ const LIFECYCLE_TABS = [
   { value: "under_review", label: "Under review" },
   { value: "approved", label: "Approved" },
   { value: "restricted", label: "Restricted" },
+  { value: "retired", label: "Retired" },
+  { value: "deprecated", label: "Deprecated" },
 ] as const;
 
 const columns: ColumnDef<Playbook>[] = [

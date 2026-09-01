@@ -149,7 +149,7 @@ python scripts/refresh_playbook_corpus.py --tenant <TENANT_UUID> --yes \
   --output refresh_report.json
 ```
 
-Retired playbooks stay in the DB for audit; active regeneration skips retired rows. Use `--limit N` only for smoke tests.
+Retired playbooks stay in the DB for audit; active regeneration skips retired rows. Regeneration **defaults to `force=True`**, so confidence floor and pre-generation blockers do not skip patterns — pass `--respect-gates` only if you want the old skip behaviour. Use `--limit N` only for smoke tests.
 
 ---
 

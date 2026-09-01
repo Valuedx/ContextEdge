@@ -1753,6 +1753,7 @@ async def rollback_playbook(
 
 class GeneratePlaybookRequest(BaseModel):
     pattern_id: UUID
+    force: bool = False
 
 
 @router.post("/generate", response_model=PlaybookResponse, status_code=status.HTTP_201_CREATED)
@@ -1855,7 +1856,7 @@ async def generate_playbook(
             negative_knowledge=negative_knowledge,
             retrieval_failed=retrieval_failed,
         )
-        if prep.should_block:
+        if prep.should_block and not body.force:
             raise HTTPException(
                 status_code=422,
                 detail={
@@ -1864,6 +1865,14 @@ async def generate_playbook(
                     "reasons": prep.gate.reasons,
                     "pregeneration": prep.gate.as_dict(),
                 },
+            )
+        if prep.should_block and body.force:
+            logger.warning(
+                "playbook.generation_forced_past_pregeneration",
+                tenant_id=str(user.tenant_id),
+                pattern_id=str(pattern.id),
+                outcome=str(prep.gate.outcome),
+                reasons=prep.gate.reasons[:5],
             )
 
         knowledge = prep.filtered_knowledge

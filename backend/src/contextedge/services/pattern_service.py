@@ -492,10 +492,15 @@ async def deduplicate_patterns_and_playbooks(
 
     await db.flush()
 
-    # 2. Deduplicate Playbooks per pattern or normalized title
+    # 2. Deduplicate active playbooks per pattern or normalized title.
+    # Retired/deprecated rows are audit history and must never be hard-deleted
+    # here — a corpus refresh keeps retired + new candidate on the same pattern.
     pbs = (
         await db.execute(
-            select(Playbook).where(Playbook.tenant_id == tenant_id)
+            select(Playbook).where(
+                Playbook.tenant_id == tenant_id,
+                Playbook.lifecycle_state.notin_(("retired", "deprecated")),
+            )
         )
     ).scalars().all()
 

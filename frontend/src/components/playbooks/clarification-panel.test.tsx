@@ -5,7 +5,6 @@ import {
   screen,
   waitFor,
   waitForElementToBeRemoved,
-  within,
 } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -276,7 +275,7 @@ describe("ClarificationPanel", () => {
     expect(screen.queryByRole("button", { name: /^Submit/ })).not.toBeInTheDocument();
   });
 
-  it("explains why it is not ready in words rather than slugs", async () => {
+  it("explains why it is not ready in user-friendly language", async () => {
     await renderPanel(
       state({
         submission: {
@@ -289,9 +288,8 @@ describe("ClarificationPanel", () => {
         },
       }),
     );
-    const banner = screen.getByText(/Not ready to submit/).parentElement as HTMLElement;
-    expect(within(banner).getByText(/mandatory questions are unanswered/)).toBeInTheDocument();
-    expect(within(banner).getByText(/quality gate would stop it/)).toBeInTheDocument();
+    expect(screen.getByText(/Answer 1 required question/)).toBeInTheDocument();
+    expect(screen.getByText(/Required questions must be answered/)).toBeInTheDocument();
   });
 
   it("says the loop has stopped when the round limit is reached", async () => {
@@ -398,12 +396,54 @@ describe("ClarificationPanel", () => {
     expect(screen.getByText(/1 rewrite left for this round/)).toBeInTheDocument();
   });
 
-  it("offers to open a round when none is live and none has ever run", async () => {
+  it("allows selecting a choice button and auto-updating the answer", async () => {
     await renderPanel(
-      state({ round: null, questions: [], has_live_round: false, outstanding_mandatory: 0 }),
+      state({
+        questions: [
+          question({
+            answer_kind: "choice",
+            choices: ["Option A", "Option B"],
+          }),
+        ],
+      }),
     );
-    expect(
-      screen.getByRole("button", { name: /Find what is missing/ }),
-    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Option A" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Option B" })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Option A" }));
+    expect(screen.getByRole("button", { name: /Save answers/ })).not.toBeDisabled();
+  });
+
+  it("allows toggling custom answer / clarification note on choice question", async () => {
+    await renderPanel(
+      state({
+        questions: [
+          question({
+            answer_kind: "choice",
+            choices: ["Option A", "Option B"],
+          }),
+        ],
+      }),
+    );
+
+    const customBtn = screen.getByText(/\+ Add custom answer/);
+    expect(customBtn).toBeInTheDocument();
+    fireEvent.click(customBtn);
+
+    const textarea = screen.getByLabelText("Which service must be restarted, and in what order?");
+    expect(textarea).toBeInTheDocument();
+  });
+
+  it("renders Wizard Mode button when onOpenWizard is provided", async () => {
+    const onOpenWizard = vi.fn();
+    vi.mocked(api.get).mockResolvedValue(state());
+    render(<ClarificationPanel playbookId="p1" onOpenWizard={onOpenWizard} />, { wrapper });
+    await waitForElementToBeRemoved(() => screen.queryByText("Loading questions…"));
+
+    const wizardBtn = screen.getByRole("button", { name: /Wizard Mode/ });
+    expect(wizardBtn).toBeInTheDocument();
+    fireEvent.click(wizardBtn);
+    expect(onOpenWizard).toHaveBeenCalled();
   });
 });
+

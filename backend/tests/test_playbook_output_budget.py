@@ -191,3 +191,24 @@ def test_a_stepless_result_is_a_failure_not_a_candidate():
     persist = source.index("playbook = Playbook(")
     # The guard has to return BEFORE anything is written.
     assert guard < persist
+
+
+def test_generate_playbook_candidate_supports_force_past_skip_gates():
+    import inspect
+
+    from contextedge.workers import pattern_tasks
+
+    source = inspect.getsource(pattern_tasks.generate_playbook_candidate)
+    assert "force: bool = False" in source
+    assert "playbook.generation_forced_past_pregeneration" in source
+    assert "playbook.generation_forced_low_confidence" in source
+
+
+def test_refresh_corpus_defaults_to_force_past_gates():
+    from pathlib import Path
+
+    source = Path(__file__).resolve().parents[1].joinpath(
+        "scripts/refresh_playbook_corpus.py"
+    ).read_text(encoding="utf-8")
+    assert "force=not args.respect_gates" in source
+    assert "--respect-gates" in source

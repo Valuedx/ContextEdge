@@ -143,6 +143,16 @@ def test_the_dedup_entry_point_runs_both_new_passes():
     )
 
 
+def test_playbook_dedup_skips_retired_audit_rows():
+    import inspect
+
+    from contextedge.services.pattern_service import deduplicate_patterns_and_playbooks
+
+    source = inspect.getsource(deduplicate_patterns_and_playbooks)
+    playbook_section = source.split("# 2. Deduplicate active playbooks", 1)[1]
+    assert 'lifecycle_state.notin_(("retired", "deprecated"))' in playbook_section
+
+
 @pytest.mark.asyncio
 async def test_merge_fold_leaves_steps_with_the_duplicate():
     """Steps must NOT move onto the canonical: every dedup sweep that did

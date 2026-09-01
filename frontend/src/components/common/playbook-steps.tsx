@@ -203,19 +203,19 @@ export function PlaybookSteps({
                   )}
                 </div>
 
-                <p className="text-sm font-medium leading-6 text-foreground">{step.text || "(no instruction text)"}</p>
+                <p className="text-sm font-medium leading-6 text-foreground break-words [overflow-wrap:anywhere] min-w-0">{step.text || "(no instruction text)"}</p>
 
                 {step.expected_outcome && (
-                  <p className="flex items-start gap-1.5 text-xs text-muted-foreground">
+                  <p className="flex items-start gap-1.5 text-xs text-muted-foreground min-w-0">
                     <ArrowRight className="mt-0.5 h-3 w-3 shrink-0 text-emerald-600 dark:text-emerald-400" />
-                    <span>{step.expected_outcome}</span>
+                    <span className="break-words [overflow-wrap:anywhere] min-w-0">{step.expected_outcome}</span>
                   </p>
                 )}
 
                 {step.on_failure && (
-                  <p className="flex items-start gap-1.5 text-xs text-amber-700 dark:text-amber-300/90">
+                  <p className="flex items-start gap-1.5 text-xs text-amber-700 dark:text-amber-300/90 min-w-0">
                     <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
-                    <span>{step.on_failure}</span>
+                    <span className="break-words [overflow-wrap:anywhere] min-w-0">{step.on_failure}</span>
                   </p>
                 )}
 

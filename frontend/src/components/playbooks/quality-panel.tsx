@@ -83,9 +83,9 @@ function severityCount(
 
 function GroupTile({ name, state }: { name: string; state: QualityState | null }) {
   return (
-    <div className="rounded-md border bg-background p-3 space-y-1">
+    <div className="rounded-lg border bg-background p-2.5 space-y-1 min-w-0 shadow-2xs">
       <div className="flex items-center justify-between gap-2">
-        <span className="text-xs font-medium">{GROUP_LABELS[name] ?? name}</span>
+        <span className="text-xs font-semibold">{GROUP_LABELS[name] ?? name}</span>
         {state ? (
           <StatusBadge status={state} />
         ) : (
@@ -93,7 +93,7 @@ function GroupTile({ name, state }: { name: string; state: QualityState | null }
           <span className="text-[10px] text-muted-foreground">not checked</span>
         )}
       </div>
-      <p className="text-[11px] text-muted-foreground">{GROUP_HELP[name] ?? ""}</p>
+      <p className="text-[11px] text-muted-foreground leading-snug">{GROUP_HELP[name] ?? ""}</p>
     </div>
   );
 }
@@ -207,8 +207,8 @@ export function QualityPanel({ playbookId }: { playbookId: string }) {
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="flex flex-wrap items-center justify-between gap-2">
-          <span>Quality</span>
+        <CardTitle className="flex flex-wrap items-center justify-between gap-2 text-sm">
+          <span>Quality scorecard</span>
           <span className="flex items-center gap-2">
             {/* Coverage leads. The verdict is only as meaningful as the number
                 of checks behind it, and right now that number is small. */}
@@ -275,7 +275,7 @@ export function QualityPanel({ playbookId }: { playbookId: string }) {
           </div>
         )}
 
-        <div className="grid gap-2 sm:grid-cols-3">
+        <div className="grid gap-2 grid-cols-1">
           {(["subject", "steps", "coherence"] as const).map((name) => (
             <GroupTile key={name} name={name} state={summary.groups[name]} />
           ))}
@@ -300,15 +300,24 @@ export function QualityPanel({ playbookId }: { playbookId: string }) {
               {findings.length} finding{findings.length === 1 ? "" : "s"}
               {blocking > 0 && (
                 <span className="text-muted-foreground">
-                  · {blocking} would fail a check
+                  · {blocking} blocking
                 </span>
               )}
             </p>
-            <div className={moved ? "space-y-2 opacity-60" : "space-y-2"}>
+            <div
+              className={
+                moved
+                  ? "max-h-56 space-y-2 overflow-y-auto pr-1 opacity-60"
+                  : "max-h-56 space-y-2 overflow-y-auto pr-1"
+              }
+            >
               {findings.map((finding) => (
                 <FindingRow key={finding.id} finding={finding} />
               ))}
             </div>
+            <p className="text-[10px] text-muted-foreground">
+              Scroll for all findings. Use guided Q&amp;A above to fix them.
+            </p>
           </div>
         )}
 

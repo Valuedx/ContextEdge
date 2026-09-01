@@ -416,8 +416,12 @@ def cluster_episodes(self, domain_id: str | None, tenant_id: str):
     default_retry_delay=120,
     name="pattern.generate_playbook_candidate",
 )
-def generate_playbook_candidate(self, pattern_id: str, tenant_id: str):
-    """Generate a playbook candidate from a pattern and persist playbook + version."""
+def generate_playbook_candidate(self, pattern_id: str, tenant_id: str, force: bool = False):
+    """Generate a playbook candidate from a pattern and persist playbook + version.
+
+    When ``force`` is true, confidence and pre-generation blockers are logged but
+    do not skip generation — used by corpus refresh to replace every gap pattern.
+    """
 
     async def work(db):
         tid = uuid.UUID(tenant_id)
@@ -457,18 +461,26 @@ def generate_playbook_candidate(self, pattern_id: str, tenant_id: str):
         # case, and for a human who disagrees with the floor.
         pattern_confidence = float(pattern.confidence or 0.0)
         if pattern_confidence < PLAYBOOK_GENERATION_MIN_PATTERN_CONFIDENCE:
-            logger.info(
-                "playbook.generation_skipped_low_confidence",
+            if not force:
+                logger.info(
+                    "playbook.generation_skipped_low_confidence",
+                    tenant_id=str(tid),
+                    pattern_id=str(pid),
+                    confidence=pattern_confidence,
+                    floor=PLAYBOOK_GENERATION_MIN_PATTERN_CONFIDENCE,
+                )
+                return {
+                    "status": "skipped",
+                    "reason": "pattern_confidence_below_floor",
+                    "confidence": pattern_confidence,
+                }
+            logger.warning(
+                "playbook.generation_forced_low_confidence",
                 tenant_id=str(tid),
                 pattern_id=str(pid),
                 confidence=pattern_confidence,
                 floor=PLAYBOOK_GENERATION_MIN_PATTERN_CONFIDENCE,
             )
-            return {
-                "status": "skipped",
-                "reason": "pattern_confidence_below_floor",
-                "confidence": pattern_confidence,
-            }
 
         lr = await db.execute(
             select(PatternEvidenceLink).where(PatternEvidenceLink.pattern_id == pid)
@@ -549,18 +561,26 @@ def generate_playbook_candidate(self, pattern_id: str, tenant_id: str):
             retrieval_failed=retrieval_failed,
         )
         if prep.should_block:
-            logger.info(
-                "playbook.generation_blocked_pregeneration",
+            if not force:
+                logger.info(
+                    "playbook.generation_blocked_pregeneration",
+                    tenant_id=str(tid),
+                    pattern_id=str(pid),
+                    outcome=str(prep.gate.outcome),
+                    reasons=prep.gate.reasons[:5],
+                )
+                return {
+                    "status": "skipped",
+                    "reason": str(prep.gate.outcome),
+                    "pregeneration": prep.gate.as_dict(),
+                }
+            logger.warning(
+                "playbook.generation_forced_past_pregeneration",
                 tenant_id=str(tid),
                 pattern_id=str(pid),
                 outcome=str(prep.gate.outcome),
                 reasons=prep.gate.reasons[:5],
             )
-            return {
-                "status": "skipped",
-                "reason": str(prep.gate.outcome),
-                "pregeneration": prep.gate.as_dict(),
-            }
 
         knowledge = prep.filtered_knowledge
         links_written = await persist_knowledge_links(
@@ -693,7 +713,16 @@ def generate_playbook_candidate(self, pattern_id: str, tenant_id: str):
             domain_id=pattern.domain_id,
         )
         await db.refresh(playbook)
-        return {"status": "ok", "playbook_id": str(playbook.id), "stable_key": stable_key}
+        result: dict[str, object] = {
+            "status": "ok",
+            "playbook_id": str(playbook.id),
+            "stable_key": stable_key,
+        }
+        if force and prep.should_block:
+            result["forced_past_pregeneration"] = str(prep.gate.outcome)
+        if force and pattern_confidence < PLAYBOOK_GENERATION_MIN_PATTERN_CONFIDENCE:
+            result["forced_low_confidence"] = pattern_confidence
+        return result
 
     try:
         return run_async(work)

@@ -10,7 +10,9 @@ import { Loader2 } from "lucide-react";
 import { PageHeader } from "@/components/common/page-header";
 import { KnowledgeSourcesPanel } from "@/components/playbooks/knowledge-sources-panel";
 import { ClarificationPanel } from "@/components/playbooks/clarification-panel";
+import { GuidedFixModal } from "@/components/playbooks/guided-fix-modal";
 import { QualityPanel, usePlaybookQuality } from "@/components/playbooks/quality-panel";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   DetailPageSkeleton,
   DetailWideCardSkeleton,
@@ -109,22 +111,22 @@ function TriggerConditionsSummary({
   }
 
   return (
-    <div className="rounded-lg border bg-muted/35 p-4">
-      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+    <div className="rounded-xl border bg-muted/30 p-4 shadow-2xs">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2 border-b border-border/40 pb-2.5">
         <h3 className="text-sm font-semibold text-foreground">Trigger conditions</h3>
         <span className="text-xs text-muted-foreground">Issue signals before execution</span>
       </div>
-      <div className="grid gap-4 lg:grid-cols-[minmax(0,1.4fr)_minmax(220px,0.8fr)]">
+      <div className="grid gap-6 md:grid-cols-2">
         {sections.map((section) => (
-          <div key={section.key} className="space-y-2">
-            <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+          <div key={section.key} className="space-y-2 min-w-0">
+            <p className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
               {formatTriggerLabel(section.key)}
             </p>
-            <ul className="space-y-1.5">
+            <ul className="space-y-2">
               {section.items.map((item, index) => (
-                <li key={`${section.key}-${index}`} className="flex gap-2 text-sm leading-6">
-                  <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-primary" />
-                  <span>{item}</span>
+                <li key={`${section.key}-${index}`} className="flex items-start gap-2.5 text-xs sm:text-sm leading-5 min-w-0">
+                  <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-primary" />
+                  <span className="break-words [overflow-wrap:anywhere] min-w-0 text-foreground">{item}</span>
                 </li>
               ))}
             </ul>
@@ -759,6 +761,8 @@ export default function PlaybookDetailPage() {
     searchParams.get("edit") === "1" ? "edit" : "view",
   );
   const [forkOpen, setForkOpen] = useState(false);
+  const [wizardOpen, setWizardOpen] = useState(false);
+  const [bottomTab, setBottomTab] = useState<string>("lineage");
   const autoForkRef = useRef(false);
   const wantsEdit = searchParams.get("edit") === "1";
   const qc = useQueryClient();
@@ -932,18 +936,65 @@ export default function PlaybookDetailPage() {
         </DialogContent>
       </Dialog>
 
+      <GuidedFixModal
+        playbookId={playbook.id}
+        open={wizardOpen}
+        onOpenChange={setWizardOpen}
+      />
+
       <div className="flex flex-wrap gap-2">
         <StatusBadge status={playbook.lifecycle_state} />
         <span className="rounded-md border px-2 py-0.5 text-xs capitalize">{playbook.risk_tier} risk</span>
       </div>
 
+      {quality?.summary?.state === "fail" && !editing && (
+        <div className="flex flex-col gap-3 rounded-xl border border-primary/30 bg-gradient-to-r from-primary/15 via-primary/5 to-background p-4.5 sm:flex-row sm:items-center sm:justify-between shadow-2xs">
+          <div className="space-y-1">
+            <div className="flex items-center gap-2">
+              <Sparkles className="h-4 w-4 text-primary" />
+              <p className="text-sm font-semibold">Playbook Quality Gaps Detected</p>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Quality found{" "}
+              {(quality.summary.finding_counts?.critical ?? 0) +
+                (quality.summary.finding_counts?.major ?? 0)}{" "}
+              blocking issue
+              {(quality.summary.finding_counts?.critical ?? 0) +
+                (quality.summary.finding_counts?.major ?? 0) ===
+              1
+                ? ""
+                : "s"}
+              . Use our step-by-step guided assistant to resolve them quickly.
+            </p>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            <Button
+              type="button"
+              size="sm"
+              onClick={() => setWizardOpen(true)}
+              className="gap-1.5 shadow-xs cursor-pointer"
+            >
+              <Sparkles className="h-3.5 w-3.5" />
+              Start guided fix
+            </Button>
+          </div>
+        </div>
+      )}
+
+      <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(320px,24rem)] lg:items-start">
+        <div className="min-w-0 order-2 lg:order-1">
       {selectedVersion ? (
         <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-base">
-              Procedure steps
-            </CardTitle>
-            <CardAction className="flex flex-wrap items-center justify-end gap-2">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between px-4 pt-4 pb-3 border-b">
+            <div className="flex items-center gap-2">
+              <h2 className="font-heading text-base font-semibold text-foreground whitespace-nowrap">
+                Procedure steps
+              </h2>
+              <span className="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground font-medium whitespace-nowrap">
+                {Array.isArray(selectedVersion.steps) ? selectedVersion.steps.length : 0} steps
+              </span>
+            </div>
+            <div className="flex flex-wrap items-center justify-end gap-2">
               <Select
                 value={selectedVersion.id}
                 onValueChange={(value) => {
@@ -952,7 +1003,7 @@ export default function PlaybookDetailPage() {
                 }}
                 disabled={editing}
               >
-                <SelectTrigger className="h-8 w-[220px]">
+                <SelectTrigger className="h-8 w-[200px] text-xs">
                   <span className="truncate">
                     {versionOptionLabel(selectedVersion, playbook)}
                   </span>
@@ -968,7 +1019,7 @@ export default function PlaybookDetailPage() {
               <Button
                 variant="outline"
                 size="sm"
-                className="h-8"
+                className="h-8 text-xs"
                 disabled={editing}
                 onClick={() => setDiffVersion(selectedVersion.id)}
               >
@@ -979,7 +1030,7 @@ export default function PlaybookDetailPage() {
                 <Button
                   variant="outline"
                   size="sm"
-                  className="h-8"
+                  className="h-8 text-xs"
                   disabled={rollbackMut.isPending || editing}
                   onClick={() => rollbackMut.mutate(selectedVersion.id)}
                 >
@@ -990,7 +1041,7 @@ export default function PlaybookDetailPage() {
               {canEdit && !editing && (
                 <Button
                   size="sm"
-                  className="h-8"
+                  className="h-8 text-xs cursor-pointer"
                   disabled={lifecycleLocked || !selectedIsMain}
                   title={editTitle}
                   onClick={() => {
@@ -1005,12 +1056,9 @@ export default function PlaybookDetailPage() {
                   {selectedVersion.published_at ? "Edit as new draft" : "Edit"}
                 </Button>
               )}
-              <span className="basis-full text-right text-xs font-normal text-muted-foreground">
-                {versionOptionLabel(selectedVersion, playbook)} — {Array.isArray(selectedVersion.steps) ? selectedVersion.steps.length : 0} steps
-              </span>
-            </CardAction>
-          </CardHeader>
-          <CardContent className="space-y-4">
+            </div>
+          </div>
+          <CardContent className="space-y-4 pt-4">
             {editing ? (
               <PlaybookEditor
                 playbook={playbook}
@@ -1058,6 +1106,19 @@ export default function PlaybookDetailPage() {
         </Card>
       )}
 
+        </div>
+
+        <aside className="order-1 flex flex-col gap-4 lg:order-2 lg:sticky lg:top-4 lg:self-start">
+          <ClarificationPanel
+            playbookId={playbook.id}
+            onOpenWizard={() => setWizardOpen(true)}
+          />
+          <div>
+            <QualityPanel playbookId={playbook.id} />
+          </div>
+        </aside>
+      </div>
+
       {!editing && playbook.description && (
         <p className="text-sm text-muted-foreground whitespace-pre-wrap">{playbook.description}</p>
       )}
@@ -1081,19 +1142,49 @@ export default function PlaybookDetailPage() {
         )}
       </div>
 
-      {/* Above lineage and governance on purpose: this is the panel that
-          tells a reviewer whether the thing below is worth reading, and a
-          finding they scroll past is a finding that did not happen. */}
-      <QualityPanel playbookId={playbook.id} />
-      {/* Directly under the quality panel, because it is the answer to the
-          question that panel raises. A reviewer who has just read "the
-          contract requires a rollback step and there isn't one" needs the
-          place to say what the rollback is to be the next thing they see. */}
-      <ClarificationPanel playbookId={playbook.id} />
-      <PlaybookLineageReferencesPanel playbookId={playbook.id} />
-      <GovernancePanel playbook={playbook} />
-      {selectedVersion && <KnowledgeSourcesPanel version={selectedVersion} />}
-      {selectedVersion && <ConflictsPanel version={selectedVersion} />}
+      <div className="pt-2">
+        <Tabs value={bottomTab} onValueChange={(val) => val && setBottomTab(val)} className="w-full">
+          <TabsList variant="glass" className="max-w-full justify-start overflow-x-auto gap-1 border border-border/80 bg-muted/60 p-1 shadow-2xs">
+            <TabsTrigger value="lineage" className="gap-1.5 text-xs">
+              <GitFork className="h-3.5 w-3.5" />
+              Lineage &amp; Evidence
+            </TabsTrigger>
+            <TabsTrigger value="governance" className="gap-1.5 text-xs">
+              <ListChecks className="h-3.5 w-3.5" />
+              Governance &amp; Approvals
+            </TabsTrigger>
+            {selectedVersion && (
+              <TabsTrigger value="knowledge" className="gap-1.5 text-xs">
+                <FileText className="h-3.5 w-3.5" />
+                Knowledge Sources
+              </TabsTrigger>
+            )}
+            {selectedVersion && (
+              <TabsTrigger value="conflicts" className="gap-1.5 text-xs">
+                <GitCompare className="h-3.5 w-3.5" />
+                Documented vs. Observed
+              </TabsTrigger>
+            )}
+          </TabsList>
+
+          <TabsContent value="lineage" className="mt-4 border-none p-0 outline-none">
+            <PlaybookLineageReferencesPanel playbookId={playbook.id} />
+          </TabsContent>
+          <TabsContent value="governance" className="mt-4 border-none p-0 outline-none">
+            <GovernancePanel playbook={playbook} />
+          </TabsContent>
+          {selectedVersion && (
+            <TabsContent value="knowledge" className="mt-4 border-none p-0 outline-none">
+              <KnowledgeSourcesPanel version={selectedVersion} />
+            </TabsContent>
+          )}
+          {selectedVersion && (
+            <TabsContent value="conflicts" className="mt-4 border-none p-0 outline-none">
+              <ConflictsPanel version={selectedVersion} />
+            </TabsContent>
+          )}
+        </Tabs>
+      </div>
     </div>
   );
 }
