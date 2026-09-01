@@ -10,6 +10,7 @@ COPY pyproject.toml .
 RUN pip install --no-cache-dir -e ".[dev]" 2>/dev/null || pip install --no-cache-dir .
 
 COPY src/ src/
+COPY data/ data/
 COPY alembic.ini .
 COPY alembic/ alembic/
 

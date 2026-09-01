@@ -12,8 +12,41 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-_DATA_DIR = Path(__file__).resolve().parents[3] / "data" / "quality"
+def _find_data_dir() -> Path:
+    candidates = [
+        Path(__file__).resolve().parents[3] / "data" / "quality",
+        Path("/app/data/quality"),
+        Path.cwd() / "data" / "quality",
+        Path.cwd() / "backend" / "data" / "quality",
+        Path(__file__).resolve().parents[2] / "data" / "quality",
+    ]
+    for c in candidates:
+        if c.is_dir():
+            return c
+    return candidates[0]
+
+
+_DATA_DIR = _find_data_dir()
 _EXAMPLES_DIR = _DATA_DIR / "examples"
+
+_FALLBACK_DATA: dict[str, dict[str, Any]] = {
+    "artifact_routing": {
+        "defect_evidence_types": ["release_notes", "defect", "known_issue"],
+        "informational_evidence_types": ["faq", "overview", "concept"],
+    },
+    "default_policy_pack": {
+        "version": "tenant-template-1.0.0",
+        "owner": None,
+        "notes": "Generic tenant template.",
+        "rules": [],
+    },
+    "default_ontology": {
+        "version": "tenant-template-1.0.0",
+        "owner": None,
+        "notes": "Generic tenant template.",
+        "components": [],
+    },
+}
 
 
 def clear_quality_data_cache() -> None:
@@ -23,6 +56,18 @@ def clear_quality_data_cache() -> None:
 
 @lru_cache(maxsize=16)
 def load_quality_data(name: str) -> dict[str, Any]:
+    for base in [
+        _DATA_DIR,
+        Path("/app/data/quality"),
+        Path.cwd() / "data" / "quality",
+        Path.cwd() / "backend" / "data" / "quality",
+        Path(__file__).resolve().parents[3] / "data" / "quality",
+    ]:
+        path = base / f"{name}.json"
+        if path.is_file():
+            return _read_json_object(path)
+    if name in _FALLBACK_DATA:
+        return _FALLBACK_DATA[name]
     path = _DATA_DIR / f"{name}.json"
     return _read_json_object(path)
 

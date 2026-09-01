@@ -23,6 +23,7 @@ services:
       - "${BACKEND_PORT:-8001}:${BACKEND_PORT:-8001}"
     volumes:
       - ./backend/src:/app/src
+      - ./backend/data:/app/data
       # Host path from GOOGLE_APPLICATION_CREDENTIALS (QA:
       # /var/www/QA/ContextEdge/google_creds.json). Inside the container the
       # file is always /run/secrets/google_creds.json.
@@ -52,6 +53,7 @@ services:
     command: celery -A contextedge.workers.celery_app worker -l INFO -Q default,sync,hydration,extraction,correlation,embedding,pattern,evaluation
     volumes:
       - ./backend/src:/app/src
+      - ./backend/data:/app/data
       - ${GOOGLE_APPLICATION_CREDENTIALS}:/run/secrets/google_creds.json:ro
     env_file:
       - .env
