@@ -23,7 +23,12 @@ from contextedge.quality.claim_match import overlap_ratio, tokens
 from contextedge.quality.section_purpose import infer_section_purpose
 from contextedge.quality.validators.artifact_suitability import validate_artifact_suitability
 from contextedge.quality.registry import ValidationContext
-from contextedge.quality.states import DIM_ARTIFACT_SUITABILITY, STATE_INCONCLUSIVE, STATE_PASS
+from contextedge.quality.states import (
+    CATEGORY_TERMINOLOGY_NONCANONICAL,
+    DIM_ARTIFACT_SUITABILITY,
+    STATE_INCONCLUSIVE,
+    STATE_PASS,
+)
 from contextedge.services.knowledge_retrieval_service import KnowledgeDocument, KnowledgeSection
 from contextedge.services.quality_contract_service import prepare_playbook_generation
 
@@ -255,3 +260,59 @@ def test_pregeneration_gate_blocks_on_source_conflicts():
     )
     assert gate.outcome == ContractOutcome.REQUIRES_ADJUDICATION
     assert gate.should_block
+
+
+class TestMatchingPrecision:
+    def test_ps_alias_does_not_match_inside_steps(self):
+        from contextedge.quality.claim_match import contains_phrase, ontology_terms_present
+        from contextedge.quality.validators.subject import validate as validate_subject
+
+        ont = [
+            {
+                "canonical_term": "Process Studio",
+                "term_kind": "component",
+                "aliases": ["PS", "Studio"],
+            }
+        ]
+        assert not contains_phrase("Follow these steps to restart the agent", "PS")
+        assert "Process Studio" in ontology_terms_present(
+            "Open Process Studio and restart the agent", ont
+        )
+
+        ctx = ValidationContext(
+            content={
+                "title": "Agent restart",
+                "description": "",
+                "steps": [{"text": "Follow these steps to restart the agent"}],
+            },
+            content_hash="abc",
+            playbook_id="p1",
+            tenant_id="t1",
+            contract={},
+            ontology_terms=ont,
+        )
+        result = validate_subject(ctx)
+        alias_findings = [
+            f for f in result.findings if f.category == CATEGORY_TERMINOLOGY_NONCANONICAL
+        ]
+        assert alias_findings == []
+
+    def test_multi_word_ontology_term_detected_in_steps(self):
+        from contextedge.quality.claim_match import ontology_terms_present
+
+        ont = [{"canonical_term": "AutomationEdge Agent", "aliases": ["AE Agent"]}]
+        found = ontology_terms_present(
+            "Restart the AutomationEdge agent service on vpn-gw-01", ont
+        )
+        assert "AutomationEdge Agent" in found
+
+    def test_short_policy_rules_require_all_tokens(self):
+        from contextedge.quality.policy_match import rule_matches_action
+
+        jar_rule = {"normalized_action": "change jar file"}
+        assert not rule_matches_action(jar_rule, "Change the config file on server")
+        assert rule_matches_action(jar_rule, "Change the jar file on server")
+
+        reregister_rule = {"normalized_action": "re-register agent"}
+        assert not rule_matches_action(reregister_rule, "Re-running the agent workflow")
+        assert rule_matches_action(reregister_rule, "Re-register the agent now")

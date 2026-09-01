@@ -16,6 +16,37 @@ def tokens(text: str) -> set[str]:
     return set(_TOKEN_RE.findall((text or "").lower()))
 
 
+def contains_phrase(text: str, phrase: str) -> bool:
+    """Match a phrase or alias on word boundaries, not as a substring."""
+    needle = (phrase or "").strip().lower()
+    if not needle:
+        return False
+    pattern = rf"\b{re.escape(needle)}\b"
+    return bool(re.search(pattern, (text or "").lower()))
+
+
+def ontology_terms_present(text: str, ontology: list[dict]) -> set[str]:
+    """Canonical terms found in text via token subsets or bounded alias matches."""
+    text_toks = tokens(text)
+    found: set[str] = set()
+    for term in ontology:
+        canon = str(term.get("canonical_term") or "").strip()
+        if not canon:
+            continue
+        canon_toks = tokens(canon)
+        if canon_toks and canon_toks <= text_toks:
+            found.add(canon)
+            continue
+        if contains_phrase(text, canon):
+            found.add(canon)
+            continue
+        for alias in term.get("aliases") or []:
+            if isinstance(alias, str) and contains_phrase(text, alias):
+                found.add(canon)
+                break
+    return found
+
+
 def overlap_ratio(left: str, right: str) -> float:
     a, b = tokens(left), tokens(right)
     if not a or not b:

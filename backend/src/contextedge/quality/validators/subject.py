@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from contextedge.quality.claim_match import (
     contract_subject_corpus,
+    contains_phrase,
+    ontology_terms_present,
     overlap_ratio,
-    tokens,
 )
 from contextedge.quality.registry import (
     Finding,
@@ -91,19 +92,10 @@ def validate(context: ValidationContext) -> ValidatorResult:
 
     ont = _ontology_terms(context)
     if ont:
-        title_toks = tokens(title + " " + description)
-        step_toks = tokens(step_blob)
-        canonical = {t["canonical_term"].lower() for t in ont}
-        aliases = {
-            a.lower()
-            for t in ont
-            for a in (t.get("aliases") or [])
-            if isinstance(a, str)
-        }
-        known = canonical | aliases
-        step_components = step_toks & known
-        title_components = title_toks & known
-        if step_components and not title_components:
+        subject_line = f"{title} {description}".strip()
+        step_terms = ontology_terms_present(step_blob, ont)
+        title_terms = ontology_terms_present(subject_line, ont)
+        if step_terms and not title_terms:
             findings.append(
                 Finding(
                     category=CATEGORY_SUBJECT_MISMATCH,
@@ -118,25 +110,28 @@ def validate(context: ValidationContext) -> ValidatorResult:
                 )
             )
         for term in ont:
-            canon = term.get("canonical_term", "")
+            canon = str(term.get("canonical_term") or "").strip()
+            if not canon:
+                continue
             for alias in term.get("aliases") or []:
-                if isinstance(alias, str) and alias.lower() in step_blob.lower():
-                    if canon.lower() not in (title + description).lower():
-                        findings.append(
-                            Finding(
-                                category=CATEGORY_TERMINOLOGY_NONCANONICAL,
-                                dimension=DIM_SUBJECT_SPECIFICITY,
-                                severity=SEVERITY_MINOR,
-                                explanation=(
-                                    f"Steps use alias {alias!r}; prefer canonical "
-                                    f"{canon!r} in the subject line."
-                                ),
-                                validator=VALIDATOR,
-                                target_kind="field",
-                                target_ref="title",
-                            )
+                if not isinstance(alias, str) or not contains_phrase(step_blob, alias):
+                    continue
+                if not contains_phrase(subject_line, canon):
+                    findings.append(
+                        Finding(
+                            category=CATEGORY_TERMINOLOGY_NONCANONICAL,
+                            dimension=DIM_SUBJECT_SPECIFICITY,
+                            severity=SEVERITY_MINOR,
+                            explanation=(
+                                f"Steps use alias {alias!r}; prefer canonical "
+                                f"{canon!r} in the subject line."
+                            ),
+                            validator=VALIDATOR,
+                            target_kind="field",
+                            target_ref="title",
                         )
-                        break
+                    )
+                    break
 
     return result_from_findings(findings, (DIM_SUBJECT_TRUTH, DIM_SUBJECT_SPECIFICITY))
 
