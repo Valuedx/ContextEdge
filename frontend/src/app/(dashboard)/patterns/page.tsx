@@ -38,7 +38,7 @@ function PatternActions({ pattern }: { pattern: Pattern }) {
   const [deleteOpen, setDeleteOpen] = useState(false);
 
   const generateMutation = useMutation({
-    mutationFn: () => api.post("/playbooks/generate", { pattern_id: pattern.id }),
+    mutationFn: () => api.post("/playbooks/generate", { pattern_id: pattern.id, force: true }),
     onSuccess: () => {
       toast.success("Playbook candidate updated!");
       queryClient.invalidateQueries({ queryKey: ["patterns"] });

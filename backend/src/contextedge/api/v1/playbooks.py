@@ -1960,6 +1960,9 @@ async def generate_playbook(
         await db.refresh(playbook)
         return playbook
 
+    except HTTPException:
+        await db.rollback()
+        raise
     except Exception as exc:
         logger.exception(
             "playbook_generation_failed",
