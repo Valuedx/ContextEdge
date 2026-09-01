@@ -1,0 +1,3767 @@
+{
+  "tenant_id": "00000000-0000-0000-0000-000000000001",
+  "generated_at": "2026-09-01T11:15:35.077085+00:00",
+  "dry_run": false,
+  "patterns_to_regenerate": 537,
+  "regeneration": [
+    {
+      "pattern_id": "dfbef080-f9a1-476d-919f-5d40c8218b38",
+      "pattern_title": "DocEdge Decommission Runbook Management",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "63fb58fe-282c-493b-b9fc-4a4963c3d43d"
+    },
+    {
+      "pattern_id": "769a807f-9ae8-44d0-aca2-6418653c4ead",
+      "pattern_title": "T3 User Login Failure Due to Password Issues",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "85b8e188-c20a-41bb-8cd4-3e45f3208fab",
+      "pattern_title": "GUI Automation/Spy Functionality Issues in Process Studio",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "493afe8d-4fda-496f-b08c-717fe24822ae",
+      "pattern_title": "ServiceNow Plugin Version Rollback Due to Instability",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "0ec1ce0a-eab0-478d-972c-2103ced279b0"
+    },
+    {
+      "pattern_id": "50532412-2db8-4373-a5bf-735ebab2aacd",
+      "pattern_title": "Duplicate Agent Registration Conflict",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "26b9561f-cc70-4a2d-b7c1-522a0925125c"
+    },
+    {
+      "pattern_id": "ba9ee509-475a-4218-9d59-37954dcc93d0",
+      "pattern_title": "Application Crash Due to System Memory Exhaustion (JVM Native Memory)",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "3cf268e7-c9cf-4e04-a93c-2f299a48c3c5"
+    },
+    {
+      "pattern_id": "a8c67df4-f16e-45b6-8e52-cbf19189c937",
+      "pattern_title": "Active Directory/LDAP Integration Failures",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "0e0d942f-345a-4be1-8964-1d5d8d1958dd",
+      "pattern_title": "SSO Concurrent Session Restriction Misunderstanding",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "b3f06d5c-4bd1-4da0-a3bd-56bc67154bbf",
+      "pattern_title": "RPA Agent Stability Issues: JVM Memory Exhaustion and Python Plugin Failures",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "97661e1a-2c84-4ed7-8668-d34fc541dd98",
+      "pattern_title": "DocEdge Azure OCR Plugin Error Handling Failure",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "7a65b396-d6d9-40fb-a6a9-8da1b891a575",
+      "pattern_title": "Process Studio Registration and Connectivity Failure",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "144b31df-9ea5-4ed9-be4a-a6ea880d0430",
+      "pattern_title": "Process Incompatibility After Library Upgrade",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "d9c00876-5c62-466d-a916-6489f8370d73"
+    },
+    {
+      "pattern_id": "4f1ec37c-80be-453c-80c6-86fad11e0bcc",
+      "pattern_title": "Application Login Failure Due to Missing JavaScript Library",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "db6497c0-2628-4431-aade-2e015a43ee72"
+    },
+    {
+      "pattern_id": "2152e502-911e-421d-b336-860ff317d9d8",
+      "pattern_title": "AutomationEdge/DocEdge System Upgrade and Migration Process",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "cfe9ba6f-3d1f-464b-a81f-bd4d5ce83ff3",
+      "pattern_title": "Third-Party Library Critical Security Vulnerability",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "8567a808-9b8c-4136-9ad6-98964ba62d1e",
+      "pattern_title": "User Reported Functionality Issue Due to Misaligned Expectations",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "43f851c7-8be4-4a27-ac51-1b12336903f1",
+      "pattern_title": "RPA Tooling Compatibility Management (Chrome Driver & AutomationEdge Extension)",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "d7c94c48-20b9-460f-95e9-723e5887cca3",
+      "pattern_title": "Agent Operational Issues Due to Misconfigured/Missing Dependencies",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "e060a208-335c-4a0b-a850-eaec0765d20c",
+      "pattern_title": "User Knowledge Gap: Performing Specific System Operations",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "41879f49-1674-4298-9890-8f5d85a5eb53"
+    },
+    {
+      "pattern_id": "9c5eb696-4e5b-4a72-841c-a20222ef259a",
+      "pattern_title": "Missing Custom Task Due to Incomplete Setup/Licensing",
+      "status": "skipped",
+      "reason": "pattern_confidence_below_floor",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "5e499a63-daa5-492b-8c3f-9e7a65229876",
+      "pattern_title": "EWS Mail Input Plugin Configuration Support",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "a9f6a609-a620-4960-aa96-4f18a3e75575",
+      "pattern_title": "RPA Development Machine Performance Degradation Due to Insufficient Hardware",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "37b9844f-71d6-4cf3-8244-3cf9ea7c5624",
+      "pattern_title": "Excel Output Plugin Failure Due to Corrupted Output File",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "f17661c4-8b38-4c7b-87ac-f8086863e659",
+      "pattern_title": "Excel Plugin Limitations for Protected File Handling",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "29a0283f-d107-4dc5-9ce9-cda1f0d52372",
+      "pattern_title": "Application Startup Failure: Missing Runtime Dependency Folder",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "7e219e13-b96d-4a46-adcd-7659eb5ad629",
+      "pattern_title": "Manual Trial License Provisioning",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "f07be17f-f261-4820-96dc-7f1b0ea8c324"
+    },
+    {
+      "pattern_id": "c2d6f2dc-465a-4f11-9420-d7e4335c079c",
+      "pattern_title": "SFTP Plugin Connection Failures to Legacy Servers",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "48dded30-474b-4b09-8dc1-d4b55559467b",
+      "pattern_title": "Security Vulnerability Remediation Workflow",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "87bb5f50-ef8a-49d1-b30f-04f7123582c7",
+      "pattern_title": "RPA Bot Failures Post OS Upgrade Due to Browser & Session Compatibility",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "9f9ceed4-20f9-4fe6-b3cc-b3e21112af56",
+      "pattern_title": "Web Automation 'Start Browser' Failure Due to Missing Browser Component",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "aafff48a-8ce7-40ea-bb78-a39ebefc0f28",
+      "pattern_title": "Copilot Workflow Overwrite and Data Loss Due to Missing Backup",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "12c73599-ad80-4ff5-ae7c-959419fab39b"
+    },
+    {
+      "pattern_id": "952bf5bc-c6fb-4a73-8b5e-5702a2287387",
+      "pattern_title": "Heap Memory Exhaustion during Large Data Processing with Excel Writer",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "7de8203e-a79c-4e62-8d6f-a33296a80ed6"
+    },
+    {
+      "pattern_id": "0ca03f54-32d6-41a5-80c3-d54f2968cf8b",
+      "pattern_title": "BOT Login Failure Due to Application-Specific Error",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "405ddfb1-a413-4692-a417-db6bba3031c3",
+      "pattern_title": "Workflow Processing Bottleneck Under High Load",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "44380513-ed05-4572-8886-bd2ba9009500",
+      "pattern_title": "Process Studio Publishing Failure: vfsFilename is null",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "f9675330-a2a4-4b04-9192-d471225d206e"
+    },
+    {
+      "pattern_id": "13dc559a-40b1-4e7b-85cf-4db147ee6cbe",
+      "pattern_title": "Client Inquiry: Excel Mapping Feasibility",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "6eedf69e-be4b-47c1-94b8-22d0b9244e39"
+    },
+    {
+      "pattern_id": "fb75a254-1a8b-4c69-a034-67dc0fdd758f",
+      "pattern_title": "VBScript Automation Failure Due to Unhandled Excel Pop-ups",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "98b48011-2002-4c5d-bcba-2dffad1d106a"
+    },
+    {
+      "pattern_id": "b25b6273-4839-483b-beec-56331de269e2",
+      "pattern_title": "DocEdge PDF Extraction Failure Due to Plugin Incompatibility",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "2649748e-3fb8-40bd-8afa-f24d38754a7a",
+      "pattern_title": "TOTP Generator Plugin: Version Compatibility and External Authentication Dependencies",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "a3806334-25d0-45ad-ae5f-febc09921ed5",
+      "pattern_title": "Application Compatibility Issues with Platform Updates",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "2eff6f7d-812d-449e-b8a1-ae14609c5eae"
+    },
+    {
+      "pattern_id": "50ed1180-9342-4d62-aa3d-59e182eeb523",
+      "pattern_title": "Function Returns Null for Expected Output Despite Successful Operation",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "2c7eb501-ffb8-47ef-bbb2-96bbdf40d55a"
+    },
+    {
+      "pattern_id": "7524ca70-3b30-43a4-bfbb-61d2ceced3c0",
+      "pattern_title": "GUI Spy Functionality Issues Due to System Resource Constraints",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "fc9fb8ed-2cd4-48bf-ad41-87d55fac38d1"
+    },
+    {
+      "pattern_id": "5a0cdd00-40b9-4480-b08a-d9a209289ec9",
+      "pattern_title": "Get File Name Plugin Functionality Issues: Environmental & Configuration Related",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "453b207e-e489-4caa-a677-c8e920d4f42f",
+      "pattern_title": "Process/Workflow Stuck During Database-Related Plugin Update",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "b2d9e153-4e35-4f9f-994a-6d734a3a557a",
+      "pattern_title": "Workflow Failure Due to Missing Dynamic Folder",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "7de3a7dc-8290-4edf-91fc-a317deae07d1"
+    },
+    {
+      "pattern_id": "d4d214bb-c0cd-47a9-ba13-0ccad54f32f9",
+      "pattern_title": "Concurrent Database Row Update Conflicts",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "67adfb97-db20-4888-99a3-65e7f1bdee49"
+    },
+    {
+      "pattern_id": "9feabeda-148d-4686-a472-3d6635d81b86",
+      "pattern_title": "RDP Session Instability Due to VBScript Timing",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "138d6f7d-c55b-482d-8783-b854a703ba54"
+    },
+    {
+      "pattern_id": "1141b3ca-4215-41e3-a1e9-9322b805c9fb",
+      "pattern_title": "Routine Plugin Assignment Fulfillment",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "a403bd9a-30b4-44ba-ac40-ec5a6f1f2b81"
+    },
+    {
+      "pattern_id": "18921ca6-7852-4795-9ed6-9e9ff267a6d5",
+      "pattern_title": "AutomationEdge Job Processing Failures Due to Architectural Limitations",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "8ee746ca-17a0-4854-909d-548c237809e4",
+      "pattern_title": "DocEdge Installation Failure Due to AE Version Mismatch",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "15ae9691-7224-4d77-ac47-9b2ce87ac5fb"
+    },
+    {
+      "pattern_id": "5666b0a9-5476-4575-9ac6-a5f61afb8913",
+      "pattern_title": "False Positive Malware Detection of Chrome Driver",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "6b76c869-a832-4cd1-a49d-8892359f3396",
+      "pattern_title": "Python Server Initialization Failure After Server Restart",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "e06f3085-83dd-48b9-8501-cfd2b22c3699"
+    },
+    {
+      "pattern_id": "f9e00784-35fa-40c1-806d-3cf7b3fca926",
+      "pattern_title": "Automation Edge License Provisioning/Update",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "436ba514-e31f-43b1-bfd0-fe006db8587c"
+    },
+    {
+      "pattern_id": "639f6234-5441-4d0d-9765-9986cd93aa62",
+      "pattern_title": "Third-Party CAPTCHA Service Unreliability",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "bdf98df0-a5ef-478c-9583-998fd1699622"
+    },
+    {
+      "pattern_id": "6f3b0ca2-eb83-44c0-a899-3c8c0d81744c",
+      "pattern_title": "AE License Upload Process Ambiguity",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "2fdcdc25-d031-4e9f-a9b0-e780907b2f05"
+    },
+    {
+      "pattern_id": "7aa71981-a6cb-44db-a5ef-464c6d3e3cc3",
+      "pattern_title": "IE Automation Session Dependency on Windows Server 2022",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "bc21fa38-517b-4156-a62d-18af01eca775"
+    },
+    {
+      "pattern_id": "e61a4a53-a2bb-4c20-87a2-097f6ce14e4a",
+      "pattern_title": "Edge IE Mode Failure Due to Missing/Incorrect Drivers",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "8cff3a61-7b34-472c-b175-853c380141bb"
+    },
+    {
+      "pattern_id": "b632e600-8db0-4e9a-b975-06a521cd6d4e",
+      "pattern_title": "Process Studio Launch Failure",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "e39b4039-81cc-4b41-86a1-0b71d8f65a3e",
+      "pattern_title": "Agent Resource Contention Due to Overlapping Workflow Execution",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "0c540a13-3654-44df-bf8b-4d91e71f3bc2",
+      "pattern_title": "Incorrect Microsoft Graph API Endpoint for SharePoint Site Creation",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "5cd870d7-f731-4d22-b0e4-ca6a09389298"
+    },
+    {
+      "pattern_id": "b2db7312-8fcf-4a35-b122-dad3c529b73d",
+      "pattern_title": "AutomationEdge Redshift Connectivity Failure Due to JDBC Driver Incompatibility",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "e120a07c-2d88-471a-9acf-4986033abea4"
+    },
+    {
+      "pattern_id": "e9a93fe6-9ec0-4302-b098-0f394ab55460",
+      "pattern_title": "RPA Agent RDP Session Blocked by Unexpected UI Popup",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "a51515ba-28dc-4953-93b4-0173705e948f"
+    },
+    {
+      "pattern_id": "0d27b629-0b1e-4bb9-a2df-ac136dc4fc05",
+      "pattern_title": "PowerShell Session Instability with Windows PowerShell Plugin",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "838adbc3-714c-4607-a4be-9eaac6f6a5f6"
+    },
+    {
+      "pattern_id": "c89111f1-3c11-45f0-b75d-ca1565036aeb",
+      "pattern_title": "Automation Edge Version Upgrade Management",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "65853edb-e05e-44a5-ac92-32cd25a78b40"
+    },
+    {
+      "pattern_id": "de5513ed-f0e1-4a25-bd0f-0fd739384af7",
+      "pattern_title": "SMTP Connection Blocked by Antivirus",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "72c22e19-ff0e-44d3-b46b-b97f21d48ec6"
+    },
+    {
+      "pattern_id": "87be9b6b-534d-4890-b703-9d20310e5f26",
+      "pattern_title": "RPA Agent OS Migration Planning",
+      "status": "skipped",
+      "reason": "pattern_confidence_below_floor",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "8fbe9a48-9d1a-413a-8a04-b41207c137d8",
+      "pattern_title": "Copilot Access Provisioning Delay/Missing Assignment",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "20daff3e-9c17-406e-98ed-01b10880bd1c"
+    },
+    {
+      "pattern_id": "f73797bd-c6e1-4f0a-9bda-f7c9f8f83095",
+      "pattern_title": "Process Studio SSO/MFA Failure Due to Missing IdP Redirect URI",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "18960091-33e1-4db9-afab-840ef5028e5e",
+      "pattern_title": "External Email Service Connectivity Issues",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "649d0b26-a296-4e57-9f46-b0aa5db42009"
+    },
+    {
+      "pattern_id": "4d994638-08a7-4dd0-81d8-c2667185b47c",
+      "pattern_title": "URL 'Not Secure' Status Despite SSL Configuration",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "78f43e54-2058-4c79-b280-9abf047f6219",
+      "pattern_title": "AutomationEdge Process Stuck at Update Plugin Due to Database Contention",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "f17ca5da-0085-4a8d-96f3-f9101cafdccc"
+    },
+    {
+      "pattern_id": "1940078d-8238-4bb5-b417-5827d3082564",
+      "pattern_title": "Chrome Extension Installation Blocked by Network Proxy",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "8a4b7574-5587-4107-957f-4954905ddead"
+    },
+    {
+      "pattern_id": "b00b1ee9-841b-4a49-bb48-6f9deb225965",
+      "pattern_title": "Web Automation Workflow Execution Failures",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "580d9cf0-5507-4cad-8672-fbe5d4760ab8"
+    },
+    {
+      "pattern_id": "121c6e6d-5733-46c9-97a6-8f7a133cde89",
+      "pattern_title": "AutomationEdge Process Studio Launch Failure",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "41772bc0-07ea-4c5a-b67b-f7c4eaa68365",
+      "pattern_title": "Missing or Unassigned DocEdge Plugins Causing Workflow Failures",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "81764349-73bc-46b7-9f09-39eafc0ba9ca",
+      "pattern_title": "Manual TOTP Plugin Enablement Request",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "91f80386-6b37-4c44-b090-0bd27f8b2750",
+      "pattern_title": "Process Studio Browser Launch Failure Due to Timeout/Delay",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "33e7a1a4-32db-494b-a286-00839ecfe1bf",
+      "pattern_title": "Manual Agentic AI Plugin Allocation Request",
+      "status": "skipped",
+      "reason": "pattern_confidence_below_floor",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "62b05cfa-ba81-4859-afe6-dde8ded52537",
+      "pattern_title": "Support Team Discontinuation Impact",
+      "status": "skipped",
+      "reason": "pattern_confidence_below_floor",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "d8d777ae-a2c9-48cd-8785-afc305dfb13f",
+      "pattern_title": "RPA Domain-based URL SSO Configuration",
+      "status": "skipped",
+      "reason": "pattern_confidence_below_floor",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "2c9e8281-fed4-4383-b517-153c4583f86e",
+      "pattern_title": "Chatbot Incomplete Data Retrieval and Message Truncation",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "1a7b8345-0437-45e5-bde7-a6bd2c3de54a"
+    },
+    {
+      "pattern_id": "de4248a7-327f-4440-8768-977ff7306856",
+      "pattern_title": "No Recurring Issue Pattern Identified",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "b5ae1354-c86e-4d79-8b34-3845140489b9"
+    },
+    {
+      "pattern_id": "5f4377a6-8851-4ba2-96ec-4565fb17571e",
+      "pattern_title": "Security Vulnerabilities (VAPT) Blocking Production Deployment",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "7da2cf06-4263-46d1-a040-23eaf8e1c70f"
+    },
+    {
+      "pattern_id": "93d57e22-3efd-4b52-adee-d512738da5e9",
+      "pattern_title": "Process Studio License and Registration Failures",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "43e4e110-24df-43fc-9c66-8137eb926cc8"
+    },
+    {
+      "pattern_id": "03a00bb1-97b3-4d0e-b335-ca7124408ae4",
+      "pattern_title": "Jira Plugin Project Fetch Failure Due to Account Configuration",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "0679cb45-0175-4efb-b0e4-cda83cd781a8"
+    },
+    {
+      "pattern_id": "0337f1a2-30b5-47a5-8c5a-4cea33afb21b",
+      "pattern_title": "Incomplete SSL Certificate Chain Causing MID Server REST API Failures",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "fc36128a-88de-4ae9-9367-a482594694cf"
+    },
+    {
+      "pattern_id": "22bc0b93-be3c-4003-a051-182914c4e877",
+      "pattern_title": "UAT Server Browser Access Issues Due to Network Policy",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "02ef911a-cf97-4c39-94ad-875065e68b25"
+    },
+    {
+      "pattern_id": "ae2d25f5-7f6c-4dfc-8521-4c52e45629a5",
+      "pattern_title": "Email Server Connection Failure Due to SSL/TLS Hostname Mismatch",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "214bfe0f-4d48-4f7d-9eab-8e1883592218"
+    },
+    {
+      "pattern_id": "e3646d14-6807-4295-952a-91288bed5d85",
+      "pattern_title": "Static UI Asset Update Request",
+      "status": "skipped",
+      "reason": "pattern_confidence_below_floor",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "c49264ea-d3d2-4c6b-8904-feb78b231aad",
+      "pattern_title": "Automation Plugin UI Element Interaction Failure",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "f6404daf-dcc7-43d3-8639-156611bcdecb"
+    },
+    {
+      "pattern_id": "e47ae6a5-5ff3-4637-96a6-e2364fd26c59",
+      "pattern_title": "Agent Failure Due to Server Configuration Discrepancy",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "72519b76-99a9-48f7-bc54-d35c70a03bb1",
+      "pattern_title": "Plugin Functionality Failure Awaiting Version Update",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "18c67189-9e23-4801-8f91-0ba58f94d7ed",
+      "pattern_title": "Misunderstood Rate Limiting for Bulk Operations",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "177156f8-4ade-42bc-b8f8-9ec9a8e3095c"
+    },
+    {
+      "pattern_id": "7d236558-5485-4987-8c07-37a60132d767",
+      "pattern_title": "Unsupported Direct Database Migration: DocEdge to AEUI",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "65567228-fd00-4303-87c8-e00ae38a36a2"
+    },
+    {
+      "pattern_id": "6e8f94b2-02e1-4c94-9e3d-ebb7c4db2c4c",
+      "pattern_title": "AutomationEdge SSO Configuration and Integration Issues",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "390c32a1-5481-49a5-8e68-8779a5c7e798",
+      "pattern_title": "AEUI Portal Intermittent File Upload Failure",
+      "status": "skipped",
+      "reason": "pattern_confidence_below_floor",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "7f73a078-670b-4d33-a796-411143a58c02",
+      "pattern_title": "Vendor-Dependent Security Vulnerability Resolution Tracking",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "96add9ab-1369-4d11-b2ed-47c7101344d6"
+    },
+    {
+      "pattern_id": "13c4b54e-dc8c-403a-bda7-0db370fbcb7e",
+      "pattern_title": "Client Self-Resolution of RPA Interaction Issues",
+      "status": "skipped",
+      "reason": "pattern_confidence_below_floor",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "779c4866-607d-411b-83e1-88a5d43c443e",
+      "pattern_title": "API 400 Bad Request Due to Incorrect Usage or Payload",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "eb31e1ab-85de-411b-8cfa-b8ad4da99253"
+    },
+    {
+      "pattern_id": "6b78988c-3db0-499f-802c-ca3cc78aea5c",
+      "pattern_title": "Trend Micro False Positive on New ChromeDriver Executables",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "30205c90-9fb1-4a83-b7d8-af879bb7a5e1",
+      "pattern_title": "Automation Tool Incompatibility with Canvas-Rendered Web Applications",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "7062377e-6db5-41da-90e0-bc7036699342",
+      "pattern_title": "AutomationEdge SMTP Authentication Failure Due to Username Format Mismatch",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "af494fff-f6ba-4188-965f-35e3c408d015",
+      "pattern_title": "Agent Unresponsive/Unknown State with Obscure Root Cause",
+      "status": "skipped",
+      "reason": "pattern_confidence_below_floor",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "5cba40fb-6ac5-4b3b-8b60-3a19c245e024",
+      "pattern_title": "Intermittent Plugin Failure Due to Script Execution Restrictions",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "28d5fee0-2e98-4b9a-a642-1d81f10a7b9d",
+      "pattern_title": "Product End-of-Life (EOL) Information Request",
+      "status": "skipped",
+      "reason": "pattern_confidence_below_floor",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "b36828fd-4036-444e-9a5c-ebd42f6d0707",
+      "pattern_title": "Process Studio Functionality and Deployment Failures",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "98c6ae09-ac50-4269-bddc-75f5d05f3377"
+    },
+    {
+      "pattern_id": "077bcee5-7559-43a4-a4a0-13f56d46e99c",
+      "pattern_title": "Office 365 Plugin Authentication Failure (Refresh Token)",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "339b6c87-7718-4f20-b2a3-ed4c79f7f637",
+      "pattern_title": "API Usage & Documentation Information Request",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "01dfc2be-b945-420e-8d39-a7147893c660"
+    },
+    {
+      "pattern_id": "f394430f-32a3-45fe-a32b-b758dad56118",
+      "pattern_title": "UAT Application Deployment Failure Due to web.xml Parsing Error",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "c927ed45-0b8b-421c-b6d9-659d69b39c36"
+    },
+    {
+      "pattern_id": "6632d2b3-fe06-48b1-9528-d66b05f4eada",
+      "pattern_title": "Jira Issue Creation Failure Due to Outdated/Incompatible Plugin",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "815402a5-23e5-47d3-a460-a9a519f25118",
+      "pattern_title": "Process Studio SSO Port Binding Conflict",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "7277f42d-f86b-4554-90e4-afe0beed38aa"
+    },
+    {
+      "pattern_id": "d6cc5ecf-9ee7-4e37-a5e8-2620cfb14b67",
+      "pattern_title": "Iterative Excel Column Validation Errors",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "175eb46a-fcd4-40d1-82e0-298872d5dff6"
+    },
+    {
+      "pattern_id": "383b2154-634a-41cb-8ac7-f79b05cb57c9",
+      "pattern_title": "Application Startup Failure: Missing Dependencies or DB Migration Lock",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "a9b94ec0-35dd-47a2-a9f1-c8c72313709b"
+    },
+    {
+      "pattern_id": "9289bb24-94ee-46c5-a112-9b14d77d1a4d",
+      "pattern_title": "Dormant Account Activation",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "2c7fdee2-e45c-491b-9726-1ed3e3611934",
+      "pattern_title": "Process Studio Web GUI Synchronization Failure Due to JAR Mismatch",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "f77c7ba0-9314-42ff-967c-ba67620c9f95"
+    },
+    {
+      "pattern_id": "b160e297-6db1-467b-8a47-125b79dbba25",
+      "pattern_title": "Browser Automation Driver Compatibility and Deployment Issues",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "739101d3-8bba-4cb3-a0f1-10ecbd3cf1c4",
+      "pattern_title": "SFTP Connection and Credential-less Setup Support",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "6200ef20-24a5-4bc2-9c75-d09b6768ac1f",
+      "pattern_title": "Workflow Variable Passing Failure",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "c9df44f4-4454-453b-a95c-e77d9551258a",
+      "pattern_title": "Workflow State Unclear Due to Pending Customer Action",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "f85e8a44-8d98-44a3-9fdf-9c2f36f0bf67"
+    },
+    {
+      "pattern_id": "8d59c610-dd01-43f9-ab97-1dff332ceab0",
+      "pattern_title": "Ticketing System Automated Notification Delivery Failure",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "44d168f7-e06f-4225-9c1c-5c8f1621fb60"
+    },
+    {
+      "pattern_id": "4c60ac2a-c989-44cd-9e88-df712140e6e3",
+      "pattern_title": "Workflow Execution Failure Due to Invalid Authentication Token",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "7a86fec2-b57e-4ed7-8804-61e795b3072e",
+      "pattern_title": "Process Studio Concurrent Resource Contention (Bind Error)",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "1f77605f-d2c3-4d95-a08c-228c8fc2f2a6",
+      "pattern_title": "Environment Upgrade Blocked by Missing Software License",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "f436a669-b45a-44c0-bc01-3f8aab2d0239",
+      "pattern_title": "Expired or Missing SSL/TLS Certificate",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "fc83986d-06a1-4413-8778-0bd44caa9493"
+    },
+    {
+      "pattern_id": "2f06e75a-e8ca-4dba-881c-c51a78db0f47",
+      "pattern_title": "Intermittent Process Output Mismatch Due to Plugin Configuration",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "c209a2bf-aa75-47cb-ac31-e03a71ae5571"
+    },
+    {
+      "pattern_id": "eed76024-1688-474e-b8da-1da5ee3c4bfe",
+      "pattern_title": "Chrome Compatibility Issue with Web GUI on AWS",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "513d0a3b-ee0b-4943-9b3b-e7e72544c096"
+    },
+    {
+      "pattern_id": "781c04ad-254e-46e1-a590-27fbc564b3be",
+      "pattern_title": "Insecure Tomcat Auto-Deployment Configuration",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "953ffb4e-1117-4fd8-826c-42741006b4b2"
+    },
+    {
+      "pattern_id": "c50e5831-c181-4236-94b0-3b5c3a8f3c3f",
+      "pattern_title": "Plugin File Version Mismatch Between Environments",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "2a7509e7-8f08-423b-8165-9a59e7bf3c18"
+    },
+    {
+      "pattern_id": "a64c9a92-665f-4a9d-b82c-3439f8907c06",
+      "pattern_title": "Copilot User Agent Visibility Misunderstanding in T3",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "8bbb8696-4701-4d10-82dc-b38ba618ff92"
+    },
+    {
+      "pattern_id": "359721e1-0fa3-4468-969f-0db5deb91a1b",
+      "pattern_title": "Tomcat Shutdown Port Conflict",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "326939b9-c871-4891-97a9-4da72a89236b"
+    },
+    {
+      "pattern_id": "84d5739d-7ebc-425d-bafe-2179b148e4e5",
+      "pattern_title": "Advanced REST Client Parameter Conflict in Workflow Execution Due to Key-Value Similarity",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "8fcc50bf-5e72-48b3-9d32-2d3ea27aac17"
+    },
+    {
+      "pattern_id": "88ade8d8-2589-41fb-bbc5-26ab9f1324c4",
+      "pattern_title": "Python Script ModuleNotFoundError Due to Missing/Outdated Dependency",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "c89d7935-4811-4aee-a7c7-4d4cf5a8489a",
+      "pattern_title": "API Workflow JSON Path Mismatch Due to Array Parsing",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "7f2732fd-a229-4b3f-8d21-6fa07eb5b767"
+    },
+    {
+      "pattern_id": "7cd973cf-60e1-4708-a9aa-8e227811dea8",
+      "pattern_title": "GUI Automation Plugin Failure Due to Incorrect JAR Version",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "935c4451-e2e8-4c26-965a-6d935f08d851"
+    },
+    {
+      "pattern_id": "a10f2bff-2bc5-4f7b-bd17-618f00e7e13e",
+      "pattern_title": "Web GUI Workflow Browser Instantiation Failure",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "377d3c92-7b29-4b8a-9f5b-8cd37702d91c",
+      "pattern_title": "Endpoint Security Software Blocking Application Agent Startup",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "cc96c8ac-5d03-4c14-81db-08a75af1ba3e",
+      "pattern_title": "Advanced REST Client SSL Handshake Failure Due to TLS Version Incompatibility",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "b1409232-b39f-4661-986b-a69b5774e991"
+    },
+    {
+      "pattern_id": "d8f89d46-900b-49dd-a254-ac8efac14415",
+      "pattern_title": "OneDrive Plugin 'Item Not Found' Due to Authentication Token Issue",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "b5195e70-300f-4291-a8e5-2478b92698c4"
+    },
+    {
+      "pattern_id": "bf23a11e-c6da-4efb-a8d8-194db2d844ab",
+      "pattern_title": "Security Vulnerability Remediation via Software Release",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "3503dc93-59e6-442d-92df-86bda8021239",
+      "pattern_title": "ActiveMQ Client Connection Instability During Broker Failover",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "484c1709-8b12-4b47-a949-8507ae485a20"
+    },
+    {
+      "pattern_id": "4b981446-815c-4517-b67f-b37232ed0949",
+      "pattern_title": "Plugin-Related User Support and Management",
+      "status": "skipped",
+      "reason": "pattern_confidence_below_floor",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "c285f68a-0609-4476-86d6-e29772856993",
+      "pattern_title": "Workflow Not Visible/Assignable Due to Configuration or Publication State",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "b6887ffb-78e8-44b0-8047-e90ad938448a"
+    },
+    {
+      "pattern_id": "e078ed7b-c70d-45af-8bd7-3906b219774e",
+      "pattern_title": "Workflow Import Failure Due to Missing Tenant Plugin Assignment",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "540817db-bc84-4aa4-be85-429cc1b3a280"
+    },
+    {
+      "pattern_id": "81e51e28-af42-4f31-a969-e93f4abaa2f5",
+      "pattern_title": "Post-Deployment Operational Blockage Due to Pending Licensing",
+      "status": "skipped",
+      "reason": "pattern_confidence_below_floor",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "98deba7a-67a1-4734-8aaf-23ef46c4f743",
+      "pattern_title": "Client-Side Digital Signature Configuration Query",
+      "status": "skipped",
+      "reason": "pattern_confidence_below_floor",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "702b7f62-5763-4ee3-8388-fefc2e09d7ba",
+      "pattern_title": "AIStudio API 404 for Content Management Endpoints",
+      "status": "skipped",
+      "reason": "pattern_confidence_below_floor",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "5b3c646b-f671-4584-8776-46fc70065af8",
+      "pattern_title": "Automation Failure Due to Unexpected UI Popup",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "4505b36b-a5ad-4fe2-a1df-f179685b4858"
+    },
+    {
+      "pattern_id": "f7965fa6-43d1-4f8b-8ed4-d4a65e118749",
+      "pattern_title": "Web Automation Plugin Inaccuracies Requiring Custom Scripting",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "c4d42acd-a6b7-4edd-955b-01e77299cbe8",
+      "pattern_title": "Agent Enters Unknown State Causing Delivery Failures",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "7d089039-81a2-4401-b9b0-61d82e5ab1f1"
+    },
+    {
+      "pattern_id": "02a2b7a4-ebfb-4e73-bdcb-720e29de7bd4",
+      "pattern_title": "Undiagnosable NetApp NAS Shared Path Issues Due to Missing Audit Logs",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "8a71cc30-cb62-4920-8cf9-a9d3d26268ec"
+    },
+    {
+      "pattern_id": "9f679120-2e9a-425b-878c-99be3f5e7450",
+      "pattern_title": "Client-Side PDF Conversion Plugin Failure",
+      "status": "skipped",
+      "reason": "pattern_confidence_below_floor",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "a3db9158-5a7b-4db3-9773-9b555c9ce093",
+      "pattern_title": "Planned Cloud Patching Impact Communication",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "d64991a5-0d51-40b3-aa20-0b1fb4117dd9"
+    },
+    {
+      "pattern_id": "415b104f-a0d2-407f-afc2-a9352db4a266",
+      "pattern_title": "Manual File/Driver Provisioning from SFTP",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "30ea1ac6-16b1-4241-948e-e33c45874252"
+    },
+    {
+      "pattern_id": "4f781939-d013-4c0f-a02d-652371ca4244",
+      "pattern_title": "Intermittent PostgreSQL Client Connection Failures",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "f8cb072c-2789-4616-9fd4-fa1d022d98ff"
+    },
+    {
+      "pattern_id": "9fc7a9fb-98ea-48b0-8dbc-5182999e2c0d",
+      "pattern_title": "Automation Edge License Deactivation Due to Nginx Service Failure",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "cd5a12c4-c61a-4c54-9182-738009de969e"
+    },
+    {
+      "pattern_id": "550a26dc-07b0-4343-b371-05d0ff5944e4",
+      "pattern_title": "Web Automation GUI Spy/Recorder Malfunction Due to Input State",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "3c655b29-32d6-46d7-b379-7147ce0be3e7"
+    },
+    {
+      "pattern_id": "8b3b7b88-fd7a-476d-91a3-3997855ea777",
+      "pattern_title": "Automated Browser Instability Post Chrome Update in Virtualized Environments",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "61c983d2-a2f0-4197-bdc5-c1d5146144dd",
+      "pattern_title": "Python Script Plugin Failure Due to Incorrect Parameters",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "ec7bb7d6-d3e4-4179-be54-505a306522ad"
+    },
+    {
+      "pattern_id": "b4a9ed98-2b3b-4385-b4ce-9ccce9cbd734",
+      "pattern_title": "Application Unavailability Due to Database Connection Exhaustion",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "932a9cf2-c3f2-4b31-88ef-d8bbd25710c3"
+    },
+    {
+      "pattern_id": "c7e38b98-c2c7-41d6-aa42-f1ce616e1dc9",
+      "pattern_title": "Messaging Queue Overload Affecting Schedulers",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "86de2f47-ea73-49fd-a599-880595045e69"
+    },
+    {
+      "pattern_id": "11a4eb3e-2e23-4f8f-9d00-eee7a1dc4c4d",
+      "pattern_title": "Sysadmin Password Request/Reset",
+      "status": "skipped",
+      "reason": "pattern_confidence_below_floor",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "31849bbd-6f53-452b-96b6-b5369c06a744",
+      "pattern_title": "Agent Workflow Failure Post-Plugin Update Due to Plugin Bug",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "7fb269e4-7724-43ff-b20d-a4778eb51332"
+    },
+    {
+      "pattern_id": "d19ee8a4-a9fe-4597-82f2-9b0dc5bda217",
+      "pattern_title": "Agentic AI Plugin Lacks Direct Workflow State Management",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "6807ce7f-edbe-468f-a2ba-af498466fd77"
+    },
+    {
+      "pattern_id": "20516227-5863-4edc-a57a-5bb7511c2776",
+      "pattern_title": "Database Upgrade Interruption: Backup Availability Issues",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "c448481e-848c-4643-9b28-d8a8577029cb"
+    },
+    {
+      "pattern_id": "5e9b3b36-6120-40eb-8d97-8010f8f0a507",
+      "pattern_title": "T3 Server Access Provisioning",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "a32cb559-c19d-4d5b-a735-5e98e663203b"
+    },
+    {
+      "pattern_id": "7c14caee-c93d-4f57-b8aa-04d3bdddefb6",
+      "pattern_title": "Recurring User Request for Custom Scripting Assistance",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "672d1f35-005c-4c5e-a3be-f0cb2104ccc0"
+    },
+    {
+      "pattern_id": "6c823c79-79a3-4fd9-acec-13930a0d51ff",
+      "pattern_title": "RDP Session State Impacting Automation Workflows",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "b0455133-4675-4a28-87d2-d17f7f1630cf",
+      "pattern_title": "Blocked Upgrade Due to Critical File Download Issues",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "2ab77574-9e0e-4dd1-b3fb-67a0102029db",
+      "pattern_title": "Recurring Information Request: API Authentication Limits",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "7a0d51ca-3150-4cff-8703-b422636062e6"
+    },
+    {
+      "pattern_id": "ec97f8be-4634-4735-9f2a-a2401a2d9042",
+      "pattern_title": "Critical Software Vulnerability Identified",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "17b5368c-652b-48d2-ba37-4cd3a4330634",
+      "pattern_title": "GUI Plugin Variable Inoperability in Max Timeout Field Post-Upgrade",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "3ee02d78-a60f-4ff5-8d2b-2da502d6555c",
+      "pattern_title": "User Plugin/Feature Access Request Fulfillment",
+      "status": "skipped",
+      "reason": "pattern_confidence_below_floor",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "2e0fae51-27cc-46e9-8e4b-3ba91e7a3348",
+      "pattern_title": "Urgent API Integration Information Request",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "d899697a-f251-47a9-8a13-da1b1dd7971a",
+      "pattern_title": "SOAP API Integration and Execution Failure in AutomationEdge Studio",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "c97bec89-f057-4d13-a058-8a391c6e0905",
+      "pattern_title": "User Account and Software License Management",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "390b78dd-cff7-4945-80da-1742df06b5e1",
+      "pattern_title": "SMTP Mail Sending Failure Due to Authentication or Connectivity Issues",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "3c61488b-3ae0-40e7-82af-cf5112acc864",
+      "pattern_title": "O365 Send Mail Plugin Protocol Information Gap",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "0af795a8-a884-4bdf-95a2-327b0027c965"
+    },
+    {
+      "pattern_id": "c77040b7-ce13-4fe2-a337-ab1aa8fb920a",
+      "pattern_title": "Process Studio Plugin Sync Failure Due to Browser Extension Restrictions",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "1a9e362a-9aba-4971-b34a-bff21cd600df"
+    },
+    {
+      "pattern_id": "0f341576-a4e6-4a22-9db9-b115e983d649",
+      "pattern_title": "Email Server Connectivity Failure During Configuration",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "74785a9a-e6ee-4b18-b214-b6b20336e59c"
+    },
+    {
+      "pattern_id": "7b4df72a-658f-4738-a56e-eace55c8a1fe",
+      "pattern_title": "Process Stuck in 'Execution Started' Requiring Agent Restart",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "6c29d25d-beaa-48d6-9d4b-9372b8099c89"
+    },
+    {
+      "pattern_id": "bc45225a-0b03-41d6-8d9d-169e8f722648",
+      "pattern_title": "Documentation Discoverability and Access Issues",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "cd6088e4-bfef-4fff-803e-5a6a9ebcd5f9"
+    },
+    {
+      "pattern_id": "82b5faa6-6ca6-457d-a686-b27ff10cbbe1",
+      "pattern_title": "Audit Log Purging Inefficiency for Historical Data",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "ce6be1fb-9be6-4c6e-9a39-ad66c7ff1cd5"
+    },
+    {
+      "pattern_id": "d350cf41-639f-47e7-8b93-f086017ac1dd",
+      "pattern_title": "Email Configuration Failure Due to Mailbox Storage Limit",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "1df2fc3a-84be-426b-b7e2-bf6534f42afd"
+    },
+    {
+      "pattern_id": "a749f27b-7968-4bae-a43b-1a6837dcf69d",
+      "pattern_title": "Product Defect Causing Workflow Unassignment",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "d1aa33a6-bc97-4bd6-b32a-7695925befa5"
+    },
+    {
+      "pattern_id": "50055393-3a96-4b4e-ac7a-79831ecb96de",
+      "pattern_title": "PS Plugin Synchronization Failure Due to Outdated Configuration",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "b7d00c18-ca04-4bcd-874e-81f62fe6b30b",
+      "pattern_title": "Apache ActiveMQ Vulnerability Remediation",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "798d94b9-f664-49b8-b0f7-1a5f4064a822",
+      "pattern_title": "Workflow Execution Failure Due to GUI Plugin Version Mismatch",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "8ded9983-5107-41e9-ad5d-d112fad152f9"
+    },
+    {
+      "pattern_id": "7e198f04-6cb6-4860-a276-b79303bf80c9",
+      "pattern_title": "Vulnerability Remediation via Component Upgrade and License Update",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "4002c9fa-7b6f-4878-9182-95d43c77fa62",
+      "pattern_title": "AutomationEdge Process Studio Installation Failure Due to Environment or Missing Dependencies",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "0181d539-3e0c-434c-80c4-1afd93216f2b"
+    },
+    {
+      "pattern_id": "a164770d-e403-46ba-b8bf-2183d6e23622",
+      "pattern_title": "Post-Upgrade License Exhaustion and Functional Regression",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "753c90ee-252b-44c5-9ed8-271cf9a0e8c5"
+    },
+    {
+      "pattern_id": "7bb665c1-22d9-4457-bceb-667e7cc24be2",
+      "pattern_title": "Automated Download Failure Due to Browser Behavior Change",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "c25d0c60-d35f-47ff-8edb-25a7d1531b0e",
+      "pattern_title": "LDAPS Connection Failure Due to Certificate Chain and Java Version Mismatch",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "ca5ae6af-87fa-4fd0-8837-4dccdf85de85",
+      "pattern_title": "Third-Party Software Licensing Compliance Queries",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "19afa198-0b0a-4f34-bacb-51b5b8be634b"
+    },
+    {
+      "pattern_id": "9519e2dc-f2e4-49b9-b75e-efeaf2f1b55e",
+      "pattern_title": "Application Component Failure Post-Migration Due to Incomplete Deployment or Misconfiguration",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "e7e9f608-d5c1-49db-9f35-f3a10ee3c13f"
+    },
+    {
+      "pattern_id": "b9606e98-5317-42d9-a56e-4526d4afdb4c",
+      "pattern_title": "Automation Workflow Browser Session Termination",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "d6925f53-013a-4ce0-acc3-c3856eadb201"
+    },
+    {
+      "pattern_id": "a9d2331c-25dd-40c8-a5f8-c37a977c02c0",
+      "pattern_title": "AutomationEdge Scheduled Process Failure Due to Timezone Mismatch and Scheduler Corruption",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "40339926-1fc4-46a8-b548-6a34006d6575"
+    },
+    {
+      "pattern_id": "801fb90f-734d-4102-80e2-f0d4e98b8f9f",
+      "pattern_title": "Environmental Restrictions on Preferred Technology",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "86bee724-b130-4edb-9eee-39cccb8dc2d0",
+      "pattern_title": "OneDrive Plugin Refresh Token Generation Failure Due to Browser Encoding",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "b052627c-c339-4e1d-bb33-4d45b4398eed"
+    },
+    {
+      "pattern_id": "505e8c20-8fad-45ba-b6e8-733132a7f4a9",
+      "pattern_title": "Copilot Access Failure Due to Cache Inconsistency During On-Prem Setup",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "43079232-3579-495c-914c-74ccf7b46a16"
+    },
+    {
+      "pattern_id": "7c8ff5ed-6f3e-4612-95ce-4171a90bb416",
+      "pattern_title": "Message Broker Memory Exhaustion Due to Over-allocated Queue Limits",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "68687045-5ba4-470b-b75f-86022d4fb10d"
+    },
+    {
+      "pattern_id": "8b18cbf1-e3b8-4e76-a627-13da17fd5773",
+      "pattern_title": "Accidental Version Mismatch During Software Patch/Upgrade",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "590cb20e-647f-48f4-9736-bd6ee8d81c5d"
+    },
+    {
+      "pattern_id": "ee12c7a8-df87-4964-ad46-0e3b5dd10f02",
+      "pattern_title": "User Login Failure Due to Authentication/Authorization Misconfiguration",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "307e6458-82ff-4516-b1be-ac269e259cb6",
+      "pattern_title": "Process Studio: Custom Decryption for Unsupported Algorithms",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "6f680d16-1678-4e3d-a81d-4d5f11a28367"
+    },
+    {
+      "pattern_id": "fe48293f-19eb-4b85-9d52-c2c074320fcb",
+      "pattern_title": "Java Heap Space Exhaustion During Large Excel File Processing",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "ba8c80b0-4fc0-4415-ba8e-affe8d0dbb90"
+    },
+    {
+      "pattern_id": "288f8c68-fbb9-44d4-b58b-399a3fa7dd42",
+      "pattern_title": "Bot Web Element Interaction Failure After Workflow Changes",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "c8f4a8ce-e70d-4b75-8a7f-5ecb348237d2"
+    },
+    {
+      "pattern_id": "4c72194b-118b-4c7a-b79d-0cf8c203fb0d",
+      "pattern_title": "New Client/Team Feature Access Provisioning",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "8d51c23a-3980-40d4-911b-5fc7dfc8854c",
+      "pattern_title": "Routine User Account and License Administration",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "31d2d697-1d52-4cfb-bc93-811842c2f283",
+      "pattern_title": "Inefficient Bulk Data Processing with API Batching Challenges",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "9cf96e8d-0758-4c16-abc8-7d139a730ba3"
+    },
+    {
+      "pattern_id": "df28368a-ad3c-4d93-b021-83c841bf6e2f",
+      "pattern_title": "Ambiguous Initial Component Setup and Configuration",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "108e2e5a-e97e-41a4-8a28-827d16cdf586",
+      "pattern_title": "ManageEngine SDP Plugin Data Deserialization and Field Display Issues (On-Premise)",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "183ddb5b-7430-4dbe-92c8-f3269e3aecbf"
+    },
+    {
+      "pattern_id": "7c7b887a-4e3c-4dbb-9c1c-4242d16fa8fd",
+      "pattern_title": "Plugin Configuration Failure: SFTP Port Not Parsed",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "a2a7d921-3e60-4c8e-a795-b0b501258384"
+    },
+    {
+      "pattern_id": "bdf09145-c3b8-4f2b-b14b-6785d934b2ed",
+      "pattern_title": "Misconfigured Service URL Mapping Leading to Access Issues",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "6407231f-8cf0-4c25-80ff-9da0310cec21",
+      "pattern_title": "AutomationEdge User Management Configuration Constraint",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "8043e62c-b4d1-46e9-a7c2-0bf27c3a6886"
+    },
+    {
+      "pattern_id": "ed2ea2d0-260d-4702-911a-72838843c2ca",
+      "pattern_title": "Web Automation Blocked by Browser Security Restrictions",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "fa07bd50-fcdc-4af9-a495-86ba3d7db718"
+    },
+    {
+      "pattern_id": "5f068643-ee73-4085-abe9-c2974b6379b8",
+      "pattern_title": "Agent Instability and Workflow Failures Due to Environmental Misconfiguration After Update",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "42e8bdb9-9163-4265-8ddf-9da2708bc20c"
+    },
+    {
+      "pattern_id": "4fadd41b-b7dd-4f90-95e2-b33bed7f04ae",
+      "pattern_title": "Application License Invalidation Requiring Re-registration",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "beca6e5e-4217-4906-b57b-0a711811fd65"
+    },
+    {
+      "pattern_id": "e6fdee38-584c-439f-862a-de7144099949",
+      "pattern_title": "Third-Party Plugin Incompatibility Due to Upstream API Changes",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "aafee7fd-7c13-4f86-aafc-0cf24a2d96cd",
+      "pattern_title": "Post-Upgrade API Incompatibility Due to Request Structure Change",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "cf240f69-8236-4ee1-b1e4-2c86b6c09953"
+    },
+    {
+      "pattern_id": "0a52d727-4a35-4904-8cd5-5b10c6a9dfe3",
+      "pattern_title": "RDP Plain Text Password Handling and Security Policy Violation",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "9d04098d-2b95-4a59-b218-8b9ac0206c53",
+      "pattern_title": "Post-Upgrade Bot Process Failure Due to Plugin Incompatibility",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "2762e1a5-4c13-40d8-a464-4f0f45668510"
+    },
+    {
+      "pattern_id": "da58fcfe-aee9-4968-81a8-7af4587be8d9",
+      "pattern_title": "Software Upgrade Requiring Full Downtime Despite Rolling Upgrade Request",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "ccddfc7a-d94d-46c3-b3fd-75ef390faed3"
+    },
+    {
+      "pattern_id": "e3e79b12-74c6-4078-907f-62ac51d2bd17",
+      "pattern_title": "AutomationEdge Performance Degradation Due to ActiveMQ Misconfiguration",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "d70feff2-240d-41ce-919d-4d82402b5525",
+      "pattern_title": "Database Schema Initialization Conflict During Application Upgrade",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "9ec13be1-4045-4c91-bcf2-021baf971acc"
+    },
+    {
+      "pattern_id": "5fc9d02f-3549-4430-9b4c-c4d0c0e122b2",
+      "pattern_title": "Post-Upgrade Flow Activation Failure Due to License Step Count",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "7a7f5f9f-be07-463c-aa26-bbed8ffb4e38"
+    },
+    {
+      "pattern_id": "ff1c4475-7a6d-45d9-a02b-14f6cd398fb0",
+      "pattern_title": "Unattended UI Automation Blocked by OS-Level Authentication Pop-up",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "ac31a258-de72-4e82-9525-4859507e2a59",
+      "pattern_title": "Third-Party API Integration: Data Mapping and Authentication Failures",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "4ea9af9f-dc8d-4db4-b72b-853741a8aa88"
+    },
+    {
+      "pattern_id": "b4531069-5f16-4cad-9d99-cca764f49ff6",
+      "pattern_title": "Automation Edge Service Termination Due to RDP Session Timeout and GPO",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "492837ee-012e-4dca-baf1-cb4877af262b"
+    },
+    {
+      "pattern_id": "67e8b558-88b8-4255-8e3e-8641620ffbdb",
+      "pattern_title": "Concurrent Workflow Execution Due to Orphaned Agent Processes",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "8c804a0a-8357-46d5-958f-69bca8d67793"
+    },
+    {
+      "pattern_id": "35a7489d-befe-4c00-8e0e-b194ea81f76c",
+      "pattern_title": "Intermittent Folder Creation Failure with Generic Error",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "fa39db7a-7377-4cf4-ab4d-aaee2a1c1083"
+    },
+    {
+      "pattern_id": "1986202d-67bd-4ae7-a214-2d70d5ce474c",
+      "pattern_title": "Operational Readiness Gaps Leading to Deployment/Upgrade Delays",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "a1ec3e95-5d7a-47db-9888-4a446076c986",
+      "pattern_title": "AutomationEdge Component Startup, Connectivity, and Configuration Failures",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "5cece0c2-6406-4721-bf31-6dc6755406ed",
+      "pattern_title": "Workflow Operation Failure Due to Plugin or Environment Configuration Issues",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "5bc96787-18ff-42c2-a5d5-13bc0d0413b4",
+      "pattern_title": "Sensitive Data Exposure and Handling Issues in Process Studio",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "02617249-6184-4f91-bcde-005d1c50f714",
+      "pattern_title": "Intermittent Connection/Resource Exhaustion for Automation Services",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "730818f0-e2d5-40e0-bb4e-e0104ad11730",
+      "pattern_title": "Chrome Driver Availability and Compatibility for Automation",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "022a6f52-abab-4abc-a03d-85ca6be94887",
+      "pattern_title": "AutomationEdge Process Studio Project/Workspace Corruption",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "f5d35ede-d19d-4ce2-a124-96466438acb8",
+      "pattern_title": "ServiceNow Workflow and Integration Logic Issues",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "61fe2994-07d3-4ed5-aeaa-8d5422817d15",
+      "pattern_title": "AutomationEdge Database Purging Failures",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "ff6f7321-1c7d-4c87-b3f8-632e9c99dfb2",
+      "pattern_title": "ML Plugin Compatibility and Input/Output Format Issues Due to Environment Changes",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "c028541f-6419-4bc3-b8da-28c4e0649580",
+      "pattern_title": "RPA Bot Unattended Execution Failures (Session & GUI Interaction)",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "8ddd8bb9-9ab3-45be-a1c8-59f63bd1e521",
+      "pattern_title": "Excel Input Plugin Data & Metadata Interpretation Challenges",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "60aeecbf-991c-4297-bed0-f33492f24ffb",
+      "pattern_title": "Automation Bot Failure Due to Target Application UI/Event Changes",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "13ffae06-a4ea-4ccd-a337-7e7851a05311",
+      "pattern_title": "SQL Script Plugin Data Insertion Failure with ORA-01013",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "8962919c-3d3c-440d-bee7-a81385114132"
+    },
+    {
+      "pattern_id": "122dca69-1abb-431e-984c-58f6534c69bf",
+      "pattern_title": "AutomationEdge Database Connectivity Misconfiguration",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "945375ec-f176-4383-b805-9403bd9a25a5",
+      "pattern_title": "Web Automation File Download Interruption",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "037ab1f0-6f8d-45ab-aee0-9a0d808dbec5",
+      "pattern_title": "External Regulatory File Version Update Requirement",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "042d66b1-60c2-45dd-8d3b-a6f2ddd08a62"
+    },
+    {
+      "pattern_id": "19ba3bd2-13d4-4761-8bc5-e90a6179cc30",
+      "pattern_title": "AutomationEdge User Access and Authentication Failures",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "7cf4f809-ff60-41ee-8b48-4605ca509ba5",
+      "pattern_title": "Compliance/Security Document Request Fulfillment",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "c71daca2-f01d-40ee-98e6-3e95dfeed1d2",
+      "pattern_title": "PostgreSQL Security Hardening and Vulnerability Remediation",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "bd3164b6-29e6-4ce4-8db5-2fba8135f43c",
+      "pattern_title": "Advanced Rest Client Plugin Defects and Configuration-Related Data Inconsistencies",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "01b3ae22-9737-46ca-b7e9-a649d78a2b6a",
+      "pattern_title": "Process Studio Workflow Design Limitations and Execution Reliability",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "3e38338f-91b4-4d9a-a7c8-17b03976603b",
+      "pattern_title": "AutomationEdge License Expiration and Management",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "2d0e95bb-13c2-47eb-a551-3e60bb3049e8",
+      "pattern_title": "Manual Provisioning of Specific Automation Browser Drivers/Extensions",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "8ef82df1-a883-44d3-9663-ca0855d0ffda",
+      "pattern_title": "Metering Unit Utility Operational Issues During License Upgrade Preparation",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "2c0b6c6d-6a8d-4ae0-95a4-473594b5c80d",
+      "pattern_title": "VAPT Findings Remediation and Clarification",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "c097e7da-a390-4fd5-9047-a431affd1561",
+      "pattern_title": "Platform Lacks Direct MFA Support, SSO Proposed as Alternative",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "57054803-3db4-4c55-9e3e-7690f2a1c0e9",
+      "pattern_title": "Automation Agent Instability and Unknown State",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "bb2af641-36d4-4344-9740-335a3513f43b",
+      "pattern_title": "O365 Email Plugin Shared Mailbox and Connectivity Issues",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "ac9666e6-ab7d-4568-a347-6a3f462b5103",
+      "pattern_title": "New Feature Planning and Guidance",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "24345604-ade5-4963-8dd5-19aebe8bff02"
+    },
+    {
+      "pattern_id": "f821c4b6-8a61-4d7c-9971-dcfef149512a",
+      "pattern_title": "Workflow Failure Due to Unhandled Null/Empty Data",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "d7616567-a7ee-47d3-8cfa-417889617e1b",
+      "pattern_title": "UAT Environment Availability and Access Issues",
+      "status": "skipped",
+      "reason": "pattern_confidence_below_floor",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "4fed26a0-e0d0-4f4f-8e15-65a37897861d",
+      "pattern_title": "AutomationEdge File Upload and Session Configuration Issues",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "bafa7f88-c3ed-4934-bcc8-0237ca696017",
+      "pattern_title": "Agent Startup and Functioning Failures Due to Environmental or Configuration Mismatches",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "aca3427e-9551-4b8f-b3f4-743e0e849b4e",
+      "pattern_title": "RPA Workflow Failures During Excel File Operations",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "bab0005a-7a14-45e1-bdaa-8c43232f64c2",
+      "pattern_title": "web.xml Configuration Review Request",
+      "status": "skipped",
+      "reason": "pattern_confidence_below_floor",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "856eb57a-f926-4052-8fe1-b15276a7af46",
+      "pattern_title": "Process Studio and Plugin Connectivity, Synchronization, and Registration Failures",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "c9b9a96f-d636-4b33-887d-a0bafd16c7c1",
+      "pattern_title": "Intermittent Workflow Stalling or Incorrect Execution",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "f73919de-aa9e-44b3-a10d-fab1aa9c07ee",
+      "pattern_title": "EdgeAI/Co-Pilot User Provisioning and Onboarding Challenges",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "3b96bde5-4941-4363-83eb-55f544147c07",
+      "pattern_title": "Bot Operational and Integration Failures",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "ea5d6034-4611-4448-9952-0d9cdd241ec4",
+      "pattern_title": "VDI Access and Application Functionality Impairment",
+      "status": "skipped",
+      "reason": "pattern_confidence_below_floor",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "485495c2-2f90-4aff-ae73-b1279ee41c99",
+      "pattern_title": "Agent Work Stoppage Due to ActiveMQ Queue Saturation or Misconfiguration",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "946d1182-60f0-4c38-a22c-3b6513f17b95",
+      "pattern_title": "Client Request for Sensitive Data Leading to Policy-Based Disclosure Restrictions",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "457eb922-164b-4252-9396-95b13caf1840"
+    },
+    {
+      "pattern_id": "cc3e4853-b465-4b72-b887-476d5b0ceffd",
+      "pattern_title": "Workflow Execution Logging and Monitoring Visibility Issues",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "90732b67-97ed-44d8-9f06-9cd994ab6756",
+      "pattern_title": "Product Feature Gap Requiring Custom Development",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "25489c08-a3d9-4cbb-8b19-a98a5da122be"
+    },
+    {
+      "pattern_id": "09d085be-9c23-49e3-a728-cfac19efc13d",
+      "pattern_title": "Driver Management and Client-Side Configuration Issues",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "dfb6f2a8-18b5-4f43-8af7-98c42abed506",
+      "pattern_title": "Agent-Workflow Execution and State Issues",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "5471dfc6-4afc-418c-b778-d23b8a2d8097",
+      "pattern_title": "API Workflow Failure Due to Incorrect Query Parameter Encoding",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "fb9f159d-d30d-444c-99ea-bcccffcdbab3",
+      "pattern_title": "External Service Connection Failure Due to Outdated Plugin/Library",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "ba396109-6572-43d3-ae92-b38870140b68",
+      "pattern_title": "Advanced REST Client Plugin Functional Limitations and Bugs",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "a97dff69-fe86-463a-a13d-b3e2720d56fa",
+      "pattern_title": "Incorrect Query Parameter Limiting Results",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "a75c7d33-ac32-4278-9cc7-0b1059dd2bcf"
+    },
+    {
+      "pattern_id": "b503491d-4f62-4883-8dab-a9eaf09c5075",
+      "pattern_title": "Unidentified Root Cause for Intermittent/Critical Issues",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "50fbac16-4bf3-4103-86d5-4e9746a98133",
+      "pattern_title": "Plugin Update and Compatibility Issues",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "c421516a-56db-4605-9e3c-bf120a2312f4",
+      "pattern_title": "Network Access Denied to Database from Application Agent",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "deaf1920-e431-4d61-ab20-e540b6fc18ed"
+    },
+    {
+      "pattern_id": "63dccc97-11ef-45d9-82dc-2e4110e7c8a1",
+      "pattern_title": "Issues Awaiting Product Release Fix (AE v8.4.0)",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "28a9ccb8-1f69-4cf0-9852-41e53f02fd5b",
+      "pattern_title": "Incorrect LDAP User Email Attribute Mapping",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "c54f7cd9-c041-46d2-a3d8-10dee988fe9a"
+    },
+    {
+      "pattern_id": "6cc0bb68-8007-4966-9f1e-276484273533",
+      "pattern_title": "Report Customization and Deployment",
+      "status": "skipped",
+      "reason": "pattern_confidence_below_floor",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "3d0c724a-7757-4421-8d09-798c47e90b92",
+      "pattern_title": "AutomationEdge OnDemand Access and Performance Issues Due to Configuration",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "ccba044d-d214-4457-b2fd-1da38fcc4f2d",
+      "pattern_title": "Application File Upload Size Limit Misconfiguration",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "4ad2132f-9981-4512-9a20-57e1871afc3b",
+      "pattern_title": "AutomationEdge-ServiceNow Integration Configuration & Authentication Failures",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "181d2ffc-d226-4d8f-a0bb-dde2d8bda8c6",
+      "pattern_title": "Audit-Identified Non-Compliant URL Configuration",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "0487d6ec-4928-45fb-aa2a-8c1be906218c"
+    },
+    {
+      "pattern_id": "621339f5-a7c8-4483-b3d4-e78efc2ce9c2",
+      "pattern_title": "Custom Development for Advanced Data Handling Requirements",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "97bb2ea2-cd6e-4425-ae0f-0629f3904cc8",
+      "pattern_title": "Policy-Driven Restricted Log Access",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "69664e86-71f6-4f59-b638-bfd15f141f26",
+      "pattern_title": "AutomationEdge Post-Upgrade Service Instability and Configuration Drift",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "d4240932-e0f2-473d-96b5-431e0465bea0",
+      "pattern_title": "VAPT Remediation and AutomationEdge Version Upgrade",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "abc412ff-e4a1-478e-b5d7-7a5291c1f32e",
+      "pattern_title": "Client Request for Unsupported Deployment Model",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "93f77e84-3b47-4c0b-8827-2ce3dfc46d43"
+    },
+    {
+      "pattern_id": "9d124e68-4078-44d8-b466-b068c1f14c37",
+      "pattern_title": "AEUI Access and Functionality Impairment Due to Configuration or Environmental Factors",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "cf1f0834-31e2-471a-87c0-b2db60280c29",
+      "pattern_title": "AutomationEdge User Account and License Management",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "e163cca3-1407-4ee3-99f4-d9b03b3ed1ba",
+      "pattern_title": "Manual User License Renewal Approval Process",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "22b7977f-ebe4-4b73-8075-3c71c0b8ccc6",
+      "pattern_title": "UI Automation Image Recognition Failure Due to Environment Mismatch",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "5edc4ece-a6e8-4515-8b4d-ee8c352a2958"
+    },
+    {
+      "pattern_id": "7781fb38-77f4-4457-9dc3-2e2dc5a6e830",
+      "pattern_title": "Automation Failure to Re-focus Original Browser Window After Tab/Popup Closure",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "4945f407-688a-4db3-af8f-09698129de5e",
+      "pattern_title": "VAPT-Driven Software Component Upgrades and Patching",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "4986b6ff-1f7b-4543-9528-5453d82efb70",
+      "pattern_title": "Web Automation Plugin and Browser Driver Incompatibility/Interaction Issues",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "329e60f2-d5cc-4c76-8277-5ad6fea74455",
+      "pattern_title": "Client-Side Network/Firewall Restrictions Blocking AutomationEdge Access",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "4b2e821b-8c97-42f6-8742-1bd572d8d2f6",
+      "pattern_title": "AutomationEdge Platform Upgrade Challenges",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "a1e21b35-310b-419e-9f15-1384e06aaac4",
+      "pattern_title": "Premature Application Session Expiration",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "179e9d90-9717-40b1-a63a-9891b386ec86",
+      "pattern_title": "Automation Platform Plugin/Library Compatibility and Versioning Issues",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "7b579ccb-2685-4cae-b61a-a14ba56c4a97",
+      "pattern_title": "Automation Agent Request Processing Inefficiencies",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "f45fbbd1-4642-4f32-bcaa-61ee1c6d5bf4",
+      "pattern_title": "Inconsistent File Deletion Plugin Behavior and Usage",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "2d518a2c-3a9b-40e0-8b4b-a0cd245bb221",
+      "pattern_title": "Agent Upgrade Feature Misunderstanding and Clarification",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "034647f0-b543-43fb-b739-6714d421c118",
+      "pattern_title": "API Authentication Failure Due to Expired or Invalid Tokens",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "e16a6887-52ed-4657-8d1c-4df110e0957a",
+      "pattern_title": "Missing Application Dependency JAR After Deployment",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "9ab85613-e0d7-4849-8024-4ad207098e15"
+    },
+    {
+      "pattern_id": "9c5909b0-4de1-4f57-97ab-f2f70abdc2b5",
+      "pattern_title": "Client Inquiry: API Functionality for User Lifecycle Management",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "962fa75c-952c-4fbf-b133-4dc004c09abd"
+    },
+    {
+      "pattern_id": "1437e2e7-8e05-43e4-98eb-9d44329ebc50",
+      "pattern_title": "Plugin Distribution Request Fulfillment",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "4b48677c-99f9-4fac-a150-fdc2b08a8e46"
+    },
+    {
+      "pattern_id": "4f2554c4-67c6-4d92-9688-c1e25fb9ce9c",
+      "pattern_title": "Standardized OS and Database Migration Procedure",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "9342e96b-d25d-45bc-a8ef-89dcde0af042"
+    },
+    {
+      "pattern_id": "59821162-0237-42cd-8e09-5b1dc455d98f",
+      "pattern_title": "Stalled Administrative Approval Due to Personnel Unavailability",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "c510dafd-e873-458a-94af-bb687b017740"
+    },
+    {
+      "pattern_id": "16650b63-2202-40fa-aec8-82ece986ddf9",
+      "pattern_title": "AI Studio Initial Configuration and Integration Issues",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "934ab1fe-d45b-40df-92bf-ed73616fda77",
+      "pattern_title": "Audit Log Purging Failure Due to Product Defect",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "7224c752-bc82-4064-8909-7b04ea8ac4a3"
+    },
+    {
+      "pattern_id": "22355b32-fcbb-4b43-a1d5-fdd6e1d76191",
+      "pattern_title": "Missing or Incorrect Certificate Deployment",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "a8b3cf59-4686-40c4-b4ce-17bdad3b62e1"
+    },
+    {
+      "pattern_id": "b8527f5f-78f6-40bf-aa5c-3749d48f87d4",
+      "pattern_title": "Automation Edge Agent Insufficient Administrative Privileges",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "dda6c102-34de-4315-a380-2fa5c41cb0ea"
+    },
+    {
+      "pattern_id": "845c1ba3-8083-4351-a48b-ff335cbaa375",
+      "pattern_title": "Microsoft 365 Plugin Refresh Token Generation Failure",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "c45d17f4-75a4-4db7-932e-b4f4ee464f47",
+      "pattern_title": "External Network Restrictions Blocking AutomationEdge Access",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "3617b8ec-5f36-4c6d-8ae5-e096642666e0",
+      "pattern_title": "Automation Platform Configuration Update",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "de0a7614-88f4-421c-84f6-874b1eac9229"
+    },
+    {
+      "pattern_id": "b02a135c-99f5-4e3c-afb4-ca5c3f2228a9",
+      "pattern_title": "Inject JavaScript Plugin Inconsistent Output and Null Returns",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "e461983c-26b1-45b9-b896-127787403e30",
+      "pattern_title": "Configuration Granularity Limitation for Time-Based Settings",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "6fef6cc1-1d29-4cbc-ab11-c2b067c174a2"
+    },
+    {
+      "pattern_id": "dca05b47-bc7c-45ce-8cc5-043afb028aa8",
+      "pattern_title": "Incorrect API Token Usage for Specific Operations",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "e15557ac-8726-4aa0-b690-f3a2639b6903"
+    },
+    {
+      "pattern_id": "66687b8f-c319-46b2-b5ce-7f9e7fc8f2eb",
+      "pattern_title": "T4 Production Server Automation Agent/Bot Failure Due to Environmental Configuration Discrepancies",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "233a6bcf-b439-4a10-b69a-9eaba968b6e5",
+      "pattern_title": "Intermittent Application Failures Due to Concurrency-Related Product Bugs",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "890b1b43-a979-4376-b1e2-2325dbac1854",
+      "pattern_title": "Application/Plugin Functionality Failure Due to Software Bug",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "cc76f34f-5646-46a9-a614-04f87461e7e0",
+      "pattern_title": "Transient User-Specific Application Performance Degradation",
+      "status": "skipped",
+      "reason": "pattern_confidence_below_floor",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "520c7ad4-a2a7-4c34-886d-e852942dbe14",
+      "pattern_title": "AutomationEdge Workflow Unassignment Due to Version-Specific Design Change",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "609accd4-122c-4654-b7f0-b4e80710d138"
+    },
+    {
+      "pattern_id": "7274aa4d-7e53-472c-a062-eca86f83dc81",
+      "pattern_title": "Input Plugin Data Inconsistency or Performance Degradation",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "d00d6074-abbb-4bce-84ca-57c6880c5884",
+      "pattern_title": "AutomationEdge Log Level Configuration Inquiry",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "85dab9e5-0eac-47ee-87a1-123f4305de6b"
+    },
+    {
+      "pattern_id": "28ceeca2-b041-43bc-bdfd-5cc48876480a",
+      "pattern_title": "Operational Overhead Due to Manual Bulk Credential Unassignment",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "3e29e098-7387-4e3f-82aa-bfbe44015707"
+    },
+    {
+      "pattern_id": "2de9daa8-0265-4768-b703-cde8f28e4157",
+      "pattern_title": "Email Service Connectivity Failure (SMTP/IMAP) due to Configuration or Certificate Mismatch",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "718903b2-d85d-4e9d-a9d8-5bd2a14056bd",
+      "pattern_title": "File Decryption Strategy Due to Missing GPG Dependency",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "23b9a420-22ef-496e-9054-6150e1d5f8b2"
+    },
+    {
+      "pattern_id": "886c8c5e-f182-4a17-ae4d-aed14915dc7d",
+      "pattern_title": "S3 Outbound Connection Timeout",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "61840101-08f1-4ebd-aa69-fec6305a0f1c"
+    },
+    {
+      "pattern_id": "c236bcfb-3743-4f07-8ed1-405b04e2bada",
+      "pattern_title": "Automated Workflow Stalling/Failure with External Integrations",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "4a6be01a-2fe8-4d3e-9718-0ab2f495e6fa",
+      "pattern_title": "Third-Party API Rate Limiting Affecting Plugin Functionality",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "d7cc2cc5-ca17-466b-81da-b505e50844b1"
+    },
+    {
+      "pattern_id": "d11a6e88-aa12-42c0-9d1c-7d48209b3fde",
+      "pattern_title": "Incident Log Retrieval Challenges",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "d91f2f8b-ebb1-476b-b1a5-63e623e9982e"
+    },
+    {
+      "pattern_id": "4848efa0-20c8-48e8-a7dc-b81f02429b7c",
+      "pattern_title": "AutomationEdge Security Feature Configuration & Operational Guidance",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "46fe1600-22b3-4cb1-913d-4149dbc5f026",
+      "pattern_title": "Application/Workflow Failures Due to Server-Side Java Environment Issues",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "8f44818b-8524-4db3-892a-9d25f74b67d6",
+      "pattern_title": "Agent/Plugin Update Failures Due to JAR File Inconsistencies",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "9809b394-c09e-423f-b283-376597b7063b",
+      "pattern_title": "RPA Platform Upgrade Blocked by Environmental Prerequisites",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "76d12823-20a6-41e7-bf60-da307e1d049a",
+      "pattern_title": "User-Requested Software Component and License Provisioning",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "a7d50ddf-76f9-4cb5-8bd4-d38ce6deadad",
+      "pattern_title": "Copilot Access Provisioning and Environment Selection",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "d6b14ba2-822a-4167-b046-21f166be784b",
+      "pattern_title": "Automation Edge Workflow Stalling/Failure Due to Plugin/Configuration Issues",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "43b59c9b-b1df-4107-8071-bbd62f24dac7",
+      "pattern_title": "User Request for Application Feature Usage Guidance",
+      "status": "skipped",
+      "reason": "pattern_confidence_below_floor",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "9d6d50db-98f7-40e2-a7ac-6fa89492cf63",
+      "pattern_title": "Unrecoverable Accidental Workflow Deletion",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "f217d59d-5ea8-4373-8805-c3ed366eeeef"
+    },
+    {
+      "pattern_id": "ae56dc7b-b9ec-4af5-bbed-662c603210e9",
+      "pattern_title": "Missing or Inaccessible Integration Architecture Documentation",
+      "status": "skipped",
+      "reason": "pattern_confidence_below_floor",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "34473b3d-aeef-4564-bdbb-3407fe2cab01",
+      "pattern_title": "Misrouted Feature Request/Complex Requirement via Support Channel",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "10971615-a592-4632-babc-9758d33a18f8"
+    },
+    {
+      "pattern_id": "5de4049f-bae4-48c3-8348-4a725bcb663f",
+      "pattern_title": "API Lacks Bulk Processing Support",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "5e76687b-0156-4da2-964b-0899d8f29c24",
+      "pattern_title": "User Guidance for Leveraging Existing Reporting Features",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "c8efc4c3-8e37-49e3-8ba8-3cb33c433f22"
+    },
+    {
+      "pattern_id": "9267e97e-9ea4-4843-902f-720fa7ca8f2b",
+      "pattern_title": "Log Content Security Justification for Operational Data",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "e23c8f9a-e709-4917-bf0f-36c2ea578148"
+    },
+    {
+      "pattern_id": "aa96dded-17e3-44ac-8c7a-5055bf82331f",
+      "pattern_title": "Operational Challenges During Workflow Updates",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "a37f5599-7576-43f6-8e4c-66198eeb61f2",
+      "pattern_title": "Missing Plugin Access Due to Unassigned Permissions",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "164f2377-a810-48a0-b7ad-fe19f0469bb4",
+      "pattern_title": "Automation Edge Version Upgrade & Licensing Management",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "c2d85c03-bbbb-4b97-81d4-0fd027ede578",
+      "pattern_title": "Java Application SSL/TLS Certificate Trust Store Misconfiguration",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "5f6400b8-c205-43dd-acb0-0e18410976b2",
+      "pattern_title": "LDAP/LDAPS Integration and Certificate Configuration Failures",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "117bfe4e-bca4-4ed3-b8ce-60d198f5e340",
+      "pattern_title": "Plugin Enhancement for Dynamic Configuration Support",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "2b727708-7c3f-4f7f-9159-c81d8763e85e",
+      "pattern_title": "Middleware Service Startup/Stability Issues Post-Maintenance",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "c798d553-7148-411b-bac8-37cdaf9720ab",
+      "pattern_title": "Client Feature Request Denied/Deferred Due to Product/Library Limitations or Business Justification",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "c8e7af79-5bca-4a2b-9379-a67d18d2c376",
+      "pattern_title": "Email Recall Request Processing",
+      "status": "skipped",
+      "reason": "pattern_confidence_below_floor",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "51ce76ad-b0bb-49d6-914a-7aeafbba1aaa",
+      "pattern_title": "Workflow Failure Due to Undefined Field Reference in Data Processing Step",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "b60ed1e0-8e50-4846-a4ed-5cb3b8760e60"
+    },
+    {
+      "pattern_id": "e913e2d2-a19b-40ec-8439-3e4462051028",
+      "pattern_title": "Workflow Database Connectivity and Configuration Issues",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "f545dff1-4e22-4119-931a-182afdebf7d2",
+      "pattern_title": "Client-Specific Certificate and Attestation Document Provisioning Challenges",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "c811abe9-b065-40e4-bcf8-fea573b1ecd5",
+      "pattern_title": "Copilot API 403 Errors Due to Missing Token Quota",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "0348d984-08ab-44e7-a432-4d9455ca024d",
+      "pattern_title": "DocEdge User Onboarding and Documentation Gaps",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "d3cd6f34-61ef-4e41-8f0e-b4ecdd06a93e",
+      "pattern_title": "Post-Upgrade Behavioral Change in API/Function Due to Defect Fix",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "da165b9e-2d09-4e13-8fba-9a6f5bff5b97"
+    },
+    {
+      "pattern_id": "bafb4caa-1143-45c6-9034-240edbc9cf10",
+      "pattern_title": "User Misunderstanding of System Notification Logic",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "8c12d2a7-d1fe-4a30-b48c-a1cf6fdd9681"
+    },
+    {
+      "pattern_id": "2e718041-ba3d-4229-af25-903782494ad6",
+      "pattern_title": "Licensing and Resource Allocation Management",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "7f548cb6-13a7-47ee-b436-b12b2d049c14",
+      "pattern_title": "Plugin Configuration Reversion Due to Persistence Defect",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "6ef15975-0726-43d3-ae18-e6ebafbc2208"
+    },
+    {
+      "pattern_id": "238044fd-bffc-44c9-86e1-79a110d20e66",
+      "pattern_title": "New User Trial License Activation Failure",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "ea77ce11-bdaa-4d5b-ae64-633466f15f1d"
+    },
+    {
+      "pattern_id": "02c798a4-fcf2-46c8-bcbf-34f8175b1a13",
+      "pattern_title": "Client Inquiry: Office 365 Plugin Communication Protocol & Authentication",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "66e764c3-40bd-4880-841e-c9f8e8f20e76"
+    },
+    {
+      "pattern_id": "37141be8-f4a0-4808-af7c-c2fd339398fb",
+      "pattern_title": "Agent O365 Plugin Connectivity Issues Due to Proxy Misconfiguration",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "293bdb49-3c74-452e-b627-286bd92ad706"
+    },
+    {
+      "pattern_id": "0534e0e8-0f1b-43d5-a312-3748e1c75390",
+      "pattern_title": "SharePoint Site Creation Failure Due to Incorrect Graph API Endpoint",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "6525a7f1-3e9d-4ffa-b124-53a8dde9288e"
+    },
+    {
+      "pattern_id": "b6101738-0a78-463d-a19f-1994137f90db",
+      "pattern_title": "ServiceNow Plugin Incompatibility Post-Platform Upgrade",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "15b36714-6309-47d8-a268-019854e08fb7"
+    },
+    {
+      "pattern_id": "0b095b95-d02c-4efd-b45c-b2d8f3bd5e49",
+      "pattern_title": "RDP Configuration and Security Policy Conflicts Affecting AutomationEdge Agent Operations",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "bd6cc7da-083b-4ca7-93cc-4ca3fd219bf9",
+      "pattern_title": "Customer Inquiry: Source IP Resolution Logic",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "183a036f-786b-4732-ae39-9ff9f9b85d8c"
+    },
+    {
+      "pattern_id": "4f6ee2f3-4c20-49b1-98a4-ac859ce07c2f",
+      "pattern_title": "Bot Automation Failure Due to Complex UI Interaction Limitations",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "c364bd58-64f3-4656-921d-11e8afc8f6d2"
+    },
+    {
+      "pattern_id": "1bc4bc1a-5126-4758-81c9-1f2fafd1c83f",
+      "pattern_title": "Unexpected Data Modification in Parent Workflow from Child Workflow Due to Pass-by-Reference Semantics",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "2814a917-a615-4f17-b147-9fa66cd8c926"
+    },
+    {
+      "pattern_id": "6b364575-8578-4360-897a-166af5642593",
+      "pattern_title": "Website 'Not Secure' Warning Due to SSL/TLS Configuration Issues",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "3f8e8097-93c9-4845-93e8-741c1a06f601",
+      "pattern_title": "Custom User Role Permission Configuration Assistance",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "4bbed6c6-6a27-4e71-b887-c053708a3fe9"
+    },
+    {
+      "pattern_id": "b7c09781-dbb6-4003-8b2a-4468bd1c66c6",
+      "pattern_title": "Chrome Browser Automation Compatibility and Configuration Drift",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "fc8221cc-0043-4317-af98-fa8e43f2dd9d",
+      "pattern_title": "Planned T4 Instance Upgrade Causing Temporary Service Interruption",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "71b0ad7e-4d2e-4b15-b55a-49a2ea1d44a2",
+      "pattern_title": "SQL Query Failure in Automation Platform Due to Date Format Mismatch",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "6caa310f-6644-4080-86a0-771847b3acac"
+    },
+    {
+      "pattern_id": "54e93078-317b-4c80-af79-3bb103b0d679",
+      "pattern_title": "Browser Automation Failure Due to Environmental Security Policies",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "75466313-0237-41bd-ac5e-d3bc31b89da3"
+    },
+    {
+      "pattern_id": "75d4997c-c0da-425b-897f-48734dacf2c2",
+      "pattern_title": "AEUI Functional Regression After DocEdge Upgrade",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "72a86795-c984-42fc-a64b-f4a82d9f1fdf"
+    },
+    {
+      "pattern_id": "4b5a6b82-233c-4f6c-b935-7fad84957282",
+      "pattern_title": "Application Migration: Incompatibility of Path-Based Object Properties with Surface Plugin",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "af2195d0-7005-4282-8fdd-2df84f2429e7"
+    },
+    {
+      "pattern_id": "705651e6-2a27-41b1-8938-f20abac2b807",
+      "pattern_title": "Customer Missing Operational Notifications",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "3fc9e5cc-6482-44ac-98e2-2a06521233a8"
+    },
+    {
+      "pattern_id": "03dc3c7a-d0c7-4f36-8b04-3be2d3b7c814",
+      "pattern_title": "Application Feature Blocked by Environmental Policy",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "d154c709-c0f2-4502-a7a1-cfccfcee2931",
+      "pattern_title": "AutomationEdge Functional Disruptions due to Configuration or Credential Mismatches",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "13cbd034-f89b-430b-9e90-d261001cb26d",
+      "pattern_title": "Recurring Sweet32 Cipher Vulnerability in VAPT Scans",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "211714a5-86f3-4b0b-94f9-c0ae783be85b"
+    },
+    {
+      "pattern_id": "6584f453-3156-4110-8477-04f7df0389b9",
+      "pattern_title": "Stale Database Schema in Process Studio Due to Caching",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "aebb858b-e697-46bc-88d1-c43b2ec47c96"
+    },
+    {
+      "pattern_id": "9f523f65-42b5-4fb4-9808-144261941ad9",
+      "pattern_title": "Concurrent Scheduled Task Execution",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "4d76d447-93ff-43c7-b2ba-7bd933214c88"
+    },
+    {
+      "pattern_id": "5f43939b-3031-4a87-bdc6-c12add55263b",
+      "pattern_title": "T4 Copilot License Expiration and Manual Renewal",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "7478b95b-8cb8-4b96-a6fe-c735dde4f32d"
+    },
+    {
+      "pattern_id": "f6e30d34-1398-4d95-af72-1f7f5b943a61",
+      "pattern_title": "Unsupported File Type Processing in Workflow",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "63354589-709e-423a-aa81-b73fdba91ed9"
+    },
+    {
+      "pattern_id": "82696494-67fd-41e5-af16-73d5d0fe8501",
+      "pattern_title": "Intermittent/Unreproducible Issues Leading to Ambiguous Ticket Closure",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "acb20f6c-0796-4efa-8366-c6f0a7fe4a24",
+      "pattern_title": "Automation Process Failure Due to Input File Formatting",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "161b5d02-89a6-4fa2-952e-69f95ac9ac8a",
+      "pattern_title": "SFTP 'No Such File' Error Due to Incorrect Pathing",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "bec96fd5-fde6-48f1-81a4-8787d0617658",
+      "pattern_title": "Plugin Operational Issues: Driver and Configuration-Related Failures",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "c7a15611-afaf-4a5b-9e6c-d7ed8bd12dd4",
+      "pattern_title": "AutomationEdge Browser Driver Configuration and Compatibility Issues",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "9b50ee9d-f964-4ff3-af27-35436f7d7061",
+      "pattern_title": "Service Port Binding Conflict",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "9d08fdae-a9ca-40d0-b25f-ef465b5a106d"
+    },
+    {
+      "pattern_id": "e189eac4-8234-47d4-b8b9-799c6c3bf1d0",
+      "pattern_title": "Initial Git Repository Setup and Connection Challenges",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "013056d1-46d9-45a6-b550-1e7d5092ec65"
+    },
+    {
+      "pattern_id": "477adc47-3873-4fad-b625-0962292bf139",
+      "pattern_title": "Long-Running Workflow Causes Mail Input Plugin Socket Timeout",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "60108521-67e6-4649-9d50-6d5e3af576d9"
+    },
+    {
+      "pattern_id": "b4d74d07-fe27-420c-9098-63c37ccc7583",
+      "pattern_title": "Application Authorization Failure Due to Incorrect OAuth Scope/Refresh Token",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "509cd45b-4cfb-4464-ad53-98b6b5e5ecc6",
+      "pattern_title": "Process Studio Resource Contention and Performance Degradation",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "c450d378-1037-4404-8047-04524f3cffe6",
+      "pattern_title": "Workflow Monitoring Feature Discrepancies",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "76881519-f855-4b09-ae7b-cc8e1c5fd08d",
+      "pattern_title": "API Response JSON Parsing and Path Extraction Issues",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "2107a88c-3403-4330-8140-8d2d9e45231b",
+      "pattern_title": "Incident Resolution Stalled by Client Unresponsiveness",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "86a0f980-7e2f-4849-8f67-64fd601a0e1f"
+    },
+    {
+      "pattern_id": "4d8eba7e-b403-4abc-b889-657422f69b61",
+      "pattern_title": "Microsoft Edge WebDriver Initialization and Versioning Issues",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "39fe3fea-0e5b-4ad8-9369-85c4af0b6fa0",
+      "pattern_title": "Application Request ID Processing Failure",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "19f74fc8-24e2-4fb7-b822-0cccefc13c67"
+    },
+    {
+      "pattern_id": "040ae144-cc94-4a00-ad07-61c0bdfcf6a6",
+      "pattern_title": "Database Schema Knowledge Gap Hindering Self-Service Data Access",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "8fdec392-6a90-48a5-bacf-3b7ebb166583"
+    },
+    {
+      "pattern_id": "3f2f69da-48e4-4584-b927-3cf6ba9744a2",
+      "pattern_title": "Linux Plugin SSH Connectivity Failure Due to Incompatible SSH Configuration",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "4c64d348-9ef8-4a54-8980-89484861b34f"
+    },
+    {
+      "pattern_id": "db7b33c0-7f00-4bdd-b73f-75edb6939f46",
+      "pattern_title": "Evaluation Access Blocked by Company Device Issues",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "92fedb82-f450-466e-908d-be939188675e"
+    },
+    {
+      "pattern_id": "781fd46b-62ae-4e2f-bf9d-434499062c79",
+      "pattern_title": "RPA Task Failure Due to Unicode Character Handling",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "c1d60cf6-66a5-46bf-bbba-57472bbcfa85"
+    },
+    {
+      "pattern_id": "48ccca9b-12a5-461d-a339-ccddf17e8737",
+      "pattern_title": "Client-Induced Logging Failure Due to Critical File Deletion",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "b11a5538-ef3f-4676-a9b8-323037e1c5e1"
+    },
+    {
+      "pattern_id": "dac9da4f-5d41-419d-8dde-01feaa27eb1c",
+      "pattern_title": "Post-Deployment UI Asset Configuration Drift",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "131262b1-5546-4667-89bd-4143913ad4a7"
+    },
+    {
+      "pattern_id": "a49d2e2f-9b70-4602-a7ce-fa112b9d6567",
+      "pattern_title": "Malformed CSV Output Due to Text File Output Plugin Configuration",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "01fb2cfe-d712-43b2-b26a-153a68e4f0f5"
+    },
+    {
+      "pattern_id": "e1ed2ae4-ca1c-4e3e-8c25-919eaa77ca34",
+      "pattern_title": "CSV Date Format Discrepancy in Spreadsheet Viewers",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "f0ce28c5-7f42-4777-9a7a-076784b99146",
+      "pattern_title": "Client Rejection of Proposed Solutions (Cost/Third-Party)",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "513d8156-30a9-48de-abfe-3574fb056b3d"
+    },
+    {
+      "pattern_id": "bf755e1d-bef9-471e-a702-28dc5b2e3482",
+      "pattern_title": "Application UI Component Failure Due to Linux File Access Restrictions",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "c2dea16d-b2e8-4959-acff-7df247ca0484"
+    },
+    {
+      "pattern_id": "2a3e3278-bdea-4964-85ee-78e4d28dc893",
+      "pattern_title": "Customer Inquiry for Non-Existent Out-of-the-Box Feature",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "9593599b-2cf9-4ae7-a9f3-719ae60ae78b"
+    },
+    {
+      "pattern_id": "16024b3f-90ef-4e89-a090-927d3e8353e0",
+      "pattern_title": "Customer Feature Request Denied Due to Architectural/Security Constraints",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "e740004a-4157-4cf1-8d09-1d5648f48a38",
+      "pattern_title": "AutomationEdge Agent Registration Failure Due to Conflicting Host Details",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "db353995-5642-40a7-823b-be8d6a72c928"
+    },
+    {
+      "pattern_id": "06481c9c-c978-49a5-8881-9e086bd43843",
+      "pattern_title": "SFTP Automation User Permission Policy Conflict",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "c15b80c9-87e8-4fe1-8a2b-5c23498fd115"
+    },
+    {
+      "pattern_id": "8da07fb1-32b7-48b9-ba09-b2d06bf5510b",
+      "pattern_title": "Agent-Controlled RDP Session Lifecycle Management Issues",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "07aa2ced-76c9-4dc4-9b54-b5141cd29741",
+      "pattern_title": "Missing or Disabled Vault Connection",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "21167579-9254-4e28-b9d1-df1d9b64b9f6"
+    },
+    {
+      "pattern_id": "32327583-5e7c-4e0d-98f9-6d3c3422f329",
+      "pattern_title": "Security Vulnerability Remediation for Outdated Components",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "8078450f-1406-43a1-903d-4931b1d8b11d",
+      "pattern_title": "Manual AutomationEdge Custom Role Provisioning",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "f3333065-fb4f-4c64-b579-b0d4fe63ab23"
+    },
+    {
+      "pattern_id": "d0aa3786-6935-41c5-a8ff-5460e012ac33",
+      "pattern_title": "Application Inaccessibility Due to Conflicting SSL Certificates",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "cbc12755-33d5-42bb-93eb-6c1ab5e16788"
+    },
+    {
+      "pattern_id": "fb737ef7-cc31-4703-9780-2caba34f9c66",
+      "pattern_title": "T3 Server UI Element Visibility Due to User Permissions",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "2aa70848-ba23-4af0-8052-7bf4e0f065ff",
+      "pattern_title": "UI Component Absence Due to Dependency-Related Bug",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "dedbb5c7-4803-4d13-a0d8-b91348a3abf8"
+    },
+    {
+      "pattern_id": "78c0f752-3f6c-4281-86c6-7c2835317d95",
+      "pattern_title": "Unsupported Application Feature Request - Session Handling",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "06951023-f674-4333-bb1b-0a20966390b6"
+    },
+    {
+      "pattern_id": "cad58565-426c-4fa4-86f6-fbd29d0049c5",
+      "pattern_title": "License Invalidation Due to Server Hardware Replacement",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "a5c83ad6-f6a9-4e60-807b-d37923b77813"
+    },
+    {
+      "pattern_id": "fff1dcb7-d616-4592-a65e-a1b5acb47b9a",
+      "pattern_title": "Inconsistent Web Element Identification in Automation Workflows",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "da9c327b-7bfa-49ef-9b1f-a98e20819b55"
+    },
+    {
+      "pattern_id": "2216d59d-5f39-4440-bdad-6b90a09b8fe3",
+      "pattern_title": "Unspecified Issue Investigation Workflow",
+      "status": "skipped",
+      "reason": "pattern_confidence_below_floor",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "f3ab24d6-d545-4a3d-adcb-80a62379d8a2",
+      "pattern_title": "Plugin Incompatibility with Custom Database Object Types",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "5f37ec27-dfa7-4544-b099-ef07c952ed84"
+    },
+    {
+      "pattern_id": "4de8a443-41af-4cf1-910a-55dd2d6cf00a",
+      "pattern_title": "Regulatory Non-Compliance: IT Service Provider Agreements Signed by Incorrect Legal Entity",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "3a0c0e9e-7baf-40e1-830f-215ba3add240"
+    },
+    {
+      "pattern_id": "8132f025-05b0-4bae-8639-37250f61f0a5",
+      "pattern_title": "False Positive Security Alert for Legitimate Automation Tool Activity",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "ab3e7270-250c-4259-975e-73a81b4c86cf"
+    },
+    {
+      "pattern_id": "b78e6ee7-6a42-4a50-a5f9-e8caaf93b9da",
+      "pattern_title": "Email Sent Without Intended Attachment",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "02f28852-7bcf-41c1-8451-25b866e00d17"
+    },
+    {
+      "pattern_id": "2fc1f6cd-1e4b-488b-895b-6662d8b059b2",
+      "pattern_title": "Monitoring Incident Data Ingestion Failure",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "9c6e3d98-42f1-4e8f-8fc8-419cbd4706c0"
+    },
+    {
+      "pattern_id": "2a117c74-263c-4134-bda8-92f8fafe00d9",
+      "pattern_title": "AutomationEdge Process Studio JDBC Driver Configuration",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "1c1e2191-5026-432d-ac80-e55ea04f357b"
+    },
+    {
+      "pattern_id": "309f398d-b454-47ac-9047-35578ed752c4",
+      "pattern_title": "Workflow Restart Validity Period Configuration Knowledge Gap",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "78684d66-63e6-4270-81af-236bcbf77b14"
+    },
+    {
+      "pattern_id": "acf812d4-bfa2-44fd-933f-2b8046b06281",
+      "pattern_title": "Customer Issue Diagnosis Hindered by Insufficient Evidence",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "461e00f8-5d21-4317-9711-df16c351e044"
+    },
+    {
+      "pattern_id": "740bf560-6b32-4d7d-9e27-7e694e7d8b87",
+      "pattern_title": "AI Studio VAPT Compliance Request Fulfillment",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "7113fbf1-e16c-423d-a021-cff529f9b0ff"
+    },
+    {
+      "pattern_id": "9795c5d7-d18a-4956-bced-3bfc2a97a2e0",
+      "pattern_title": "Process Studio Unicode Character Conversion Failure",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "8d5f40a2-3838-4c40-b672-22eaa83361c2"
+    },
+    {
+      "pattern_id": "93280c55-afb9-408d-a560-62ab939077ee",
+      "pattern_title": "Client-Side Automation Status Display Lag",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "fa0dc6c9-0fd1-4035-914f-df8e93628bd3"
+    },
+    {
+      "pattern_id": "7df20727-9015-41e5-9a54-bc74f7f57937",
+      "pattern_title": "ActiveMQ Service Unresponsive Despite Running",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "89513daf-1713-4644-9d05-7dd76d7143ea"
+    },
+    {
+      "pattern_id": "2413f8b2-265d-4c4a-9bd8-b39c5b562196",
+      "pattern_title": "User Guidance for SharePoint Plugin Configuration",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "c8273044-c9a3-4782-acb9-17c27149f27d"
+    },
+    {
+      "pattern_id": "1b033016-010b-4ac6-87d3-c7cc53c53b03",
+      "pattern_title": "AutoIt Script Output Parsing Discrepancy in Production",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "e20340eb-e05e-4a56-a880-6666c2a8aded"
+    },
+    {
+      "pattern_id": "75b9190a-3ab3-48a8-b350-5df09e7341fa",
+      "pattern_title": "Post-Deployment Connectivity Failure Due to New Build",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "e975ef8d-338f-463d-af08-8607bd6a9cad"
+    },
+    {
+      "pattern_id": "00bdbdfa-cf23-468c-aacf-2d79415fa7fe",
+      "pattern_title": "Login Failure After License Renewal",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "407b035b-49d7-44a2-84de-e94ef134371f"
+    },
+    {
+      "pattern_id": "4ade53ac-6742-4ecb-8595-706ae87f582a",
+      "pattern_title": "New Feature Deployment Blocked by Insufficient Database Permissions",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "c80a9aa8-9684-48f9-8f06-53e2eea133fb"
+    },
+    {
+      "pattern_id": "c603c4bf-2a12-4675-8271-db9c6ec777ca",
+      "pattern_title": "Missing Software Component Provisioning Block",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "fb681a2b-e48e-4978-88e4-a80567de12e4"
+    },
+    {
+      "pattern_id": "ef34b631-f976-4dfc-9bcb-4e2d00a8b915",
+      "pattern_title": "Elara Solution Database Connection Timeouts and High CPU Utilization",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "e82e3a27-8466-4e97-8222-0a7adfbbbe12"
+    },
+    {
+      "pattern_id": "f009b152-aea8-4719-b466-40b59f942196",
+      "pattern_title": "New Component Adoption Blocked by Customer Security Review",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "52924301-ae51-4b1b-a651-76017b7b8473"
+    },
+    {
+      "pattern_id": "92f19350-ffef-4c88-9bbe-ee93ea56b587",
+      "pattern_title": "Missing Credential in Vault Due to Misplacement",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "c2c19a41-172a-4f60-9207-fa6bf8b820b3"
+    },
+    {
+      "pattern_id": "fb85fb13-4359-47a1-a1f4-84ab01eb1576",
+      "pattern_title": "Client Inquiry: RPO/RTO for Deployed Solution",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "9b2b74c1-bcce-4c89-9610-85a0fa076519"
+    },
+    {
+      "pattern_id": "0f13dc29-97b5-49fa-8f65-8ffea876759b",
+      "pattern_title": "Plugin Sync Failure Due to Incomplete On-Prem Installation",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "b8abc282-e07d-4ae9-9071-997257779a60"
+    },
+    {
+      "pattern_id": "52d965ba-8df2-483a-88eb-89c4ddcd8e48",
+      "pattern_title": "Client-Side Application Issues Due to Outdated Components or Misconfiguration",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "7694fb76-6d52-4623-9a06-eb1ec26e5382"
+    },
+    {
+      "pattern_id": "d2492ccf-1df0-4f1b-b801-039a76430223",
+      "pattern_title": "Email Agent Certificate Loading Failure on Startup",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "af09fd37-d7b3-484c-8286-bf4449519952"
+    },
+    {
+      "pattern_id": "cafd8cf3-d4af-4af3-a6c5-a02e40851629",
+      "pattern_title": "Compliance Audit: Data in Transit Encryption Verification",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "e565e760-e516-40f6-9eb5-bb058443a434"
+    },
+    {
+      "pattern_id": "174592ec-aae8-4f77-b176-937f13fb2f04",
+      "pattern_title": "ActiveMQ JMX Monitoring Configuration Guide",
+      "status": "skipped",
+      "reason": "pattern_confidence_below_floor",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "fd2aea2e-ba0b-45a6-9ec8-7573b20f402d",
+      "pattern_title": "ServiceNow Work Notes Update with JavaScript",
+      "status": "skipped",
+      "reason": "pattern_confidence_below_floor",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "e1864ea0-90a0-4bbc-adca-32c03f86fe05",
+      "pattern_title": "Documented Resolution for Browser Compatibility Issue",
+      "status": "skipped",
+      "reason": "pattern_confidence_below_floor",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "e35c92bf-48cf-4a33-bbdd-aaa142238437",
+      "pattern_title": "Security Recommendation: Restricting Dangerous HTTP Methods",
+      "status": "skipped",
+      "reason": "pattern_confidence_below_floor",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "d17d0193-f199-43fe-883e-a74e38457281",
+      "pattern_title": "Agent 'Unknown error at server side' due to Proxy Issue (Defect in 5.3.0)",
+      "status": "skipped",
+      "reason": "pattern_confidence_below_floor",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "93203ae7-7c50-44de-8974-cf0a9a46634b",
+      "pattern_title": "ERROR: Invalid Orgcode while Registering Agent",
+      "status": "skipped",
+      "reason": "pattern_confidence_below_floor",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "fd10ace7-69ce-4cd0-9dae-37cc9dc77fc7",
+      "pattern_title": "java.lang.NullPointerException when opening workflows in AutomationEdge Process Studio",
+      "status": "skipped",
+      "reason": "pattern_confidence_below_floor",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "7c58c60c-e3c3-434d-af64-fef4f13cf2e1",
+      "pattern_title": "Java Heap Memory Release for Agents using Shenandoah GC",
+      "status": "skipped",
+      "reason": "pattern_confidence_below_floor",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "34300b51-8c61-4257-9067-f00e34af541d",
+      "pattern_title": "OnDemand Tenant Requests going into 'NEW' State due to Credential Misuse",
+      "status": "skipped",
+      "reason": "pattern_confidence_below_floor",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "8b66d2f5-8074-4a99-95ad-c816bfbf41ee",
+      "pattern_title": "Unable to Create and Update Workflow on AEUI due to Invalid JSON",
+      "status": "skipped",
+      "reason": "pattern_confidence_below_floor",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "9612bc98-6cd1-4fe9-a2e0-8730a875fe6e",
+      "pattern_title": "RemedyForce Integration Connection Timed Out",
+      "status": "skipped",
+      "reason": "pattern_confidence_below_floor",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "22434a78-1be0-4270-8b4e-2f2ab28e9a90",
+      "pattern_title": "'INVALID SAHI PRO MODE' Error in Process Studio",
+      "status": "skipped",
+      "reason": "pattern_confidence_below_floor",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "dc057fe6-609f-4e81-a60a-2ca4c15bc6a0",
+      "pattern_title": "How to Deploy Desktop and Runner Licenses",
+      "status": "skipped",
+      "reason": "pattern_confidence_below_floor",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "b2158ba6-ffa1-4367-955e-6a32ed4affe8",
+      "pattern_title": "Unable to Launch Desktop Application Due to Spaces in Filenames",
+      "status": "skipped",
+      "reason": "pattern_confidence_below_floor",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "65550ab7-da65-4d27-b2ea-9ce3830aa034",
+      "pattern_title": "Desktop License Not Working on Agent Side",
+      "status": "skipped",
+      "reason": "pattern_confidence_below_floor",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "605f0e2e-265b-4a51-8a68-4d2ef3763e1d",
+      "pattern_title": "Issue Spying Java Applet/JNLP Pages with Desktop-Spy",
+      "status": "skipped",
+      "reason": "pattern_confidence_below_floor",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "56ceccf2-fe7c-4014-89c0-516c6f8c1bff",
+      "pattern_title": "Proxy Not Reverting After Sahi Scripts Execution",
+      "status": "skipped",
+      "reason": "pattern_confidence_below_floor",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "0d594b46-2521-4075-9c81-b3721359734c",
+      "pattern_title": "Agent-Side Desktop Runner License Application Guide",
+      "status": "skipped",
+      "reason": "pattern_confidence_below_floor",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "f70631cc-a591-440b-9829-3502209514e6",
+      "pattern_title": "Application launch failure from compressed folder",
+      "status": "skipped",
+      "reason": "pattern_confidence_below_floor",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "07e5c534-1436-43b2-b211-83f408b7098e",
+      "pattern_title": "Desktop Start 'Connection refused' error on Agent",
+      "status": "skipped",
+      "reason": "pattern_confidence_below_floor",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "d67e5e17-ab36-4e46-94ad-a3f4d2ea7f10",
+      "pattern_title": "Unable to Send/Receive Mail (SMTP Authentication)",
+      "status": "skipped",
+      "reason": "pattern_confidence_below_floor",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "e7914c95-1d61-436b-80d8-9a8370193d16",
+      "pattern_title": "Cherwell Integration Failure due to Bad Request",
+      "status": "skipped",
+      "reason": "pattern_confidence_below_floor",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "0d609b5a-34e4-4acf-848f-8750d0555833",
+      "pattern_title": "Send Email Step Fails with 'specified filename not found'",
+      "status": "skipped",
+      "reason": "pattern_confidence_below_floor",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "61637eff-c739-419a-a02a-f633fcba35e3",
+      "pattern_title": "Excel Writer ArrayIndexOutOfBoundsException",
+      "status": "skipped",
+      "reason": "pattern_confidence_below_floor",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "0b2d5c1d-e0f9-490e-97a1-ea26a908a570",
+      "pattern_title": "Tomcat Services Stop Abruptly",
+      "status": "skipped",
+      "reason": "pattern_confidence_below_floor",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "bdfc3485-4276-499d-a69a-b728284df991",
+      "pattern_title": "Outlook POP3 Settings Configuration Guide",
+      "status": "skipped",
+      "reason": "pattern_confidence_below_floor",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "0b544827-765e-4c9f-91a6-83cd994da688",
+      "pattern_title": "NullPointerException in Reports Dashboard",
+      "status": "skipped",
+      "reason": "pattern_confidence_below_floor",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "bb42a5af-dfb3-4da6-9576-27da2545d2c4",
+      "pattern_title": "Understanding INFO and TRACE Log Levels",
+      "status": "skipped",
+      "reason": "pattern_confidence_below_floor",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "2bcff457-880f-4c00-a3e7-593fc76bf5bd",
+      "pattern_title": "NGINX Dropping HTTP Headers with Underscores",
+      "status": "skipped",
+      "reason": "pattern_confidence_below_floor",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "6a04e0ff-f523-4bb6-ae35-6cdfc3429f6c",
+      "pattern_title": "AE Request status unexpectedly updating Remedyforce Helpmate ticket",
+      "status": "skipped",
+      "reason": "pattern_confidence_below_floor",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "598ff638-c476-4d6d-81d9-1e1b1fec34f7",
+      "pattern_title": "Excel Writer Plugin Invalid Row Number Error",
+      "status": "skipped",
+      "reason": "pattern_confidence_below_floor",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "297f0473-4b5d-407c-9873-900209fe52f3",
+      "pattern_title": "Converting Excel String with Currency Symbol to Number",
+      "status": "skipped",
+      "reason": "pattern_confidence_below_floor",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "ff09b820-c0a9-4fad-a41a-fb9a93c8c8c7",
+      "pattern_title": "AutomationEdge UI Login Failures",
+      "status": "skipped",
+      "reason": "pattern_confidence_below_floor",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "71a11104-68d2-493d-a0da-0a09a2f8a931",
+      "pattern_title": "Unable to login to AE server due to invalid credentials",
+      "status": "skipped",
+      "reason": "pattern_confidence_below_floor",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "4bcdd265-724c-4405-aba7-be6c959383b3",
+      "pattern_title": "ActiveMQ failed to load activemq.xml due to XML parsing error",
+      "status": "skipped",
+      "reason": "pattern_confidence_below_floor",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "3baea080-977e-4f99-9f1e-6f254c431c5f",
+      "pattern_title": "Desktop Product Key Restriction due to Timezone",
+      "status": "skipped",
+      "reason": "pattern_confidence_below_floor",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "9b75b0e0-9e71-46d3-a2b7-bdddd80ff4d2",
+      "pattern_title": "Cherwell Integration Polling Schedule Mismatch",
+      "status": "skipped",
+      "reason": "pattern_confidence_below_floor",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "b78f24cd-7f9c-4891-a0b7-66243a979631",
+      "pattern_title": "Database Connectivity and Locking Issues",
+      "status": "skipped",
+      "reason": "pattern_confidence_below_floor",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "a72ba849-8694-4dce-81ab-e225456b0d74",
+      "pattern_title": "Supporting Browser Version of Mobile",
+      "status": "skipped",
+      "reason": "pattern_confidence_below_floor",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "c0669593-8768-49f8-9c23-96b0aebb986f",
+      "pattern_title": "AutomationEdge Integration and Authentication Failures",
+      "status": "skipped",
+      "reason": "pattern_confidence_below_floor",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "c0871372-bd93-4e01-b0c9-9e4c1af2e628",
+      "pattern_title": "Cherwell Integration 500 Error due to System Requirements",
+      "status": "skipped",
+      "reason": "pattern_confidence_below_floor",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "23b014e9-c76a-4e67-970f-e1f94b2f10d0",
+      "pattern_title": "Cherwell Integration JSON Deserialization Error",
+      "status": "skipped",
+      "reason": "pattern_confidence_below_floor",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "05abe3bd-280d-493f-8150-2d4a05e52b01",
+      "pattern_title": "AEUI Login Failure due to Full Disk Drive",
+      "status": "skipped",
+      "reason": "pattern_confidence_below_floor",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "719ff5b6-0322-4408-9125-a80828eb92f5",
+      "pattern_title": "Cherwell Connectivity Error due to IIS Pooling",
+      "status": "skipped",
+      "reason": "pattern_confidence_below_floor",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "d987ea5d-4ec7-4872-8bb1-97cfee27eeff",
+      "pattern_title": "Workflow Processing and Agent Licensing Issues",
+      "status": "skipped",
+      "reason": "pattern_confidence_below_floor",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "6b2a0679-6684-42d5-a25e-2161ddbb13a6",
+      "pattern_title": "AutomationEdge Server and Agent Management Issues",
+      "status": "skipped",
+      "reason": "pattern_confidence_below_floor",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "a0df5e5f-29d4-4bf0-ae26-17e8dc082026",
+      "pattern_title": "Database, System Resource, and File Access Issues",
+      "status": "skipped",
+      "reason": "pattern_confidence_below_floor",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "0a415353-b400-4f63-811e-cd0ac941e544",
+      "pattern_title": "Number Ranges Plugin Variable Input Issue",
+      "status": "skipped",
+      "reason": "pattern_confidence_below_floor",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "088195e2-fe5b-4e33-85d7-d9f731fb9732",
+      "pattern_title": "Disabling File Download on AEUI",
+      "status": "skipped",
+      "reason": "pattern_confidence_below_floor",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "961c7b58-edb5-4e9b-aade-104615795385",
+      "pattern_title": "Mozilla Firefox Support for Web Automation",
+      "status": "skipped",
+      "reason": "pattern_confidence_below_floor",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "33be4abf-d3a1-4184-a091-99088498cf51",
+      "pattern_title": "Unable to Connect to Automationedge / PS Opening Error",
+      "status": "skipped",
+      "reason": "pattern_confidence_below_floor",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "db2417ae-ac6e-4efe-b232-5f1fe9bab479",
+      "pattern_title": "Web Automation Setup and Requirements",
+      "status": "skipped",
+      "reason": "pattern_confidence_below_floor",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "af4b52ba-cdda-43e1-bec2-3d61a70fb8ea",
+      "pattern_title": "Agent Startup Failure: EXCEPTION_ACCESS_VIOLATION",
+      "status": "skipped",
+      "reason": "pattern_confidence_below_floor",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "da5b0b49-e773-41f9-a0c3-710657e5ff1e",
+      "pattern_title": "SAP Integration Prerequisites",
+      "status": "skipped",
+      "reason": "pattern_confidence_below_floor",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "96c72407-20b0-4f5d-b296-0889d44f2aa7",
+      "pattern_title": "Socket Timeout During Connection",
+      "status": "skipped",
+      "reason": "pattern_confidence_below_floor",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "2abc905b-9585-4aba-b998-bbd29d2d0912",
+      "pattern_title": "Restricted Java Constructs in PS User-Defined Class",
+      "status": "skipped",
+      "reason": "pattern_confidence_below_floor",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "7cadd848-d8c1-4882-a157-1bf5546999e0",
+      "pattern_title": "Remedy Integration Connection Failure (Proxy Issue)",
+      "status": "skipped",
+      "reason": "pattern_confidence_below_floor",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "3b79d766-0cc0-4b8c-a569-e6e611c0652b",
+      "pattern_title": "Various Network and Connectivity Issues",
+      "status": "skipped",
+      "reason": "pattern_confidence_below_floor",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "2035f348-3268-411b-9f2a-6645f432ef8a",
+      "pattern_title": "Workflow and UI Functionality Bugs",
+      "status": "skipped",
+      "reason": "pattern_confidence_below_floor",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "92ad03b2-8d22-41b3-9d7f-bec086f62d61",
+      "pattern_title": "Headers Mismatch After AutomationEdge Migration",
+      "status": "skipped",
+      "reason": "pattern_confidence_below_floor",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "d09c6eb0-2886-494f-bc69-80472b925d46",
+      "pattern_title": "AutomationEdge Workflow and Agent Operational Issues",
+      "status": "skipped",
+      "reason": "pattern_confidence_below_floor",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "cf7faba8-f81c-4703-98a0-3bcb373b0c7b",
+      "pattern_title": "AutomationEdge UI and System Configuration Issues",
+      "status": "skipped",
+      "reason": "pattern_confidence_below_floor",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "5ccf1c73-b47a-4646-a7df-1c10cf1648b7",
+      "pattern_title": "MySQL Connection Error in Process Studio (Permissions)",
+      "status": "skipped",
+      "reason": "pattern_confidence_below_floor",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "ef7cb8a1-41ef-4cc3-96c8-fab85eba9909",
+      "pattern_title": "AutomationEdge Workflow Upload Defect in 6.0",
+      "status": "skipped",
+      "reason": "pattern_confidence_below_floor",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "4120da01-0bd7-4f84-a58f-a73fcaa92f07",
+      "pattern_title": "Agent Workflow Processing Stalled by Queue Backlog",
+      "status": "skipped",
+      "reason": "pattern_confidence_below_floor",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "50ea4a63-aa0e-4389-9c32-ef5a101c6c75",
+      "pattern_title": "Workflow Assignment and Agent Registration Issue",
+      "status": "skipped",
+      "reason": "pattern_confidence_below_floor",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "886fa48e-3c27-4329-93ef-741f0a93e82e",
+      "pattern_title": "Cross-Operating System Workflow Compatibility",
+      "status": "skipped",
+      "reason": "pattern_confidence_below_floor",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "d3d7aa53-e556-4c28-aae6-b9d5a1d504b9",
+      "pattern_title": "Excel Plugin Usage and Configuration",
+      "status": "skipped",
+      "reason": "pattern_confidence_below_floor",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "31552d01-3895-4e59-84ff-ca2906bf839a",
+      "pattern_title": "Selenium \"Unable to find element on closed window\" Error",
+      "status": "skipped",
+      "reason": "pattern_confidence_below_floor",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "0433f4ef-04d3-43e4-83dc-17fe75d3b210",
+      "pattern_title": "On-Demand Portal SMTP Configuration Saving Error",
+      "status": "skipped",
+      "reason": "pattern_confidence_below_floor",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "85a9eda9-0aca-46b7-9839-d16ed241002b",
+      "pattern_title": "Excel Output Plugin Overrides Data Instead of Appending",
+      "status": "skipped",
+      "reason": "pattern_confidence_below_floor",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "13c2e4e6-a414-4b74-b906-bc03cb9ce633",
+      "pattern_title": "Managing Tomcat Service Configuration Files",
+      "status": "skipped",
+      "reason": "pattern_confidence_below_floor",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "f3eeeeba-9b90-4717-a852-b8d2b0fe4300",
+      "pattern_title": "SMTP Configuration Failures",
+      "status": "skipped",
+      "reason": "pattern_confidence_below_floor",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "6340955e-9c3d-4eeb-a023-4b818c32c87e",
+      "pattern_title": "Connecting R Models with Java/Process Studio",
+      "status": "skipped",
+      "reason": "pattern_confidence_below_floor",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "9ebf9003-c4b7-4fc0-bd35-4f4be12038df",
+      "pattern_title": "Email Plugin Fails to Send .Js Attachments via Gmail",
+      "status": "skipped",
+      "reason": "pattern_confidence_below_floor",
+      "playbook_id": null
+    }
+  ]
+}

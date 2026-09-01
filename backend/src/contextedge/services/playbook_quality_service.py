@@ -44,7 +44,7 @@ from contextedge.quality import (
     build_content,
     error_outcome,
 )
-from contextedge.quality.hashing import content_hash
+from contextedge.quality.hashing import content_hash, normalize
 from contextedge.quality.states import (
     NON_PASSING_STATES,
     SEVERITIES,
@@ -121,6 +121,9 @@ async def ensure_content_revision(
     """
     content = build_content(playbook, version)
     digest = content_hash(content)
+    # JSONB bind uses stdlib json.dumps — UUIDs and datetimes must be coerced
+    # first. Hashing already normalises via the same helper; storage must match.
+    storable_content = normalize(content)
 
     existing = await db.execute(
         select(PlaybookContentRevision).where(
@@ -139,7 +142,7 @@ async def ensure_content_revision(
         playbook_version_id=getattr(version, "id", None),
         revision_number=await _next_revision_number(db, playbook.tenant_id, playbook.id),
         content_hash=digest,
-        content=content,
+        content=storable_content,
         quality_contract_hash=quality_contract_hash,
         source_snapshot_hash=source_snapshot_hash,
         created_by=actor_id,

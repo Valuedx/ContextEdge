@@ -1,4 +1,4 @@
-﻿"""Tests for the versioned prompt registry + per-tenant A/B routing
+"""Tests for the versioned prompt registry + per-tenant A/B routing
 (W10-12.2)."""
 
 from unittest.mock import patch

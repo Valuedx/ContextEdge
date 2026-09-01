@@ -132,6 +132,25 @@ PLAYBOOK_QUALITY_MODE=enforcing
 2. Calls `publication_readiness`
 3. Raises `InvalidTransitionError` if not ready (stale, no assessment, non-passing state, content hash mismatch)
 
+### Step 8 — Corpus refresh (pre-v10 playbooks)
+
+Candidates generated before v10 / quality contracts should be **regenerated**, not re-assessed in place. Re-assessing old text validates stale artifacts; regeneration runs the full pre-generation + v10 pipeline.
+
+**Prerequisites:** seed policy/ontology (Step 4), `.env` quality keys below, and `LLM_TASK_OUTPUT_TOKENS` for playbook (16k — a 2048 global cap truncates steps).
+
+```bash
+cd backend
+
+# Preview counts
+python scripts/refresh_playbook_corpus.py --tenant <TENANT_UUID> --dry-run
+
+# Retire candidates, regenerate from patterns, batch assess
+python scripts/refresh_playbook_corpus.py --tenant <TENANT_UUID> --yes \
+  --output refresh_report.json
+```
+
+Retired playbooks stay in the DB for audit; active regeneration skips retired rows. Use `--limit N` only for smoke tests.
+
 ---
 
 ## 3. Cache alignment
@@ -194,6 +213,7 @@ Quality interacts with two cache layers. Misalignment makes the UI or runtime li
 | `backend/scripts/seed_quality_policy_pack.py` | DB bootstrap |
 | `backend/scripts/verify_quality_persistence.py` | Readiness runner (DB) |
 | `backend/scripts/batch_assess_playbook_corpus.py` | Batch shadow assessment + triage JSON |
+| `backend/scripts/refresh_playbook_corpus.py` | Retire pre-v10 candidates + regenerate from patterns |
 | `backend/src/contextedge/quality/context_loader.py` | Loads contract + tenant policy + ontology into validators |
 | `backend/src/contextedge/services/playbook_quality_service.py` | Assessment orchestration |
 | `frontend/src/components/playbooks/quality-panel.tsx` | Reviewer UI |

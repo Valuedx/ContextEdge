@@ -188,6 +188,7 @@ def get_prompt(
 # submodule here.
 from contextedge.ai.prompts import (  # noqa: E402, F401
     applicability,
+    clarification,
     contradiction,
     decision,
     episode,

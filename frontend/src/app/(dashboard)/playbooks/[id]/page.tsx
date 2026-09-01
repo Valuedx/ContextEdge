@@ -9,6 +9,7 @@ import { Loader2 } from "lucide-react";
 
 import { PageHeader } from "@/components/common/page-header";
 import { KnowledgeSourcesPanel } from "@/components/playbooks/knowledge-sources-panel";
+import { ClarificationPanel } from "@/components/playbooks/clarification-panel";
 import { QualityPanel, usePlaybookQuality } from "@/components/playbooks/quality-panel";
 import {
   DetailPageSkeleton,
@@ -1084,6 +1085,11 @@ export default function PlaybookDetailPage() {
           tells a reviewer whether the thing below is worth reading, and a
           finding they scroll past is a finding that did not happen. */}
       <QualityPanel playbookId={playbook.id} />
+      {/* Directly under the quality panel, because it is the answer to the
+          question that panel raises. A reviewer who has just read "the
+          contract requires a rollback step and there isn't one" needs the
+          place to say what the rollback is to be the next thing they see. */}
+      <ClarificationPanel playbookId={playbook.id} />
       <PlaybookLineageReferencesPanel playbookId={playbook.id} />
       <GovernancePanel playbook={playbook} />
       {selectedVersion && <KnowledgeSourcesPanel version={selectedVersion} />}

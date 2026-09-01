@@ -105,6 +105,14 @@ class Settings(BaseSettings):
     # is fail, error, stale, or out of date with live content.
     playbook_runtime_quality_filter: bool = True
 
+    # Clarification loop: how many times a playbook may be re-questioned before
+    # the loop stops and hands the remaining gaps to a person. Each round costs
+    # one retrieval plus up to two generation calls, and applying one costs a
+    # full playbook generation — so an unbounded loop is a cost incident waiting
+    # for a corpus refresh to trigger it. See
+    # docs/PLAYBOOK_CLARIFICATION_LOOP_PLAN.md §7.
+    playbook_clarification_max_rounds: int = 5
+
     # --- Cost containment -------------------------------------------------
     # Every knob below bounds spend that is otherwise open-ended. Each one is
     # a ceiling, not a target: ordinary work stays well under all of them.
@@ -153,11 +161,28 @@ class Settings(BaseSettings):
     # "extraction" onto its own routing lane — without its own entry the
     # lane flip would have silently dropped its ceiling 16384 -> 4096,
     # recreating the truncation failure above.
+    #
+    # "clarification" entered after the identical failure happened a third
+    # time, on its first live run: completion_tokens 2034, of which
+    # reasoning_tokens 1962, leaving ~72 tokens of answer and JSON that stopped
+    # mid-string at `"why_it_matters":`. Its output is short — a handful of
+    # questions — so the ceiling is not about the answer being long. It is
+    # about reasoning counting against the same budget, which is the trap this
+    # whole map exists for: a task absent from it inherits a cost backstop
+    # sized for the answer alone, and on a thinking model the answer is the
+    # small part.
+    #
+    # 8192 rather than 16384 because that is what ``llm_complete_json`` already
+    # requests for this task; the entry stops the clamp, it does not raise the
+    # ask. The real cost lever here is a thinking budget for the
+    # ``clarification_questions`` prompt — ~96% of its output was reasoning —
+    # but per the note below, that waits for an A/B against the eval baseline.
     llm_task_output_tokens: dict[str, int] = Field(
         default_factory=lambda: {
             "playbook": 16384,
             "extraction": 16384,
             "pattern": 16384,
+            "clarification": 8192,
         }
     )
     # Largest number of texts sent to the embedding API in one request.

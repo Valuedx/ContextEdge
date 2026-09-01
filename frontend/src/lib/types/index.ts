@@ -404,6 +404,130 @@ export interface PlaybookQuality {
   superseded_at: string | null;
 }
 
+/* --- clarification loop ---------------------------------------------------
+ *
+ * Questions the system asks when a quality defect needs a fact only a person
+ * has. See docs/PLAYBOOK_CLARIFICATION_LOOP_PLAN.md.
+ *
+ * Two fields decide how this renders and both are easy to skip:
+ *
+ * - `matches_current_content` is false when the playbook was edited after the
+ *   round was opened. The questions then describe text nobody can see, and an
+ *   answer recorded against them is an answer about a draft that no longer
+ *   exists.
+ * - `answer_source` separates an answer a person typed from one prefilled out
+ *   of a KB article. Rendering them identically is how a retrieval score gets
+ *   approved as a support decision.
+ */
+
+export type ClarificationRoundStatus =
+  | "open"
+  | "answered"
+  | "applied"
+  | "satisfied"
+  | "exhausted"
+  | "abandoned";
+
+export type ClarificationQuestionStatus =
+  | "open"
+  | "answered"
+  | "skipped"
+  | "resolved_from_kb"
+  | "resolved_from_context"
+  | "withdrawn";
+
+export type ClarificationObligation = "mandatory" | "optional";
+
+export type ClarificationAnswerKind = "text" | "choice" | "boolean" | "list";
+
+export type ClarificationAnswerSource = "human" | "kb" | "context" | "carried";
+
+export interface ClarificationQuestion {
+  id: string;
+  /** Stable identity of the underlying defect, so the same question can be
+   *  correlated across rounds rather than read as a new one each time. */
+  gap_key: string;
+  gap_kind: string;
+  gap_origin: "finding" | "contract" | "gate" | "structure";
+  target_kind: "playbook" | "field" | "step";
+  target_ref: string | null;
+  claim: string | null;
+  severity: QualitySeverity | null;
+  question_text: string;
+  why_it_matters: string | null;
+  obligation: ClarificationObligation;
+  answer_kind: ClarificationAnswerKind;
+  choices: string[];
+  expected_format: string | null;
+  status: ClarificationQuestionStatus;
+  answer_text: string | null;
+  answer_source: ClarificationAnswerSource | null;
+  answer_provenance: Record<string, unknown> | null;
+  answered_at: string | null;
+}
+
+export interface ClarificationRound {
+  id: string;
+  round_number: number;
+  status: ClarificationRoundStatus;
+  content_hash: string;
+  assessment_id: string | null;
+  /** `gap_count` >= `question_count`: the difference is what the playbook and
+   *  the KB answered without asking anybody. */
+  gap_count: number;
+  question_count: number;
+  mandatory_count: number;
+  resolved_from_kb_count: number;
+  resolved_from_context_count: number;
+  kb_status: "ok" | "no_results" | "retrieval_failed";
+  /** How many times the questions have been rewritten. Bounded server-side;
+   *  the panel stops offering the button rather than letting it 409. */
+  regeneration_count: number;
+  prompt_name: string | null;
+  prompt_version: string | null;
+  /** Populated when question generation failed or fell back. An empty round
+   *  with no reason reads as "nothing to ask", which is a very different and
+   *  much more reassuring statement than the truth. */
+  generation_error: string | null;
+  applied_version_id: string | null;
+  opened_at: string;
+  closed_at: string | null;
+  notes: string | null;
+}
+
+export interface ClarificationSubmission {
+  ready: boolean;
+  blocked_reasons: string[];
+  outstanding_mandatory: number;
+  open_round_id: string | null;
+  open_round_status: ClarificationRoundStatus | null;
+  quality: { ready?: boolean; blocked_reason?: string | null };
+}
+
+export interface PlaybookClarification {
+  playbook_id: string;
+  content_hash: string;
+  round: ClarificationRound | null;
+  questions: ClarificationQuestion[];
+  matches_current_content: boolean;
+  has_live_round: boolean;
+  outstanding_mandatory: number;
+  max_rounds: number;
+  submission: ClarificationSubmission;
+}
+
+export interface ClarificationApplyResult {
+  applied_round: ClarificationRound;
+  new_version_id: string;
+  new_semantic_version: string;
+  answers_applied: number;
+  next_round: ClarificationRound | null;
+  /** True when the loop hit its round limit with gaps still open. Terminal:
+   *  this needs a decision rather than another question. */
+  limit_reached: boolean;
+  submission: ClarificationSubmission;
+}
+
 export interface PlaybookSourceRef {
   label: string;
   kind: "knowledge" | "episode";

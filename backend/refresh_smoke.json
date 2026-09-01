@@ -1,0 +1,29 @@
+{
+  "tenant_id": "00000000-0000-0000-0000-000000000001",
+  "generated_at": "2026-09-01T11:04:44.506211+00:00",
+  "dry_run": false,
+  "patterns_to_regenerate": 540,
+  "regeneration": [
+    {
+      "pattern_id": "fc3789ca-79bc-4bba-9517-b2364620ec7d",
+      "pattern_title": "Stored Procedure Call Failure Due to Extraneous 'result' Parameter",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "5ea11029-af46-468e-b7e1-e8022dec4e47"
+    },
+    {
+      "pattern_id": "37b9844f-71d6-4cf3-8244-3cf9ea7c5624",
+      "pattern_title": "Excel Output Plugin Failure Due to Corrupted Output File",
+      "status": "skipped",
+      "reason": "requires_conflict_adjudication",
+      "playbook_id": null
+    },
+    {
+      "pattern_id": "bf17b9cb-ff46-40e0-8045-221a5ab7ea88",
+      "pattern_title": "External Service Plugin Connectivity Failure due to Expired Token",
+      "status": "ok",
+      "reason": null,
+      "playbook_id": "22ae85f3-7778-4bd2-8605-28aa7def5f58"
+    }
+  ]
+}

@@ -277,6 +277,17 @@ def test_build_content_tolerates_a_versionless_shell():
     assert content["title"]
 
 
+def test_content_revision_payload_is_json_serializable():
+    """Revision rows are JSONB; domain_id on the shell is a UUID object."""
+    import json
+
+    from contextedge.quality.hashing import normalize
+
+    content = build_content(make_playbook(domain_id=uuid.uuid4()), make_version())
+    json.dumps(normalize(content))
+    assert isinstance(normalize(content)["domain_id"], str)
+
+
 def test_summarize_change_names_the_fields():
     left = build_content(make_playbook(title="A"), make_version())
     right = build_content(make_playbook(title="B"), make_version())

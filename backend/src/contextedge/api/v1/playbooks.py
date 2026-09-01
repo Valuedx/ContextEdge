@@ -30,6 +30,14 @@ from contextedge.schemas.playbook import (
     PlaybookVersionResponse,
     PlaybookVersionUpdate,
 )
+from contextedge.schemas.playbook_clarification import (
+    ClarificationAnswersRequest,
+    ClarificationApplyRequest,
+    ClarificationApplyResponse,
+    ClarificationRegenerateRequest,
+    ClarificationSubmissionReadiness,
+    PlaybookClarificationResponse,
+)
 from contextedge.services.approval_policy_service import (
     ApprovalPolicyViolation,
     check_automation_mode,
@@ -450,6 +458,309 @@ async def get_playbook_quality(playbook_id: UUID, db: DbSession, user: AuthUser)
         stale_at=assessment.stale_at if assessment else None,
         superseded_at=assessment.superseded_at if assessment else None,
     )
+
+
+def _clarification_payload(state: dict) -> PlaybookClarificationResponse:
+    return PlaybookClarificationResponse(
+        playbook_id=state["playbook_id"],
+        content_hash=state["content_hash"],
+        round=state["round"],
+        questions=state["questions"],
+        matches_current_content=state["matches_current_content"],
+        has_live_round=state["has_live_round"],
+        outstanding_mandatory=state["outstanding_mandatory"],
+        max_rounds=state["max_rounds"],
+        submission=ClarificationSubmissionReadiness(**state["submission"]),
+    )
+
+
+@router.get("/{playbook_id}/clarification", response_model=PlaybookClarificationResponse)
+async def get_playbook_clarification(playbook_id: UUID, db: DbSession, user: AuthUser):
+    """The current clarification round, its questions, and submission readiness.
+
+    Read-only, and deliberately so: this route opens no round, retrieves no
+    knowledge and calls no model. Opening a playbook must not spend an LLM call,
+    and must not change its history to record who looked — the same rule
+    ``GET /{id}/quality`` follows.
+
+    Two fields decide how this renders and both are easy to skip:
+
+    - ``matches_current_content`` is false when the playbook has been edited
+      since the round was opened. The questions then describe text nobody can
+      see; answering them records an answer about a draft that no longer exists.
+    - ``questions[].answer_source`` separates an answer a person typed from one
+      prefilled out of a KB article. Rendering them the same way is how a
+      retrieval score gets approved as a support decision.
+
+    ``round`` may be a terminal round (``satisfied``, ``exhausted``,
+    ``abandoned``) when nothing is live. That is not the same as never having
+    asked, and an empty panel must not be shown for it.
+    """
+    from contextedge.services import playbook_clarification_service as clarification
+
+    playbook = await _load_tenant_playbook(db, playbook_id, user.tenant_id)
+    state = await clarification.clarification_state(db, playbook)
+    return _clarification_payload(state)
+
+
+@router.post(
+    "/{playbook_id}/clarification/rounds",
+    response_model=PlaybookClarificationResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def open_clarification_round(playbook_id: UUID, db: DbSession, user: AuthUser):
+    """Detect what is missing, resolve what we can, ask about the rest.
+
+    Costs one knowledge retrieval and up to two generation calls, which is why
+    it is a POST behind an explicit human action and why there is no bulk
+    equivalent. Opening rounds across a whole corpus would produce thousands of
+    questions nobody answers, and a panel full of unanswered questions is worse
+    than no panel.
+
+    Requires the reviewer role: a round spends money and writes rows, unlike the
+    read route beside it.
+
+    A 201 does not mean questions were generated. The round may come back
+    ``satisfied`` (nothing to ask — recorded, because "we looked and found
+    nothing" is a fact the reviewer needs before submitting) or ``exhausted``
+    (the loop hit its round limit with gaps open, which needs a decision rather
+    than another question).
+    """
+    from contextedge.services import playbook_clarification_service as clarification
+
+    user.require_role("playbook_reviewer")
+    playbook = await _load_tenant_playbook(db, playbook_id, user.tenant_id)
+    try:
+        round_row = await clarification.open_round(
+            db, playbook, actor_id=user.user_id
+        )
+    except clarification.RoundAlreadyOpen as exc:
+        raise _conflict("clarification_round_open", str(exc)) from exc
+
+    await log_audit_event(
+        db,
+        tenant_id=user.tenant_id,
+        actor_id=user.user_id,
+        actor_email=user.email,
+        action="playbook.clarification_round_opened",
+        resource_type="playbook",
+        resource_id=str(playbook_id),
+        details={
+            "round_number": round_row.round_number,
+            "status": round_row.status,
+            "gap_count": round_row.gap_count,
+            "question_count": round_row.question_count,
+            "mandatory_count": round_row.mandatory_count,
+        },
+    )
+    state = await clarification.clarification_state(db, playbook)
+    return _clarification_payload(state)
+
+
+@router.post(
+    "/{playbook_id}/clarification/answers", response_model=PlaybookClarificationResponse
+)
+async def answer_clarification_questions(
+    playbook_id: UUID,
+    body: ClarificationAnswersRequest,
+    db: DbSession,
+    user: AuthUser,
+):
+    """Record answers and skips against the open round.
+
+    A skip on a mandatory question is refused with a 409 rather than ignored.
+    Silently dropping it would leave the reviewer believing they had disposed of
+    the question, and the round sitting un-appliable with no explanation.
+    """
+    from contextedge.services import playbook_clarification_service as clarification
+
+    user.require_role("playbook_reviewer")
+    playbook = await _load_tenant_playbook(db, playbook_id, user.tenant_id)
+    try:
+        await clarification.record_answers(
+            db,
+            playbook,
+            [
+                clarification.AnswerInput(
+                    question_id=item.question_id,
+                    answer_text=item.answer_text,
+                    skip=item.skip,
+                )
+                for item in body.answers
+            ],
+            actor_id=user.user_id,
+        )
+    except clarification.NoLiveRound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except clarification.ClarificationError as exc:
+        raise _conflict("clarification_answer_rejected", str(exc)) from exc
+
+    state = await clarification.clarification_state(db, playbook)
+    return _clarification_payload(state)
+
+
+@router.post(
+    "/{playbook_id}/clarification/regenerate",
+    response_model=PlaybookClarificationResponse,
+)
+async def regenerate_clarification_questions(
+    playbook_id: UUID,
+    body: ClarificationRegenerateRequest,
+    db: DbSession,
+    user: AuthUser,
+):
+    """Ask again for the wording of the questions nobody has answered yet.
+
+    The escape hatch for questions that are unusable through no fault of the
+    playbook — too vague, or the raw validator text the generator falls back to
+    when the model's JSON arrives truncated. Without it the only way out is
+    abandoning the round, which spends one of the loop's bounded rounds on a
+    defect in our own output.
+
+    Answered, skipped and KB-resolved questions are untouched: rewriting the
+    text of a question somebody already answered would orphan the answer.
+
+    Bounded — each rewrite is a generation call. Past the limit this returns
+    409 rather than a fourth attempt, because by then the problem is not the
+    wording.
+    """
+    from contextedge.services import playbook_clarification_service as clarification
+
+    user.require_role("playbook_reviewer")
+    playbook = await _load_tenant_playbook(db, playbook_id, user.tenant_id)
+    try:
+        await clarification.regenerate_questions(
+            db, playbook, actor_id=user.user_id, guidance=body.guidance
+        )
+    except clarification.NoLiveRound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except clarification.RegenerationLimitReached as exc:
+        raise _conflict(
+            "clarification_regeneration_limit",
+            str(exc),
+            limit=clarification.MAX_QUESTION_REGENERATIONS,
+        ) from exc
+    except clarification.NothingToRegenerate as exc:
+        raise _conflict("clarification_nothing_to_regenerate", str(exc)) from exc
+
+    await log_audit_event(
+        db,
+        tenant_id=user.tenant_id,
+        actor_id=user.user_id,
+        actor_email=user.email,
+        action="playbook.clarification_questions_regenerated",
+        resource_type="playbook",
+        resource_id=str(playbook_id),
+        details={"had_guidance": bool(body.guidance and body.guidance.strip())},
+    )
+    state = await clarification.clarification_state(db, playbook)
+    return _clarification_payload(state)
+
+
+@router.post(
+    "/{playbook_id}/clarification/apply", response_model=ClarificationApplyResponse
+)
+async def apply_clarification_round(
+    playbook_id: UUID,
+    body: ClarificationApplyRequest,
+    db: DbSession,
+    user: AuthUser,
+):
+    """Fold the answers into a new draft version derived from the current one.
+
+    This revises the playbook that exists; it does not regenerate it from the
+    pattern. Every step the answers do not contradict survives with its wording,
+    order and citations — a revision that starts over throws away every hand
+    edit a reviewer made, which is how a clarification loop stops being used
+    after its first run.
+
+    The new version is a draft carrying ``derived_from_version_id``. Published
+    versions stay immutable, so the effect of the answers is readable as a
+    version diff.
+
+    Nothing is submitted here. When the loop finishes, ``submission.ready`` says
+    the playbook could go forward; moving it is still an explicit human action
+    through ``POST /{id}/transition``.
+    """
+    from contextedge.services import playbook_clarification_service as clarification
+
+    user.require_role("playbook_reviewer")
+    playbook = await _load_tenant_playbook(db, playbook_id, user.tenant_id)
+    try:
+        result = await clarification.apply_round(
+            db, playbook, actor_id=user.user_id, open_next=body.open_next
+        )
+    except clarification.NoLiveRound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except clarification.MandatoryUnanswered as exc:
+        raise _conflict(
+            "clarification_mandatory_unanswered",
+            str(exc),
+            outstanding=exc.outstanding,
+        ) from exc
+    except clarification.RevisionFailed as exc:
+        # 422, not 500: the request was well-formed and the round is still
+        # answerable. The reviewer can edit an answer and try again, which a
+        # 500 would not suggest.
+        raise HTTPException(
+            # The literal, not the Starlette constant: it was renamed between
+            # versions and this file has to import cleanly on both.
+            status_code=422,
+            detail={"code": "clarification_revision_failed", "message": str(exc)},
+        ) from exc
+    except InvalidTransitionError as exc:  # pragma: no cover - defensive
+        raise _conflict("invalid_transition", str(exc)) from exc
+
+    new_version = result["version"]
+    await log_audit_event(
+        db,
+        tenant_id=user.tenant_id,
+        actor_id=user.user_id,
+        actor_email=user.email,
+        action="playbook.clarification_round_applied",
+        resource_type="playbook",
+        resource_id=str(playbook_id),
+        details={
+            "round_number": result["applied_round"].round_number,
+            "answers_applied": result["answers_applied"],
+            "new_version_id": str(new_version.id),
+            "semantic_version": new_version.semantic_version,
+            "limit_reached": result["limit_reached"],
+        },
+    )
+    submission = await clarification.submission_readiness(db, playbook)
+    return ClarificationApplyResponse(
+        applied_round=result["applied_round"],
+        new_version_id=new_version.id,
+        new_semantic_version=new_version.semantic_version,
+        answers_applied=result["answers_applied"],
+        next_round=result["next_round"],
+        limit_reached=result["limit_reached"],
+        submission=ClarificationSubmissionReadiness(**submission),
+    )
+
+
+@router.post(
+    "/{playbook_id}/clarification/abandon", response_model=PlaybookClarificationResponse
+)
+async def abandon_clarification_round(
+    playbook_id: UUID, db: DbSession, user: AuthUser, reason: str | None = None
+):
+    """Close the open round without applying it.
+
+    Exists because the alternative — a round that can only be closed by
+    answering it — makes a badly generated round permanent. The row is kept, so
+    what was asked and why it was dropped stays readable.
+    """
+    from contextedge.services import playbook_clarification_service as clarification
+
+    user.require_role("playbook_reviewer")
+    playbook = await _load_tenant_playbook(db, playbook_id, user.tenant_id)
+    closed = await clarification.abandon_round(db, playbook, reason=reason)
+    if closed is None:
+        raise HTTPException(status_code=404, detail="No clarification round is open")
+    state = await clarification.clarification_state(db, playbook)
+    return _clarification_payload(state)
 
 
 @router.get("/{playbook_id}/references")

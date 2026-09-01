@@ -430,6 +430,7 @@ def generate_playbook_candidate(self, pattern_id: str, tenant_id: str):
         existing = await db.execute(
             select(Playbook).where(
                 Playbook.tenant_id == tid,
+                Playbook.lifecycle_state.notin_(("retired", "deprecated")),
                 or_(
                     Playbook.pattern_id == pid,
                     func.lower(Playbook.title) == pattern.title.strip().lower(),
