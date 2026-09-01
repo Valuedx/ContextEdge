@@ -503,7 +503,9 @@ async def _resolve_query_embedding(
     if query_text:
         try:
             from contextedge.ai.provider import generate_embedding
-            return await generate_embedding(query_text)
+            # Attributed: without tenant_id/db this call skips the per-tenant
+            # budget gate and bills to `unknown`. Both are in scope above.
+            return await generate_embedding(query_text, tenant_id=tenant_id, db=db)
         except Exception as exc:
             logger.warning(
                 "decision.query_embed_failed",

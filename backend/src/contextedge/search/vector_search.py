@@ -215,7 +215,17 @@ async def search_evidence_semantic(
     Returns ``(EvidenceItem, distance, best_chunk | None)`` tuples,
     closest first.
     """
-    emb = query_embedding if query_embedding is not None else await generate_embedding(query_text)
+    # tenant_id/db are not decoration: `generate_embedding` skips the
+    # per-tenant budget gate entirely when either is missing, and the spend
+    # lands in /admin/cost as `tenant_id=unknown`. Both were already
+    # parameters of this function and simply were not forwarded, so every
+    # semantic search in the product — the highest-frequency LLM call there
+    # is — ran outside the budget block.
+    emb = (
+        query_embedding
+        if query_embedding is not None
+        else await generate_embedding(query_text, tenant_id=tenant_id, db=db)
+    )
 
     await tune_ann_recall(db)
     candidates = await _chunk_candidates(
@@ -257,7 +267,17 @@ async def search_evidence_semantic_for_playbook(
     """Semantic search over one published playbook version's linked
     evidence — chunk-aware with the same rollup. Row shape stays
     ``row[0]``=item / ``row[1]``=distance for the hybrid ranker."""
-    emb = query_embedding if query_embedding is not None else await generate_embedding(query_text)
+    # tenant_id/db are not decoration: `generate_embedding` skips the
+    # per-tenant budget gate entirely when either is missing, and the spend
+    # lands in /admin/cost as `tenant_id=unknown`. Both were already
+    # parameters of this function and simply were not forwarded, so every
+    # semantic search in the product — the highest-frequency LLM call there
+    # is — ran outside the budget block.
+    emb = (
+        query_embedding
+        if query_embedding is not None
+        else await generate_embedding(query_text, tenant_id=tenant_id, db=db)
+    )
 
     await tune_ann_recall(db)
     candidates = await _chunk_candidates(
