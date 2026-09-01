@@ -518,16 +518,50 @@ def generate_playbook_candidate(self, pattern_id: str, tenant_id: str):
             persist_knowledge_links,
             retrieve_knowledge_for_pattern,
         )
+        from contextedge.services.quality_contract_service import prepare_playbook_generation
 
         version_fields = await ticket_version_custom_fields(db, tid, evidence_ref_ids)
-        knowledge = await retrieve_knowledge_for_pattern(
-            db,
-            tid,
-            pattern_title=pattern.title,
-            pattern_description=pattern.description,
+        retrieval_failed = False
+        try:
+            knowledge = await retrieve_knowledge_for_pattern(
+                db,
+                tid,
+                pattern_title=pattern.title,
+                pattern_description=pattern.description,
+                episode_summaries=summaries,
+                custom_fields=version_fields or None,
+            )
+        except Exception:
+            retrieval_failed = True
+            knowledge = []
+            logger.exception(
+                "playbook.knowledge_retrieval_failed",
+                tenant_id=str(tid),
+                pattern_id=str(pid),
+            )
+
+        prep = prepare_playbook_generation(
+            pattern=pattern,
             episode_summaries=summaries,
-            custom_fields=version_fields or None,
+            knowledge=knowledge,
+            negative_knowledge=neg,
+            retrieval_failed=retrieval_failed,
         )
+        if prep.should_block:
+            logger.info(
+                "playbook.generation_blocked_pregeneration",
+                tenant_id=str(tid),
+                pattern_id=str(pid),
+                outcome=str(prep.gate.outcome),
+                reasons=prep.gate.reasons[:5],
+            )
+            return {
+                "status": "skipped",
+                "reason": str(prep.gate.outcome),
+                "pregeneration": prep.gate.as_dict(),
+            }
+
+        knowledge = prep.filtered_knowledge
         links_written = await persist_knowledge_links(
             db, tid, pid, knowledge, domain_id=pattern.domain_id
         )
@@ -539,6 +573,7 @@ def generate_playbook_candidate(self, pattern_id: str, tenant_id: str):
             sections=sum(len(k.sections) for k in knowledge),
             links_written=links_written,
             ticket_version=(version_fields or {}).get("version"),
+            pregeneration_outcome=str(prep.gate.outcome),
         )
 
         llm = await playbook_generator.generate_playbook_candidate(
@@ -548,6 +583,7 @@ def generate_playbook_candidate(self, pattern_id: str, tenant_id: str):
             episode_summaries=summaries,
             negative_knowledge=neg,
             knowledge_sources=knowledge,
+            quality_contract_prompt=prep.contract_prompt_block,
             tenant_id=tid,
             db=db,
         )
@@ -608,17 +644,14 @@ def generate_playbook_candidate(self, pattern_id: str, tenant_id: str):
                 "evidence_ids": evidence_ref_ids,
                 "episode_ids": [str(eid) for eid in ep_ids],
                 "pattern_id": str(pattern.id),
-                # Knowledge is recorded separately from the episode
-                # evidence it was generated alongside. It grounds the
-                # playbook normatively, not empirically, and a reviewer
-                # asking "which SOP does this implement" needs that
-                # distinction preserved rather than flattened into one
-                # evidence list.
+                "quality_contract": prep.evidence_refs_quality(),
                 **knowledge_refs_payload(
                     knowledge,
                     ticket_version=(version_fields or {}).get("version"),
                 ),
             },
+            "quality_contract_hash": prep.contract_hash,
+            "source_snapshot_hash": prep.source_snapshot_hash,
             # Where the documented procedure and observed practice
             # disagree. Persisted rather than resolved: preferring the
             # SOP ignores verified runs that did something else,
@@ -633,7 +666,7 @@ def generate_playbook_candidate(self, pattern_id: str, tenant_id: str):
             # candidate dict whole.
             GENERATION_PROVENANCE_KEY: llm.get(GENERATION_PROVENANCE_KEY),
         }
-        version = await create_playbook_version(db, playbook, version_data)
+        version = await create_playbook_version(db, playbook, version_data, origin="generation")
         # Semantic fingerprint so the agent seed resolver can match this
         # playbook by meaning, not just title words. Best-effort.
         from contextedge.services.playbook_embedding import embed_playbook

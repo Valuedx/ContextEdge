@@ -338,7 +338,8 @@ def test_knowledge_block_labels_procedural_section_purpose():
         ]
     )
     block = format_knowledge_block([doc])
-    assert "Use ACTION, PREREQUISITE, VALIDATION, and ROLLBACK" in block
+    assert "structure-derived" in block
+    assert "QUALITY CONTRACT" in block
     assert "ACTION" in block
     assert "VALIDATION" in block
 

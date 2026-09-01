@@ -93,6 +93,15 @@ from contextedge.models.playbook import (
     PlaybookNegativeKnowledge,
     PlaybookVersion,
 )
+from contextedge.models.playbook_quality import (
+    PlaybookContentRevision,
+    PlaybookQualityAssessment,
+    PlaybookQualityFinding,
+    ProductOntologyTerm,
+    ProductOntologyVersion,
+    QualityPolicyPack,
+    QualityPolicyRule,
+)
 from contextedge.models.policy import (
     POLICY_CHECK_RESULTS,
     POLICY_TYPES,
@@ -170,6 +179,9 @@ __all__ = [
     "IMPACT_ROLES", "CHANGE_CANDIDATE_STATUSES", "TEMPORAL_RELATIONS",
     "Playbook", "PlaybookVersion", "PlaybookEvidenceLink", "PlaybookApproval",
     "PlaybookNegativeKnowledge",
+    "PlaybookContentRevision", "PlaybookQualityAssessment", "PlaybookQualityFinding",
+    "QualityPolicyPack", "QualityPolicyRule",
+    "ProductOntologyVersion", "ProductOntologyTerm",
     "ResolutionSession", "DecisionTraceEvent", "CaseLink",
     "Decision", "DecisionOption", "DecisionOutcome",
     "ExecutionRun", "ExecutionStepRun", "ToolInvocation", "ApprovalRequest",

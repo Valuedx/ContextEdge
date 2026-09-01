@@ -133,6 +133,110 @@ class PatternResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class PlaybookQualityCoverage(BaseModel):
+    """How much of the artifact was actually judged.
+
+    Served alongside the state because in the current validator bundle the
+    state is mostly a statement about our own coverage, not about the
+    playbook. A panel that shows "6 of 14 checks run" is telling the truth; a
+    red badge on all 420 playbooks is teaching reviewers to ignore badges.
+    """
+
+    decided: int
+    undecided: int
+    total: int
+
+
+class PlaybookQualityGroups(BaseModel):
+    """The three independent decisions (plan §1).
+
+    Deliberately three fields rather than one score. A strong subject cannot
+    pay for wrong steps, and a reviewer reading a single rolled-up number has
+    no way to see which half is broken. ``None`` means the group was not
+    evaluated at all — render that differently from a clean result.
+    """
+
+    subject: str | None = None
+    steps: str | None = None
+    coherence: str | None = None
+
+
+class PlaybookQualitySummary(BaseModel):
+    """Compact quality state for a list row."""
+
+    state: str | None = None
+    # A precondition, not a fourth group. Empty procedure, duplicate step
+    # identities, a branch pointing at a step that does not exist — these make
+    # the three verdicts below moot rather than merely accompanying them, so
+    # render this above them and never as a peer tab.
+    structure: str | None = None
+    groups: PlaybookQualityGroups = Field(default_factory=PlaybookQualityGroups)
+    coverage: PlaybookQualityCoverage
+    finding_counts: dict[str, int] = Field(default_factory=dict)
+    # False when the assessment describes content the playbook has since moved
+    # away from. Without this a stale verdict reads as a live one — the row
+    # looks healthy because the assessment is healthy, about text nobody can
+    # see any more.
+    matches_current_content: bool = False
+    assessed_at: datetime | None = None
+    stale_reason: str | None = None
+    evaluation_mode: str | None = None
+
+    model_config = {"from_attributes": True}
+
+
+class PlaybookQualityFindingResponse(BaseModel):
+    id: UUID
+    category: str
+    dimension: str
+    severity: str
+    target_kind: str
+    # A step_id or a field name, never a line number — steps get reordered and
+    # the reviewer has to be able to find the thing.
+    target_ref: str | None = None
+    claim: str | None = None
+    explanation: str
+    supporting_spans: list = Field(default_factory=list)
+    contradicting_spans: list = Field(default_factory=list)
+    validator: str
+    confidence: float | None = None
+    remediation_category: str | None = None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class PlaybookQualityReadiness(BaseModel):
+    """What the Phase 5 gate *would* decide, computed but not enforced.
+
+    Surfaced in shadow mode so product and support can see how many playbooks
+    the gate would stop before agreeing to switch it on.
+    """
+
+    ready: bool
+    state: str | None = None
+    blocked_reason: str | None = None
+
+
+class PlaybookQualityResponse(BaseModel):
+    playbook_id: UUID
+    # Hash of the content as it stands right now, which is not necessarily
+    # the content that was assessed. Compare against assessed_content_hash.
+    content_hash: str
+    assessment_id: UUID | None = None
+    content_revision_id: UUID | None = None
+    assessed_content_hash: str | None = None
+    validator_bundle_version: str | None = None
+    dimension_states: dict[str, str] = Field(default_factory=dict)
+    summary: PlaybookQualitySummary
+    findings: list[PlaybookQualityFindingResponse] = Field(default_factory=list)
+    readiness: PlaybookQualityReadiness
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    stale_at: datetime | None = None
+    superseded_at: datetime | None = None
+
+
 class PlaybookResponse(BaseModel):
     id: UUID
     tenant_id: UUID
@@ -154,6 +258,10 @@ class PlaybookResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
     confidence: float | None = None
+    # Present only when the caller asks for it (`?include_quality=true`).
+    # Absent rather than empty when they do not, so a client cannot mistake
+    # "we did not look" for "there is no assessment".
+    quality: PlaybookQualitySummary | None = None
 
     @computed_field
     @property

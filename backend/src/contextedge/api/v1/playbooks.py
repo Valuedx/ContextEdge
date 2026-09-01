@@ -18,6 +18,8 @@ from contextedge.models.playbook import Playbook, PlaybookEvidenceLink, Playbook
 from contextedge.schemas.playbook import (
     PlaybookBulkTransition,
     PlaybookCreate,
+    PlaybookQualityResponse,
+    PlaybookQualitySummary,
     PlaybookResponse,
     PlaybookRollbackRequest,
     PlaybookTransition,
@@ -176,6 +178,13 @@ async def list_playbooks(
     q: str | None = None,
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
+    include_quality: bool = Query(
+        False,
+        description=(
+            "Attach the current quality assessment summary to each row. Off by "
+            "default so existing callers pay nothing for it."
+        ),
+    ),
 ):
     query_stmt = select(Playbook).where(Playbook.tenant_id == user.tenant_id)
     if lifecycle_state:
@@ -280,6 +289,53 @@ async def list_playbooks(
         )
         pat_map = {row[0]: row[1] for row in pat_result.all() if row[1] is not None}
 
+    # Quality is opt-in and batched: three queries for the whole page rather
+    # than three per row. The review list is the screen this data exists to
+    # improve, so making it slower would be a poor way to introduce it.
+    quality_map: dict = {}
+    if include_quality and playbooks:
+        from contextedge.services.playbook_quality_service import (
+            assessments_for_playbooks,
+            finding_counts_for,
+            summarize,
+        )
+
+        from contextedge.quality import build_content
+        from contextedge.quality.hashing import content_hash
+
+        assessments = await assessments_for_playbooks(db, user.tenant_id, pb_ids)
+        counts = await finding_counts_for(
+            db, user.tenant_id, [a.id for a in assessments.values()]
+        )
+        # Current versions as objects, not just their confidence — the live
+        # hash spans shell and version, so the steps are needed too.
+        current_ids = [pb.current_version_id for pb in playbooks if pb.current_version_id]
+        current_versions: dict = {}
+        if current_ids:
+            rows = await db.execute(
+                select(PlaybookVersion).where(PlaybookVersion.id.in_(current_ids))
+            )
+            current_versions = {version.id: version for version in rows.scalars().all()}
+        # The live hash is recomputed per playbook to answer "is this verdict
+        # still about what the row shows?" — the single most misleading thing
+        # a list can get wrong, because a stale assessment looks exactly as
+        # healthy as a current one.
+        for pb in playbooks:
+            assessment = assessments.get(pb.id)
+            version = current_versions.get(pb.current_version_id)
+            live_hash = content_hash(build_content(pb, version))
+            # Built as the model, not left as the service's dict. Pydantic
+            # does not revalidate an already-constructed instance, so a dict
+            # assigned to `r.quality` below would survive all the way to
+            # serialization and only fail there.
+            quality_map[pb.id] = PlaybookQualitySummary.model_validate(
+                summarize(
+                    assessment,
+                    live_content_hash=live_hash,
+                    finding_counts=counts.get(assessment.id) if assessment else None,
+                )
+            )
+
     resp_list = []
     for pb in playbooks:
         r = PlaybookResponse.model_validate(pb)
@@ -287,6 +343,8 @@ async def list_playbooks(
         if conf is None and pb.pattern_id:
             conf = pat_map.get(pb.pattern_id)
         r.confidence = float(conf) if conf is not None else 0.8
+        if include_quality:
+            r.quality = quality_map.get(pb.id)
         resp_list.append(r)
 
     return resp_list
@@ -334,6 +392,64 @@ async def get_playbook(playbook_id: UUID, db: DbSession, user: AuthUser):
     if not playbook:
         raise HTTPException(status_code=404, detail="Playbook not found")
     return playbook
+
+
+@router.get("/{playbook_id}/quality", response_model=PlaybookQualityResponse)
+async def get_playbook_quality(playbook_id: UUID, db: DbSession, user: AuthUser):
+    """The current quality assessment for this playbook, with its findings.
+
+    No role beyond tenant membership, matching the other read routes on this
+    router: a quality finding is information a reviewer needs before they
+    decide, and putting it behind a higher bar than the playbook it describes
+    would leave the person doing the reviewing unable to see it.
+
+    Read-only. Opening a playbook must not mint a revision or trigger an
+    assessment, or the history stops recording what happened to the content
+    and starts recording who looked at it.
+
+    Render order is part of the contract. ``summary.structure`` is a
+    precondition, not a fourth tab: an empty procedure or a branch pointing at
+    a step that does not exist makes the three group verdicts moot rather than
+    merely accompanying them. Show it above ``summary.groups``, and show the
+    three groups separately — never rolled into one number, because a strong
+    subject must not pay for wrong steps.
+
+    Two more fields decide how this should be rendered, and both are easy to
+    skip:
+
+    - ``summary.matches_current_content`` is false when the content has moved
+      since it was assessed. The assessment can look perfectly healthy and be
+      about text nobody can see any more.
+    - ``summary.coverage`` says how many dimensions were actually decided. In
+      the current bundle most validators are not built, so ``state`` is
+      mostly a statement about our coverage rather than about the playbook.
+      Show "N of M checks run" until that number is worth a verdict; a red
+      badge on every playbook trains reviewers to ignore the badge.
+    """
+    from contextedge.services.playbook_quality_service import quality_report
+
+    playbook = await _load_tenant_playbook(db, playbook_id, user.tenant_id)
+    report = await quality_report(db, playbook)
+    assessment = report["assessment"]
+
+    return PlaybookQualityResponse(
+        playbook_id=playbook.id,
+        content_hash=report["content_hash"],
+        assessment_id=assessment.id if assessment else None,
+        content_revision_id=assessment.content_revision_id if assessment else None,
+        assessed_content_hash=assessment.content_hash if assessment else None,
+        validator_bundle_version=(
+            assessment.validator_bundle_version if assessment else None
+        ),
+        dimension_states=(assessment.dimension_states or {}) if assessment else {},
+        summary=report["summary"],
+        findings=report["findings"],
+        readiness=report["readiness"],
+        started_at=assessment.started_at if assessment else None,
+        completed_at=assessment.completed_at if assessment else None,
+        stale_at=assessment.stale_at if assessment else None,
+        superseded_at=assessment.superseded_at if assessment else None,
+    )
 
 
 @router.get("/{playbook_id}/references")
@@ -549,6 +665,44 @@ async def update_playbook(playbook_id: UUID, body: PlaybookUpdate, db: DbSession
         from contextedge.services.playbook_embedding import embed_playbook
 
         await embed_playbook(db, playbook)
+
+    # Reassess on any shell field the content hash covers, not just the two
+    # that are also search-relevant. `risk_tier` and `automation_mode` are in
+    # `build_content` and change the hash, so patching either one alone used to
+    # leave a stale assessment attached to content that had moved — invisible
+    # in shadow mode, and caught only later by the hash comparison in
+    # `publication_readiness`.
+    #
+    # The membership test reads from `SHELL_QUALITY_FIELDS` rather than
+    # repeating the names here, because a hand-maintained copy of that list is
+    # exactly what drifted the first time.
+    from contextedge.quality.revision import SHELL_QUALITY_FIELDS
+
+    if set(update_data) & SHELL_QUALITY_FIELDS:
+        # These belong in the quality verdict, which until now they did
+        # not. This endpoint requires only knowledge_manager and checks no
+        # lifecycle state, so an approved playbook's title can be replaced
+        # outright; the steps are untouched and every version-level check
+        # still passes. A quality record that lives on the version cannot
+        # notice, which is precisely how a playbook ends up carrying an
+        # assessment that was about a different title.
+        #
+        # Two rows of the AutomationEdge review sheet show this happening:
+        # dc6a3e33 and dd39c4cd were each reviewed twice under two different
+        # titles, with opposite verdicts, and nothing in the data says
+        # whether the steps moved too.
+        from contextedge.services.playbook_quality_service import (
+            STALE_SHELL_EDITED,
+            invalidate_and_reassess,
+        )
+
+        await invalidate_and_reassess(
+            db,
+            playbook,
+            reason=STALE_SHELL_EDITED,
+            origin="shell_edit",
+            actor_id=user.user_id,
+        )
     await db.flush()
     await log_audit_event(
         db,
@@ -898,6 +1052,31 @@ async def update_playbook_version(
             "edit_note": body.edit_note,
         },
     )
+    # A draft edit is a quality-bearing mutation even though no new version
+    # row is created — this endpoint patches steps in place, so it is the one
+    # write path that changes the procedure without going through
+    # create_playbook_version.
+    #
+    # Note what the grounding validator will find here: PROTECTED_KEYS keeps
+    # source_refs and grounding_status across the merge, so a rewritten
+    # grounded step keeps the citations of the sentence it replaced. That is
+    # correct behaviour for the merge (a typed round-trip must not strip
+    # provenance) and a stale evidence claim for the reviewer, and it is
+    # `human_edited` that lets the assessment tell the difference.
+    from contextedge.services.playbook_quality_service import (
+        STALE_STEPS_EDITED,
+        invalidate_and_reassess,
+    )
+
+    await invalidate_and_reassess(
+        db,
+        playbook,
+        version,
+        reason=STALE_STEPS_EDITED,
+        origin="draft_edit",
+        actor_id=user.user_id,
+    )
+
     await db.flush()
     await db.refresh(version)
     if body.edit_note:
@@ -956,7 +1135,7 @@ async def fork_playbook_version_draft(
 
     data = _version_payload(target)
     try:
-        version = await create_playbook_version(db, playbook, data)
+        version = await create_playbook_version(db, playbook, data, origin="fork")
     except DuplicateVersionError as e:
         raise HTTPException(status_code=409, detail=str(e)) from e
     except UnresolvedSkillReference as e:
@@ -1093,6 +1272,32 @@ async def discard_playbook_version_draft(
         # Restore the published fingerprint as the main embedding.
         await embed_playbook(db, playbook, newest_published)
 
+    # Discarding a draft reverts the playbook to `fallback`, so the open
+    # assessment now describes content this playbook no longer presents. The
+    # hash comparison in `publication_readiness` would refuse to publish on
+    # that basis, but nothing else would notice — a reviewer's panel would go
+    # on showing a verdict about the version they just threw away.
+    #
+    # Reassess rather than only invalidate: whatever the playbook presents now
+    # deserves a current verdict of its own.
+    #
+    # No version is passed. `fallback` is only what the playbook reverts to
+    # when the discarded draft *was* the current version; when it was not,
+    # current_version_id still points somewhere else entirely. Letting the
+    # service resolve current_version_id is right in both cases.
+    from contextedge.services.playbook_quality_service import (
+        STALE_CONTENT_CHANGED,
+        invalidate_and_reassess,
+    )
+
+    await invalidate_and_reassess(
+        db,
+        playbook,
+        reason=STALE_CONTENT_CHANGED,
+        origin="draft_discarded",
+        actor_id=user.user_id,
+    )
+
     await append_operational_event(
         db,
         tenant_id=user.tenant_id,
@@ -1219,7 +1424,13 @@ async def rollback_playbook(
     version_data = _version_payload(target)
     if target.rollback_notes:
         version_data["rollback_notes"] = target.rollback_notes
-    version = await create_playbook_version(db, playbook, version_data)
+    # create_playbook_version runs a fresh assessment against the *current*
+    # validators, policy and sources — which is the point of reassessing on
+    # rollback rather than trusting the verdict the target version carried
+    # when it was first published. What is still missing is the gate: this
+    # path republishes immediately below, so in Phase 5 the readiness check
+    # belongs between these two statements.
+    version = await create_playbook_version(db, playbook, version_data, origin="rollback")
     if playbook.lifecycle_state == "approved":
         version.published_at = version.published_at or datetime.now(UTC)
         version.published_by = version.published_by or user.user_id
@@ -1284,6 +1495,7 @@ async def generate_playbook(
             persist_knowledge_links,
             retrieve_knowledge_for_pattern,
         )
+        from contextedge.services.quality_contract_service import prepare_playbook_generation
 
         ep_summaries = await playbook_episode_summaries(
             db, user.tenant_id, list(episodes)
@@ -1306,14 +1518,44 @@ async def generate_playbook(
         version_fields = await ticket_version_custom_fields(
             db, user.tenant_id, evidence_ref_ids
         )
-        knowledge = await retrieve_knowledge_for_pattern(
-            db,
-            user.tenant_id,
-            pattern_title=pattern.title,
-            pattern_description=pattern.description,
+        retrieval_failed = False
+        try:
+            knowledge = await retrieve_knowledge_for_pattern(
+                db,
+                user.tenant_id,
+                pattern_title=pattern.title,
+                pattern_description=pattern.description,
+                episode_summaries=ep_summaries,
+                custom_fields=version_fields or None,
+            )
+        except Exception:
+            retrieval_failed = True
+            knowledge = []
+            logger.exception(
+                "playbook.knowledge_retrieval_failed",
+                tenant_id=str(user.tenant_id),
+                pattern_id=str(pattern.id),
+            )
+
+        prep = prepare_playbook_generation(
+            pattern=pattern,
             episode_summaries=ep_summaries,
-            custom_fields=version_fields or None,
+            knowledge=knowledge,
+            negative_knowledge=negative_knowledge,
+            retrieval_failed=retrieval_failed,
         )
+        if prep.should_block:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "message": "Pre-generation quality gates blocked generation.",
+                    "outcome": str(prep.gate.outcome),
+                    "reasons": prep.gate.reasons,
+                    "pregeneration": prep.gate.as_dict(),
+                },
+            )
+
+        knowledge = prep.filtered_knowledge
         await persist_knowledge_links(
             db, user.tenant_id, pattern.id, knowledge, domain_id=pattern.domain_id
         )
@@ -1324,6 +1566,7 @@ async def generate_playbook(
             documents=len(knowledge),
             sections=sum(len(k.sections) for k in knowledge),
             ticket_version=(version_fields or {}).get("version"),
+            pregeneration_outcome=str(prep.gate.outcome),
         )
 
         candidate = await generate_playbook_candidate(
@@ -1333,6 +1576,7 @@ async def generate_playbook(
             ep_summaries,
             negative_knowledge,
             knowledge_sources=knowledge,
+            quality_contract_prompt=prep.contract_prompt_block,
             tenant_id=user.tenant_id,
             db=db,
         )
@@ -1345,11 +1589,14 @@ async def generate_playbook(
             "evidence_ids": evidence_ref_ids,
             "episode_ids": [str(eid) for eid in episode_ids],
             "pattern_id": str(pattern.id),
+            "quality_contract": prep.evidence_refs_quality(),
             **knowledge_refs_payload(
                 knowledge,
                 ticket_version=(version_fields or {}).get("version"),
             ),
         }
+        candidate["quality_contract_hash"] = prep.contract_hash
+        candidate["source_snapshot_hash"] = prep.source_snapshot_hash
 
         # 3. Create Playbook Shell
         stable_key = f"pb-{uuid_mod.uuid4().hex[:12]}"
@@ -1368,7 +1615,7 @@ async def generate_playbook(
         await db.flush()
 
         # 4. Create Version 0.1.0 with the AI content
-        await create_playbook_version(db, playbook, candidate)
+        await create_playbook_version(db, playbook, candidate, origin="manual_generation")
         identity_ids = []
         for episode in episodes:
             identity_ids.extend(identity_ids_from_refs(episode.entity_refs))

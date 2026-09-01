@@ -109,10 +109,25 @@ async def check_playbook_drift(
 
     Alerts include playbooks that were past expiry (``past_expiry``) before the transition runs.
     """
+    from contextedge.services.playbook_quality_service import (
+        STALE_SOURCE_CHANGED,
+        signal_quality_stale,
+    )
+
     alerts = await list_drift_alerts(db, tenant_id)
+    invalidated = 0
+    for alert in alerts:
+        invalidated += await signal_quality_stale(
+            db,
+            tenant_id,
+            uuid.UUID(alert["playbook_id"]),
+            reason=STALE_SOURCE_CHANGED,
+            origin="drift_scan",
+        )
     expired_count = await apply_expired_playbook_transitions(db, tenant_id)
     return {
         "alerts": alerts,
         "expired_transition_count": expired_count,
         "alert_count": len(alerts),
+        "quality_invalidated": invalidated,
     }

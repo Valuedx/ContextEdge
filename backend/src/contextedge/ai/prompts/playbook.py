@@ -509,3 +509,73 @@ register_prompt(
     ),
     default=True,
 )
+
+
+# v10 — best-practice steps become permitted, not mandated (2026-09-01).
+#
+# Registered, NOT default. v9 stays the default until the A/B in
+# evals/playbook_prompt_ab.py says otherwise; the point of the registry is
+# that a prompt change is a measured decision rather than a deploy.
+#
+# The problem: v5's rule 9 hands the model a thirteen-item checklist of
+# best-practice steps to add — "prerequisite validation, backup/rollback
+# preparation, checksum or antivirus verification, security validation,
+# version compatibility checks, file integrity verification, logging and
+# audit documentation…" — and then v6's rule 11 tells it to produce the
+# minimal complete set and emit no filler. The two rules pull in opposite
+# directions, and the AutomationEdge support review shows which one wins:
+#
+#   "Agent auto-update fails during JAR deletion in the lib directory —
+#    for this no need to check agent state"          (prerequisite validation)
+#   "Multipart file size limit exceeded — no need to check size, and
+#    [no need to] check the installed version … 8.1.0 or higher"
+#                                                    (version compatibility)
+#   "Errors regarding Log4j or conflicting plugin JARs during startup —
+#    no need to check log4j file"                    (file integrity)
+#
+# Three rejections, three items straight off the checklist. The generator was
+# doing exactly what it was told. Building a padding detector against output
+# the prompt requires is fighting yourself, so the enumeration goes.
+#
+# What replaces it is a test, not a list. A best-practice step has to earn
+# its place by naming the specific risk it removes for THIS issue — which is
+# the same utility standard the quality validator will apply, stated at the
+# point of generation so the two agree.
+_V10_SYSTEM = _V9_SYSTEM.replace(
+    """   - Best practice: an important operational step no source states but
+     an experienced support engineer would expect — prerequisite
+     validation, backup/rollback preparation, checksum or antivirus
+     verification, security validation, version compatibility checks,
+     file integrity verification, logging and audit documentation,
+     customer communication checkpoints, post-deployment validation,
+     health checks, risk mitigation, cleanup, documentation updates,
+     lessons learned. Tag it exactly:""",
+    """   - Best practice: an operational step no source states, which you may
+     add ONLY when its absence would leave this specific procedure unsafe
+     or unable to complete. There is no checklist of these. Before adding
+     one, name — in "reason" — the concrete risk it removes for THIS
+     issue, on THIS component. If the honest answer is "it is generally
+     good practice", do not add the step: a reviewer will read it as
+     padding and they will be right. In particular, do not add a
+     prerequisite check, a version check, a file-integrity check or a
+     backup step merely because the action sounds risky in general; add
+     it when this issue's evidence shows that omitting it caused, or
+     would cause, a failure. Tag it exactly:""",
+)
+
+# Guard against a silent no-op: `str.replace` returns the original string when
+# the pattern does not match, so a future edit to v5's rule 9 would leave v10
+# identical to v9 and the A/B would compare a prompt with itself.
+if _V10_SYSTEM == _V9_SYSTEM:  # pragma: no cover - construction-time assertion
+    raise RuntimeError(
+        "playbook prompt v10 failed to patch rule 9; the v5 text it edits has changed"
+    )
+
+register_prompt(
+    Prompt(
+        name="playbook",
+        version="v10",
+        system=_V10_SYSTEM,
+        user_template=_V3_USER,
+    ),
+)

@@ -299,8 +299,109 @@ export interface Playbook {
   last_validated_at: string | null;
   expiry_at: string | null;
   confidence?: number | null;
+  /**
+   * Present only when the list was requested with `include_quality=true`.
+   * Absent rather than empty otherwise, so "we did not ask" cannot be
+   * mistaken for "there is no assessment".
+   */
+  quality?: PlaybookQualitySummary | null;
   created_at: string;
   updated_at: string;
+}
+
+/**
+ * Playbook quality (backend Phase 1, read API Phase 4).
+ *
+ * Two fields decide how this renders and both are easy to skip:
+ *
+ * - `structure` is a PRECONDITION, not a fourth group. An empty procedure or
+ *   a branch pointing at a step that does not exist makes the three group
+ *   verdicts moot rather than merely accompanying them. Render it above them.
+ * - `coverage` says how many dimensions were actually decided. Most
+ *   validators are not built yet, so `state` is largely a statement about our
+ *   own coverage. Show "3 of 14 checks run" and withhold the verdict until
+ *   that number is worth showing; a warning badge on every playbook teaches
+ *   reviewers to ignore badges.
+ */
+export type QualityState =
+  | "pass"
+  | "fail"
+  | "inconclusive"
+  | "error"
+  | "stale"
+  | "overridden";
+
+export type QualitySeverity = "critical" | "major" | "minor" | "info";
+
+export interface QualityCoverage {
+  decided: number;
+  undecided: number;
+  total: number;
+}
+
+/** The three independent decisions. `null` means the group was not evaluated
+ *  at all, which must not render the same as a clean result. */
+export interface QualityGroups {
+  subject: QualityState | null;
+  steps: QualityState | null;
+  coherence: QualityState | null;
+}
+
+export interface PlaybookQualitySummary {
+  state: QualityState | null;
+  structure: QualityState | null;
+  groups: QualityGroups;
+  coverage: QualityCoverage;
+  finding_counts: Partial<Record<QualitySeverity, number>>;
+  /** False when the assessment describes content the playbook has since
+   *  moved away from. A stale verdict otherwise looks exactly as healthy as
+   *  a current one. */
+  matches_current_content: boolean;
+  assessed_at: string | null;
+  stale_reason: string | null;
+  evaluation_mode: string | null;
+}
+
+export interface PlaybookQualityFinding {
+  id: string;
+  category: string;
+  dimension: string;
+  severity: QualitySeverity;
+  target_kind: "playbook" | "field" | "step";
+  /** A step_id or a field name — never a line number, because steps get
+   *  reordered and the reviewer has to be able to find the thing. */
+  target_ref: string | null;
+  claim: string | null;
+  explanation: string;
+  supporting_spans: unknown[];
+  contradicting_spans: unknown[];
+  validator: string;
+  confidence: number | null;
+  remediation_category: string | null;
+  created_at: string;
+}
+
+export interface PlaybookQualityReadiness {
+  ready: boolean;
+  state: QualityState | null;
+  blocked_reason: string | null;
+}
+
+export interface PlaybookQuality {
+  playbook_id: string;
+  content_hash: string;
+  assessment_id: string | null;
+  content_revision_id: string | null;
+  assessed_content_hash: string | null;
+  validator_bundle_version: string | null;
+  dimension_states: Record<string, QualityState>;
+  summary: PlaybookQualitySummary;
+  findings: PlaybookQualityFinding[];
+  readiness: PlaybookQualityReadiness;
+  started_at: string | null;
+  completed_at: string | null;
+  stale_at: string | null;
+  superseded_at: string | null;
 }
 
 export interface PlaybookSourceRef {

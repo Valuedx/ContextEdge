@@ -301,6 +301,29 @@ async def transition_playbook(
             "comments": comments,
         },
     )
+    # Quality assessment at the two boundaries where a human is making a
+    # claim about this content: sending it to review, and approving it.
+    #
+    # Shadow mode — this records a verdict, it does not gate the transition.
+    # The gate is Phase 5, and `publication_readiness` already computes the
+    # answer it will use, so switching it on is a call-site change here.
+    #
+    # `under_review` matters more than it looks. Approval is the boundary the
+    # plan is written around, but this tenant's whole corpus sits in
+    # `candidate` with nothing published, so review entry is where reviewer
+    # attention is actually being spent and where a finding can still change
+    # the outcome cheaply.
+    if new_state in ("under_review", "approved"):
+        from contextedge.services.playbook_quality_service import assess_playbook
+
+        await assess_playbook(
+            db,
+            playbook,
+            approved_version,
+            origin=f"transition_{new_state}",
+            actor_id=actor_id,
+        )
+
     if new_state == "approved" and approved_version is not None:
         await promote_playbook_memory(
             db,
@@ -360,8 +383,18 @@ async def create_playbook_version(
     db: AsyncSession,
     playbook: Playbook,
     version_data: dict,
+    *,
+    origin: str = "version_create",
 ) -> PlaybookVersion:
-    """Create a new version of a playbook."""
+    """Create a new version of a playbook.
+
+    ``origin`` records which path minted the content revision this creates —
+    ``generation``, ``manual_generation``, ``fork``, ``rollback``, or the
+    default ``version_create`` for a hand-authored version. Five callers share
+    this function, and without the parameter every revision in the audit trail
+    claimed to be the same kind of event, which makes "how did this playbook
+    come to say that?" unanswerable from the history alone.
+    """
     # F6: a step that names a tool must name one the registry knows. Checked
     # before any version row is created, so an unresolvable reference fails
     # the create instead of publishing a version that cannot be executed.
@@ -432,6 +465,31 @@ async def create_playbook_version(
                     "semantic_version": version.semantic_version,
                     "playbook_confidence": version.playbook_confidence,
                 },
+            )
+            # Every version-creating path funnels through here — the generation
+            # worker, POST /playbooks/generate, POST /{id}/versions, and
+            # rollback — so hooking the assessment at this one point is what
+            # stops the five of them drifting into five different notions of
+            # whether the content was ever checked.
+            #
+            # `invalidate_and_reassess` rather than a bare assess: the new
+            # version replaces current_version_id, so any verdict about the
+            # previous one is now about content this playbook no longer
+            # presents.
+            from contextedge.services.playbook_quality_service import (
+                STALE_CONTENT_CHANGED,
+                invalidate_and_reassess,
+            )
+
+            await invalidate_and_reassess(
+                db,
+                playbook,
+                version,
+                reason=STALE_CONTENT_CHANGED,
+                origin=origin,
+                actor_id=version.created_by,
+                quality_contract_hash=version_data.get("quality_contract_hash"),
+                source_snapshot_hash=version_data.get("source_snapshot_hash"),
             )
             return version
         except IntegrityError as exc:

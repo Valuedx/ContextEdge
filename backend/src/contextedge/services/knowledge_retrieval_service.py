@@ -33,7 +33,6 @@ events.
 
 from __future__ import annotations
 
-import re
 import uuid
 from dataclasses import dataclass, field
 from typing import Any
@@ -43,6 +42,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from contextedge.models.evidence import EvidenceChunk, EvidenceItem
+from contextedge.quality.section_purpose import infer_section_purpose_from_chunk
 from contextedge.services.evidence_typing import KNOWLEDGE_EVIDENCE_TYPES
 from contextedge.services.knowledge_lifecycle import is_current
 
@@ -230,8 +230,9 @@ class KnowledgeDocument:
             header += " — " + "; ".join(self.applicability_notes)
         lines = [
             header,
-            "  Use ACTION, PREREQUISITE, VALIDATION, and ROLLBACK sections as "
-            "required playbook guidance unless they conflict with observed evidence.",
+            "  Section labels (ACTION/PREREQUISITE/VALIDATION/ROLLBACK) are "
+            "structure-derived, not keyword matches. Binding obligations come "
+            "from the QUALITY CONTRACT block when supplied.",
         ]
         for section in self.sections:
             purpose = section.purpose.upper()
@@ -529,87 +530,8 @@ async def _apply_supersession(
             document.superseded = True
 
 
-_SECTION_PURPOSE_KEYWORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
-    (
-        "rollback",
-        (
-            "rollback",
-            "roll back",
-            "revert",
-            "restore",
-            "undo",
-            "backout",
-            "back out",
-        ),
-    ),
-    (
-        "validation",
-        (
-            "validate",
-            "validation",
-            "verify",
-            "verification",
-            "expected result",
-            "expected outcome",
-            "test",
-            "confirm",
-            "health check",
-            "post-check",
-            "post check",
-        ),
-    ),
-    (
-        "prerequisite",
-        (
-            "prerequisite",
-            "pre-requisite",
-            "before you begin",
-            "required",
-            "requirement",
-            "supported version",
-            "applies to",
-            "dependency",
-            "permission",
-        ),
-    ),
-    (
-        "action",
-        (
-            "step",
-            "procedure",
-            "resolution",
-            "solution",
-            "configure",
-            "restart",
-            "run ",
-            "execute",
-            "install",
-            "update",
-            "enable",
-            "disable",
-            "open ",
-            "select ",
-            "click ",
-            "change ",
-        ),
-    ),
-)
-
-_COMMANDISH_RE = re.compile(
-    r"(\b[a-z][\w.-]+\s+(-{1,2}[\w-]+|/[A-Za-z0-9_.-]+|[A-Za-z]:\\)|"
-    r"`[^`]+`|\b[A-Z_]{3,}\b=|\.(properties|conf|xml|yaml|yml|json)\b)"
-)
-
-
 def _section_purpose(chunk: Any) -> str:
-    text = f"{getattr(chunk, 'parent_section', '') or ''}\n{getattr(chunk, 'text', '') or ''}"
-    lower = text[:1600].lower()
-    for purpose, keywords in _SECTION_PURPOSE_KEYWORDS:
-        if any(keyword in lower for keyword in keywords):
-            return purpose
-    if _COMMANDISH_RE.search(text[:1600]):
-        return "action"
-    return "context"
+    return infer_section_purpose_from_chunk(chunk)
 
 
 def _section_priority(chunk: Any) -> int:

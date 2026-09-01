@@ -19,6 +19,7 @@ import { useState } from "react";
 
 import { AlertTriangle, ArrowRight, FileText, Layers, Lightbulb, PencilLine } from "lucide-react";
 
+import type { PlaybookQualityFinding } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 export interface PlaybookStepRef {
@@ -29,6 +30,8 @@ export interface PlaybookStepRef {
 }
 
 export interface PlaybookStep {
+  // Findings address a step by step_id, so it has to survive into the view.
+  step_id?: string;
   text?: string;
   type?: string;
   order?: number;
@@ -76,12 +79,33 @@ export function sortSteps(steps: PlaybookStep[]): PlaybookStep[] {
 export function PlaybookSteps({
   steps,
   className,
+  findings,
 }: {
   steps: unknown;
   className?: string;
+  /**
+   * Quality findings for this version, shown against the step each one is
+   * about. Optional, so every existing call site is unaffected.
+   *
+   * Inline rather than only in the quality panel: a finding that says "step 4
+   * cites a source that no longer supports it" is useless three panels away
+   * from step 4. This is the difference between a reviewer reading the
+   * findings and a reviewer scrolling past them.
+   */
+  findings?: PlaybookQualityFinding[];
 }) {
   const list: PlaybookStep[] = Array.isArray(steps) ? (steps as PlaybookStep[]) : [];
   const [hideBestPractice, setHideBestPractice] = useState(false);
+
+  // Grouped once rather than filtered per step: the step list is rendered on
+  // every keystroke of the editor above it.
+  const findingsByStep = new Map<string, PlaybookQualityFinding[]>();
+  for (const finding of findings ?? []) {
+    if (finding.target_kind !== "step" || !finding.target_ref) continue;
+    const bucket = findingsByStep.get(finding.target_ref);
+    if (bucket) bucket.push(finding);
+    else findingsByStep.set(finding.target_ref, [finding]);
+  }
 
   if (list.length === 0) {
     return (
@@ -116,6 +140,12 @@ export function PlaybookSteps({
       {sortSteps(visible).map((step, index) => {
         const type = (step.type || "").toLowerCase();
         const refs = Array.isArray(step.source_refs) ? step.source_refs : [];
+        // Findings address a step by step_id; the backend also emits the
+        // 1-based order for steps that have no id yet.
+        const stepFindings = [
+          ...(step.step_id ? (findingsByStep.get(step.step_id) ?? []) : []),
+          ...(findingsByStep.get(String(step.order ?? index + 1)) ?? []),
+        ];
         return (
           <li
             key={`${step.order ?? index}-${(step.text || "").slice(0, 24)}`}
@@ -210,6 +240,30 @@ export function PlaybookSteps({
                           </span>
                         )}
                       </span>
+                    ))}
+                  </div>
+                )}
+
+                {stepFindings.length > 0 && (
+                  <div className="space-y-1 pt-1">
+                    {stepFindings.map((finding) => (
+                      <p
+                        key={finding.id}
+                        className={cn(
+                          "flex items-start gap-1.5 rounded border px-2 py-1 text-[11px]",
+                          finding.severity === "critical" || finding.severity === "major"
+                            ? "border-destructive/40 bg-destructive/10"
+                            : "border-muted bg-muted/50 text-muted-foreground",
+                        )}
+                      >
+                        <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
+                        <span>
+                          <span className="font-medium">
+                            {finding.category.replace(/_/g, " ")}
+                          </span>{" "}
+                          — {finding.explanation}
+                        </span>
+                      </p>
                     ))}
                   </div>
                 )}

@@ -22,6 +22,7 @@ async def generate_playbook_candidate(
     negative_knowledge: list[str],
     *,
     knowledge_sources: list[Any] | None = None,
+    quality_contract_prompt: str | None = None,
     tenant_id: _uuid.UUID | str | None = None,
     db: Any | None = None,
 ) -> dict:
@@ -66,6 +67,8 @@ async def generate_playbook_candidate(
         format_kwargs["knowledge_sources"] = knowledge_text
 
     user = prompt.format_user(**format_kwargs)
+    if quality_contract_prompt:
+        user = f"{user}\n\n{quality_contract_prompt}"
     ref_map = _build_ref_map(knowledge_sources or [], episode_summaries)
     result = await llm_complete_json(
         user,

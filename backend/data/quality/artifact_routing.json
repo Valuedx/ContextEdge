@@ -1,0 +1,4 @@
+{
+  "defect_evidence_types": ["release_notes", "defect", "known_issue"],
+  "informational_evidence_types": ["faq", "overview", "concept"]
+}

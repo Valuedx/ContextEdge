@@ -476,6 +476,19 @@ async def scan_contradictions(
                 if not contradicted:
                     continue
 
+                from contextedge.services.playbook_quality_service import (
+                    STALE_SOURCE_CHANGED,
+                    signal_quality_stale,
+                )
+
+                await signal_quality_stale(
+                    db,
+                    tenant_id,
+                    playbook.id,
+                    reason=STALE_SOURCE_CHANGED,
+                    origin="contradiction_scan",
+                )
+
                 contradiction, created = await _get_or_create_contradiction(
                     db,
                     tenant_id=tenant_id,

@@ -9,6 +9,7 @@ import { Loader2 } from "lucide-react";
 
 import { PageHeader } from "@/components/common/page-header";
 import { KnowledgeSourcesPanel } from "@/components/playbooks/knowledge-sources-panel";
+import { QualityPanel, usePlaybookQuality } from "@/components/playbooks/quality-panel";
 import {
   DetailPageSkeleton,
   DetailWideCardSkeleton,
@@ -761,6 +762,11 @@ export default function PlaybookDetailPage() {
   const wantsEdit = searchParams.get("edit") === "1";
   const qc = useQueryClient();
 
+  // Same query key the panel uses, so this is the panel's fetch, not a second
+  // one. The step list needs the findings to show each one against the step
+  // it is about.
+  const { data: quality } = usePlaybookQuality(playbookId);
+
   const { data: playbook, isLoading, error } = useQuery({
     queryKey: ["playbook", playbookId],
     queryFn: () => api.get<Playbook>(`/playbooks/${playbookId}`),
@@ -1017,7 +1023,10 @@ export default function PlaybookDetailPage() {
             ) : (
               <>
                 <TriggerConditionsSummary triggerConditions={selectedVersion.trigger_conditions} />
-                <PlaybookSteps steps={selectedVersion.steps} />
+                <PlaybookSteps
+                  steps={selectedVersion.steps}
+                  findings={quality?.findings}
+                />
                 <div className="border-t pt-4 text-xs text-muted-foreground">
                   <div className="space-y-2">
                     <p>
@@ -1071,6 +1080,10 @@ export default function PlaybookDetailPage() {
         )}
       </div>
 
+      {/* Above lineage and governance on purpose: this is the panel that
+          tells a reviewer whether the thing below is worth reading, and a
+          finding they scroll past is a finding that did not happen. */}
+      <QualityPanel playbookId={playbook.id} />
       <PlaybookLineageReferencesPanel playbookId={playbook.id} />
       <GovernancePanel playbook={playbook} />
       {selectedVersion && <KnowledgeSourcesPanel version={selectedVersion} />}

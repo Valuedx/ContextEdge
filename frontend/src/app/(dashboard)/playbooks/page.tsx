@@ -16,6 +16,7 @@ import {
   lifecycleStateLabel,
   PlaybookLifecycleActions,
 } from "@/components/common/playbook-lifecycle-actions";
+import { QualityCell } from "@/components/playbooks/quality-panel";
 import { Input } from "@/components/ui/input";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -98,6 +99,12 @@ const columns: ColumnDef<Playbook>[] = [
     },
   },
   {
+    id: "quality",
+    header: "Quality",
+    enableSorting: false,
+    cell: ({ row }) => <QualityCell summary={row.original.quality} />,
+  },
+  {
     accessorKey: "last_validated_at",
     header: "Validated",
     cell: ({ row }) => {
@@ -137,7 +144,9 @@ export default function PlaybooksPage() {
 
   const { data = [], isLoading } = useQuery<Playbook[]>({
     queryKey: ["playbooks", pg.page, searchQuery, lifecycleState],
-    queryFn: () => api.get("/playbooks", params),
+    // The quality summary rides along with the page rather than being
+    // fetched per row; the backend batches it into three extra queries.
+    queryFn: () => api.get("/playbooks", { ...params, include_quality: "true" }),
   });
 
   const selectedPlaybooks = data.filter((playbook) => selectedIds.includes(playbook.id));

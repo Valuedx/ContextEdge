@@ -1,0 +1,35 @@
+{
+  "version": "ae-support-2026.09.01",
+  "owner": "AutomationEdge Support",
+  "notes": "Initial pack from review sheet adjudication (Phase 2.5). Load via scripts/seed_quality_policy_pack.py.",
+  "rules": [
+    {
+      "normalized_action": "replace jar in lib directory",
+      "decision": "discouraged",
+      "alternative_action": "Use the supported agent upgrade procedure instead of manual JAR replacement.",
+      "rationale": "Review adjudication: JAR replacement rejection cluster.",
+      "source_kind": "review_adjudication"
+    },
+    {
+      "normalized_action": "delete jar from lib",
+      "decision": "discouraged",
+      "alternative_action": "Follow the documented agent upgrade path.",
+      "rationale": "Review adjudication: JAR replacement rejection cluster.",
+      "source_kind": "review_adjudication"
+    },
+    {
+      "normalized_action": "change jar file",
+      "decision": "discouraged",
+      "alternative_action": "Use supported upgrade or plugin install procedure.",
+      "rationale": "Review adjudication: JAR replacement rejection cluster.",
+      "source_kind": "review_adjudication"
+    },
+    {
+      "normalized_action": "re-register agent",
+      "decision": "discouraged",
+      "alternative_action": "Verify agent state and configuration before re-registration.",
+      "rationale": "Review adjudication: unnecessary agent re-registration.",
+      "source_kind": "review_adjudication"
+    }
+  ]
+}
