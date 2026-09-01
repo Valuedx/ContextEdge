@@ -1918,20 +1918,39 @@ async def generate_playbook(
         candidate["quality_contract_hash"] = prep.contract_hash
         candidate["source_snapshot_hash"] = prep.source_snapshot_hash
 
-        # 3. Create Playbook Shell
-        stable_key = f"pb-{uuid_mod.uuid4().hex[:12]}"
-        playbook = Playbook(
-            tenant_id=user.tenant_id,
-            domain_id=pattern.domain_id,
-            stable_key=stable_key,
-            title=candidate.get("title", f"Fix: {pattern.title}"),
-            description=candidate.get("description", pattern.description),
-            risk_tier=candidate.get("risk_tier", "medium"),
-            automation_mode="suggest_only",
-            owner_user_id=user.user_id,
-            pattern_id=pattern.id,
+        # 3. Find or Create Playbook Shell
+        existing_pb_q = (
+            select(Playbook)
+            .where(
+                Playbook.pattern_id == pattern.id,
+                Playbook.tenant_id == user.tenant_id,
+            )
+            .order_by(Playbook.created_at.desc())
         )
-        db.add(playbook)
+        existing_pb_res = await db.execute(existing_pb_q)
+        playbook = existing_pb_res.scalars().first()
+        now_utc = datetime.now(UTC)
+
+        if playbook:
+            playbook.title = candidate.get("title", playbook.title)
+            playbook.description = candidate.get("description", playbook.description)
+            playbook.updated_at = now_utc
+        else:
+            stable_key = f"pb-{uuid_mod.uuid4().hex[:12]}"
+            playbook = Playbook(
+                tenant_id=user.tenant_id,
+                domain_id=pattern.domain_id,
+                stable_key=stable_key,
+                title=candidate.get("title", f"Fix: {pattern.title}"),
+                description=candidate.get("description", pattern.description),
+                risk_tier=candidate.get("risk_tier", "medium"),
+                automation_mode="suggest_only",
+                owner_user_id=user.user_id,
+                pattern_id=pattern.id,
+                updated_at=now_utc,
+            )
+            db.add(playbook)
+        pattern.updated_at = now_utc
         await db.flush()
 
         # 4. Create Version 0.1.0 with the AI content

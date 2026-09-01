@@ -73,10 +73,12 @@ async def list_patterns(
 
     pat_ids = [p.id for p in patterns]
     pb_result = await db.execute(
-        select(Playbook.id, Playbook.pattern_id, Playbook.updated_at).where(
+        select(Playbook.id, Playbook.pattern_id, Playbook.updated_at)
+        .where(
             Playbook.tenant_id == user.tenant_id,
             Playbook.pattern_id.in_(pat_ids),
         )
+        .order_by(Playbook.updated_at.asc())
     )
     pb_map = {row[1]: (row[0], row[2]) for row in pb_result.all()}
 
@@ -90,6 +92,7 @@ async def list_patterns(
             if (
                 pb_updated_at
                 and pat.updated_at
+                and pat.updated_at > pb_updated_at
                 and (pat.updated_at - pb_updated_at).total_seconds() > 5
             ):
                 resp.playbook_status = "review_needed"
