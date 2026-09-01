@@ -232,7 +232,7 @@ export default function EpisodesPage() {
   const { data = [], isLoading, isFetching } = useQuery<Episode[]>({
     queryKey: ["episodes", pg.page, sortMode, reviewerTab, statusFilter, appliedQuery],
     queryFn: () => {
-      const params: Record<string, string | number | boolean> = {
+      const params: Record<string, string> = {
         ...pg.params,
         sort: sortMode,
       };
@@ -242,7 +242,7 @@ export default function EpisodesPage() {
       if (reviewerTab !== "all") {
         params.reviewer_state = reviewerTab;
         if (reviewerTab === "superseded") {
-          params.include_superseded = true;
+          params.include_superseded = "true";
         }
       }
       if (statusFilter !== "all") {

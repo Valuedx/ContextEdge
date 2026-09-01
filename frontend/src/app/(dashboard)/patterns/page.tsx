@@ -203,7 +203,7 @@ export default function PatternsPage() {
   const { data: rawData = [], isLoading, isFetching } = useQuery<Pattern[]>({
     queryKey: ["patterns", pg.page, appliedQuery],
     queryFn: () => {
-      const params: Record<string, string | number> = { ...pg.params };
+      const params: Record<string, string> = { ...pg.params };
       if (appliedQuery.trim()) {
         params.q = appliedQuery.trim();
       }

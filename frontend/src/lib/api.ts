@@ -130,9 +130,18 @@ class ApiClient {
     return res.json();
   }
 
-  get<T>(path: string, params?: Record<string, string>) {
-    const query = params
-      ? "?" + new URLSearchParams(params).toString()
+  get<T>(path: string, params?: Record<string, string | number | boolean | undefined | null>) {
+    if (!params) {
+      return this.request<T>(`/api/v1${path}`);
+    }
+    const cleanParams: Record<string, string> = {};
+    for (const [key, value] of Object.entries(params)) {
+      if (value !== undefined && value !== null && value !== "") {
+        cleanParams[key] = String(value);
+      }
+    }
+    const query = Object.keys(cleanParams).length > 0
+      ? "?" + new URLSearchParams(cleanParams).toString()
       : "";
     return this.request<T>(`/api/v1${path}${query}`);
   }

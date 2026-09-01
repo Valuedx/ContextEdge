@@ -153,7 +153,18 @@ ContextEdge implements multi-tenancy at the database kernel level rather than re
 
 ---
 
-## 4. Deep-Dive: Point-by-Point Analysis of the Last 50 Commits
+## 4. Deep-Dive: Point-by-Point Analysis of Recent Commits
+
+---
+
+### `ea308f7` (2026-09-02) — Comprehensive Filter Tabs, Search Bars & Toolbars across Episodes, Patterns, and Evidence
+* **Problem:** Reviewers could not isolate draft vs. approved episodes or filter patterns by playbook generation status. Search was limited, and navigation across different evidence relevance buckets required multiple manual clicks.
+* **Code & Logic Changes:**
+  * **`api/v1/episodes.py` & `api/v1/patterns.py`**: Added backend search query parameter `q` with case-insensitive `ILIKE` matching over titles, error descriptions, and resolutions.
+  * **`episodes/page.tsx`**: Added quick-filter tabs (`All`, `Drafts / Unreviewed`, `Approved`, `Rejected`, `Superseded`), status dropdown (`Draft`, `Complete`, `Failed`), sort toggle (`Review Priority` vs `Newest`), and a search toolbar.
+  * **`patterns/page.tsx`**: Added playbook lifecycle tabs (`All Patterns`, `With Playbook`, `Needs Sync`, `No Playbook`), live search toolbar, and a 1-click toggle between List View and Clustering Graph View.
+  * **`evidence/page.tsx`**: Added relevance quick-filter tabs (`All Evidence`, `Operational`, `Possibly Relevant`, `Not Relevant`, `Unclassified`) synchronized with source and evidence type dropdowns.
+* **Benefit:** Fast, intuitive incident exploration and 1-click triage of draft vs approved records across all core modules.
 
 ---
 
