@@ -209,7 +209,33 @@ describe("QualityCell", () => {
         summary={summary({ finding_counts: { critical: 2, major: 1, minor: 9, info: 9 } })}
       />,
     );
-    expect(screen.getByText("3")).toBeInTheDocument();
+    expect(screen.getByText("3 blocking")).toBeInTheDocument();
+  });
+
+  it("names the unit rather than showing a bare number", () => {
+    // It shipped as a bare integer. In a column of red badges "fail 5" reads
+    // as a version, an ID, or nothing — the reviewer has to guess the unit.
+    render(
+      <QualityCell summary={summary({ finding_counts: { critical: 0, major: 1 } })} />,
+    );
+    expect(screen.queryByText("1")).not.toBeInTheDocument();
+    const count = screen.getByText("1 blocking");
+    expect(count).toHaveAttribute(
+      "title",
+      expect.stringContaining("would fail a check"),
+    );
+  });
+
+  it("shows no count when nothing would fail a check", () => {
+    render(
+      <QualityCell
+        summary={summary({
+          state: "inconclusive",
+          finding_counts: { critical: 0, major: 0, minor: 4, info: 9 },
+        })}
+      />,
+    );
+    expect(screen.queryByText(/blocking/)).not.toBeInTheDocument();
   });
 });
 

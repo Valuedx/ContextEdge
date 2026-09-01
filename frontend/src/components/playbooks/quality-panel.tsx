@@ -346,7 +346,17 @@ export function QualityCell({
         </span>
       )}
       {blocking > 0 && (
-        <span className="text-[10px] text-muted-foreground">{blocking}</span>
+        // Labelled, not a bare integer. It shipped as one, and in a column of
+        // red badges "fail 5" reads as a version, an ID, or nothing at all —
+        // a reviewer cannot act on a number whose unit they have to guess.
+        // Same words as the panel below ("would fail a check") so the two
+        // surfaces are obviously talking about the same figure.
+        <span
+          className="whitespace-nowrap text-[10px] text-muted-foreground"
+          title={`${blocking} finding${blocking === 1 ? "" : "s"} at critical or major severity — these are what would fail a check`}
+        >
+          {blocking} blocking
+        </span>
       )}
     </span>
   );
