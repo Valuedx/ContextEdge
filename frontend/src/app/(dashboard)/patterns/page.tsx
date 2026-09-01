@@ -11,18 +11,20 @@ type DeduplicateResult = {
 
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { ColumnDef } from "@tanstack/react-table";
-import { BookOpen, Loader2, Network, List, Trash2, BookCheck, RefreshCw } from "lucide-react";
+import { BookOpen, Loader2, Network, List, Trash2, BookCheck, RefreshCw, FilterX, Search } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useState, useMemo } from "react";
 
 import { PageHeader } from "@/components/common/page-header";
+import { PageToolbar } from "@/components/common/page-toolbar";
 import { DataTable } from "@/components/common/data-table";
 import { DataTableSkeleton } from "@/components/common/data-table-skeleton";
 import { api } from "@/lib/api";
 import type { Pattern } from "@/lib/types";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { PatternGraph } from "@/components/patterns/pattern-graph";
@@ -190,13 +192,47 @@ const columns: ColumnDef<Pattern>[] = [
 ];
 
 export default function PatternsPage() {
+  const [search, setSearch] = useState<string>("");
+  const [appliedQuery, setAppliedQuery] = useState<string>("");
+  const [statusTab, setStatusTab] = useState<string>("all");
+  const [viewMode, setViewMode] = useState<string>("list");
+
   const pg = usePagination(50);
   const queryClient = useQueryClient();
 
-  const { data = [], isLoading } = useQuery<Pattern[]>({
-    queryKey: ["patterns", pg.page],
-    queryFn: () => api.get("/patterns", pg.params),
+  const { data: rawData = [], isLoading, isFetching } = useQuery<Pattern[]>({
+    queryKey: ["patterns", pg.page, appliedQuery],
+    queryFn: () => {
+      const params: Record<string, string | number> = { ...pg.params };
+      if (appliedQuery.trim()) {
+        params.q = appliedQuery.trim();
+      }
+      return api.get("/patterns", params);
+    },
   });
+
+  const data = useMemo(() => {
+    if (statusTab === "all") return rawData;
+    if (statusTab === "generated") {
+      return rawData.filter((p) => p.has_playbook && p.playbook_status !== "review_needed");
+    }
+    if (statusTab === "review_needed") {
+      return rawData.filter((p) => p.playbook_status === "review_needed");
+    }
+    if (statusTab === "none") {
+      return rawData.filter((p) => !p.has_playbook);
+    }
+    return rawData;
+  }, [rawData, statusTab]);
+
+  const clearAllFilters = () => {
+    setSearch("");
+    setAppliedQuery("");
+    setStatusTab("all");
+    pg.reset();
+  };
+
+  const hasActiveFilters = Boolean(appliedQuery.trim() || statusTab !== "all");
 
   const dedupMutation = useMutation({
     mutationFn: () => api.post<DeduplicateResult>("/patterns/deduplicate", {}),
@@ -222,74 +258,141 @@ export default function PatternsPage() {
         title="Patterns"
         description="Operational patterns derived from episode clusters."
         actions={
-        <Button
-          variant="outline"
-          size="sm"
-          className="gap-2 text-xs"
-          onClick={() => dedupMutation.mutate()}
-          disabled={dedupMutation.isPending}
-        >
-          {dedupMutation.isPending ? (
-            <Loader2 className="h-3.5 w-3.5 animate-spin" />
-          ) : (
-            <RefreshCw className="h-3.5 w-3.5" />
-          )}
-          Clean & Deduplicate
-        </Button>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              className="gap-2 text-xs"
+              onClick={() => dedupMutation.mutate()}
+              disabled={dedupMutation.isPending}
+            >
+              {dedupMutation.isPending ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <RefreshCw className="h-3.5 w-3.5" />
+              )}
+              Clean & Deduplicate
+            </Button>
+          </div>
         }
       />
       
-      <Tabs defaultValue="list" className="w-full">
-        <TabsList>
-          <TabsTrigger value="list">
-            <List className="h-4 w-4" /> List View
-          </TabsTrigger>
-          <TabsTrigger value="graph">
-            <Network className="h-4 w-4" /> Graph View (Clustering)
-          </TabsTrigger>
-        </TabsList>
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <Tabs
+          value={statusTab}
+          onValueChange={(val) => {
+            setStatusTab(val);
+            pg.reset();
+          }}
+          className="w-full sm:w-auto"
+        >
+          <TabsList className="bg-black/[0.03] dark:bg-white/[0.04] p-1 border border-border/50">
+            <TabsTrigger value="all">All Patterns</TabsTrigger>
+            <TabsTrigger value="generated">With Playbook</TabsTrigger>
+            <TabsTrigger value="review_needed">Needs Sync</TabsTrigger>
+            <TabsTrigger value="none">No Playbook</TabsTrigger>
+          </TabsList>
+        </Tabs>
 
-        <TabsContent value="list" className="border-none p-0 outline-none">
-          {isLoading ? (
-            <DataTableSkeleton columns={6} />
-          ) : (
-            <>
-              <DataTable columns={columns} data={data} />
-              <PaginationControls
-                page={pg.page}
-                pageSize={pg.pageSize}
-                count={data.length}
-                onPrev={pg.prevPage}
-                onNext={pg.nextPage}
-              />
-            </>
-          )}
-        </TabsContent>
+        <Tabs
+          value={viewMode}
+          onValueChange={setViewMode}
+          className="w-full sm:w-auto"
+        >
+          <TabsList className="bg-black/[0.03] dark:bg-white/[0.04] p-1 border border-border/50">
+            <TabsTrigger value="list" className="gap-1.5 text-xs">
+              <List className="h-3.5 w-3.5" /> List
+            </TabsTrigger>
+            <TabsTrigger value="graph" className="gap-1.5 text-xs">
+              <Network className="h-3.5 w-3.5" /> Graph View
+            </TabsTrigger>
+          </TabsList>
+        </Tabs>
+      </div>
 
-        <TabsContent value="graph" className="border-none p-0 outline-none">
-          {data.length > 0 ? (
-            <div className="grid grid-cols-1 gap-6">
-              {data.map((pattern) => (
-                <div key={pattern.id} className="space-y-3">
-                  <div className="flex items-center justify-between">
-                    <h3 className="text-lg font-semibold text-foreground">{pattern.title}</h3>
-                    <div className="flex items-center gap-4 text-sm text-muted-foreground">
-                      <span>{pattern.episode_count} Episodes</span>
-                      <span>{((pattern.confidence) * 100).toFixed(0)}% Confidence</span>
-                    </div>
+      <PageToolbar
+        actions={
+          <>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={() => queryClient.invalidateQueries({ queryKey: ["patterns"] })}
+              disabled={isFetching}
+            >
+              {isFetching ? (
+                <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
+              )}
+              Refresh
+            </Button>
+            {hasActiveFilters && (
+              <Button type="button" size="sm" variant="ghost" onClick={clearAllFilters} className="text-xs">
+                <FilterX className="mr-1.5 h-3.5 w-3.5" />
+                Clear Filters
+              </Button>
+            )}
+          </>
+        }
+      >
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            setAppliedQuery(search);
+            pg.reset();
+          }}
+          className="relative min-w-[220px] flex-1"
+        >
+          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+          <Input
+            type="search"
+            placeholder="Search patterns by title, type, or root cause description..."
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="pl-8 text-xs"
+          />
+        </form>
+      </PageToolbar>
+
+      {viewMode === "list" ? (
+        isLoading ? (
+          <DataTableSkeleton columns={6} />
+        ) : (
+          <>
+            <DataTable columns={columns} data={data} />
+            <PaginationControls
+              page={pg.page}
+              pageSize={pg.pageSize}
+              count={data.length}
+              onPrev={pg.prevPage}
+              onNext={pg.nextPage}
+            />
+          </>
+        )
+      ) : (
+        data.length > 0 ? (
+          <div className="grid grid-cols-1 gap-6">
+            {data.map((pattern) => (
+              <div key={pattern.id} className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-lg font-semibold text-foreground">{pattern.title}</h3>
+                  <div className="flex items-center gap-4 text-sm text-muted-foreground">
+                    <span>{pattern.episode_count} Episodes</span>
+                    <span>{((pattern.confidence) * 100).toFixed(0)}% Confidence</span>
                   </div>
-                  <PatternGraph patternId={pattern.id} />
                 </div>
-              ))}
-            </div>
-          ) : (
-             <div className="flex flex-col items-center justify-center rounded-lg border bg-card p-12 shadow-sm">
-                <Network className="mb-4 h-12 w-12 text-muted-foreground" />
-                <p className="text-muted-foreground">Analyze an episode first to discover a pattern graph.</p>
-             </div>
-          )}
-        </TabsContent>
-      </Tabs>
+                <PatternGraph patternId={pattern.id} />
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="flex flex-col items-center justify-center rounded-lg border bg-card p-12 shadow-sm">
+            <Network className="mb-4 h-12 w-12 text-muted-foreground" />
+            <p className="text-muted-foreground">No patterns match your filter.</p>
+          </div>
+        )
+      )}
     </div>
   );
 }

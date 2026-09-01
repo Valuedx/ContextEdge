@@ -22,6 +22,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { toast } from "sonner";
 import { usePagination } from "@/lib/hooks/use-pagination";
 import { PaginationControls } from "@/components/common/pagination-controls";
@@ -257,6 +258,25 @@ export default function EvidencePage() {
     <div className="space-y-6">
       <PageHeader title="Evidence Explorer" description="Search and browse operational evidence across all sources." />
       
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <Tabs
+          value={relevanceFilter}
+          onValueChange={(val) => {
+            setRelevanceFilter(val);
+            pg.reset();
+          }}
+          className="w-full sm:w-auto"
+        >
+          <TabsList className="bg-black/[0.03] dark:bg-white/[0.04] p-1 border border-border/50">
+            <TabsTrigger value="all">All Evidence</TabsTrigger>
+            <TabsTrigger value="operational">Operational</TabsTrigger>
+            <TabsTrigger value="possibly_relevant">Possibly Relevant</TabsTrigger>
+            <TabsTrigger value="not_relevant">Not Relevant</TabsTrigger>
+            <TabsTrigger value="unclassified">Unclassified</TabsTrigger>
+          </TabsList>
+        </Tabs>
+      </div>
+
       <PageToolbar
         actions={
           <>

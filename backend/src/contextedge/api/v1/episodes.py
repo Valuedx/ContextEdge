@@ -45,6 +45,7 @@ async def list_episodes(
     status: str | None = None,
     reviewer_state: str | None = None,
     include_superseded: bool = False,
+    q: str | None = None,
     sort: str = "newest",
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
@@ -65,26 +66,36 @@ async def list_episodes(
     ``include_superseded`` or by naming the state — a reviewer auditing
     what changed needs to see them.
     """
-    q = select(Episode).where(Episode.tenant_id == user.tenant_id)
+    query_stmt = select(Episode).where(Episode.tenant_id == user.tenant_id)
     if domain_id:
-        q = q.where(Episode.domain_id == domain_id)
+        query_stmt = query_stmt.where(Episode.domain_id == domain_id)
     if status:
-        q = q.where(Episode.status == status)
+        query_stmt = query_stmt.where(Episode.status == status)
     if reviewer_state:
-        q = q.where(Episode.reviewer_state == reviewer_state)
+        query_stmt = query_stmt.where(Episode.reviewer_state == reviewer_state)
     elif not include_superseded:
-        q = q.where(Episode.reviewer_state != "superseded")
+        query_stmt = query_stmt.where(Episode.reviewer_state != "superseded")
+    if q and q.strip():
+        clean_q = q.strip().lstrip("#").strip()
+        from sqlalchemy import or_
+        query_stmt = query_stmt.where(
+            or_(
+                Episode.title.ilike(f"%{clean_q}%"),
+                Episode.problem_description.ilike(f"%{clean_q}%"),
+                Episode.resolution.ilike(f"%{clean_q}%"),
+            )
+        )
     if sort not in EPISODE_SORTS:
         raise HTTPException(
             status_code=422,
             detail=f"sort must be one of {EPISODE_SORTS}",
         )
     if sort == "review_priority":
-        q = q.order_by(_review_priority().desc(), Episode.created_at.desc())
+        query_stmt = query_stmt.order_by(_review_priority().desc(), Episode.created_at.desc())
     else:
-        q = q.order_by(Episode.created_at.desc())
-    q = q.limit(limit).offset(offset)
-    result = await db.execute(q)
+        query_stmt = query_stmt.order_by(Episode.created_at.desc())
+    query_stmt = query_stmt.limit(limit).offset(offset)
+    result = await db.execute(query_stmt)
     return result.scalars().all()
 
 

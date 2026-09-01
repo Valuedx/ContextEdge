@@ -44,16 +44,27 @@ async def list_patterns(
     user: AuthUser,
     domain_id: UUID | None = None,
     active_only: bool = True,
+    q: str | None = None,
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
 ):
-    q = select(Pattern).where(Pattern.tenant_id == user.tenant_id)
+    query_stmt = select(Pattern).where(Pattern.tenant_id == user.tenant_id)
     if domain_id:
-        q = q.where(Pattern.domain_id == domain_id)
+        query_stmt = query_stmt.where(Pattern.domain_id == domain_id)
     if active_only:
-        q = q.where(Pattern.active_flag.is_(True))
-    q = q.order_by(Pattern.episode_count.desc()).limit(limit).offset(offset)
-    result = await db.execute(q)
+        query_stmt = query_stmt.where(Pattern.active_flag.is_(True))
+    if q and q.strip():
+        clean_q = q.strip().lstrip("#").strip()
+        from sqlalchemy import or_
+        query_stmt = query_stmt.where(
+            or_(
+                Pattern.title.ilike(f"%{clean_q}%"),
+                Pattern.description.ilike(f"%{clean_q}%"),
+                Pattern.pattern_type.ilike(f"%{clean_q}%"),
+            )
+        )
+    query_stmt = query_stmt.order_by(Pattern.episode_count.desc()).limit(limit).offset(offset)
+    result = await db.execute(query_stmt)
     patterns = list(result.scalars().all())
     if not patterns:
         return []

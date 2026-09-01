@@ -8,9 +8,10 @@ type BulkApproveResult = {
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ColumnDef } from "@tanstack/react-table";
-import { Sparkles, Loader2, Trash2, CheckCircle2 } from "lucide-react";
+import { Sparkles, Loader2, Trash2, CheckCircle2, FilterX, Search } from "lucide-react";
 
 import { PageHeader } from "@/components/common/page-header";
+import { PageToolbar } from "@/components/common/page-toolbar";
 import { DataTable } from "@/components/common/data-table";
 import { DataTableSkeleton } from "@/components/common/data-table-skeleton";
 import { StatusBadge } from "@/components/common/status-badge";
@@ -19,6 +20,15 @@ import type { Episode, EpisodeReconstructQueuedResponse } from "@/lib/types";
 import Link from "next/link";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { toast } from "sonner";
 import { usePagination } from "@/lib/hooks/use-pagination";
 import { PaginationControls } from "@/components/common/pagination-controls";
@@ -207,6 +217,11 @@ export default function EpisodesPage() {
   const [isClustering, setIsClustering] = useState(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
 
+  const [reviewerTab, setReviewerTab] = useState<string>("all");
+  const [statusFilter, setStatusFilter] = useState<string>("all");
+  const [search, setSearch] = useState<string>("");
+  const [appliedQuery, setAppliedQuery] = useState<string>("");
+
   const pg = usePagination(50);
   const queryClient = useQueryClient();
   // Review priority is the default: newest-first buried the resolution-
@@ -214,10 +229,40 @@ export default function EpisodesPage() {
   // beneath the last trickle of fragments after every bulk ingest.
   const [sortMode, setSortMode] = useState<"review_priority" | "newest">("review_priority");
 
-  const { data = [], isLoading } = useQuery<Episode[]>({
-    queryKey: ["episodes", pg.page, sortMode],
-    queryFn: () => api.get("/episodes", { ...pg.params, sort: sortMode }),
+  const { data = [], isLoading, isFetching } = useQuery<Episode[]>({
+    queryKey: ["episodes", pg.page, sortMode, reviewerTab, statusFilter, appliedQuery],
+    queryFn: () => {
+      const params: Record<string, string | number | boolean> = {
+        ...pg.params,
+        sort: sortMode,
+      };
+      if (appliedQuery.trim()) {
+        params.q = appliedQuery.trim();
+      }
+      if (reviewerTab !== "all") {
+        params.reviewer_state = reviewerTab;
+        if (reviewerTab === "superseded") {
+          params.include_superseded = true;
+        }
+      }
+      if (statusFilter !== "all") {
+        params.status = statusFilter;
+      }
+      return api.get("/episodes", params);
+    },
   });
+
+  const clearAllFilters = () => {
+    setSearch("");
+    setAppliedQuery("");
+    setStatusFilter("all");
+    setReviewerTab("all");
+    pg.reset();
+  };
+
+  const hasActiveFilters = Boolean(
+    appliedQuery.trim() || reviewerTab !== "all" || statusFilter !== "all"
+  );
 
   const bulkApproveMutation = useMutation({
     mutationFn: (ids: string[]) =>
@@ -318,17 +363,6 @@ export default function EpisodesPage() {
               type="button"
               variant="outline"
               size="sm"
-              onClick={() =>
-                setSortMode((m) => (m === "review_priority" ? "newest" : "review_priority"))
-              }
-              title="Review priority ranks resolution-bearing, well-evidenced drafts first"
-            >
-              Sort: {sortMode === "review_priority" ? "Review priority" : "Newest"}
-            </Button>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
               onClick={handleAiReview}
               disabled={isAiReviewing}
               title="AI first-pass review of pending drafts. Approval only happens when EPISODE_AI_REVIEW=auto_approve AND deterministic floors pass; otherwise verdicts are advisory annotations for your queue."
@@ -368,6 +402,107 @@ export default function EpisodesPage() {
           </div>
         }
       />
+
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <Tabs
+          value={reviewerTab}
+          onValueChange={(val) => {
+            setReviewerTab(val);
+            pg.reset();
+          }}
+          className="w-full sm:w-auto"
+        >
+          <TabsList className="bg-black/[0.03] dark:bg-white/[0.04] p-1 border border-border/50">
+            <TabsTrigger value="all">All</TabsTrigger>
+            <TabsTrigger value="unreviewed">Drafts / Unreviewed</TabsTrigger>
+            <TabsTrigger value="approved">Approved</TabsTrigger>
+            <TabsTrigger value="rejected">Rejected</TabsTrigger>
+            <TabsTrigger value="superseded">Superseded</TabsTrigger>
+          </TabsList>
+        </Tabs>
+      </div>
+
+      <PageToolbar
+        actions={
+          <>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={() => queryClient.invalidateQueries({ queryKey: ["episodes"] })}
+              disabled={isFetching}
+            >
+              {isFetching ? (
+                <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Sparkles className="mr-1.5 h-3.5 w-3.5" />
+              )}
+              Refresh
+            </Button>
+            {hasActiveFilters && (
+              <Button type="button" size="sm" variant="ghost" onClick={clearAllFilters} className="text-xs">
+                <FilterX className="mr-1.5 h-3.5 w-3.5" />
+                Clear Filters
+              </Button>
+            )}
+          </>
+        }
+      >
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            setAppliedQuery(search);
+            pg.reset();
+          }}
+          className="relative min-w-[220px] flex-1"
+        >
+          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+          <Input
+            type="search"
+            placeholder="Search episodes by title, problem, or resolution..."
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="pl-8 text-xs"
+          />
+        </form>
+
+        <div className="flex items-center gap-2">
+          <Select
+            value={statusFilter}
+            onValueChange={(v) => {
+              setStatusFilter(v);
+              pg.reset();
+            }}
+          >
+            <SelectTrigger className="w-[140px] text-xs">
+              <SelectValue placeholder="Status" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Statuses</SelectItem>
+              <SelectItem value="draft">Draft</SelectItem>
+              <SelectItem value="complete">Complete</SelectItem>
+              <SelectItem value="failed">Failed</SelectItem>
+            </SelectContent>
+          </Select>
+
+          <Select
+            value={sortMode}
+            onValueChange={(v: "review_priority" | "newest") => {
+              setSortMode(v);
+              pg.reset();
+            }}
+          >
+            <SelectTrigger className="w-[150px] text-xs">
+              <SelectValue placeholder="Sort" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="review_priority">Review Priority</SelectItem>
+              <SelectItem value="newest">Newest First</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+      </PageToolbar>
+
       {isLoading ? (
         <DataTableSkeleton columns={6} />
       ) : (
