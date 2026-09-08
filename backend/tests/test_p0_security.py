@@ -80,11 +80,35 @@ def test_config_rejects_default_jwt_secret_in_non_development(monkeypatch):
 
     monkeypatch.setenv("APP_ENV", "production")
     monkeypatch.setenv("JWT_SECRET_KEY", "change-me-in-production")
+    # The MinIO guard runs first and would raise on its own default, masking
+    # the assertion this test makes. Give it a real value so the JWT check is
+    # the only one left that can fire.
+    monkeypatch.setenv("MINIO_ROOT_PASSWORD", "a-real-minio-password")
 
     try:
         with pytest.raises(RuntimeError, match="JWT_SECRET_KEY must be changed"):
             importlib.reload(config_module)
     finally:
         monkeypatch.setenv("APP_ENV", "development")
+        monkeypatch.delenv("JWT_SECRET_KEY", raising=False)
+        monkeypatch.delenv("MINIO_ROOT_PASSWORD", raising=False)
+        importlib.reload(config_module)
+
+
+def test_config_rejects_default_minio_password_in_non_development(monkeypatch):
+    """The MinIO guard shipped with the multi-tenant work but had no test;
+    the JWT test above only noticed it by being masked."""
+    import contextedge.config as config_module
+
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("MINIO_ROOT_PASSWORD", "contextedge-secret")
+    monkeypatch.setenv("JWT_SECRET_KEY", "a-real-jwt-secret")
+
+    try:
+        with pytest.raises(RuntimeError, match="MINIO_ROOT_PASSWORD must be changed"):
+            importlib.reload(config_module)
+    finally:
+        monkeypatch.setenv("APP_ENV", "development")
+        monkeypatch.delenv("MINIO_ROOT_PASSWORD", raising=False)
         monkeypatch.delenv("JWT_SECRET_KEY", raising=False)
         importlib.reload(config_module)

@@ -170,7 +170,6 @@ async def test_chunk_query_carries_visibility_predicates():
 
 @pytest.mark.asyncio
 async def test_playbook_variant_keeps_ranker_row_shape():
-    from contextedge.search.hybrid_ranker import _semantic_corpus_score
     from contextedge.search.vector_search import search_evidence_semantic_for_playbook
 
     tenant_id = uuid4()
@@ -196,9 +195,11 @@ async def test_playbook_variant_keeps_ranker_row_shape():
             query_embedding=[1.0, 0.0],
         )
 
-    score, count = _semantic_corpus_score(rows)
-    assert count == 1
-    assert score == pytest.approx(1.0 - 0.30 / 2.0)
+    # Phase 2 replaced the per-playbook corpus scorer with the candidate arms,
+    # so assert the row shape directly: consumers read the cosine distance out
+    # of position 1, and the playbook variant must keep that contract.
+    assert len(rows) == 1
+    assert rows[0][1] == pytest.approx(0.30)
 
 
 def test_mmr_degrades_on_corrupt_embedding_dimensions():

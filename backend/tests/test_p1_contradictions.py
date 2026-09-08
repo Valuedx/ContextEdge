@@ -175,6 +175,14 @@ async def test_contradiction_detected_with_embedding_prefilter():
             "contextedge.services.contradiction_service.generate_embedding",
             AsyncMock(return_value=[0.1] * 3072),
         ),
+        # A confirmed contradiction now also marks the playbook's quality
+        # assessment stale. That hook has its own coverage in
+        # test_playbook_quality_staleness_hooks; here it would just consume a
+        # db.execute the numbered side_effect list below does not account for.
+        patch(
+            "contextedge.services.playbook_quality_service.signal_quality_stale",
+            AsyncMock(return_value=0),
+        ),
         patch(
             "contextedge.services.contradiction_service.llm_complete_json",
             AsyncMock(return_value={"contradiction": True, "reason": "KB explicitly says never restart"}),
@@ -239,6 +247,14 @@ async def test_no_contradiction_still_records_scan_state():
         patch(
             "contextedge.services.contradiction_service.generate_embedding",
             AsyncMock(return_value=[0.1] * 3072),
+        ),
+        # A confirmed contradiction now also marks the playbook's quality
+        # assessment stale. That hook has its own coverage in
+        # test_playbook_quality_staleness_hooks; here it would just consume a
+        # db.execute the numbered side_effect list below does not account for.
+        patch(
+            "contextedge.services.playbook_quality_service.signal_quality_stale",
+            AsyncMock(return_value=0),
         ),
         patch(
             "contextedge.services.contradiction_service.llm_complete_json",
@@ -359,6 +375,14 @@ async def test_budget_cap_stops_llm_calls_and_records_skipped():
             "contextedge.services.contradiction_service.generate_embedding",
             AsyncMock(return_value=[0.1] * 3072),
         ),
+        # A confirmed contradiction now also marks the playbook's quality
+        # assessment stale. That hook has its own coverage in
+        # test_playbook_quality_staleness_hooks; here it would just consume a
+        # db.execute the numbered side_effect list below does not account for.
+        patch(
+            "contextedge.services.playbook_quality_service.signal_quality_stale",
+            AsyncMock(return_value=0),
+        ),
         patch(
             "contextedge.services.contradiction_service.llm_complete_json",
             AsyncMock(side_effect=llm_side_effect),
@@ -427,6 +451,14 @@ async def test_cursor_skips_pair_scanned_since_evidence_update():
         patch(
             "contextedge.services.contradiction_service.generate_embedding",
             AsyncMock(return_value=[0.1] * 3072),
+        ),
+        # A confirmed contradiction now also marks the playbook's quality
+        # assessment stale. That hook has its own coverage in
+        # test_playbook_quality_staleness_hooks; here it would just consume a
+        # db.execute the numbered side_effect list below does not account for.
+        patch(
+            "contextedge.services.playbook_quality_service.signal_quality_stale",
+            AsyncMock(return_value=0),
         ),
         patch("contextedge.services.contradiction_service.llm_complete_json", llm_mock),
     ):

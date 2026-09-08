@@ -63,6 +63,13 @@ _ADDED_DYNAMICALLY: dict[tuple[str, str], str] = {
     ("entities", "model"): "0043 (same loop)",
     ("entities", "os_name"): "0043 (same loop)",
     ("entities", "os_version"): "0043 (same loop)",
+    # 0078 adds tenant_id to every name in its CHILD_TABLES tuple via
+    # `for table in CHILD_TABLES: op.add_column(table, ...)`, which the
+    # static scan below cannot see. The other CHILD_TABLES entries already
+    # had an explicit tenant_id column; these three did not.
+    ("claim_evidence", "tenant_id"): "0078 (loop over CHILD_TABLES)",
+    ("decision_evidence", "tenant_id"): "0078 (same loop)",
+    ("knowledge_case_steps", "tenant_id"): "0078 (same loop)",
 }
 
 

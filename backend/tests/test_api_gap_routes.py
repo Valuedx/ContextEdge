@@ -196,6 +196,7 @@ async def test_rotate_source_credentials_replaces_active_credential():
     old_cred = SimpleNamespace(source_id=source_id, status="active", rotated_at=None)
     source = SimpleNamespace(
         id=source_id,
+        tenant_id=uuid4(),
         source_type="teams",
         config={},
         auth_type="oauth2",
@@ -247,6 +248,7 @@ async def test_get_playbook_version_diff_reports_changed_fields():
         conflicts=None,
         playbook_confidence=0.5,
         execution_confidence_guidance=None,
+        verification_policy=None,
     )
     target = SimpleNamespace(
         id=target_id,
@@ -262,6 +264,7 @@ async def test_get_playbook_version_diff_reports_changed_fields():
         conflicts=None,
         playbook_confidence=0.8,
         execution_confidence_guidance="manual check",
+        verification_policy={"mode": "manual"},
     )
     db = SimpleNamespace(
         execute=AsyncMock(

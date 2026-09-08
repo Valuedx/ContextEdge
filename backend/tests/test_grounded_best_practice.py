@@ -77,19 +77,23 @@ def test_projection_marks_best_practice_steps():
     assert facts["steps"][1].startswith("2. [best practice] ")
 
 
-def test_prompt_v9_is_default_and_earlier_versions_untouched():
-    """v9 took the default so mail-thread solutions under each episode
-    are used together with KB. The grounded / best-practice taxonomy
-    this module covers came in at v5 and must survive into whatever is
-    current — it is inherited, not re-stated.
+def test_default_prompt_inherits_the_grounded_taxonomy():
+    """The grounded / best-practice taxonomy this module covers came in at
+    v5 and must survive into whatever is current — it is inherited, not
+    re-stated. Asserted against the registered default rather than a pinned
+    version so a bump does not silently stop testing the taxonomy.
+
+    v7's KB coverage checklist is deliberately NOT asserted here: it was
+    retired from the default chain on 2026-09-01 (v8+ build from v6) because
+    the pre-generation gates bind those obligations before the LLM runs.
     """
     from contextedge.ai import prompts as prompts_mod
 
-    assert prompts_mod._DEFAULTS["playbook"] == "v9"
-    for superseded in ("v4", "v5", "v6", "v7", "v8"):
+    default = prompts_mod._DEFAULTS["playbook"]
+    assert default == "v10"
+    for superseded in ("v4", "v5", "v6", "v7", "v8", "v9"):
         assert superseded in prompts_mod._REGISTRY["playbook"]
-    current = prompts_mod._REGISTRY["playbook"]["v9"].system
+    current = prompts_mod._REGISTRY["playbook"][default].system
     assert "non_grounded" in current and "best_practice" in current
-    assert "KB sections as a coverage checklist" in current
     assert "PRODUCT VERSION MISMATCH" in current
     assert "Use BOTH sources" in current

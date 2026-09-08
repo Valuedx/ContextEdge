@@ -305,6 +305,14 @@ async def test_rank_playbooks_identity_signal_boosts_score():
             "contextedge.search.hybrid_ranker.generate_playbook_candidates",
             AsyncMock(return_value=candidates),
         ),
+        # rank_playbooks now runs every candidate through the quality filter.
+        # These tests are about candidate union and signal wiring, not quality,
+        # so let the corpus through untouched rather than teaching each fake db
+        # to answer an assessment query it was never written for.
+        patch(
+            "contextedge.search.hybrid_ranker.filter_runtime_eligible",
+            AsyncMock(side_effect=lambda _db, _tenant, pbs, **_kw: pbs),
+        ),
         patch(
             "contextedge.search.hybrid_ranker._latest_published_versions",
             AsyncMock(return_value={playbook.id: version}),

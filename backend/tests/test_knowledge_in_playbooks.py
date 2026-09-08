@@ -488,7 +488,7 @@ def test_default_prompt_instructs_the_model_to_surface_disagreement_not_resolve_
     from contextedge.ai.prompts import get_prompt
 
     prompt = get_prompt("playbook", None)
-    assert prompt.version == "v9"  # mail-thread solutions under episodes
+    assert prompt.version == "v10"
     # Whitespace-normalized: the prompt is hard-wrapped, so asserting on
     # raw text would break whenever a line is reflowed â€” a failure that
     # says nothing about the contract being tested.
@@ -504,15 +504,18 @@ def test_default_prompt_instructs_the_model_to_surface_disagreement_not_resolve_
     assert "reproduce it EXACTLY" in system
     assert "NOWHERE in prose" in system
     assert "what observable result would confirm" in system
-    # v7 contract: labelled KB action/check/rollback sections are a coverage
-    # checklist for the final generated playbook.
-    assert "Treat labelled KB sections as a coverage checklist" in system
-    assert "product-specific action" in system
-    assert "If any required item is missing" in system
+    # v7's KB coverage checklist is intentionally absent: it was retired from
+    # the default chain on 2026-09-01 (v8+ build from v6) because the
+    # pre-generation gates and the Source-Derived Quality Contract bind those
+    # obligations before the LLM runs, and keeping rules 13-15 produced
+    # checklist filler the quality validators then had to reject. v7 stays
+    # registered for historical A/B baselines.
     # v8 contract: a different-release KB is still used, and the step
-    # text itself names the KB product version vs the ticket version.
+    # text itself names the KB product version vs the ticket version. The
+    # product name is a placeholder, not "AutomationEdge" — the prompt was
+    # made tenant-generic, so asserting the literal tenant would re-pin it.
     assert "PRODUCT VERSION MISMATCH" in system
-    assert "Based on KB for AutomationEdge" in system
+    assert "Based on KB for <product>" in system
     # v9 contract: mail-thread solutions sit under each episode and are
     # used together with KB, not instead of it.
     assert "Use BOTH sources" in system
@@ -525,7 +528,11 @@ def test_earlier_prompt_versions_remain_registered_and_immutable():
     # v8 added: name KB vs ticket product version on the step itself.
     # Earlier versions stay for eval baselines and historical llm.usage
     # attribution.
-    assert list_prompt_versions("playbook") == [
+    # Sorted numerically for readability: list_prompt_versions sorts
+    # lexically, which puts "v10" between "v1" and "v2".
+    assert sorted(
+        list_prompt_versions("playbook"), key=lambda v: int(v.lstrip("v"))
+    ) == [
         "v1",
         "v2",
         "v3",
@@ -535,6 +542,7 @@ def test_earlier_prompt_versions_remain_registered_and_immutable():
         "v7",
         "v8",
         "v9",
+        "v10",
     ]
 
 

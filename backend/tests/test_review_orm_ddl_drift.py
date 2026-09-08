@@ -356,7 +356,68 @@ _EXPECTED_MARKERS: set[tuple[str, str]] = {('action_policy.py', 'ForeignKey("act
  ('verification.py',
   'UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"),'),
  ('verification.py',
-  'UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False')}
+  'UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False'),
+ # Playbook Quality System (0094) and the clarification loop (0095/0096):
+ # brand-new tables, so their constraints arrive with CREATE TABLE rather
+ # than an ALTER. Each named constraint was checked against those migrations.
+ ('playbook_clarification.py',
+  'ForeignKey("playbook_clarification_rounds.id", ondelete="CASCADE"),'),
+ ('playbook_clarification.py',
+  'ForeignKey("playbook_quality_assessments.id", ondelete="SET NULL"),'),
+ ('playbook_clarification.py',
+  'UUID(as_uuid=True), ForeignKey("playbooks.id", ondelete="CASCADE"), '
+  'nullable=False'),
+ ('playbook_clarification.py',
+  'UniqueConstraint( "tenant_id", "playbook_id", "round_number", '
+  'name="uq_pclr_tenant_playbook_round" ),'),
+ ('playbook_clarification.py',
+  'UniqueConstraint("tenant_id", "id", name="uq_pclq_tenant_id_id"),'),
+ ('playbook_clarification.py',
+  'UniqueConstraint("tenant_id", "id", name="uq_pclr_tenant_id_id"),'),
+ ('playbook_clarification.py',
+  'UniqueConstraint("tenant_id", "round_id", "gap_key", '
+  'name="uq_pclq_round_gap"),'),
+ ('playbook_quality.py',
+  'ForeignKey("playbook_content_revisions.id", ondelete="CASCADE"),'),
+ ('playbook_quality.py',
+  'ForeignKey("playbook_quality_assessments.id", ondelete="CASCADE"),'),
+ ('playbook_quality.py',
+  'ForeignKey("playbook_versions.id", ondelete="SET NULL"),'),
+ ('playbook_quality.py',
+  'ForeignKey("product_ontology_versions.id", ondelete="CASCADE"),'),
+ ('playbook_quality.py',
+  'UUID(as_uuid=True), ForeignKey("playbooks.id", ondelete="CASCADE"), '
+  'nullable=False'),
+ ('playbook_quality.py',
+  'UUID(as_uuid=True), ForeignKey("quality_policy_packs.id", '
+  'ondelete="CASCADE"),'),
+ ('playbook_quality.py',
+  'UniqueConstraint( "tenant_id", "ontology_version_id", "canonical_term", '
+  'name="uq_pot_version_term" ),'),
+ ('playbook_quality.py',
+  'UniqueConstraint( "tenant_id", "playbook_id", "content_hash", '
+  'name="uq_pcr_tenant_playbook_hash" ),'),
+ ('playbook_quality.py',
+  'UniqueConstraint( "tenant_id", "playbook_id", "revision_number", '
+  'name="uq_pcr_tenant_playbook_number" ),'),
+ ('playbook_quality.py',
+  'UniqueConstraint("tenant_id", "id", name="uq_pcr_tenant_id_id"),'),
+ ('playbook_quality.py',
+  'UniqueConstraint("tenant_id", "id", name="uq_pot_tenant_id_id"),'),
+ ('playbook_quality.py',
+  'UniqueConstraint("tenant_id", "id", name="uq_pov_tenant_id_id"),'),
+ ('playbook_quality.py',
+  'UniqueConstraint("tenant_id", "id", name="uq_pqa_tenant_id_id"),'),
+ ('playbook_quality.py',
+  'UniqueConstraint("tenant_id", "id", name="uq_pqf_tenant_id_id"),'),
+ ('playbook_quality.py',
+  'UniqueConstraint("tenant_id", "id", name="uq_qpp_tenant_id_id"),'),
+ ('playbook_quality.py',
+  'UniqueConstraint("tenant_id", "id", name="uq_qpr_tenant_id_id"),'),
+ ('playbook_quality.py',
+  'UniqueConstraint("tenant_id", "version", name="uq_pov_tenant_version"),'),
+ ('playbook_quality.py',
+  'UniqueConstraint("tenant_id", "version", name="uq_qpp_tenant_version"),')}
 
 
 def test_no_new_constraint_tightening_without_migration():

@@ -126,6 +126,13 @@ async def test_rank_playbooks_shadow_serves_linear_and_logs_fused():
             "generate_playbook_candidates",
             AsyncMock(return_value=candidates),
         ),
+        # rank_playbooks now runs candidates through the quality filter; this
+        # test is about shadow scoring and calibration, so let them all through.
+        patch.object(
+            hybrid_ranker,
+            "filter_runtime_eligible",
+            AsyncMock(side_effect=lambda _db, _tenant, pbs, **_kw: pbs),
+        ),
         patch.object(
             hybrid_ranker,
             "_latest_published_versions",

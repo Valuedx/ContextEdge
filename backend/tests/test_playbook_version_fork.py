@@ -83,8 +83,9 @@ async def test_fork_copies_verification_policy_and_repoints_current():
     )
     captured = {}
 
-    async def fake_create(db, playbook, data):
+    async def fake_create(db, playbook, data, *, origin=None):
         captured["data"] = data
+        captured["origin"] = origin
         playbook.current_version_id = draft_id
         return draft
 
@@ -112,6 +113,9 @@ async def test_fork_copies_verification_policy_and_repoints_current():
     assert draft.derived_from_version_id == source_id
     assert captured["data"]["verification_policy"] == source.verification_policy
     assert captured["data"]["steps"] == source.steps
+    # Provenance: a forked draft must be stamped as a fork, not as fresh
+    # generation, or the version history stops explaining where it came from.
+    assert captured["origin"] == "fork"
     embed_mock.assert_not_awaited()
     assert source.published_at is not None
     assert source.steps == [{"text": "published step"}]
