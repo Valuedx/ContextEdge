@@ -112,7 +112,7 @@ Allowlist `trigger_of` / `causes` (with their node types, or preferably project 
 
 Without `depends_on`/`runs_on` edges between CIs, the agent cannot walk "checkout depends on payment; payment calls this DB." ServiceNow's `cmdb_rel_ci` table holds exactly these relationships: add it to the connector registry, map rows to entity↔entity `depends_on` edges via the existing `graph/builder.ensure_edge` path, allowlist in `maf.v1`.
 
-### C2. Criticality / owner / tier on entity facts
+### C2. Criticality / owner / tier on entity facts ✅ *(shipped 2026-08-21. Criticality is defined on `cmdb_ci_service` only, so it reaches infrastructure through the dependency edge rather than being stamped on every CI — which is semantically right: a switch is critical because a critical service depends on it. Tier is not modelled on this instance at all.)*
 
 Blast radius without criticality cannot be prioritized, and remediation risk ("restart a Tier-1 service?") cannot be assessed. Sync these attributes from the CMDB during C1 and project them as entity facts. Owner also gives the agent an escalation target.
 
@@ -129,14 +129,30 @@ Blast radius without criticality cannot be prioritized, and remediation risk ("r
 Populate the empty `error_signatures` table at ingestion with normalized fingerprints (error code + component + variable-stripped message) from logs and tickets, edged to evidence and episodes. An exact fingerprint match beats embedding similarity every time and gives the agent an O(1) answer to "is this exact failure known?" with full history one hop away.
 **Priority: first item in the whole roadmap** — cheapest, sharpest diagnostic gain.
 
-### D2. Make issue signatures seedable and projectable
+### D2. Make issue signatures seedable and projectable ✅
 
-The 53 `issue_signatures` rows are the best diagnostic index in the graph and the agent cannot see them (F5). Add: `issue_signature` to `MAF_NODE_TYPES` with facts (`failing_component`, `failure_mode`, `trigger_change`, `episode_count`); a seed layer matching incident symptom text against signatures (FTS over the structured fields; embeddings if needed later). Signature-first entry — symptom → signature → episodes → playbook — is how an experienced engineer thinks.
+**Shipped, and measured 2026-08-21 for the first time.** The agent can see them: `issue_signature` is in `MAF_NODE_TYPES`, hydrated with its structured facts, and reached by a dedicated seed layer (`repository.py`, "Layer A2") that de-slugs the underscore-joined fields before the tsvector match — without which no query word could ever match. `has_signature` is traversable, so a matched signature reaches its episode history in one hop.
 
-### D3. Populate `aggregated_by` from connector references
+The corpus has grown from the 53 rows this item was written against to **1,411**. Measured against four symptom queries, three landed sharply and one did not:
 
-`parent_incident` / `problem_id` are already fetched by reference enrichment. Wiring them to `aggregated_by` edges lets the agent recognize "this is the 6th ticket of one ongoing event" — preventing six parallel diagnoses and giving true impact scale.
-**Effort:** small.
+| query | top signature | relevance |
+| --- | --- | --- |
+| VPN authentication failing with certificate error | `tls_certificate / invalid_certificate_in_use` | 0.82 |
+| agent will not start after upgrade | `agent_software / stuck_in_upgrade_state_due_to_permissions` | 0.90 |
+| chrome driver version mismatch | `chrome_driver / version_mismatch` | 0.90 |
+| oracle deadlock on the claims database | `database_backup_format / restore_failure...` | 0.76 |
+
+The last is a miss: it matched on the word *database* and lost the failure mode. Signature matching is strong where the query shares vocabulary with the structured fields and drifts to generic component matches where it does not — the relevance ordering reflects it, which is the useful half.
+
+Original text: The 53 `issue_signatures` rows are the best diagnostic index in the graph and the agent cannot see them (F5). Add: `issue_signature` to `MAF_NODE_TYPES` with facts (`failing_component`, `failure_mode`, `trigger_change`, `episode_count`); a seed layer matching incident symptom text against signatures (FTS over the structured fields; embeddings if needed later). Signature-first entry — symptom → signature → episodes → playbook — is how an experienced engineer thinks.
+
+### D3. Major-incident grouping from connector references ✅ *(this item's title was wrong)*
+
+**Shipped, under different edge types than this item named.** `parent_incident` and `problem_id` became `child_of_incident` and `related_problem`, both written by ServiceNow reference enrichment and both in the `maf.v1` allowlist — measured on the live corpus, 5 and 18 edges respectively.
+
+`aggregated_by` was the wrong name for it: in `graph/edge_types.py` that relation means **signature → pattern**, not incident → incident, and it remains 0 rows in every database. Wiring incident grouping to it would have overloaded one edge type with two unrelated meanings. The capability this item asked for — recognising "this is the 6th ticket of one ongoing event" — is delivered, and delivered twice over: by `child_of_incident` and by H3's situations, which group the same six tickets into one occurrence with a stated onset.
+
+Original text: `parent_incident` / `problem_id` are already fetched by reference enrichment. Wiring them to `aggregated_by` edges lets the agent recognize "this is the 6th ticket of one ongoing event" — preventing six parallel diagnoses and giving true impact scale.
 
 ---
 
@@ -144,15 +160,22 @@ The 53 `issue_signatures` rows are the best diagnostic index in the graph and th
 
 *Fixes F10. What separates an agent that suggests from one you would let act.*
 
-### E1. Efficacy rollups on the remediation path
+### E1. Efficacy rollups on the remediation path ✅
 
-Aggregate `validated_fix`/`invalidated_fix` outcomes into playbook node facts or `recommends` edge metadata: `success_count`, `failure_count`, `last_validated_at`, notable failure contexts. The agent chooses remediations by evidence-weighted success rate, and can say *why*: "resolved 8 of 9 matching incidents; failed twice on version ≥ 6.2."
+Shipped 2026-08-21, **pulled forward from position 9** after a competitive review found this the one capability no vendor in the landscape ships.
 
-### E2. Applicability constraints on edges, not buried in text
+The design above assumed the wrong substrate. **Measured 2026-08-21: `validated_fix` = 0, `invalidated_fix` = 0 and `case_outcomes` = 0 — in both databases, including the 15,260-episode reference corpus.** Those edges have no producer, so aggregating them would aggregate nothing. The outcome signal actually lives in `episodes.final_outcome`, which 10,247 episodes carry as free text in **9,014 distinct phrasings**, and in the `PatternEvidence` ledger, whose `outcome` column was NULL on all 1,551 rows.
+
+So E1 became: normalize the text deterministically, write it into the ledger, aggregate per pattern. Result on the reference corpus — 1,416 empirical rows classified (697 success / 66 partial / 132 failure / 521 unknown), 533 patterns split 429 `EMPIRICAL` / 75 `DOCUMENTED_ONLY` / 29 `MIXED`, mean success rate 76.9%.
+
+Knowledge drift returns **zero** there, and that is a negative result rather than a broken rule: 15 patterns cleared the sample threshold and none fell below the success threshold. Recorded so it is not re-litigated.
+**In code:** `services/outcome_classification.py`, `services/efficacy_service.py`, `GET /api/v1/patterns/efficacy`, `GET /api/v1/patterns/knowledge-drift`. Design: [EFFICACY_AND_KNOWLEDGE_DRIFT](EFFICACY_AND_KNOWLEDGE_DRIFT.md).
+
+### E2. Applicability constraints on edges, not buried in text ✅ *(shipped 2026-08-21 — see [EFFICACY_AND_KNOWLEDGE_DRIFT](EFFICACY_AND_KNOWLEDGE_DRIFT.md). `fix_applicability_rules` holds 0 rows; the real payload is on knowledge cases, and only `deployment` (100%) and `components` (94%) are populated enough to decide anything — version bounds sit at 7.5%.)*
 
 The applicability machinery exists (`version_floor`/ceiling extraction, `fix_applicability`). Project the constraints onto `recommends`/`addresses` edges so the agent can structurally *rule out* a fix that does not match the incident's product version or environment — mis-applied remediation being the classic agent failure.
 
-### E3. Negative knowledge as a first-class projection
+### E3. Negative knowledge as a first-class projection ✅ *(shipped 2026-08-21. `invalidated_fix` holds 0 rows; the real signal is `episode_steps.result_state` — 970 failed steps, 217 patterns carrying 510 failure statements. Writing confirmed `preceded_by` suspicions back into `trigger_change` remains open and belongs with H6.)*
 
 `[did not work]` step markers and `invalidated_fix` edges exist; surface them *with* every recommendation ("known to fail when X"), and write confirmed `preceded_by` suspicions back into `trigger_change` (closing B4's loop). An agent that repeats a documented-bad fix destroys trust faster than one that abstains.
 
@@ -164,9 +187,15 @@ The applicability machinery exists (`version_floor`/ceiling extraction, `fix_app
 
 *The biggest structural omission. Everything above is inventory; this is the flywheel.*
 
-### F1. Agent decision write-back
+### F1. Agent decision write-back ✅
 
-The `session` / `decision` / `chose` / `resulted_in` machinery exists, but nothing makes the MAF agent's own diagnostic trail flow back into the graph. Each diagnosis should write back: hypotheses considered, which was chosen, outcome. The next agent facing the same signature then inherits "the connection-leak hypothesis was checked and disproven for this signature; it was the pool size." Without write-back, every diagnosis starts from zero and the graph learns only from human tickets, never from agent runs.
+Shipped 2026-08-21. The machinery existed and nothing called it; `DecisionOption` already carried `selected`, `rejection_reason` and `rejection_code`, which is exactly "hypotheses considered, which was chosen, and why the others were not".
+
+The hazard that kept it unbuilt — an agent reading its own unreviewed conclusions as evidence — was already closed upstream: the projection drops any decision that is AI-authored and still `pending`. F1 relies on that and adds two more layers, because one guard on a path nobody re-reads is a guard with a short life: `prior_hypotheses` filters explicitly, and the agent's client port exposes no argument that could request unreviewed work.
+
+An **outcome**, not age, promotes a diagnosis. Verified live: a diagnosis with two rejected hypotheses was invisible while pending, visible to a review surface, and inherited by the next reader only once the fix was recorded as successful.
+
+Original text: The `session` / `decision` / `chose` / `resulted_in` machinery exists, but nothing makes the MAF agent's own diagnostic trail flow back into the graph. Each diagnosis should write back: hypotheses considered, which was chosen, outcome. The next agent facing the same signature then inherits "the connection-leak hypothesis was checked and disproven for this signature; it was the pool size." Without write-back, every diagnosis starts from zero and the graph learns only from human tickets, never from agent runs.
 **In code:** the MAF adapter (`integrations/maf`) currently reads; write-back goes through the existing decisions/sessions API so governance (review, audit) applies to agent-authored records exactly as to human ones.
 
 ---
@@ -192,9 +221,17 @@ Not an `episodes.kind` discriminator: with a kind column every query that counts
 
 This is what makes two capabilities possible: **cold start**, where a pattern exists on documentation alone and *graduates* as incidents arrive (measured: ~55% of knowledge cases match no existing pattern — most of the KB documents failure modes the incident history has never seen), and **knowledge drift**, where a documented resolution accumulating contradictions from recent episodes becomes a query rather than an impossibility.
 
-### G4. Claim-level epistemic status — *not started*
+### G4. Claim-level epistemic status — ⛔ *blocked, and sequenced before its own prerequisite*
 
-Source type is not epistemic status. A Teams message saying "I think restarting IIS might help" is hypothesis; "restarted at 14:32, recovered at 14:34" is observation. The target taxonomy is prescriptive → documented → empirical → conversational → inferred, carried on claims rather than inferred from the connector. `claim` already has `claim_type` / `validation_status`; this extends rather than replaces it.
+**Blocked, and the sequencing is wrong.** `claims` holds **0 rows in every database**, so carrying epistemic status on claims means adding a column to a table nothing has ever written to. G4 is item 9 in the sequence and A4 — the item that would populate claims — is item 11, so this is scheduled before its own prerequisite.
+
+A4 is itself blocked behind a **measured negative result**, recorded in `ai/prompts/relevance.py`: relevance v3 emits claims from the same call, and asking the gate to do both *"moved half the borderline possibly_relevant verdicts"* on 8 tickets (2026-08-07). v3 stays registered and is **not** the default, so the claim parsing and persistence pipeline — which is fully wired into `_normalize` — ships dormant behind v2 with an empty claims list.
+
+The remedy is already written down there: separate the claims pass from the gate, or A/B a reworded v3 against a labeled set before flipping the default. Neither is G4.
+
+Note also that the epistemic axis is not absent meanwhile: `PatternEvidence.evidence_class` carries empirical / documented / prescriptive over 1,551 rows. What it cannot do is distinguish *within* a source — which is precisely G4's point, and precisely what needs claims.
+
+Original text: Source type is not epistemic status. A Teams message saying "I think restarting IIS might help" is hypothesis; "restarted at 14:32, recovered at 14:34" is observation. The target taxonomy is prescriptive → documented → empirical → conversational → inferred, carried on claims rather than inferred from the connector. `claim` already has `claim_type` / `validation_status`; this extends rather than replaces it.
 
 ### G5. Prescriptive knowledge as its own object — *not started*
 
@@ -215,13 +252,21 @@ An `OperationalSituation` is a bounded real-world occurrence assembled from many
 `operational_situations`, `situation_evidence_memberships`, `situation_entity_impacts`, `situation_change_candidates`, plus seven registered graph relations (four MAF-traversable, three excluded with reasons). Three invariants live in the database: a change after onset cannot be a cause, a merged situation must name its survivor, and membership/impact are unique so a retry cannot invent a second occurrence.
 **In code:** `models/situation.py`, `graph/edge_types.py`, migration 0074.
 
-### H2. Coverage and missing-context reporting — *next, and unblocked*
+### H2. Coverage and missing-context reporting ✅
 
-The highest-value item in this workstream **because** so much is missing. Today an agent silently reasons as though absent change data means no changes occurred. The contract is that ContextEdge reports what it knows *and what it does not*: no monitoring connector, CMDB not present, topology last synced N hours ago. Implementable now against the current corpus; every other item below is not.
+Shipped 2026-08-21. Ten facets, each answering with one of eight statuses, and a `blind_spots` list naming where an empty result must not be read as a zero. The discrimination that repays the work is `unavailable` vs `not_selected`: ServiceNow's `em_alert` needs ITOM, which a stock instance does not activate, so reporting it as "not approved for sync" sends an operator to a checkbox that does not exist.
 
-### H3. Deterministic situation correlation — *partially blocked*
+Folded in: a canonical capability declaration (`services/source_capabilities.py`). Record kinds are *derived* from `evidence_typing`; relations are declared and cross-checked against the five reference services by tests in both directions. This is what lets coverage say "this source cannot supply change links" rather than silently reporting none — and it is the layer a new ITSM adapter declares itself into.
+**In code:** `services/coverage_service.py`, `services/source_capabilities.py`, `GET /api/v1/graph/coverage`. Design: [COVERAGE_AND_CAPABILITY](COVERAGE_AND_CAPABILITY.md).
 
-Of the intended signals — major-incident links, duplicate/parent, monitoring lineage, exact CI, exact service, issue signature, environment veto, hub suppression — only **issue signature, environment and hub suppression** have data today. Zoho Desk has no major-incident or parent-child semantics, and there are no CI entities. Buildable now in restricted form; completed when an ITSM connector supplies the rest.
+### H3. Deterministic situation correlation ✅
+
+Shipped 2026-08-21. The signal audit above was written when Zoho Desk was the only connected source, and connecting ServiceNow inverted it. **Measured 2026-08-21:** `issue_signatures` = 0 and `source_facets` = 0, so issue signature and environment — the two the plan counted on — have *no* data. What arrived instead is what the plan assumed absent: `child_of_incident` duplicate links (human-authored), CI entities, and error signatures.
+
+So the correlator merges on authoritative links and on same-CI + window + symptom agreement, and refuses to merge on a shared problem or a shared CI alone. Hub suppression fired on a real hub (`PolicyAdminService`, 12 incidents in three days). Live result: 51 groups considered, 1 situation created, 50 singletons left alone.
+
+Two defects surfaced in review and were fixed: evidence carried `sys_updated_on` rather than occurrence time (making the window veto inert), and the first implementation created a duplicate situation on every run.
+**In code:** `services/situation_correlation_service.py`, `workers/correlation_tasks.py`, `GET /api/v1/graph/situations`. Design: [SITUATION_CORRELATION](SITUATION_CORRELATION.md).
 
 ### H4. Topology correlation and blast radius — *blocked on CMDB*
 
@@ -231,17 +276,34 @@ Of the intended signals — major-incident links, duplicate/parent, monitoring l
 
 Alert rollups, event grouping, source lineage (an alert, the ticket it opened and the mail it sent are one observation, not three), independent corroboration (three monitoring systems agreeing genuinely is three), recovery evidence, storm velocity. No alert evidence exists today.
 
-### H6. Situation-aware change correlation — *blocked on change records*
+### H6. Situation-aware change correlation ✅
 
-Evidence typing already maps `servicenow/change_request → change`; no change rows exist. Supersedes same-CI-preceding-change lookup (B4) with situation → affected entities → bounded topology → ranked candidates. `correlation_score` is a ranking, never a probability, and `confirmed` is reachable only from governed evidence.
+Shipped 2026-08-21, and it supersedes B4's same-CI lookup as planned: situation → affected entities → one dependency hop → ranked candidates. `correlation_score` stayed a ranking and `confirmed` stayed reachable only from governed evidence — a ServiceNow `caused_by` a human filled in, recorded with what asserted it.
 
-### H7. Diagnostic context service — *depends on H2–H6*
+Measured on the canonical incident: two candidates, correctly ordered. The same-CI change at `confirmed`, a change one hop away at `candidate` 0.55, and the deliberately coincidental control on an unrelated CI absent entirely rather than merely ranked low.
 
-One bounded, security-filtered, provenance-aware bundle: case, situation, signals, impact, topology, changes, history, knowledge, patterns, decisions, coverage. The acceptance test is that an agent given one incident identifier obtains the operational context around it rather than reasoning from the description alone.
+Building it surfaced a defect worth more than the feature: one PDI record dated 2035 had pinned the `change_request` keyset checkpoint nine years ahead, so every incremental sync since returned zero rows and reported success.
+**In code:** `services/change_correlation_service.py`, `GET /graph/situations/{id}/change-candidates`. Design: [CHANGE_CORRELATION](CHANGE_CORRELATION.md).
 
-### H8. Lifecycle, merge and review — *depends on H3*
+### H7. Diagnostic context service ✅
 
-`emerging → active → stabilizing → resolved`, plus reopen, recurrence and merge. Absence of signal is never recovery. Automatic split is deliberately out of scope for v1: a split proposal is safe, an automatic split is not.
+Shipped 2026-08-21, and **the acceptance test passes**: an agent given one incident identifier obtains the operational context around it rather than reasoning from the description alone.
+
+Seven facets — situation, impact, duplicates, changes, recurrence, remediation, coverage — each with its own status, provenance, count and truncation flag, plus a `blind_spots` list naming what must not be read as a zero. Bounded per facet, and security-filtered on every record-bearing facet rather than only at the entry point.
+
+Two defects found in review, both of the same family the rest of this roadmap keeps producing: `blind_spots` reported `[]` on a deployment with no monitoring connector, because facet-level and deployment-level absences were tracked separately and coverage had "successfully" reported its own inability; and domain scoping was applied to the incident lookup alone, so a restricted reader would have seen duplicates, recurrence and change candidates from outside their scope.
+
+Monitoring (H5) remains the one facet this deployment cannot answer, and the bundle says so rather than returning silence.
+**In code:** `services/diagnostic_context_service.py`, `GET /graph/diagnostic-context/{id}`. Design: [DIAGNOSTIC_CONTEXT](DIAGNOSTIC_CONTEXT.md).
+
+### H8. Lifecycle, merge and review ✅
+
+Shipped 2026-08-21. `emerging → active → stabilizing → resolved`, plus reopen, recurrence and merge — and the rule held: **absence of signal is never recovery**. Only member incidents carrying a resolution in the source system move a situation toward resolved, so a quiet situation with no resolved members stays `active`, which looks wrong on a wallboard and is the only honest reading.
+
+Reopen and recurrence stayed distinct, which is the S1/S5 distinction one level up. A reopen keeps the situation's identity and clears its recovery stamps; a recurrence is a *new* situation linked by `recurred_from`. Merge moves memberships and retires rather than deletes the duplicates, because which situation a signal was first filed under is the lineage; the database refuses a `merged` row that names no survivor, verified live.
+
+Automatic split remains out of scope, as specified.
+**In code:** `services/situation_lifecycle_service.py`, `POST /graph/situations/lifecycle`, `POST /graph/situations/{id}/merge`. Design: [SITUATION_LIFECYCLE](SITUATION_LIFECYCLE.md).
 
 ---
 
@@ -253,12 +315,12 @@ One bounded, security-filtered, provenance-aware bundle: case, situation, signal
 | 2 | Salient slicing + summary distillation | A1, A2 | S–M | — | fixes a proven knowledge-loss bug (F4); improves every LLM call |
 | 3 | Thread backfill | A3 | S | A1 | recovers known-lost knowledge |
 | 4 | `change_request` + causal-vocabulary projection | B1, B5 | S | — | near-free; unlocks the change join |
-| 5 | Signature seeding/projection + `aggregated_by` | D2, D3 | S–M | — | signature-first entry |
+| ✅ | Signature seeding/projection + major-incident grouping | D2, D3 | S–M | — | **already shipped; measured 2026-08-21 for the first time.** D3 landed as `child_of_incident`, not `aggregated_by` — see the correction below |
 | 6 | Event layer + `preceded_by` seed layer | B2, B4 | M | B1 | the diagnose-time correlation capability |
-| 7 | Inventory-diff detector | B3 | M | B2 | first high-yield event source |
+| ✅ | Inventory-diff detector | B3 | M | — | **shipped 2026-08-21** — one hook at the point the change was already noticed and discarded. See [INVENTORY_DIFF_DETECTOR](INVENTORY_DIFF_DETECTOR.md) |
 | 8 | `cmdb_rel_ci` topology + criticality facts | C1, C2 | M | — | blast radius |
-| 9 | Efficacy rollups + applicability + negative knowledge | E1–E3 | M | — | trustworthy remediation choice |
-| 10 | Agent decision write-back | F1 | M–L | — | the compounding loop |
+| ✅ | Efficacy rollups + applicability + negative knowledge | E1–E3 | M | — | **shipped 2026-08-21, pulled forward** — the one capability no competitor ships; see [EFFICACY_AND_KNOWLEDGE_DRIFT](EFFICACY_AND_KNOWLEDGE_DRIFT.md) |
+| ✅ | Agent decision write-back | F1 | M–L | — | **shipped 2026-08-21** — the compounding loop, with the self-training hazard contained in three places. See [AGENT_DECISION_WRITEBACK](AGENT_DECISION_WRITEBACK.md) |
 | 11 | Claims population | A4 | M–L | A2 | granular assertions, once summaries prove out |
 
 Revised 2026-08-20. Workstream G shipped out of order because a knowledge backfill exposed the contamination as a live defect rather than a planned improvement; the sequence below reflects what the corpus can now support.
@@ -267,18 +329,21 @@ Revised 2026-08-20. Workstream G shipped out of order because a knowledge backfi
 | --- | --- | --- | --- | --- | --- |
 | ✅ | Epistemic separation (knowledge ≠ observation) | G1–G3 | — | — | shipped; a document's claim was being counted as an observed outcome |
 | ✅ | Situation schema and graph vocabulary | H1 | — | — | shipped ahead of its connectors so the data has somewhere to arrive |
-| 1 | Coverage / missing-context reporting | H2 | S | — | **unblocked and highest value now** — the agent currently cannot tell "no changes occurred" from "no change connector" |
-| 2 | Restricted situation correlation (signature + environment + hub suppression) | H3 | M | H2 | the only correlation signals with data today |
-| 3 | `change_request` ingestion | B1 | S | ITSM connector | unlocks H6 and the change join |
-| 4 | `cmdb_rel_ci` topology + criticality facts | C1, C2 | M | CMDB connector | unlocks H4 blast radius |
-| 5 | Monitoring alert/event ingestion | H5 | M | monitoring connector | unlocks corroboration and lineage |
-| 6 | Situation-aware change correlation | H6 | M | 3, 4 | supersedes B4's same-CI lookup |
-| 7 | Diagnostic context service | H7 | M–L | 1–6 | the actual product acceptance criterion |
-| 8 | Situation lifecycle, merge, review | H8 | M | 2 | reopen vs recurrence, merge without losing lineage |
-| 9 | Claim-level epistemic status | G4 | M–L | — | source type is not epistemic status |
+| ✅ | Coverage / missing-context reporting | H2 | S | — | **shipped 2026-08-21** — eight statuses, ten facets, plus a canonical capability declaration; see [COVERAGE_AND_CAPABILITY](COVERAGE_AND_CAPABILITY.md) |
+| ✅ | Situation correlation | H3 | M | — | **shipped 2026-08-21** — in fuller form than planned: ServiceNow supplied authoritative duplicate links, which the plan assumed absent. See [SITUATION_CORRELATION](SITUATION_CORRELATION.md) |
+| ✅ | `change_request` ingestion | B1 | S | — | **shipped 2026-08-21** — 39 change evidence rows; the change join is data |
+| ✅ | CI entities + `depends_on` topology | C1 | M | — | **largely already wired** — the topology cache warms itself once a real CMDB is connected; 28 CIs, 19 `depends_on` edges |
+| ✅ | Criticality / owner / tier on entity facts | C2 | S | — | **shipped 2026-08-21** — three defects, each of which looked wired: attributes were write-once, criticality is only on `cmdb_ci_service`, and `owned_by` was captured nowhere. See [SERVICENOW_LIVE_VERIFICATION](SERVICENOW_LIVE_VERIFICATION.md) |
+| — | Monitoring alert/event ingestion | H5 | M | **an instance with ITOM** | blocked on the instance, not the connector: `em_alert` is absent, discovery skips it |
+| ✅ | Situation-aware change correlation | H6 | M | — | **shipped 2026-08-21** — ranked candidates with one-hop blast radius; building it found a single future-dated row that had silently stopped change ingestion entirely. See [CHANGE_CORRELATION](CHANGE_CORRELATION.md) |
+| ✅ | Diagnostic context service | H7 | M–L | — | **shipped 2026-08-21** — the acceptance criterion is met: one incident identifier returns seven provenanced facets and an honest blind-spot list. See [DIAGNOSTIC_CONTEXT](DIAGNOSTIC_CONTEXT.md) |
+| ✅ | Situation lifecycle, merge, review | H8 | M | — | **shipped 2026-08-21** — recovery is evidenced, never inferred from silence; reopen and recurrence stay distinct. See [SITUATION_LIFECYCLE](SITUATION_LIFECYCLE.md) |
+| ⛔ | Claim-level epistemic status | G4 | M–L | **A4, which is blocked on a measured negative result** | `claims` is 0 rows in every database. See the correction below — this item is sequenced before its own prerequisite |
 | 10 | Prescriptive knowledge as its own object | G5 | M | G4 | an SOP and a known-error article are not the same claim |
 
-**Items 3–6 are blocked on connectors, not on engineering.** The vocabulary, evidence typing and connector classes already exist for changes, alerts and topology; what is absent is a connected source. Building their correlation logic before data exists means testing against synthetic fixtures that prove the code runs, not that it works — and the adversarial cases that matter (generic-word merges, same-engineer merges, monitoring floods) are only meaningful against a real corpus.
+**Revised again 2026-08-21: the connector block is mostly lifted.** A live ServiceNow instance supplies changes, CIs, CI relationships and problems, so B1 and the bulk of C1 are shipped and H6 has data to rank. Only monitoring remains absent, and for a narrower reason — the alert connector exists, the instance lacks the ITOM plugin. See [SERVICENOW_LIVE_VERIFICATION](SERVICENOW_LIVE_VERIFICATION.md).
+
+The warning that motivated the block still stands for everything built on top. Correlation logic validated against a PDI's randomly generated records proves the code runs, not that it works: those records encode no causality — no change precedes the incident it caused, no CI depends on another, no incident duplicates its neighbour. The scenarios in `evals/fixtures/servicenow_scenarios.py` supply the causality, each with a stated assertion, including two (S2, S4) that exist to make sure a correlator does **not** fire. The instance's ~600 random records stay in the corpus as the adversarial noise those two are measured against.
 
 Every item that changes model-facing prompts or projection composition follows the measurement discipline established for thinking budgets and projection caps ([18](18-cost-observability-and-containment.md)): measure before, A/B on real data, ship only what the numbers support, record negative results.
 

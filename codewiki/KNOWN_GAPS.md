@@ -2,6 +2,283 @@
 
 Short list of implementation gaps and operational caveats called out in the codewiki and root documentation. Use this when the product surface looks more complete in the architecture than it does in the current UI or environment.
 
+## 2026-08-21 A tracked `.env` backup put live secrets in the repo; keys rotated
+
+### Closed
+
+- **`.env.backup-contextedge` was tracked**, added by commit `861c5f9`, and carried a populated `FERNET_KEY` (44 chars), `JWT_SECRET_KEY` (64), `MINIO_ROOT_PASSWORD` (18) and `POSTGRES_PASSWORD` (4). The `.gitignore` rule `.env.backup*` was already present and did nothing, because **ignore rules do not apply to files already in the index** — which is also why `git check-ignore` reported the path as *not* ignored and made the rule look absent. Now `git rm --cached`; the file stays on disk.
+- **`FERNET_KEY` and `JWT_SECRET_KEY` are rotated**, in that order relative to the untracking: rotate first, then untrack. Untracking alone closes nothing — the blob is still reachable in history — so the value has to be made inert before the commit that removes it. The historical secrets are now dead keys.
+- **Rotating `FERNET_KEY` naively destroys every stored source credential.** `source_credentials.encrypted_credentials` is Fernet ciphertext; a new key cannot read it, the plaintext is gone, and the failure surfaces as a connector that stopped syncing rather than as a key problem. So rotation ran as a value-preserving re-encryption — decrypt under old, encrypt under new, same plaintext — across both databases (`contextedge_sn`, `AEProdSupport`), 1 credential each, with a `pg_dump` of the table taken first. Verified after: both decrypt, and the ServiceNow credential returns **HTTP 200** against the live instance.
+
+### Opened
+
+- **The secrets remain in git history.** `git rm --cached` stops future exposure; it does not rewrite `861c5f9`. Rotation is what makes that acceptable — anyone reading the history now holds keys that open nothing. `MINIO_ROOT_PASSWORD` and `POSTGRES_PASSWORD` were **not** rotated: both are local-only dev services, and changing them means reconfiguring the containers. They are still live in history.
+- **Nothing prevents the next backup from being committed.** The ignore rule only helps someone who has not already run `git add -f` or `git add` on a path before the rule existed. A pre-commit secret scan is the actual control, and there isn't one — CLAUDE.md asks a human to "scan every staged diff before commit", which is a discipline, not a mechanism.
+- **Rotating `JWT_SECRET_KEY` invalidates every issued token.** Intended, and harmless on a single-developer deployment; on anything shared it logs everyone out with no warning and no migration path, because tokens are not re-signed the way credentials are re-encrypted.
+
+## 2026-08-21 The scenario fixtures are portable, and an update set cannot carry them
+
+### Recorded
+
+- **An update set is the wrong tool for the scenario data, permanently.** Update sets capture configuration; everything the fixtures create is data. Verified by sampling 392 captured updates on this instance across 39 types — Access Control, System Property, Dictionary, Business Rule and so on — and **not one is a data-record type**. Anyone reaching for an update set to move the scenarios will get an empty one.
+- **The builder is the portable artifact**, and now says so out loud: `--preflight` (read-only), `--build` (idempotent), `--verify`, `--teardown`. Nothing hardcodes a sys_id; every prerequisite resolves by name.
+- **Silent degradation on an unprepared instance is closed.** A missing lookup used to return None, the field was omitted, and the record landed without its assignment group or topology edge — a fixture that builds clean and tests nothing. Critical prerequisites now abort with a reason; optional ones name the scenario they cost.
+- **Two things I had created outside the builder are now in it**: the B3 OS baseline on `radius-auth-01` (without a prior value the detector has nothing to diff, since a first observation is deliberately not a change) and the problem-role grant.
+
+### Opened
+
+- **`--verify` checks eight references, not all of them.** It covers the joins each scenario rests on and the topology count; it does not check every field of every record, so a fixture could drift in a way it does not see.
+- **`--preflight` cannot check write permission.** It resolves reads and reports role state. An account that can read everything and write nothing passes preflight and fails on the first POST — which is roughly how the first build here went, four guardrails deep.
+- **The anchor moves on every build.** Timestamps are relative to run time, so rebuilding shifts the whole scenario forward and any evidence already ingested keeps the old times. Harmless within one instance, confusing across two.
+
+## 2026-08-21 B3 shipped: the changes nobody records — and a third field family lost the same way
+
+Design: [INVENTORY_DIFF_DETECTOR](INVENTORY_DIFF_DETECTOR.md).
+
+### Closed and corrected
+
+- **Unrecorded state changes are now observed [was: B3].** Verified live: `radius-auth-01` OS 8.6 → 8.8 with nothing filed produced `radius-auth-01: os_version_changed 8.6 -> 8.8`, linked to its CI, `source_type='inventory_diff'`, and idempotent — a re-warm with no further change produced no second event. B2's `record_state_event` existed and had never been called; B3 is its producer.
+- **The detector is one hook, not a sweep.** `_ensure_entity` already compared each incoming trait against the stored one, overwrote it and said nothing. A separate scanner would need a snapshot table, a migration and a retention policy to learn something already known for free at that line.
+- **os / os_version had NEVER been captured by topology warm — FIXED, and this is the third field family lost the same way.** They live on `cmdb_ci_computer`, not on the `cmdb_ci` base table the neighbourhood fetch queries, and asking the base table for a subclass column returns rows *without the column* rather than an error. The connector's own comment misdiagnosed it — "ServiceNow returns them empty for other classes" — which is why it survived; it does not return them empty, it does not return them at all.
+
+  **Dot-walking is what hid it:** an incident asking for `cmdb_ci.os` does get a value, because dot-walking resolves against the referenced record's real class. So traits arrived via incident enrichment and never via topology warm, and the gap read as sparse data — 16 of 140 entities had an `os_name` and every one came from an incident. The one-off service lookup added for C2 is now `SUBCLASS_DETAIL_FIELDS`, covering both families and any third.
+
+### G4 is blocked, and sequenced before its own prerequisite
+
+- **`claims` is 0 rows in every database**, so G4 (epistemic status on claims) would add a column to a table nothing has written to. G4 is sequence item 9; A4, which populates claims, is item 11.
+- **A4 is blocked behind a measured negative result**, already recorded in `ai/prompts/relevance.py`: relevance v3 emits claims from the gate call, and doing both *"moved half the borderline possibly_relevant verdicts"* (8 tickets, 2026-08-07). v3 is registered and deliberately not default, so the claim pipeline — fully wired into `_normalize` — ships dormant behind v2. The remedy is written there: separate the claims pass from the gate, or A/B a reworded v3 against a labeled set. **Neither is G4.**
+
+### Opened
+
+- **The detector observes the working set, not the estate.** It fires only when something warms a CI, so a CI nobody touches is never diffed. That matches the topology cache's scope and means silence is not evidence of stability.
+- **Event timestamps are observation time, not change time.** An event can be stamped days after the change it describes, which weakens the change→incident interval H6 computes. Nothing marks the uncertainty.
+- **Nothing counts failed emissions.** The emitter is fail-soft by design and logs on failure; a persistently broken event layer is invisible outside the logs.
+- **Only ServiceNow CI traits are diffed.** The roadmap's B3 intent — agent version, plugin versions, browser/driver versions, config hashes — needs an agent-side source that does not exist here. What ships covers manufacturer, model, os_name and os_version, which is the CMDB's answer to the same question and a narrower one.
+
+## 2026-08-21 D2/D3 were already shipped, and are now measured
+
+No code was written for this. Investigating the next roadmap item found both already implemented, with the sequencing table stale — recorded because a roadmap that disagrees with the code is worse than no roadmap, being trusted.
+
+### Corrected
+
+- **D2 (signature-first entry) shipped, and has now been measured for the first time.** `issue_signature` is projectable and hydrated; a dedicated seed layer de-slugs the underscore-joined structured fields before the tsvector match, without which no query word could match at all. The corpus has grown from the 53 rows the item was written against to **1,411**.
+
+  Four symptom queries, three sharp and one miss: `VPN authentication failing with certificate error` → `tls_certificate / invalid_certificate_in_use` (0.82); `agent will not start after upgrade` → `agent_software / stuck_in_upgrade_state_due_to_permissions` (0.90); `chrome driver version mismatch` → `chrome_driver / version_mismatch` (0.90); and `oracle deadlock on the claims database` → `database_backup_format / restore_failure...` (0.76), which matched on the word *database* and lost the failure mode.
+
+- **D3 shipped under different edge types than the roadmap named.** `parent_incident` and `problem_id` became `child_of_incident` and `related_problem`, both in the `maf.v1` allowlist. **`aggregated_by` was the wrong name**: in the edge vocabulary it means *signature → pattern*, not incident → incident, and wiring incident grouping to it would have overloaded one relation with two unrelated meanings. It is 0 rows in every database and correctly so.
+
+### Opened
+
+- **Signature matching degrades to component-level matches on unfamiliar vocabulary.** The oracle-deadlock query is the demonstration: nothing in it shares wording with a deadlock signature's structured fields, so the match fell back to the component token and returned backup-related signatures at a visibly lower relevance. The score exposes it and nothing acts on it — there is no floor below which a signature seed is dropped rather than offered.
+
+- **`aggregated_by` (signature → pattern) has no writer.** It is allowlisted for the agent to traverse and 0 rows exist, so a relation the projection advertises can never be followed. Unrelated to D3 despite the shared name, and now the only situation-adjacent edge type in that position.
+
+- **Signature-first entry has no regression test.** It was measured by hand against a corpus the test suite cannot reach; nothing would catch a de-slugging change that silently returns zero signatures for every query.
+
+## 2026-08-21 F1 shipped: the compounding loop, with the self-training hazard contained
+
+`GET /api/v1/decisions/prior-hypotheses`, plus two MAF tools. Design: [AGENT_DECISION_WRITEBACK](AGENT_DECISION_WRITEBACK.md).
+
+### Closed
+
+- **Agent diagnoses now flow back [was: F1].** Hypotheses considered, which was chosen, and why the others were rejected — through the existing decision machinery, so review, audit and supersession apply to agent-authored records exactly as to human ones. `decision_trace_service` already did all of it and nothing called it.
+- **The self-training hazard is contained in three places, deliberately not one.** The projection drops pending AI decisions (pre-existing); `prior_hypotheses` filters them explicitly, because it is a different code path the projection does not cover; and the agent's client port exposes no `include_unreviewed` argument at all. A guarantee an agent cannot reach beats one it is asked to respect.
+- **An outcome, not age, promotes a diagnosis.** Verified live: two rejected hypotheses were invisible while pending, visible to a review surface, and inherited only after the fix was recorded successful.
+
+### Opened — record these before they read as capability
+
+- **Nothing validates that a rejection reason is any good.** "Seemed unlikely" satisfies the schema and teaches the next reader nothing. Only the tool description discourages it, and a tool description is advice rather than a constraint.
+- **In a deployment where nobody records outcomes, F1 writes a great deal and returns nothing, forever.** That is the honest failure mode — silence rather than unearned confidence — but it will look like the feature is broken, and nothing surfaces "you have N diagnoses stuck pending".
+- **Agent diagnoses share a table with human decisions.** Every query here filters on `actor_type`; nothing forces the next one to, and forgetting mixes an agent's guess with a person's judgement.
+- **No agent runs here.** The write-back path, the tools and the retrieval are exercised by a synthetic trail, not by a live MAF agent — this deployment has none. The plumbing is proven; the loop has never turned under its own power.
+- **A review surface for pending agent diagnoses does not exist.** `include_unreviewed=True` is implemented and has no UI, so in practice nothing moves a diagnosis off pending except an outcome.
+
+## 2026-08-21 H8 shipped: lifecycle, and a governance register that cannot tell two models apart
+
+`POST /api/v1/graph/situations/lifecycle`, `POST /api/v1/graph/situations/{id}/merge`. Design: [SITUATION_LIFECYCLE](SITUATION_LIFECYCLE.md).
+
+### Closed
+
+- **Situations now finish [was: H8].** Verified live: the canonical situation moved `active → resolved` because all six members carry a resolution in ServiceNow, then `resolved → reopened` when one stopped, with `resolved_at` and `stabilizing_at` cleared — they described a recovery that did not hold, and leaving them makes the next MTTR read from a moment the situation was not over.
+- **Absence of signal is never recovery.** Only positive resolution evidence moves a situation toward resolved. `cancelled` is deliberately not a resolved state: a withdrawn report is not a fixed problem.
+- **Merge preserves lineage.** Memberships move; duplicates already in the survivor are *retired* rather than deleted. The DB CHECK refusing a `merged` row with no survivor was exercised and held (`IntegrityError`).
+- **Reopen and recurrence stay distinct.** `recurred_from` and `merged_into` needed no migration — H1 registered both.
+
+### Opened — record these before they read as capability
+
+- **The governance column register cannot tell two models' same-named columns apart, and a real gap has now become invisible to it.** It matches assignments by column NAME across the whole source tree, so `situation.resolved_at = now` in the lifecycle service satisfies the register entry for `RemediationAction.resolved_at` — which still has no writer at all. That entry had to be removed for the suite to pass. **The gap is real: nothing closes a remediation escalation.** Recorded here because the automated check can no longer see it. Making the scanner model-aware is the fix; this is the second false positive of the day, after a local variable and then a *comment* each satisfied the entry for `SituationEntityImpact.basis`.
+
+- **Situations pile up in `active` on any source that does not populate `case_state`.** The backlog will look like a bug and is the honest reading. Only ServiceNow populates it here.
+
+- **The duration of a recovery that did not hold is lost.** Reopen clears the timestamps rather than recording them. Preserving the history needs a transition table, which H8 did not ask for and nothing has.
+
+- **Retired memberships accumulate and every consumer must remember to exclude them.** Every query in this service does; nothing enforces that the next one will, and forgetting double-counts.
+
+- **A situation merged in error stays merged.** Terminal states are never recomputed — correct — and no unwind exists.
+
+- **`severity` and `review_status` on situations still have no writer.** Nothing grades a situation's severity, and inferring it from member priority would launder a ticket field into an operational judgement. Situations have no review queue; merge is governed by a role rather than a queue somebody works through.
+
+## 2026-08-21 H7 shipped: the acceptance criterion is met
+
+`GET /api/v1/graph/diagnostic-context/{incident_evidence_id}`. Design: [DIAGNOSTIC_CONTEXT](DIAGNOSTIC_CONTEXT.md).
+
+### Closed and corrected
+
+- **One incident identifier now returns the operational context around it [was: H7].** Seven facets, each independently provenanced and each able to say "no data, and here is why". Live on the canonical incident: situation (1 of 6 signals), impact (4 entities, highest criticality `1 - most critical` reached one hop away), duplicates (5), changes (2 ranked, 1 confirmed), recurrence (empty, explained), remediation (1, with known failures), coverage (monitoring unanswerable).
+- **`blind_spots` reported `[]` on a deployment with a known blind spot — FIXED.** Facet-level absences and deployment-level ones were tracked separately, and the coverage facet had answered *successfully* about being unable to answer. The field a reader checks for reassurance gave it falsely. The two lists are now one, because they differ in cause and are identical in consequence. This is the confusion H2 exists to remove, reintroduced one layer up.
+- **Domain scoping was applied at the door only — FIXED.** The incident lookup honoured `allowed_domain_ids`; duplicates, recurrence and change candidates did not, so a restricted reader would have seen titles, timestamps and ranked changes from outside their scope. Scoping now runs through every record-bearing facet, and domain-NULL evidence is deliberately excluded from restricted views. Verified live: a reader limited to a foreign domain receives no bundle at all.
+
+### Opened — record these before they read as capability
+
+- **The bundle recomputes on every call.** Change correlation in particular re-runs per request. Caching needs invalidation across six upstream tables, which is worse than the latency until something measures the latency — and nothing has.
+- **A restricted reader cannot see tenant-global knowledge either.** Excluding domain-NULL is the safe direction and a real loss: reviewed tenant-wide knowledge is domain-NULL by convention, so a scoped reader loses it along with the unassigned ingest the exclusion is aimed at.
+- **Facets the roadmap named are absent.** H7 was specified with case, signals, topology, knowledge, patterns and decisions among its facets. Knowledge has no facet (this deployment holds zero knowledge cases), and decisions has none (nothing writes agent decisions back — that is F1, unstarted). Their absence is silent: the bundle does not list facets it never attempted, so a reader cannot tell "no knowledge here" from "no knowledge facet exists".
+- **`impact` reports one hop.** Same bound as H6, same consequence: a two-hop dependency is invisible.
+
+## 2026-08-21 H6 shipped, and a single future-dated row had stopped change ingestion
+
+`GET /api/v1/graph/situations/{id}/change-candidates`, `correlation.correlate_situation_changes`. Design: [CHANGE_CORRELATION](CHANGE_CORRELATION.md).
+
+### Closed and corrected
+
+- **Incidents now arrive with their suspect changes attached [was: H6].** Ranked, explainable, one dependency hop of blast radius. Measured on the canonical incident: the same-CI change at `confirmed` (governed `caused_by`), a change one hop away at `candidate` 0.55, and the coincidental control absent entirely rather than ranked low.
+- **P0 — one record dated 2035 had silently stopped `change_request` ingestion — FIXED.** A stock PDI contains `CHG0000003` ("Roll back Windows SP2 patch") with `sys_updated_on = 2035-05-28`. The keyset is `sys_updated_on > checkpoint`, so once consumed, the cursor pinned nine years ahead and **no change created after that moment could ever arrive**. Every sync since 20:04 returned zero rows and reported `completed`, which is indistinguishable from "nothing new". A future-dated row is now ingested but never becomes the checkpoint. **Operational note: an already-wedged deployment does not self-heal — the stored checkpoint must be reset manually, as was done here.** Any table can be affected; only `change_request` was, on this instance.
+- **Unparseable timestamps are deliberately not treated as future.** Doing so would stall a stream the same way, the next time an upstream format changes.
+
+### Opened — record these before they read as capability
+
+- **Nothing detects a wedged checkpoint.** The fix prevents new occurrences; it does not find existing ones or alert on a stream that has returned zero rows for an implausibly long time. A sync reporting `completed` with 0 items is still indistinguishable from a quiet source. This is the highest-value follow-up here and it is not written.
+- **One hop only.** A two-hop cause is invisible: `esx-host-04 → vpn-gw-east-01 → acme-vpn-service` means a change to the ESX host is one hop from the gateway and two from the service, so a service-level situation would not see it.
+- **Affected CIs are derived from membership, not from `situation_entity_impacts`.** That table is H4's and is empty, so two code paths will compute blast radius until H4 lands, and they can disagree.
+- **A rejected candidate stays rejected.** Reviewed rows are never recomputed — correct, but nothing re-opens one when the evidence underneath it changes.
+- **Thresholds named and untuned**, as everywhere else: `SUSPECTED_SCORE = 0.7`, `CANDIDATE_SCORE = 0.4`, chosen so same-CI plus close-in-time clears the bar while either alone does not.
+- **The governance column register can be satisfied by prose.** It scans source text for an assignment to a column name, comments included. A local variable named after `SituationEntityImpact.basis`, and then a comment quoting that name, each silently retired a gap H4 still owes. Both were renamed rather than the register entry removed — but the scanner will accept the same trick from anyone.
+
+## 2026-08-21 C2 shipped: criticality and owner, and three ways code looks wired
+
+### Closed and corrected
+
+- **Entity `attributes` were write-once — FIXED.** `_ensure_entity` refreshed the display name and B2 traits on an existing row but wrote `attributes` only on INSERT, so criticality, owning team and owner could land only on a CI nobody had seen before. Once a CMDB has been synced once, that is none of them: the fields would be re-fetched on every warm and stored never, with no error anywhere. Attributes now merge key-by-key on the same terms as traits. Shared with the Jira and SapphireIMS reference services, so attribute refresh is fixed there too.
+- **Criticality was requested from a table that does not have it — FIXED.** `busines_criticality` [sic] is defined on `cmdb_ci_service`, not on the `cmdb_ci` base table the neighborhood fetch queries, and asking the base table for it returns rows without the key rather than an error. Verified live on one sys_id both ways. The fetch now makes a second targeted call, and only when the neighborhood contains a service.
+- **`owned_by` was captured nowhere — FIXED.** A team is who is on call, an owner is who is accountable; both are carried and projected.
+
+### Opened — record these before they read as capability
+
+- **Criticality exists for services only, by construction.** Infrastructure CIs carry owner and team but no criticality of their own, and inherit importance through the dependency edge. Any consumer that reads `criticality` directly off a switch will find nothing and must walk to the service — nothing enforces that today, and nothing warns when a consumer does not.
+- **Tier is not modelled on this instance.** `u_tier` is 0 of 400 and is not a base ServiceNow field. C2's "tier" is delivered as criticality plus the topology walk; a deployment with a real tier field would need a mapping nobody has written.
+- **The instance's own CMDB is effectively unpopulated for this.** 0 of 400 sampled CIs carry criticality, owner or environment. Every C2 measurement here rests on fixture CIs populated deliberately; the capability is proven, its coverage on real ServiceNow data is not.
+- **Environment is still absent everywhere.** 0 of 400 CIs and 0 evidence rows state one, so the situation correlator's environment veto and the advisory's environment exclusion both remain inert for a second, independent reason.
+
+## 2026-08-21 E2 + E3 shipped: the measurement reaches the recommendation
+
+`POST /api/v1/patterns/advise`. E1 alone was a report; this is where it changes what gets recommended. Design: [EFFICACY_AND_KNOWLEDGE_DRIFT](EFFICACY_AND_KNOWLEDGE_DRIFT.md).
+
+### Closed and corrected
+
+- **E2's and E3's stated substrates are empty, like E1's [correction].** `fix_applicability_rules`, `fix_patterns`, `fix_cohort_stats`, `case_outcome_fix_patterns` and `invalidated_fix` are all 0 rows on the reference corpus. Applicability actually lives in the `applicability` JSON on knowledge cases (764 rows), and negative knowledge in `episode_steps.result_state` (970 failed steps). Roadmap corrected.
+- **Remediations are now ranked by whether they are defensible.** Measured over 533 patterns: a cloud context suppresses 97 patterns documented for on-prem, an on-prem context 21, no context 0. Each result carries its own rationale rather than a score.
+- **`episode_steps` has three columns that disagree.** 378 of 24,245 rows conflict between `result_state` and the booleans. Precedence is now explicit — `result_state` wins, and the 33 rows asserting both success and failure are dropped rather than resolved.
+
+### Opened — record these before they read as capability
+
+- **E2 can barely rule out on version, which was its headline use.** `version_floor` is populated on 7.5% of applicability payloads and `version_ceiling` on 5%; `platforms` on 0%. Deployment (100%) and components (94%) carry every exclusion the engine actually makes. "Rule out a fix that does not match the product version" is implemented and almost never fires.
+- **Component mismatch deliberately never excludes.** Those vocabularies are LLM-extracted free text, so absence of overlap is as likely to be a naming difference as a real mismatch. The consequence is that a fix for a completely unrelated component is not suppressed on that basis alone.
+- **Evidence-level applicability is not merged in.** 629 `evidence_items` carry payloads that are ignored: an incident's stated environment describes where the *problem* happened, not where the *remedy* applies, and conflating them would exclude fixes on the strength of where they were last needed. Reaching them needs an episode-link hop nobody has written.
+- **`trigger_change` write-back is still open.** E3 specified writing confirmed `preceded_by` suspicions back into the signature's `trigger_change`; that half depends on H6's change correlation and is not done.
+- **Thresholds remain named and untuned.** `CAUTION_SUCCESS_RATE = 0.6`, `MIN_RATE_SAMPLE = 3`, alongside E1's drift constants. No labelled set exists to tune any of them against.
+- **Mojibake observed in episode step text.** Failure statements returned by the advisory contain sequences like `â€"` where an em-dash should be — UTF-8 read as latin-1 somewhere on the ingest path. Observed, not investigated; it affects display of negative knowledge and probably other free text.
+
+## 2026-08-21 E1 shipped: efficacy measurement, pulled forward
+
+E1 was position 9 in the sequence. A competitive review found that no vendor in the landscape — ServiceNow, incident.io, PagerDuty, Rootly, Glean — verifiably tracks whether a remediation *worked*, so it was pulled forward. Design: [EFFICACY_AND_KNOWLEDGE_DRIFT](EFFICACY_AND_KNOWLEDGE_DRIFT.md).
+
+### Closed and corrected
+
+- **E1's stated substrate does not exist [correction].** The roadmap said to aggregate `validated_fix` / `invalidated_fix`. Measured: **both are 0 rows, and `case_outcomes` is 0, in both databases including the 15,260-episode reference corpus.** The `case_outcome_service` writers exist but fire on governed session open/close, and this corpus has no governed sessions. Aggregating those edges would have aggregated nothing, and the roadmap is corrected rather than worked around.
+- **`PatternEvidence.outcome` was NULL on all 1,551 rows — FIXED.** Not for want of data: 10,247 of 15,260 episodes carry a `final_outcome`, in **9,014 distinct phrasings**. That single unnormalized column was what stood between the ledger G3 built and the question it exists to answer. `outcome_classification` normalizes deterministically; `backfill_ledger_outcomes` writes it, with `dry_run=True` as the default.
+- **Failures now record as `contradicts_resolution`.** The value existed in the vocabulary and had never been used, so a pattern had no way to accumulate evidence against itself.
+- **Confidence class and drift are computable.** 533 patterns: 429 `EMPIRICAL`, 75 `DOCUMENTED_ONLY` (the cold-start population), 29 `MIXED`. Mean success rate 76.9% over the 330 with a computable one.
+
+### Negative result, recorded so it is not re-run
+
+- **Knowledge drift finds nothing on the reference corpus, and the rule is not broken.** 15 of the 29 `MIXED` patterns clear the ≥5 rate-bearing sample bar and were all evaluated; none fell below the 50% success threshold. Lowest observed rates: 60.0%, 61.1%, 66.7%. On this corpus documented resolutions hold up.
+
+### Opened — record these before they read as capability
+
+- **32.1% of outcome text is unrecognised.** 67.9% is recognised by some rule (4,442 success / 471 partial / 1,099 failure / 950 deliberately declined). The remainder is dominated by *process states* — "meeting scheduled to discuss the issue", "fix identified and planned for AE 8.2.5", "guidance provided" — which are honestly neither success nor failure. Further rule-writing would over-fit this corpus's idioms; classifying them properly needs a different mechanism, not more regexes.
+
+- **The drift thresholds are named and untuned.** `DRIFT_SUCCESS_RATE = 0.5`, `MIN_DRIFT_SAMPLE = 5`. There is no labelled drift set to tune against. The sensitivity is real: the lowest observed rate is 60.0%, so a threshold of 0.65 flags one pattern where 0.5 flags none. Any tuning needs a labelled set first, or the number will look measured when it was chosen.
+
+- **The ledger backfill has never run against the reference corpus.** It is exercised only against the isolated database (30 rows, plus a CHECK-constraint probe confirming a documented row still refuses an outcome). The 1,416-row figure is a `dry_run` preview and a `classify_live` computation, both read-only. A real deployment upgrading past this needs the backfill run, and nothing schedules it.
+
+- **Rollups are computed on read.** Fine at 1,551 ledger rows, not at a million. This will need a materialized view rather than scaling as written.
+
+- **Efficacy does not yet reach ranking.** The rollups exist and are readable over the API; nothing consumes them when choosing a remediation. That is E2/E3 territory and the loop is not closed until it happens — measuring efficacy that nothing acts on is a report, not a capability.
+
+## 2026-08-21 H3 shipped: situation correlation, and the occurrence-time defect it exposed
+
+Roadmap H3 is in. `GET /api/v1/graph/situations`, `correlation.correlate_situations`. Design: [SITUATION_CORRELATION](SITUATION_CORRELATION.md). Live: 51 groups considered, 1 situation created (6 members, all authoritative), 50 singletons left alone, 1 hub CI suppressed.
+
+### Closed and corrected
+
+- **Six tickets are now one occurrence [was: H3].** Authoritative `child_of_incident` / `duplicate_of` links merge; same-CI + window + symptom agreement merges weakly. `related_problem` and `affects_ci` are named in `NON_MERGING_EDGE_TYPES` rather than merely omitted — same root cause is not same occurrence, and a shared domain controller is not a shared outage.
+- **The H3 signal audit in the roadmap was inverted, and is corrected.** It was written when Zoho Desk was the only connected source and said issue signature, environment and hub suppression were the signals with data. Measured 2026-08-21: `issue_signatures` = 0, `source_facets` = 0 — neither has any. What ServiceNow supplied is what the plan assumed absent: human-authored duplicate links and CI entities.
+- **Evidence carried last-touch time, not occurrence time — FIXED.** `created_at_source` was `sys_updated_on` for every ServiceNow record, so an incident opened in January and re-assigned yesterday looked like it happened yesterday, and every record from one backfill looked simultaneous. This made H3's window veto inert and would have made H6 impossible. `EVENT_TIME_FIELDS` now derives it per table (`opened_at`; `work_start` then `start_date` for changes; `initial_event_time` for alerts), falling back to `sys_updated_on`. The checkpoint still uses `sys_updated_on` — it is the only monotonic cursor. Verified: the fixture change moved from its ingest minute to 2026-08-10 01:30, the major incident to 02:40.
+- **Situation correlation was not idempotent — FIXED.** Two runs over an unchanged corpus produced two situations and twelve memberships for one six-ticket occurrence; a scheduled run would have minted a new outage every tick. Identity is now overlap with a live situation, not set equality — a set-hash would fragment one occurrence into a new row per arriving ticket.
+
+### Opened — record these before they read as capability
+
+- **The inferred tier is built and barely fires.** It needs symptom agreement, which means `issue_signatures` (0 rows — nothing has reconstructed episodes here) or `error_signatures` (6 rows, all from randomly generated demo records, none matching the authored scenarios). On this corpus every merge came from the authoritative tier. The tier is not dead code, but a reader who assumes it is carrying weight would be wrong.
+
+- **The environment veto is inert.** `source_facets` is empty on every row, so no evidence states an environment to disagree about. `derive_facets` only populates when a source declares `facet_fields` in its config, and the ServiceNow source declares none. The veto is right and the data is missing.
+
+- **Only ServiceNow's occurrence time was fixed.** Zoho Desk, Jira SM, SapphireIMS, Teams, Gmail and ManageEngine were not audited for the same defect. `_normalize` reads `closedTime` before `_source_timestamp`, so at least one connector supplies a close time rather than an open time, which is a third meaning of "when". Nothing measures which connectors are affected.
+
+- **Rows normalized before the timestamp fix keep the old value.** `_normalize` dedups on `content_hash` and its dedup path only fills `created_at_source` when it is NULL, so re-syncing a corrected record does not refresh it. The fixture evidence had to be deleted and rebuilt. Any deployment upgrading past this needs a backfill, and none is written.
+
+- **Overlapping situations are not merged.** If a group overlaps two live situations, the earliest onset wins and the other is left alone. Collapsing them is a merge, merge needs lineage, and lineage is H8's — but until H8 lands a genuinely split occurrence stays split, silently.
+
+- **Hub suppression is not exercised by the fixture that was built for it.** S4 puts four incidents on a shared domain controller; the threshold is 8, so S4 never reaches it and is separated by symptom disagreement instead. Hub suppression is exercised by a real hub the corpus happened to contain (`PolicyAdminService`, 12 incidents in three days). The threshold has not been tuned against anything — 8 is a guess that happens to sit between the two.
+
+## 2026-08-21 H2 shipped: coverage reporting, and the capability layer under it
+
+Roadmap H2 is in. `GET /api/v1/graph/coverage` reports ten facets, each with one of eight statuses, plus a `blind_spots` list naming the facets where an empty result must NOT be read as a zero. Design: [COVERAGE_AND_CAPABILITY](COVERAGE_AND_CAPABILITY.md).
+
+### Closed
+
+- **"No changes occurred" and "no change connector" are now different answers [was: H2].** Only `empty`, `stale` and `available` are answerable; `unsupported`, `unavailable`, `not_selected`, `pending` and `not_configured` are blind spots. Measured live: 9 facets available, `monitoring` correctly reported `unavailable` — attributed to the missing ITOM module rather than to a missing connector or an unticked box, which are three different fixes.
+- **Connector capability is declared once [Gap].** `services/source_capabilities.py`. Record kinds are derived from `evidence_typing._OBJECT_TYPE_MAP` rather than restated; relations are declared and cross-checked against each reference service's own string literals, in both directions, by `tests/test_source_capabilities.py`. A connector that gains a relation without declaring it fails the suite, and so does a declaration the code cannot deliver. This is the layer a new ITSM adapter declares itself into — the answer to "do we have a canonical schema so we can keep adding adaptors".
+
+### Opened — record these before they read as capability
+
+- **Coverage is precise on ServiceNow and coarse everywhere else.** Only ServiceNow names its source objects after its object types (discovery writes one per *table*, so `external_id` is `incident`, `change_request`). Teams uses `team:channel`, Gmail a mailbox, Zoho `tickets:<department>`, Jira a project key. Narrowing the sync lookup by object type is therefore meaningful only on ServiceNow; elsewhere the facet falls back to source-level sync state and cannot say "this particular channel is not synced". The fallback is deliberate — narrowing regardless would report every facet on a Teams or Jira deployment as `unavailable`, which is the false-blind-spot failure H2 exists to prevent. Making it precise on the others needs a per-connector statement of which source objects feed which object types, which no connector currently exposes.
+
+- **Coverage counts are tenant-wide, not domain-scoped**, unlike most read paths which honour `allowed_domain_ids`. Deliberate: coverage answers "what can this deployment see at all", and a blind spot that varies by who is asking is a permissions artefact rather than a blind spot. The consequence is that a domain-limited reader sees counts larger than the records they could retrieve. Counts are evidence a facet is populated, never a result set.
+
+- **`local_file` and `manageengine` have no entries in the evidence-type map**, so `record_kinds_for` returns empty for both and every record facet reports `unsupported` on a deployment using only those. For `manageengine` that is roughly honest (no reference service exists). For `local_file` it is wrong — uploaded documents do produce evidence — and it means an upload-only tenant is told it has no incidents when it may have plenty.
+
+## 2026-08-21 ServiceNow connected: four capabilities measured, two ingest defects found
+
+A live ServiceNow instance is connected for the first time on any deployment (a ServiceNow developer instance: 325 incidents / 237 changes / 2,804 CIs / 250 CI relationships / 43 problems / 57 articles). Four Phase 1-4 sections below carry a deployment note saying *code only on this deployment, zero rows*. Three of them are now measured; the fourth is blocked for a more specific reason than before. Full write-up: [SERVICENOW_LIVE_VERIFICATION](SERVICENOW_LIVE_VERIFICATION.md).
+
+### Closed and corrected
+
+- **Change records exist [was: F6/B1] — 39 evidence rows typed `change`.** The `incident -> CI <- change` join is data, not a capability. The Phase 1 deployment note ("zero change records in the corpus, so `caused_by_change` / `remediated_by_change` exist as a capability and not as data") no longer describes this deployment.
+- **CI entities and topology exist [was: F9/C1] — 28 `configuration_item` entities, 32 `affects_ci` and 19 `depends_on` edges.** The Phase 2 note ("zero topology edges and zero CI entities — all 849 entities are `topic` or `knowledge_category`") is superseded. Notable: nobody built the `depends_on` edges as part of this work. `cmdb_topology_service` warms a CI neighbourhood when correlation meets a stale CI reference, so pointing the connector at a real CMDB populated the cache on its own. C1 is substantially wired already and was starved, not missing.
+- **`source_type` was a side effect of chunking — FIXED.** `evidence_items.source_type` was written in exactly one place, the chunking dispatch, which sits behind the `not_relevant >= 0.75` extraction gate. Confidently-irrelevant evidence therefore kept `source_type = NULL` forever, although the `Source` row is loaded three lines above the constructor. Exact split on both corpora: 11 of 106 on the first ServiceNow ingest, **3,805 of 10,547 (36%) on zoho_desk**. The 43 `not_relevant` zoho_desk rows that *do* carry a source_type confirm the mechanism — they scored below 0.75, never skipped, and so reached the stamp. Every filter and grouping over source silently omitted the discarded evidence, which is the population a reviewer auditing "what did this connector throw away" wants. Now stamped at construction (`workers/extraction_tasks.py::_normalize`); the chunking write is kept, and documented, as a backstop for pre-fix rows.
+
+### Opened — record these before they read as capability
+
+- **The message-function classifier has never run on the ingest path [Gap].** Same ordering defect, larger consequence. The gate `if not skip_extraction and (ev.source_type or "") in MESSAGE_FUNCTION_SOURCE_TYPES` reads `ev.source_type` about ninety lines above the only line that set it, so on a freshly constructed row it was always NULL and the gate was always False. `classify_message_function` has one caller, behind that gate. Measured: **0 of 10,547 rows in the live corpus carry a `message_function`.** Its four consumers have all been reading NULL — correction supersession (`correlation_service:585`), the dissociation veto and reply inheritance (`ticket_bridge_service:631,797,816,953`), and telemetry-based outcome verification (`execution_verification_service:295,304`). This file records A1 as shipped and later upgraded: the classifier shipped, the path feeding it did not run.
+
+  The `source_type` fix revives it. On this deployment that is inert — `CONVERSATIONAL_SOURCE_TYPES` is `{teams, gmail, local_file}` and the only connected source is `servicenow` — so no unmeasured model spend lands here. **Owed before a Teams or Gmail source is connected anywhere:** a before/after measurement per CLAUDE.md, because enabling it adds one classification call per message and changes four behaviours at once. It cannot be measured on this deployment.
+
+- **H5 (monitoring) is blocked on the instance, not on the connector.** `em_alert` ships with ITOM Event Management, which is not activated on this instance; the Table API answers `400 Invalid table` and discovery skips it (correctly — verified live, 6 tables discovered, `em_alert` skipped). The alert-rollup connector code is written and untested against live alerts. This is a narrower statement than "blocked on a monitoring connector": what is missing is an instance with the plugin, or a different monitoring source.
+
+- **A 365-day backfill window bounds what history is reachable.** `BackfillRequest.window_days` is capped at 365, which matches `RETENTION_DEFAULT_DAYS`. Against a corpus spanning 2014-2035 that captures 95% of incidents and 89% of changes but only 7 of 57 KB articles, because articles are authored once and rarely updated. Knowledge coverage from an ITSM source is therefore systematically thinner than ticket coverage, and no error says so.
+
+- **Fresh databases cannot be built with `alembic upgrade head`.** `0001_initial` runs `Base.metadata.create_all`, so on an empty database it creates *today's* models — including columns later revisions add — and the first such revision fails on `DuplicateColumn` (hit at `0070_episode_ai_review`, `episodes.ai_review`). The revision's own docstring says to restore from a dump instead, which is what the isolated `contextedge_sn` database was built from (`pg_dump --schema-only` + `alembic stamp head`). Recorded because "run the migrations" is the obvious thing to try and it half-succeeds: it leaves a partially built schema with the version marker stranded at whichever revision last opened an autocommit block.
+
 ## 2026-08-20 the observed/documented split, and the situation schema
 
 Five commits landed after the last sweep, and between them they draw one line through the middle of the system: **what happened** and **what a document says works** are now different objects, stored in different tables, with the database refusing to confuse them. `5dcfeca` stops a knowledge-only cluster becoming an episode. `2a7520f` (migration `0072`) gives documented knowledge its own table plus an evidence ledger for patterns. `f6ab870` (migration `0073`) moves the rows already sitting on the wrong side of that line. `5c0ad5b` attaches a knowledge case to the pattern it documents, or seeds one. `2e2c19c` (migration `0074`) adds the OperationalSituation schema — schema only.

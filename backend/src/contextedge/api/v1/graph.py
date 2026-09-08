@@ -2,6 +2,7 @@ from datetime import datetime
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Query
+from pydantic import BaseModel
 
 from contextedge.deps import AuthUser, DbSession
 from contextedge.graph.agent.contracts import AgentGraphRequest, AgentGraphSubset
@@ -133,6 +134,237 @@ async def change_risk(
         "domain_admin",
     )
     return await assess_change_risk(db, user.tenant_id, ci, window_days=window_days)
+
+
+@router.get("/coverage")
+async def coverage(db: DbSession, user: AuthUser):
+    """What this deployment can and cannot answer, per facet.
+
+    Roadmap H2. Every facet reports one of `available`, `stale`, `empty`,
+    `pending`, `not_selected`, `unavailable`, `unsupported` or
+    `not_configured`, and `blind_spots` lists the facets where an empty
+    result must NOT be read as a zero.
+
+    The distinction this exists for: without it, "no change caused this
+    incident" and "nothing here can see changes" are the same empty list,
+    and an agent cannot tell a finding from a missing connector.
+    """
+    from contextedge.services.coverage_service import build_coverage_report
+
+    report = await build_coverage_report(db, user.tenant_id)
+    return report.as_dict()
+
+
+@router.get("/situations")
+async def list_situations(
+    db: DbSession,
+    user: AuthUser,
+    limit: int = Query(50, ge=1, le=200),
+):
+    """Operational situations: what is happening, assembled from many signals.
+
+    Roadmap H3. Each membership says how it got there (`correlation_method`,
+    `membership_status`), because a merge is a factual claim and a claim
+    nobody can inspect is one nobody can retract.
+    """
+    from sqlalchemy import select
+
+    from contextedge.models.situation import (
+        OperationalSituation,
+        SituationEvidenceMembership,
+    )
+
+    rows = await db.execute(
+        select(OperationalSituation)
+        .where(
+            OperationalSituation.tenant_id == user.tenant_id,
+            OperationalSituation.state.not_in(("merged", "invalidated")),
+        )
+        .order_by(OperationalSituation.onset_at.desc().nulls_last())
+        .limit(limit)
+    )
+    situations = list(rows.scalars().all())
+    if not situations:
+        return {"situations": []}
+
+    member_rows = await db.execute(
+        select(SituationEvidenceMembership).where(
+            SituationEvidenceMembership.situation_id.in_([s.id for s in situations])
+        )
+    )
+    by_situation: dict[UUID, list] = {}
+    for m in member_rows.scalars().all():
+        by_situation.setdefault(m.situation_id, []).append(m)
+
+    return {
+        "situations": [
+            {
+                "id": str(s.id),
+                "title": s.title,
+                "state": s.state,
+                "situation_type": s.situation_type,
+                "confidence": s.situation_confidence,
+                "onset_at": s.onset_at.isoformat() if s.onset_at else None,
+                "last_signal_at": (
+                    s.last_signal_at.isoformat() if s.last_signal_at else None
+                ),
+                "incident_count": s.incident_count,
+                "correlation_version": s.correlation_version,
+                "members": [
+                    {
+                        "evidence_id": str(m.evidence_id),
+                        "role": m.evidence_role,
+                        "status": m.membership_status,
+                        "method": m.correlation_method,
+                        "confidence": m.membership_confidence,
+                    }
+                    for m in by_situation.get(s.id, [])
+                ],
+            }
+            for s in situations
+        ]
+    }
+
+
+@router.get("/situations/{situation_id}/change-candidates")
+async def situation_change_candidates(
+    situation_id: UUID,
+    db: DbSession,
+    user: AuthUser,
+    persist: bool = Query(
+        False,
+        description=(
+            "Store the ranked candidates. Idempotent, and never overwrites a "
+            "row a human reviewed or rejected."
+        ),
+    ),
+):
+    """Which change could explain this situation (roadmap H6).
+
+    A RANKED LIST, never a verdict. `correlation_score` is a rank under an
+    explainable additive model — 0.85 means "strong on the factors below",
+    not "85% likely". Only `confirmed` is a claim, and it comes solely from
+    governed evidence such as a ServiceNow `caused_by` a human filled in;
+    no score promotes a candidate to it.
+    """
+    from contextedge.models.situation import OperationalSituation
+    from contextedge.services.change_correlation_service import (
+        correlate_changes_for_situation,
+        persist_candidates,
+    )
+
+    situation = await db.get(OperationalSituation, situation_id)
+    if situation is None or situation.tenant_id != user.tenant_id:
+        raise HTTPException(status_code=404, detail="Situation not found")
+
+    candidates = await correlate_changes_for_situation(db, user.tenant_id, situation)
+    written = None
+    if persist and candidates:
+        written = await persist_candidates(db, user.tenant_id, situation, candidates)
+
+    return {
+        "situation_id": str(situation.id),
+        "onset_at": situation.onset_at.isoformat() if situation.onset_at else None,
+        "candidates": [c.as_dict() for c in candidates],
+        "persisted": written,
+    }
+
+
+@router.get("/diagnostic-context/{incident_evidence_id}")
+async def diagnostic_context(
+    incident_evidence_id: UUID,
+    db: DbSession,
+    user: AuthUser,
+):
+    """Everything known around one incident, as facets (roadmap H7).
+
+    The acceptance criterion the roadmap was written for: an agent handed a
+    single incident identifier obtains the operational context around it
+    rather than reasoning from the description alone.
+
+    Read `blind_spots` before concluding anything from an empty facet. It
+    merges two different absences with the same consequence — a facet that
+    could not answer for this incident, and a dimension this deployment
+    cannot answer at all.
+    """
+    from contextedge.services.diagnostic_context_service import (
+        build_diagnostic_context,
+    )
+
+    context = await build_diagnostic_context(
+        db,
+        user.tenant_id,
+        incident_evidence_id,
+        allowed_domain_ids=user.allowed_domain_ids,
+    )
+    if context is None:
+        raise HTTPException(status_code=404, detail="Incident not found")
+    return context.as_dict()
+
+
+@router.post("/situations/lifecycle")
+async def evaluate_situation_lifecycle(
+    db: DbSession,
+    user: AuthUser,
+    apply: bool = Query(
+        False,
+        description=(
+            "Write the transitions. Defaults to a dry assessment, because this "
+            "moves states other things read."
+        ),
+    ),
+):
+    """Move situations along their lifecycle on evidence (roadmap H8).
+
+    A situation is only ever moved toward `resolved` by member incidents
+    carrying a resolution in the source system. **Absence of signal is never
+    recovery** — going quiet happens when a thing is fixed, when everyone gave
+    up, and when a connector broke, and the silence does not distinguish them.
+    """
+    from contextedge.services.situation_lifecycle_service import (
+        evaluate_all_situations,
+    )
+
+    return await evaluate_all_situations(db, user.tenant_id, apply=apply)
+
+
+class SituationMergeRequest(BaseModel):
+    survivor_situation_id: UUID
+    reason: str
+
+
+@router.post("/situations/{situation_id}/merge")
+async def merge_situation(
+    situation_id: UUID,
+    body: SituationMergeRequest,
+    db: DbSession,
+    user: AuthUser,
+):
+    """Fold this situation into another, keeping the lineage.
+
+    A governed action: merging rewrites what somebody may already have acted
+    on, so it needs authority rather than a score. The loser keeps pointing at
+    its survivor, and the database refuses a merged row that names none.
+
+    Splitting is deliberately absent. One situation that turns out to be two is
+    a real case and an unsafe automation — a proposal is safe, an automatic
+    split silently rewrites history with no way to tell afterwards which half a
+    reader saw.
+    """
+    user.require_role("knowledge_manager")
+    from contextedge.services.situation_lifecycle_service import merge_situations
+
+    result = await merge_situations(
+        db,
+        user.tenant_id,
+        situation_id,
+        body.survivor_situation_id,
+        reason=body.reason,
+        reviewed_by=user.user_id,
+    )
+    if "error" in result:
+        raise HTTPException(status_code=400, detail=result["error"])
+    return result
 
 
 @router.get("/edge-proposals")

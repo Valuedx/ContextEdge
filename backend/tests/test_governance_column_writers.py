@@ -45,34 +45,71 @@ _MODELS = _SRC / "models"
 # (model file, column) -> (owner, reason). Owner is an Epic F item where the
 # column is scheduled, or a category when no work is pending.
 EXPECTED_UNWRITTEN: dict[tuple[str, str], tuple[str, str]] = {
-    # --- situations: schema landed in 0074 ahead of the correlation that
-    # populates it, deliberately, so the shape could be reviewed against a
-    # real schema. Every entry here should LEAVE this register when the
-    # situation correlation service lands; any that does not is a column
-    # nobody needed. The ServiceNow/monitoring/CMDB connectors that supply
-    # changes, alerts and topology are not connected in this deployment yet,
-    # which is why the writers are a separate phase rather than an omission.
+    # --- situations: schema landed in 0074 ahead of its writers, deliberately,
+    # so the shape could be reviewed against a real schema. H3
+    # (situation_correlation_service, 2026-08-21) took the first 14 columns off
+    # this register. What remains is grouped by the roadmap item that owes the
+    # writer, because "not yet built" said of everything hides which parts are
+    # scheduled and which are blocked on a connector nobody has.
+    #
+    # H8 — lifecycle, merge and review. A situation currently only ever starts;
+    # nothing moves it to stabilizing/resolved, and merge needs lineage.
     **{
         ("situation.py", col): (
-            "situation-correlation",
-            "written by the situation evaluator, not yet built",
+            "H8-lifecycle",
+            "situation lifecycle, merge and review not yet built",
         )
         for col in (
-            "situation_type", "situation_confidence",
-            "onset_at", "detected_at", "last_signal_at", "stabilizing_at",
-            "resolved_at", "primary_entity_id", "primary_service_entity_id",
-            "incident_count", "alert_count", "event_count",
-            "change_candidate_count", "affected_entity_count",
-            "correlation_version", "merged_into_situation_id",
-            "situation_id", "evidence_role", "membership_status",
-            "membership_confidence", "correlation_method", "score_breakdown",
-            "source_lineage_group", "first_seen_at", "machine_decision_version",
-            "review_status", "review_reason",
-            "impact_role", "basis", "signal_observed_at", "topology_distance",
-            "correlation_score", "temporal_relation", "minutes_from_onset",
-            "reason_summary", "confirmation_basis",
+            # H8 shipped 2026-08-21 (situation_lifecycle_service): stabilizing_at,
+            # resolved_at, merged_into_situation_id and review_reason left this
+            # register when it landed.
+            #
+            # `review_status` stays: situations have no review queue yet --
+            # merge is governed by a role, not by a queue somebody works
+            # through.
+            #
+            # `severity` is NOT here, and that is the name-shadowing limitation
+            # above, not a writer. Nothing grades a situation's severity, and
+            # inferring it from member priority would still launder a ticket
+            # field into an operational judgement. It leaves the register only
+            # because quality/clarification/gaps.py writes `severity=` on gap
+            # findings, and detection is by column name.
+            "review_status",
         )
     },
+    # H4 — topology correlation and blast radius. Needs the CMDB walk to say
+    # which entities a situation reached and how far away they are.
+    **{
+        ("situation.py", col): (
+            "H4-topology",
+            "blast-radius impact rows need the topology walk",
+        )
+        for col in (
+            "primary_entity_id", "primary_service_entity_id",
+            "affected_entity_count", "impact_role", "basis",
+            "signal_observed_at",
+        )
+    },
+    # H5 — monitoring. Blocked on an instance with Event Management, not on
+    # code: the alert-rollup connector exists and em_alert does not.
+    **{
+        ("situation.py", col): (
+            "H5-monitoring",
+            "no alert evidence exists; em_alert absent on the connected instance",
+        )
+        for col in ("alert_count", "event_count", "source_lineage_group")
+    },
+    # H6 shipped 2026-08-21 (change_correlation_service): change_candidate_count,
+    # correlation_score, temporal_relation, minutes_from_onset,
+    # topology_distance, score_breakdown, reason_summary and confirmation_basis
+    # all left this register when it landed.
+    #
+    # `basis` on SituationEntityImpact stays with H4 above, and nearly did not:
+    # a local variable named after it in the change correlator, and then a
+    # COMMENT quoting that name, each satisfied this scanner's writer regex in
+    # turn. The register reads source text, comments included, so a gap can be
+    # retired by prose alone. Both were renamed rather than the entry removed.
+
     # --- knowledge_case / pattern_evidence: schema landed in 0072 ahead of
     # its writers, deliberately. The tables exist so the reconstruction
     # branch and the 299-episode migration can be reviewed against a real
@@ -157,7 +194,15 @@ EXPECTED_UNWRITTEN: dict[tuple[str, str], tuple[str, str]] = {
             "the resolve flow is an operator action with no surface yet; raising "
             "and acknowledging an escalation are wired, closing one is not",
         )
-        for col in ("resolved_at", "resolution_note")
+        # "resolved_at" WAS in this tuple and had to be removed -- not because
+        # it gained a writer, but because this scanner cannot tell two models'
+        # same-named columns apart. It matches assignments by column NAME
+        # across the whole source tree, so `situation.resolved_at = now` in the
+        # H8 lifecycle service satisfies the entry for
+        # RemediationAction.resolved_at, which still has no writer at all.
+        # The gap is real and is recorded in KNOWN_GAPS; this register can no
+        # longer see it. Making the scanner model-aware is the fix if it recurs.
+        for col in ("resolution_note",)
     },
     ("execution.py", "rolls_back_run_id"): (
         "executor",

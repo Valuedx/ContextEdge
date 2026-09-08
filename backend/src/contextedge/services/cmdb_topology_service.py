@@ -157,6 +157,13 @@ async def cache_neighborhood(
         support_group = _display(detail.get("support_group.name"))
         if support_group:
             attributes["support_group"] = support_group
+        # A team and a person answer different questions at 3am: who is on
+        # call, and who is accountable. Kept separate rather than collapsed
+        # into one "owner" — escalating to a named individual who has left is
+        # worse than escalating to a queue.
+        owner = _display(detail.get("owned_by.name"))
+        if owner:
+            attributes["owner"] = owner
         entities_by_sys_id[sid] = await _ensure_entity(
             db,
             tenant_id,

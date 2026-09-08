@@ -7,7 +7,7 @@ handling, and journal/comment extraction.
 """
 
 import asyncio
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import httpx
@@ -60,7 +60,8 @@ TABLES = {
         "label": "Change Requests",
         "fields": (
             "number,short_description,description,state,type,assigned_to,"
-            "start_date,end_date,close_code,category,sys_updated_on,cmdb_ci,"
+            "start_date,end_date,work_start,work_end,close_code,category,"
+            "sys_updated_on,cmdb_ci,"
             "cmdb_ci.name,cmdb_ci.sys_class_name,cmdb_ci.manufacturer.name,"
             "cmdb_ci.model_id.name,cmdb_ci.os,cmdb_ci.os_version,"
             "assignment_group,assignment_group.name"
@@ -116,6 +117,59 @@ TABLES = {
         ),
     },
 }
+
+# When the thing described actually HAPPENED, per table, most specific first.
+#
+# Evidence timestamps used to be `sys_updated_on` for every record, which is
+# when someone last touched it — an incident opened in January and re-assigned
+# yesterday looked like it happened yesterday. That is harmless for the
+# checkpoint (which must keep using sys_updated_on: it is the only monotonic
+# cursor) and wrong for everything that reasons about time. Situation onset,
+# the change→incident interval, and any "what else was happening around then"
+# question all read this field, and all of them silently collapse when every
+# record from one backfill carries the same timestamp.
+#
+# kb_knowledge is deliberately absent: an article has no occurrence time, and
+# its last update is the most meaningful date it has.
+EVENT_TIME_FIELDS: dict[str, tuple[str, ...]] = {
+    "incident": ("opened_at",),
+    "problem": ("opened_at",),
+    # A change's event is its execution, not its paperwork. work_start is when
+    # someone actually began; start_date is when they were approved to. The
+    # gap between them is itself a signal (a change run outside its window),
+    # so both are fetched and the actual one wins.
+    "change_request": ("work_start", "start_date"),
+    "sc_req_item": ("opened_at",),
+    "sc_task": ("opened_at",),
+    "em_alert": ("initial_event_time",),
+}
+
+# Fields that live on a SUBCLASS of cmdb_ci, not on cmdb_ci itself.
+#
+# Querying the base table for one of these does not error and does not warn:
+# the column is simply absent from every row returned, so the request looks
+# correct and yields nothing, permanently. It has now bitten three separate
+# field families — busines_criticality (C2) and os/os_version (B2 traits) —
+# each discovered only by noticing that a value which should have been there
+# never was.
+#
+# Verified live on one sys_id, both ways: /table/cmdb_ci returns name and
+# sys_class_name alone, while /table/cmdb_ci_server returns os and os_version.
+#
+# Each entry costs one extra call per neighborhood fetch and is queried for
+# EVERY sys_id rather than only the matching classes: ServiceNow returns only
+# the rows that exist in that table, so the filtering is free and correct,
+# where class-prefix matching would be neither (cmdb_ci_server,
+# cmdb_ci_esx_server and cmdb_ci_pc_hardware share no usable prefix).
+#
+# Dot-walking is the exception that hid this for so long: an incident asking
+# for `cmdb_ci.os` DOES get a value, because dot-walking resolves against the
+# referenced record's real class. So traits arrived via incident enrichment
+# and never via topology warm, and the gap looked like sparse data.
+SUBCLASS_DETAIL_FIELDS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("cmdb_ci_service", ("busines_criticality",)),
+    ("cmdb_ci_computer", ("os", "os_version")),
+)
 
 # Alerts at or below this severity number are ingested (1=critical …
 # 5=info). Overridable per source via source_config["alert_severity_max"].
@@ -317,7 +371,7 @@ class ServiceNowConnector(BaseConnector):
                         object_type=table_name,
                         content=_with_derived_title(record),
                         thread_id=f"{table_name}:{sys_id}",
-                        timestamp=_parse_snow_datetime(record.get("sys_updated_on")),
+                        timestamp=_event_time(table_name, record),
                         metadata={"table": table_name},
                     )
                 )
@@ -422,7 +476,21 @@ class ServiceNowConnector(BaseConnector):
                 sys_id = record.get("sys_id", "")
                 if (ts, sys_id) <= (cursor_ts, cursor_sys_id):
                     continue  # server returned an already-seen row; skip
-                if (ts, sys_id) > (latest_ts, latest_sys_id):
+                # A future-dated row must never become the checkpoint. The
+                # keyset is `sys_updated_on > checkpoint`, so one row dated
+                # 2035 ends the stream for that table PERMANENTLY — and
+                # silently, because every later sync then reports completed
+                # with zero items, which is indistinguishable from "nothing
+                # new". Measured on a stock PDI: CHG0000003 "Roll back
+                # Windows SP2 patch" carries sys_updated_on 2035-05-28 and had
+                # wedged change_request ingestion entirely; no change created
+                # after that point could ever arrive.
+                #
+                # The row is still ingested — it is a real record someone
+                # made. Only the cursor refuses to follow it. The cost is that
+                # such a row is re-fetched and deduped on every later sync,
+                # which is one wasted row per sync against a dead stream.
+                if (ts, sys_id) > (latest_ts, latest_sys_id) and not _is_future(ts):
                     latest_ts, latest_sys_id = ts, sys_id
                 if table_name == "em_alert":
                     # Alerts roll up after pagination — one event per
@@ -436,7 +504,7 @@ class ServiceNowConnector(BaseConnector):
                         object_type=table_name,
                         content=_with_derived_title(record),
                         thread_id=f"{table_name}:{sys_id}",
-                        timestamp=_parse_snow_datetime(ts),
+                        timestamp=_event_time(table_name, record),
                         metadata={"table": table_name},
                     )
                 )
@@ -538,20 +606,58 @@ class ServiceNowConnector(BaseConnector):
                 "sysparm_query": "sys_idIN" + ",".join(sys_ids[:200]),
                 "sysparm_fields": (
                     "sys_id,name,sys_class_name,operational_status,"
-                    # B2 traits. os/os_version exist only on computer
-                    # subclasses — ServiceNow returns them empty for
-                    # other classes, which lands as absent traits.
+                    # B2 traits. os/os_version are NOT on this table -- see
+                    # SUBCLASS_DETAIL_FIELDS below. They are requested here
+                    # only so the field list documents what the caller wants;
+                    # the values arrive from the subclass pass.
                     # busines_criticality [sic — ServiceNow's own field
                     # spelling] + support_group feed the C2 criticality/
                     # owner facts; absent on a class -> absent, never
                     # guessed.
+                    #
+                    # owned_by is a PERSON and support_group is a TEAM, and
+                    # they answer different questions at 3am: who is
+                    # accountable versus who is on call. Escalating to a
+                    # named individual who left the company is worse than
+                    # escalating to a queue, so both are carried and neither
+                    # substitutes for the other.
+                    #
+                    # busines_criticality exists only on cmdb_ci_service, not
+                    # on the cmdb_ci base table this queries. ServiceNow
+                    # returns it empty for every other class rather than
+                    # erroring, which is why criticality reaches a switch
+                    # through the service that depends on it rather than
+                    # being stamped on the switch.
                     "manufacturer.name,model_id.name,os,os_version,"
-                    "busines_criticality,support_group.name"
+                    "support_group.name,owned_by.name"
                 ),
                 "sysparm_limit": "200",
             },
         )
-        return data.get("result", [])
+        rows = data.get("result", [])
+
+        # Subclass fields need their own calls. See SUBCLASS_DETAIL_FIELDS.
+        by_sys_id = {r.get("sys_id"): r for r in rows if r.get("sys_id")}
+        if by_sys_id:
+            ids = list(by_sys_id)[:200]
+            for table, fields in SUBCLASS_DETAIL_FIELDS:
+                extra = await self._snow_get(
+                    f"/api/now/table/{table}",
+                    {
+                        "sysparm_query": "sys_idIN" + ",".join(ids),
+                        "sysparm_fields": "sys_id," + ",".join(fields),
+                        "sysparm_limit": "200",
+                    },
+                )
+                for found in extra.get("result", []):
+                    target = by_sys_id.get(found.get("sys_id"))
+                    if target is None:
+                        continue
+                    for field_name in fields:
+                        value = found.get(field_name)
+                        if value:
+                            target[field_name] = value
+        return rows
 
     def rate_limit_config(self) -> RateLimitConfig:
         return RateLimitConfig(requests_per_second=10.0, burst_size=20)
@@ -578,6 +684,39 @@ def _with_derived_title(record: dict) -> dict:
     enriched = dict(record)
     enriched["short_description"] = subject
     return enriched
+
+
+# How far ahead of our clock a source timestamp may sit and still be treated
+# as "now". Covers ordinary clock drift between this host and the instance;
+# anything beyond it is bad data, not skew.
+CHECKPOINT_CLOCK_SKEW = timedelta(minutes=5)
+
+
+def _is_future(value: str | None, now: datetime | None = None) -> bool:
+    """Is this source timestamp implausibly ahead of our clock?
+
+    Unparseable is NOT future: a timestamp we cannot read must not be treated
+    as bad data and silently excluded from the checkpoint, or a format change
+    upstream would stall the stream the same way a 2035 row does.
+    """
+    parsed = _parse_snow_datetime(value)
+    if parsed is None:
+        return False
+    return parsed > (now or datetime.now(UTC)) + CHECKPOINT_CLOCK_SKEW
+
+
+def _event_time(table_name: str, record: dict) -> datetime | None:
+    """When this record's subject occurred, falling back to last update.
+
+    Falls back rather than returning None: a record with no occurrence field
+    still needs to be orderable, and `sys_updated_on` is a worse answer than
+    `opened_at` but a much better one than nothing.
+    """
+    for field_name in EVENT_TIME_FIELDS.get(table_name, ()):
+        parsed = _parse_snow_datetime(record.get(field_name))
+        if parsed is not None:
+            return parsed
+    return _parse_snow_datetime(record.get("sys_updated_on"))
 
 
 def _parse_snow_datetime(value: str | None) -> datetime | None:

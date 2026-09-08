@@ -426,3 +426,112 @@ class HttpCmdbTopologyClient:
         finally:
             if owns_client:
                 await client.aclose()
+
+
+class DiagnosisClient(Protocol):
+    """Agent diagnosis write-back and inheritance (F1)."""
+
+    async def record(
+        self, rationale: str, hypotheses: list, evidence_ids: list, situation_id: str | None
+    ) -> dict: ...
+
+    async def prior(self, situation_id: str | None) -> dict: ...
+
+
+class InProcessDiagnosisClient:
+    """F1 in-process port.
+
+    Deliberately exposes no way to read unreviewed diagnoses: ``prior`` never
+    passes ``include_unreviewed``. An agent reading its own pending conclusion
+    back as prior knowledge is the laundering the projection refuses, and the
+    cheapest way to guarantee an agent cannot do it is to give it no argument
+    that would.
+    """
+
+    def __init__(self, session_factory, tenant_id, *, domain_id=None, actor_id=None):
+        self.session_factory = session_factory
+        self.tenant_id = tenant_id
+        self.domain_id = domain_id
+        self.actor_id = actor_id
+
+    async def record(
+        self,
+        rationale: str,
+        hypotheses: list,
+        evidence_ids: list,
+        situation_id: str | None,
+    ) -> dict:
+        import uuid as _uuid
+
+        from contextedge.services.agent_diagnosis_service import (
+            Hypothesis,
+            record_agent_diagnosis,
+        )
+
+        def _uuid_or_none(value):
+            try:
+                return _uuid.UUID(str(value))
+            except (ValueError, TypeError, AttributeError):
+                return None
+
+        parsed = [
+            Hypothesis(
+                hypothesis=str(h.get("hypothesis", ""))[:200],
+                selected=bool(h.get("selected")),
+                rejection_reason=(
+                    str(h["rejection_reason"])[:500]
+                    if h.get("rejection_reason")
+                    else None
+                ),
+                rejection_code=(
+                    str(h["rejection_code"])[:40] if h.get("rejection_code") else None
+                ),
+                confidence=h.get("confidence"),
+            )
+            for h in (hypotheses or [])
+            if isinstance(h, dict) and h.get("hypothesis")
+        ]
+        if not parsed:
+            return {
+                "error": {
+                    "code": "no_hypotheses",
+                    "message": "Provide at least one hypothesis.",
+                }
+            }
+
+        async with self.session_factory() as db:
+            decision = await record_agent_diagnosis(
+                db,
+                self.tenant_id,
+                rationale=rationale,
+                hypotheses=parsed,
+                evidence_ids=[
+                    e for e in (_uuid_or_none(x) for x in (evidence_ids or [])) if e
+                ],
+                situation_id=_uuid_or_none(situation_id),
+                actor_id=self.actor_id,
+                domain_id=self.domain_id,
+            )
+            await db.commit()
+            return {
+                "decision_id": str(decision.id),
+                "status": decision.status,
+                "hypotheses_recorded": len(parsed),
+                "note": (
+                    "Recorded as a pending AI decision. It does not enter the "
+                    "context graph until a human reviews it or an outcome is "
+                    "recorded against it."
+                ),
+            }
+
+    async def prior(self, situation_id: str | None) -> dict:
+        import uuid as _uuid
+
+        from contextedge.services.agent_diagnosis_service import prior_hypotheses
+
+        try:
+            sid = _uuid.UUID(str(situation_id)) if situation_id else None
+        except (ValueError, TypeError):
+            sid = None
+        async with self.session_factory() as db:
+            return await prior_hypotheses(db, self.tenant_id, situation_id=sid)

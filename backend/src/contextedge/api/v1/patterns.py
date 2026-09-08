@@ -106,6 +106,104 @@ async def list_patterns(
     return response_list
 
 
+@router.get("/efficacy")
+async def pattern_efficacy(
+    db: DbSession,
+    user: AuthUser,
+    limit: int = Query(100, ge=1, le=500),
+):
+    """How well each pattern's remediation actually works (roadmap E1).
+
+    Declared BEFORE `/{pattern_id}`: FastAPI matches in definition order, so
+    a literal route added after a path parameter is shadowed by it and
+    `/efficacy` would be parsed as a pattern UUID.
+
+    `success_rate` is `None`, never 0.0, when nothing is rate-bearing — "we
+    have no outcome data" and "it never works" are different claims.
+    """
+    from contextedge.services.efficacy_service import compute_pattern_efficacy
+
+    efficacy = await compute_pattern_efficacy(db, user.tenant_id)
+    ranked = sorted(
+        efficacy.values(),
+        key=lambda e: (e.success_rate if e.success_rate is not None else 2.0, -e.rate_base),
+    )
+    by_class: dict[str, int] = {}
+    for e in efficacy.values():
+        by_class[e.confidence_class] = by_class.get(e.confidence_class, 0) + 1
+    return {
+        "confidence_classes": by_class,
+        "patterns": [e.as_dict() for e in ranked[:limit]],
+    }
+
+
+@router.get("/knowledge-drift")
+async def knowledge_drift(
+    db: DbSession,
+    user: AuthUser,
+    limit: int = Query(50, ge=1, le=200),
+):
+    """Documented resolutions the observed record contradicts.
+
+    The stale-KB query: patterns carrying documented support whose outcomes
+    fall below the drift threshold, worst first. An empty list is a real
+    answer — measured on the reference corpus, 15 patterns cleared the
+    minimum sample and none fell below the threshold.
+    """
+    from contextedge.services.efficacy_service import find_drifting_knowledge
+
+    return {"drifting": await find_drifting_knowledge(db, user.tenant_id, limit=limit)}
+
+
+class RemediationContext(BaseModel):
+    """The incident's stated situation, for ruling remediations in or out.
+
+    Every field is optional and an omitted one never excludes anything —
+    silence yields `unknown` applicability, not `excluded`, because
+    suppressing a fix that would have worked is a failure nobody sees.
+    """
+
+    deployment: str | None = None
+    version: str | None = None
+    components: list[str] = []
+    environments: list[str] = []
+
+
+@router.post("/advise")
+async def advise(
+    body: RemediationContext,
+    db: DbSession,
+    user: AuthUser,
+    limit: int = Query(20, ge=1, le=100),
+    classify_live: bool = Query(
+        False,
+        description=(
+            "Read outcomes from episodes rather than the ledger column. Use on "
+            "a deployment whose ledger backfill has not run, which otherwise "
+            "reports insufficient_evidence for every pattern."
+        ),
+    ),
+):
+    """Rank remediations by whether they are defensible (roadmap E1+E2+E3).
+
+    Each result carries its own rationale — success rate over outcome-bearing
+    episodes, epistemic support class, applicability verdict, and what is known
+    to have failed. A verdict nobody can inspect is one nobody can overrule.
+
+    Declared before `/{pattern_id}`: FastAPI matches in definition order.
+    """
+    from contextedge.services.remediation_advisory_service import advise_remediations
+
+    advice = await advise_remediations(
+        db,
+        user.tenant_id,
+        context=body.model_dump(exclude_none=True),
+        limit=limit,
+        classify_live=classify_live,
+    )
+    return {"advice": [a.as_dict() for a in advice]}
+
+
 @router.get("/{pattern_id}", response_model=PatternResponse)
 async def get_pattern(pattern_id: UUID, db: DbSession, user: AuthUser):
     result = await db.execute(
