@@ -18,6 +18,7 @@ from contextedge.models.playbook import (
     PlaybookVersion,
 )
 from contextedge.search.fusion import rrf_max, rrf_scores
+from contextedge.search.playbook_candidates import generate_playbook_candidates
 from contextedge.search.quality_filter import filter_runtime_eligible
 from contextedge.services.case_frame_service import CaseFrame, build_case_frame
 from contextedge.services.identity_service import resolve_identity_ids_for_terms

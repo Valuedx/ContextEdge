@@ -58,7 +58,7 @@ EXPECTED_UNWRITTEN: dict[tuple[str, str], tuple[str, str]] = {
             "written by the situation evaluator, not yet built",
         )
         for col in (
-            "situation_type", "severity", "situation_confidence",
+            "situation_type", "situation_confidence",
             "onset_at", "detected_at", "last_signal_at", "stabilizing_at",
             "resolved_at", "primary_entity_id", "primary_service_entity_id",
             "incident_count", "alert_count", "event_count",
@@ -82,7 +82,6 @@ EXPECTED_UNWRITTEN: dict[tuple[str, str], tuple[str, str]] = {
     **{
         ("knowledge_case.py", col): ("phase-3", reason)
         for col, reason in (
-            ("source_kind", "knowledge reconstruction not yet wired"),
             ("source_authority", "knowledge reconstruction not yet wired"),
             ("source_state", "knowledge reconstruction not yet wired"),
             ("source_published_at", "knowledge reconstruction not yet wired"),
@@ -186,7 +185,6 @@ EXPECTED_UNWRITTEN: dict[tuple[str, str], tuple[str, str]] = {
         for col in (
             "pattern_name",
             "issue_type",
-            "error_signature_id",
             "failed_step",
             "recommended_fix",
             "recommended_playbook_id",
@@ -200,10 +198,6 @@ EXPECTED_UNWRITTEN: dict[tuple[str, str], tuple[str, str]] = {
         )
         for col in ("usual_causes", "recommended_actions", "risk_notes", "last_used_at")
     },
-    ("issue_signature.py", "error_signature_id"): (
-        "dormant-feature",
-        "the issue-signature ↔ error-signature bridge is never set",
-    ),
     # --- case spine (0029): resolution_sessions' structured columns
     **{
         ("session.py", col): ("F3", "case-spine columns the policy scope will key on")
@@ -213,7 +207,6 @@ EXPECTED_UNWRITTEN: dict[tuple[str, str], tuple[str, str]] = {
             "case_type",
             "issue_type",
             "request_entity_id",
-            "severity",
             "user_entity_id",
         )
     },
@@ -266,7 +259,23 @@ EXPECTED_UNWRITTEN: dict[tuple[str, str], tuple[str, str]] = {
     },
     **{
         ("tenant.py", col): ("F5", "tenant admin CRUD remains open (E5)")
-        for col in ("retention_defaults", "sso_config", "sso_provider")
+        for col in ("retention_defaults", "sso_config")
+    },
+    # --- playbook quality system
+    ("playbook_clarification.py", "opened_at"): (
+        "db-generated",
+        "server_default now()",
+    ),
+    # The pack loader reads every other optional rule field with row.get();
+    # these two it does not, and no seeded pack supplies them. The schema
+    # therefore offers role/authority gating that no code can act on yet.
+    **{
+        ("playbook_quality.py", col): (
+            "quality-policy",
+            "provisioned on QualityPolicyRule, not read by the pack loader "
+            "and not consumed by any validator",
+        )
+        for col in ("required_evidence_authority", "required_role")
     },
 }
 
