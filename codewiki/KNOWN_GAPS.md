@@ -2,6 +2,20 @@
 
 Short list of implementation gaps and operational caveats called out in the codewiki and root documentation. Use this when the product surface looks more complete in the architecture than it does in the current UI or environment.
 
+## 2026-09-10 RLS is real on the request path, and switched off for every Celery task
+
+### Closed
+
+- **Tenant isolation is no longer application-code-only.** `docs/06_Database_Design.md` said there was "no database-level backstop"; that stopped being true when the multi-tenant line reached `main` (2026-09-09). Measured on `main`: **10 migrations carrying RLS, 10 `CREATE POLICY` statements** (`0077`–`0084`), against **0 of each** on the pre-merge line. The doc is corrected.
+- **The policy fails closed and the owner cannot escape it.** `tenant_isolation` matches no rows when `app.tenant_id` is unset, rather than all of them, and the tables carry `FORCE ROW LEVEL SECURITY` — without `FORCE` the table owner, which is what the app connects as, would bypass its own policy. The GUC is set transaction-locally and re-applied by an `after_begin` hook, so a pooled connection cannot inherit the previous request's tenant.
+
+### Opened
+
+- **Every Celery task runs with RLS bypassed.** `run_async` — the single entry point for worker tasks — calls `bind_session_tenant(db, None, bypass=True)` unconditionally (`backend/src/contextedge/workers/asyncio_runner.py:20`), and **no worker re-binds a tenant afterwards**. Measured: **25 of 27 worker modules, 43 call sites**. Ingestion, extraction, chunking, correlation, playbook generation, evaluation and cleanup therefore have exactly the isolation they had before — the hand-written predicate and nothing else. The half of the system that moves the most data between tenants is the half the backstop does not cover.
+- **The predicate is still load-bearing, in 624 places.** `.tenant_id ==` appears 624 times across `backend/src`. On the request path those are now redundant; on the worker path they are the whole control. RLS changed what happens when someone forgets on one path; it did not make forgetting safe.
+- **A migration is not a deployment.** These policies exist from `0077`; a database that has not been upgraded past `0084` has none of them, and nothing in the app checks. `SELECT relname, relrowsecurity, relforcerowsecurity FROM pg_class WHERE relrowsecurity` is the check. Whether the running instance has them is not recorded here because it was not measured.
+- **Login, seeds and sync probes bypass deliberately.** `api/v1/auth.py:61,75` must find a user before it knows their tenant; `seed.py`, `reset_db_and_seed.py`, `demo_maf_seed.py` and the sync-control probes bypass by design. These are defensible; they are listed so the bypass set is known rather than discovered.
+
 ## 2026-08-21 A tracked `.env` backup put live secrets in the repo; keys rotated
 
 ### Closed

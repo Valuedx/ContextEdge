@@ -589,12 +589,32 @@ The per-revision narrative lives in [MIGRATIONS.md](MIGRATIONS.md); operational 
 18. `0071_episode_step_uniqueness.py` - `UNIQUE (episode_id, step_order)` on `episode_steps`, added to convert silent timeline corruption into a loud `IntegrityError`.
 19. `0072_knowledge_case_and_pattern_evidence.py` - `knowledge_cases` + `knowledge_case_steps` (what a source *says*) and `pattern_evidence` (what supports a pattern, and on what footing). Carries the `ck_pattern_evidence_empirical_is_episode` CHECK, which is the split's invariant written where a future code path cannot forget it. Schema only — no data moves here.
 20. `0073_migrate_knowledge_episodes_to_cases.py` - The data half: knowledge-derived episodes become knowledge cases and the originals are tombstoned into `episodes_knowledge_migrated_backup` / `episode_steps_knowledge_migrated_backup`. A **no-op** on any database whose rows were never marked (see MIGRATIONS.md).
-21. `0074_operational_situations.py` - Current head. `operational_situations` + `situation_evidence_memberships` + `situation_entity_impacts` + `situation_change_candidates`, with `ck_change_after_onset_not_causal` and `ck_situation_merged_has_target`. Schema only; nothing populates them yet.
+21. `0074_operational_situations.py` - `operational_situations` + `situation_evidence_memberships` + `situation_entity_impacts` + `situation_change_candidates`, with `ck_change_after_onset_not_causal` and `ck_situation_merged_has_target`. Schema only; nothing populates them yet.
+
+**`0075`–`0096` are not itemised above.** They arrived together when the
+playbook-quality and multi-tenant lines merged into `main` (2026-09-09) and are
+summarised by theme rather than one by one: `0075`–`0076` username login and
+role nav access; `0077`–`0084` tenant isolation, RLS and composite tenant FKs
+(see §7); `0085`–`0091` playbook risk tier, lexical search, negative knowledge,
+runtime match records and ranking calibration; `0092` copilot audit; `0093`
+playbook version editing; `0094`–`0096` the Playbook Quality System and its
+clarification loop. Current head is `0096_clarification_regeneration`.
 
 ## 7. Multi-Tenancy
 
-- **Isolation:** Every operational table carries an indexed `tenant_id` via `TenantScopedMixin` (`backend/src/contextedge/models/base.py:13-27`).
-- **Query Scoping:** Tenant isolation is enforced **in application code**, not by row-level security. Each request resolves a `CurrentUser` carrying `tenant_id` (`backend/src/contextedge/deps.py:72-114`) and every query filters on it. There is no database-level backstop, so a query written without the filter would leak — treat the `tenant_id` predicate as mandatory in review, not as a convention.
+- **Isolation:** Every operational table carries an indexed `tenant_id`, via `TenantScopedMixin` for tables that own their tenant scope (`backend/src/contextedge/models/base.py:33`) or `TenantOwnedMixin` for child tables that inherit it from a parent row (`:22`). The child tables were backfilled and given the column by `0078`, whose `CHILD_TABLES` loop adds `tenant_id` to 11 tables at once — worth knowing, because a static scan for `add_column` will not find them.
+- **Query Scoping — two layers, and only one of them covers everything.** Postgres row-level security is the backstop on the request path; the `tenant_id` predicate written into each query is defence in depth behind it. Neither alone is the whole story, so read both bullets below before relying on either.
+- **Layer 1 — RLS (request path only).** Migrations `0077`–`0084` put every tenant-scoped table behind `ENABLE` **and** `FORCE ROW LEVEL SECURITY` with a `tenant_isolation` policy (`backend/alembic/versions/0078_tenant_owned_children_and_rls.py:258-280`). The policy fails closed — an unset `app.tenant_id` matches **no** rows rather than all of them:
+
+  ```sql
+  COALESCE(current_setting('app.tenant_id', true), '') <> ''
+  AND tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid
+  ```
+
+  `FORCE` matters: without it the table owner (which is what the app connects as) would bypass its own policy. Each request binds the GUC transaction-locally in `get_current_user` (`backend/src/contextedge/deps.py:97-127`, via `backend/src/contextedge/tenant_rls.py`), and an `after_begin` hook re-applies it on every new transaction so a pooled connection cannot inherit the previous request's tenant.
+- **Layer 2 — the in-query predicate (everywhere).** `.tenant_id ==` appears **624 times** across `backend/src`. On the request path these are now redundant with RLS; on the worker path they are the *only* isolation. Keep treating the predicate as mandatory in review — RLS changed what happens when someone forgets, it did not make forgetting safe.
+- **The gap you must not gloss: Celery bypasses RLS entirely.** `run_async` — the entry point for every Celery task — binds `bypass=True` unconditionally (`backend/src/contextedge/workers/asyncio_runner.py:20`), and no worker narrows back to a tenant afterwards. That covers **25 of 27 worker modules across 43 call sites**: ingestion, extraction, chunking, correlation, playbook generation, evaluation and cleanup all run with the policy switched off. The half of the system that moves the most data cross-tenant is the half RLS does not cover, and there it is still "a place a developer can forget". Other deliberate bypasses are login (which must find a user before it knows their tenant, `api/v1/auth.py:61,75`), the seed/reset scripts, and the sync-control probes.
+- **RLS in a migration is not RLS on your database.** These policies exist from `0077` onward; a deployment that has not run `alembic upgrade head` past `0084` has none of them. Verify with `SELECT relname, relrowsecurity, relforcerowsecurity FROM pg_class WHERE relrowsecurity` before assuming the backstop is live.
 - **Domain Scoping:** `domain_id` partitions further within a tenant. Service-account principals may additionally carry `allowed_domain_ids`; routes that care consult it.
 - **Known scoping caveats — do not gloss these:**
   - `role_bindings.scope_type` / `scope_id` are stored but **not enforced**. Login selects role *names* only, and `has_role` is a pure name check, so a "domain admin of one domain" holds that role tenant-wide on every `require_role` route (`codewiki/KNOWN_GAPS.md:187-191`). Single-domain tenants are unaffected; multi-domain tenants must treat role grants as tenant-wide.
