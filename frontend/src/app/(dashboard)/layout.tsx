@@ -56,7 +56,6 @@ export default function DashboardLayout({
           )}
         >
           <BrandLockup
-            surface="dark"
             variant={sidebarCollapsed ? "mark" : "full"}
           />
         </div>

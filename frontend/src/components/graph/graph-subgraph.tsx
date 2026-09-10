@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import { createPortal } from "react-dom";
 import { useQuery } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
@@ -478,6 +479,17 @@ export function GraphSubgraph({
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
   const [fullscreenOpen, setFullscreenOpen] = useState(false);
 
+  useEffect(() => {
+    if (!fullscreenOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setFullscreenOpen(false);
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [fullscreenOpen]);
+
   const { data, isLoading, error, isFetching } = useQuery<GraphSubgraphResponse>({
     queryKey: [
       "graph-subgraph",
@@ -651,14 +663,14 @@ export function GraphSubgraph({
         </div>
       )}
 
-      {fullscreenOpen && data && data.nodes.length > 0 && (
+      {fullscreenOpen && data && data.nodes.length > 0 && typeof document !== "undefined" && createPortal(
         <div
-          className="fixed inset-0 z-50 bg-background"
+          className="fixed inset-0 z-50 flex flex-col bg-background"
           role="dialog"
           aria-modal="true"
           aria-label="Subgraph fullscreen"
         >
-          <div className="flex h-12 items-center justify-between border-b bg-card px-4 shadow-sm">
+          <div className="flex h-12 shrink-0 items-center justify-between border-b bg-card px-4 shadow-sm">
             <div className="min-w-0">
               <p className="truncate text-sm font-semibold text-foreground">Graph explorer</p>
               <p className="text-xs text-muted-foreground">
@@ -675,7 +687,7 @@ export function GraphSubgraph({
               <X className="h-5 w-5" />
             </button>
           </div>
-          <div className="h-[calc(100vh-3rem)]">
+          <div className="relative flex-1 w-full overflow-hidden">
             <ReactFlowProvider>
               <FlowCanvas
                 nodes={nodes}
@@ -689,7 +701,8 @@ export function GraphSubgraph({
               />
             </ReactFlowProvider>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   );

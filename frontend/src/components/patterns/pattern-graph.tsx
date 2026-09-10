@@ -16,6 +16,7 @@ import {
   X,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   ReactFlow,
   ReactFlowProvider,
@@ -473,6 +474,17 @@ export function PatternGraph({ patternId }: { patternId: string }) {
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
   const [fullscreenOpen, setFullscreenOpen] = useState(false);
 
+  useEffect(() => {
+    if (!fullscreenOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setFullscreenOpen(false);
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [fullscreenOpen]);
+
   const { data, isLoading, error } = useQuery<PatternSubgraph>({
     queryKey: ["pattern-graph", patternId],
     queryFn: () => api.get<PatternSubgraph>(`/patterns/${patternId}/graph`),
@@ -561,14 +573,14 @@ export function PatternGraph({ patternId }: { patternId: string }) {
         </ReactFlowProvider>
       </div>
 
-      {fullscreenOpen && (
+      {fullscreenOpen && typeof document !== "undefined" && createPortal(
         <div
-          className="fixed inset-0 z-50 bg-background"
+          className="fixed inset-0 z-50 flex flex-col bg-background"
           role="dialog"
           aria-modal="true"
           aria-label="Pattern graph fullscreen"
         >
-          <div className="flex h-12 items-center justify-between border-b bg-card px-4 shadow-sm">
+          <div className="flex h-12 shrink-0 items-center justify-between border-b bg-card px-4 shadow-sm">
             <div className="min-w-0">
               <p className="truncate text-sm font-semibold text-foreground">
                 Pattern graph
@@ -587,7 +599,7 @@ export function PatternGraph({ patternId }: { patternId: string }) {
               <X className="h-5 w-5" />
             </button>
           </div>
-          <div className="h-[calc(100vh-3rem)]">
+          <div className="relative flex-1 w-full overflow-hidden">
             <ReactFlowProvider>
               <FlowCanvas
                 nodes={nodes}
@@ -601,7 +613,8 @@ export function PatternGraph({ patternId }: { patternId: string }) {
               />
             </ReactFlowProvider>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
     </>
   );
