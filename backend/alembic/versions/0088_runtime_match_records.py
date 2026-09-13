@@ -57,6 +57,11 @@ def upgrade() -> None:
     op.execute(
         sa.text(
             """
+            -- Pre-drop so this is idempotent. PostgreSQL has no
+            -- CREATE POLICY IF NOT EXISTS, and on a create_all-built
+            -- database 0078's loop has already put this policy on the
+            -- table. Matches the idiom in 0078/0079/0083/0084.
+            DROP POLICY IF EXISTS tenant_isolation ON runtime_match_records;
             CREATE POLICY tenant_isolation ON runtime_match_records
             USING (
               current_setting('app.bypass_rls', true) = 'on'
