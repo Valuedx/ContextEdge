@@ -490,3 +490,88 @@ async def test_the_pool_hooks_clear_a_session_level_scope(pg, world):
         )
     finally:
         await engine.dispose()
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_scope_survives_a_released_connection(pg, world):
+    """`released` must not silently widen or drop scope.
+
+    The whole point of committing before an external call is to stop holding
+    a connection across it. That only works if the scope comes back on the
+    next transaction — otherwise the code after the call reads an empty
+    database (fail-closed, so it looks like missing data, not a leak) or,
+    worse, a wider one.
+
+    `bind_session_scope` records the keys on `session.info` and the
+    `Session.after_begin` hook re-applies them. This drives a real commit
+    between two reads to prove that hook fires.
+    """
+    from contextedge.db.external_call import released
+    from contextedge.tenant_rls import bind_session_scope
+
+    engine = create_async_engine(_url_as(pg, CLIENT_ROLE))
+    try:
+        async with AsyncSession(engine) as db:
+            await bind_session_scope(db, msp_id=world["msp_a"], tenant_id=world["c_a1"])
+            before = (
+                await db.execute(
+                    sa.text("SELECT count(*) FROM audit_logs WHERE action LIKE 'probe-%'")
+                )
+            ).scalar_one()
+            assert before == 1, "sanity: the client sees its own row before the gap"
+
+            async with released(db, reason="test.external_call"):
+                pass  # stands in for the LLM call
+
+            after = (
+                await db.execute(
+                    sa.text("SELECT count(*) FROM audit_logs WHERE action LIKE 'probe-%'")
+                )
+            ).scalar_one()
+        assert after == 1, (
+            "scope did not survive the released connection: after_begin "
+            f"did not re-bind (saw {after} rows, expected 1)"
+        )
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_the_budget_advisory_lock_serialises_across_connections(pg, world):
+    """Two separate connections must not hold the tenant budget lock at once.
+
+    This is the property the asyncio.Lock never had. Held on connection A,
+    connection B's attempt must block — asserted with a short timeout, since
+    "it blocked" cannot be observed directly.
+    """
+    import asyncio as _asyncio
+
+    from contextedge.services.tenant_budget_service import _advisory_key
+
+    key = _advisory_key(world["c_a1"])
+    ea = create_async_engine(_url_as(pg, MSP_ROLE))
+    eb = create_async_engine(_url_as(pg, MSP_ROLE))
+    try:
+        async with AsyncSession(ea) as a:
+            await a.execute(sa.text("SELECT pg_advisory_xact_lock(:k)"), {"k": key})
+
+            async def contend():
+                async with AsyncSession(eb) as b:
+                    await b.execute(sa.text("SELECT pg_advisory_xact_lock(:k)"), {"k": key})
+
+            with pytest.raises(_asyncio.TimeoutError):
+                await _asyncio.wait_for(contend(), timeout=2.0)
+
+            await a.rollback()  # releases the xact lock
+
+        # Once released, the same key is immediately takeable.
+        async with AsyncSession(eb) as b:
+            await _asyncio.wait_for(
+                b.execute(sa.text("SELECT pg_advisory_xact_lock(:k)"), {"k": key}),
+                timeout=5.0,
+            )
+            await b.rollback()
+    finally:
+        await ea.dispose()
+        await eb.dispose()
