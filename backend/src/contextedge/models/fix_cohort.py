@@ -9,12 +9,12 @@ from sqlalchemy import DateTime, ForeignKey, Integer, String, UniqueConstraint, 
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
-from contextedge.models.base import Base
+from contextedge.models.base import Base, MspScopedMixin
 
 COHORT_TYPES = ("model", "class", "family")
 
 
-class FixCohortStat(Base):
+class FixCohortStat(Base, MspScopedMixin):
     __tablename__ = "fix_cohort_stats"
     __table_args__ = (
         UniqueConstraint(

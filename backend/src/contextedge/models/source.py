@@ -5,7 +5,7 @@ from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from contextedge.models.base import Base, TenantOwnedMixin, TenantScopedMixin
+from contextedge.models.base import Base, MspScopedMixin, TenantOwnedMixin, TenantScopedMixin
 
 
 class Source(Base, TenantScopedMixin):
@@ -125,7 +125,7 @@ class SyncCheckpoint(Base, TenantOwnedMixin):
     source_object: Mapped["SourceObject"] = relationship(back_populates="checkpoints")
 
 
-class SyncRun(Base):
+class SyncRun(Base, MspScopedMixin):
     __tablename__ = "sync_runs"
 
     id: Mapped[uuid.UUID] = mapped_column(

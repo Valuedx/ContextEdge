@@ -17,7 +17,7 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from contextedge.models.base import Base, TenantOwnedMixin, TenantScopedMixin
+from contextedge.models.base import Base, MspScopedMixin, TenantOwnedMixin, TenantScopedMixin
 
 
 class Pattern(Base, TenantScopedMixin):
@@ -273,7 +273,7 @@ class ContradictionScanState(Base, TenantScopedMixin):
     skip_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
-class GraphEdge(Base):
+class GraphEdge(Base, MspScopedMixin):
     """Adjacency table for the context/pattern graph."""
     __tablename__ = "graph_edges"
     __table_args__ = (

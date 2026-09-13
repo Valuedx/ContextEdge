@@ -32,7 +32,7 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
-from contextedge.models.base import Base, TenantScopedMixin
+from contextedge.models.base import Base, MspScopedMixin, TenantScopedMixin
 
 RISK_LEVELS = ("low", "medium", "high", "restricted")
 POLICY_RESULTS = (
@@ -130,7 +130,7 @@ class ActionPolicy(Base, TenantScopedMixin):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
 
-class DecisionActionPolicy(Base):
+class DecisionActionPolicy(Base, MspScopedMixin):
     __tablename__ = "decision_action_policies"
     __table_args__ = (
         UniqueConstraint(

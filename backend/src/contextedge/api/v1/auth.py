@@ -11,7 +11,7 @@ from contextedge.deps import DbSession
 from contextedge.models.tenant import RoleBinding, Tenant, User
 from contextedge.schemas.tenant import LoginRequest, TokenResponse
 from contextedge.services.copilot_audit_service import record_login_event
-from contextedge.tenant_rls import bind_session_tenant
+from contextedge.tenant_rls import bind_session_scope
 
 router = APIRouter()
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -58,7 +58,9 @@ def _login_meta(request: Request) -> dict[str, str | None]:
 async def _persist_login_event(**kwargs) -> None:
     try:
         async with async_session_factory() as session:
-            await bind_session_tenant(session, kwargs.get("tenant_id"), bypass=True)
+            # Platform scope: login resolves a user before it knows which
+            # client they belong to, so it cannot be client-scoped.
+            await bind_session_scope(session, msp_id=None, tenant_id=None)
             await record_login_event(session, **kwargs)
             await session.commit()
     except Exception:
@@ -72,7 +74,8 @@ async def login(body: LoginRequest, db: DbSession, request: Request):
     import anyio
 
     meta = _login_meta(request)
-    await bind_session_tenant(db, None, bypass=True)
+    # Platform scope, same reason as above: the tenant is the answer.
+    await bind_session_scope(db, msp_id=None, tenant_id=None)
     stmt = select(User).where(User.username == body.username, User.status == "active")
     if body.tenant_slug:
         stmt = stmt.join(Tenant, Tenant.id == User.tenant_id).where(

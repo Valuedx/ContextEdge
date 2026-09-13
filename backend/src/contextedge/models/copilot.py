@@ -14,10 +14,10 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
-from contextedge.models.base import Base
+from contextedge.models.base import Base, MspScopedMixin
 
 
-class CopilotLoginEvent(Base):
+class CopilotLoginEvent(Base, MspScopedMixin):
     __tablename__ = "copilot_login_events"
     __table_args__ = (
         UniqueConstraint("tenant_id", "id", name="uq_copilot_login_events_tenant_id_id"),
@@ -50,7 +50,7 @@ class CopilotLoginEvent(Base):
     )
 
 
-class CopilotUsageEvent(Base):
+class CopilotUsageEvent(Base, MspScopedMixin):
     __tablename__ = "copilot_usage_events"
     __table_args__ = (
         UniqueConstraint("tenant_id", "id", name="uq_copilot_usage_events_tenant_id_id"),
@@ -95,7 +95,7 @@ class CopilotUsageEvent(Base):
     )
 
 
-class CopilotConversation(Base):
+class CopilotConversation(Base, MspScopedMixin):
     __tablename__ = "copilot_conversations"
     __table_args__ = (
         UniqueConstraint("tenant_id", "id", name="uq_copilot_conversations_tenant_id_id"),
@@ -133,7 +133,7 @@ class CopilotConversation(Base):
     )
 
 
-class CopilotMessage(Base):
+class CopilotMessage(Base, MspScopedMixin):
     __tablename__ = "copilot_messages"
     __table_args__ = (
         UniqueConstraint("tenant_id", "id", name="uq_copilot_messages_tenant_id_id"),

@@ -407,9 +407,10 @@ async def _read_control(run_id: uuid.UUID) -> str | None:
 
     try:
         async with async_session_factory() as probe:
-            from contextedge.tenant_rls import bind_session_tenant
+            from contextedge.tenant_rls import bind_session_scope
 
-            await bind_session_tenant(probe, None, bypass=True)
+            # Platform scope: a liveness probe on a separate connection.
+            await bind_session_scope(probe, msp_id=None, tenant_id=None)
             return (
                 await probe.execute(
                     _select(_SyncRun.control).where(_SyncRun.id == run_id)

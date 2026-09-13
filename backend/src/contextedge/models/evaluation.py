@@ -5,10 +5,10 @@ from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text, Uniqu
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
-from contextedge.models.base import Base, TimestampMixin
+from contextedge.models.base import Base, MspScopedMixin, TimestampMixin
 
 
-class EvaluationDataset(Base, TimestampMixin):
+class EvaluationDataset(Base, TimestampMixin, MspScopedMixin):
     """Evaluation gold datasets; timestamps come from TimestampMixin."""
 
     __tablename__ = "evaluation_datasets"
@@ -22,7 +22,7 @@ class EvaluationDataset(Base, TimestampMixin):
     cases: Mapped[list] = mapped_column(JSONB, server_default="[]", nullable=False)
 
 
-class EvaluationRun(Base, TimestampMixin):
+class EvaluationRun(Base, TimestampMixin, MspScopedMixin):
     __tablename__ = "evaluation_runs"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -39,7 +39,7 @@ class EvaluationRun(Base, TimestampMixin):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
-class RetrievalFeedback(Base, TimestampMixin):
+class RetrievalFeedback(Base, TimestampMixin, MspScopedMixin):
     """Runtime retrieval feedback; `created_at` is the submission time."""
 
     __tablename__ = "retrieval_feedback"
@@ -58,7 +58,7 @@ class RetrievalFeedback(Base, TimestampMixin):
     submitted_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
 
 
-class RuntimeMatchRecord(Base, TimestampMixin):
+class RuntimeMatchRecord(Base, TimestampMixin, MspScopedMixin):
     """Durable runtime match — Redis stays the hot cache for /explain."""
 
     __tablename__ = "runtime_match_records"
@@ -78,7 +78,7 @@ class RuntimeMatchRecord(Base, TimestampMixin):
     calibrated_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
 
 
-class RankingCalibrationConfig(Base, TimestampMixin):
+class RankingCalibrationConfig(Base, TimestampMixin, MspScopedMixin):
     """Versioned RRF weights + isotonic map. Ranker reads; it does not write."""
 
     __tablename__ = "ranking_calibration_configs"

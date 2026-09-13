@@ -29,7 +29,7 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from contextedge.models.base import Base, TenantOwnedMixin, TenantScopedMixin
+from contextedge.models.base import Base, MspScopedMixin, TenantOwnedMixin, TenantScopedMixin
 
 CLAIM_TYPES = (
     "probable_root_cause",
@@ -180,7 +180,7 @@ class DecisionEvidence(Base, TenantOwnedMixin):
     )
 
 
-class DecisionClaim(Base):
+class DecisionClaim(Base, MspScopedMixin):
     __tablename__ = "decision_claims"
     __table_args__ = (
         UniqueConstraint(

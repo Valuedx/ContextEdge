@@ -16,7 +16,7 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
-from contextedge.models.base import Base, TenantScopedMixin
+from contextedge.models.base import Base, MspScopedMixin, TenantScopedMixin
 
 POLICY_TYPES: frozenset[str] = frozenset(
     {"retention", "classification", "access", "approval"}
@@ -67,7 +67,7 @@ class TenantPolicy(Base, TenantScopedMixin):
     }
 
 
-class PolicyCheck(Base):
+class PolicyCheck(Base, MspScopedMixin):
     """One evaluation of one policy version against one artifact (0056).
 
     Append-only by convention. Keyed to the policy VERSION rather than to the

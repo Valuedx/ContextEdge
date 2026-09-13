@@ -5,7 +5,7 @@ from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, fun
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from contextedge.models.base import Base, TenantScopedMixin
+from contextedge.models.base import Base, MspScopedMixin, TenantScopedMixin
 
 SAFETY_CLASSES = ("read_only", "low_side_effect", "high_side_effect", "destructive")
 EXECUTION_STATUSES = ("pending", "running", "awaiting_approval", "completed", "failed", "aborted")
@@ -83,7 +83,7 @@ class ExecutionRun(Base, TenantScopedMixin):
     )
 
 
-class ExecutionStepRun(Base):
+class ExecutionStepRun(Base, MspScopedMixin):
     __tablename__ = "execution_step_runs"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -142,7 +142,7 @@ class ExecutionStepRun(Base):
     approval_requests: Mapped[list["ApprovalRequest"]] = relationship(back_populates="step_run")
 
 
-class ToolInvocation(Base):
+class ToolInvocation(Base, MspScopedMixin):
     __tablename__ = "tool_invocations"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -170,7 +170,7 @@ class ToolInvocation(Base):
     step_run: Mapped["ExecutionStepRun"] = relationship(back_populates="tool_invocations")
 
 
-class ApprovalRequest(Base):
+class ApprovalRequest(Base, MspScopedMixin):
     __tablename__ = "approval_requests"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)

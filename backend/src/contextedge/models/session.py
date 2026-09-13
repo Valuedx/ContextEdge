@@ -5,7 +5,7 @@ from sqlalchemy import DateTime, Float, ForeignKey, Index, String, Text, func, t
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from contextedge.models.base import Base, TenantScopedMixin
+from contextedge.models.base import Base, MspScopedMixin, TenantScopedMixin
 
 
 class ResolutionSession(Base, TenantScopedMixin):
@@ -98,7 +98,7 @@ class ResolutionSession(Base, TenantScopedMixin):
     )
 
 
-class DecisionTraceEvent(Base):
+class DecisionTraceEvent(Base, MspScopedMixin):
     __tablename__ = "decision_trace_events"
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -145,7 +145,7 @@ class DecisionTraceEvent(Base):
     session: Mapped["ResolutionSession"] = relationship(back_populates="trace_events")
 
 
-class CaseLink(Base):
+class CaseLink(Base, MspScopedMixin):
     __tablename__ = "case_links"
 
     id: Mapped[uuid.UUID] = mapped_column(

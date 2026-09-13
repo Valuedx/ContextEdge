@@ -7,10 +7,10 @@ from sqlalchemy import Boolean, DateTime, ForeignKey, String, Text, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
-from contextedge.models.base import Base, TenantScopedMixin
+from contextedge.models.base import Base, MspScopedMixin, TenantScopedMixin
 
 
-class OperationalEvent(Base):
+class OperationalEvent(Base, MspScopedMixin):
     __tablename__ = "operational_events"
 
     id: Mapped[uuid.UUID] = mapped_column(

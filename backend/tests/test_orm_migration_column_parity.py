@@ -70,6 +70,15 @@ _ADDED_DYNAMICALLY: dict[tuple[str, str], str] = {
     ("claim_evidence", "tenant_id"): "0078 (loop over CHILD_TABLES)",
     ("decision_evidence", "tenant_id"): "0078 (same loop)",
     ("knowledge_case_steps", "tenant_id"): "0078 (same loop)",
+    # 0097 adds msp_id to every table carrying tenant_id, in a loop over the
+    # information_schema catalog. Derived rather than listed: a literal list of
+    # ~100 entries would rot on the next model added, and the property being
+    # allowed is "0097 covers exactly the tenant-scoped set".
+    **{
+        (table, "msp_id"): "0097 (loop over every tenant-scoped table)"
+        for table, meta in Base.metadata.tables.items()
+        if "msp_id" in meta.c
+    },
 }
 
 

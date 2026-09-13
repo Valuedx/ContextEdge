@@ -284,9 +284,10 @@ def _demo_id(kind: str, key: str) -> uuid.UUID:
 async def seed_maf_demo() -> None:
     require_destructive_reset_allowed("demo_maf_seed")
     async with async_session_factory() as db:
-        from contextedge.tenant_rls import bind_session_tenant
+        from contextedge.tenant_rls import bind_session_scope
 
-        await bind_session_tenant(db, None, bypass=True)
+        # Platform scope: a seed creates the tenants it would scope to.
+        await bind_session_scope(db, msp_id=None, tenant_id=None)
         print("1. Truncating old unlinked data tables...")
         tables_to_wipe = [
             "playbook_evidence_links",

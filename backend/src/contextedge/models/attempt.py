@@ -32,7 +32,7 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
-from contextedge.models.base import Base
+from contextedge.models.base import Base, MspScopedMixin
 
 # The technical result of one attempt — never the business outcome. A
 # SUCCEEDED attempt can still be a failed remediation, which is what the
@@ -50,7 +50,7 @@ ATTEMPT_STATUSES = (
 TERMINAL_ATTEMPT_STATUSES = ("succeeded", "failed", "timeout", "cancelled", "deduplicated")
 
 
-class ExecutionAttempt(Base):
+class ExecutionAttempt(Base, MspScopedMixin):
     __tablename__ = "execution_attempts"
     __table_args__ = (
         UniqueConstraint(

@@ -10,7 +10,10 @@ from contextedge.models.base import Base
 for _mod in pkgutil.iter_modules(models_pkg.__path__):
     __import__(f"contextedge.models.{_mod.name}")
 
-GLOBAL_TABLES = frozenset({"tenants", "role_nav_access", "entity_classes"})
+# "msps" joins "tenants" here: it is the level ABOVE a tenant, so a
+# tenant_id on it would be backwards. Everything below a tenant still
+# needs one, which is what this test protects.
+GLOBAL_TABLES = frozenset({"msps", "tenants", "role_nav_access", "entity_classes"})
 
 
 def test_every_domain_table_has_non_null_tenant_id_fk():

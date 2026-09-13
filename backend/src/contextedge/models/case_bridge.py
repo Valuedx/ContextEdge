@@ -15,7 +15,7 @@ from sqlalchemy import Boolean, DateTime, Float, ForeignKey, String, UniqueConst
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
-from contextedge.models.base import Base
+from contextedge.models.base import Base, MspScopedMixin
 
 MEMBERSHIP_RELATIONSHIPS = (
     "primary_case",       # the ticket evidence itself
@@ -29,7 +29,7 @@ MEMBERSHIP_RELATIONSHIPS = (
 )
 
 
-class CaseIdentifier(Base):
+class CaseIdentifier(Base, MspScopedMixin):
     __tablename__ = "case_identifiers"
     __table_args__ = (
         UniqueConstraint(
@@ -57,7 +57,7 @@ class CaseIdentifier(Base):
     )
 
 
-class EvidenceCaseMembership(Base):
+class EvidenceCaseMembership(Base, MspScopedMixin):
     __tablename__ = "evidence_case_memberships"
     __table_args__ = (
         UniqueConstraint(
@@ -89,7 +89,7 @@ class EvidenceCaseMembership(Base):
     )
 
 
-class PendingIdentifierMention(Base):
+class PendingIdentifierMention(Base, MspScopedMixin):
     __tablename__ = "pending_identifier_mentions"
     __table_args__ = (
         UniqueConstraint(

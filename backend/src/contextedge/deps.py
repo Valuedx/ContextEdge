@@ -11,7 +11,7 @@ from contextedge.config import settings
 from contextedge.database import get_db
 from contextedge.models.tenant import RoleBinding, Tenant, User
 from contextedge.security_tokens import service_token_context
-from contextedge.tenant_rls import bind_session_tenant
+from contextedge.tenant_rls import bind_session_scope, resolve_msp_for_tenant
 
 security = HTTPBearer(auto_error=False)
 
@@ -94,6 +94,19 @@ def _service_principal(token: str) -> CurrentUser | None:
     )
 
 
+async def _scope_request(db, tenant_id):
+    """Bind both keys for this request.
+
+    The client policy requires msp_id AND tenant_id, so binding the tenant
+    alone admits nothing — a caller that forgets the MSP sees an empty
+    database rather than someone else's. The MSP is resolved from the tenant
+    row rather than trusted from the token: a JWT claim is attacker-influenced
+    input and this is the value isolation rests on.
+    """
+    msp_id = await resolve_msp_for_tenant(db, tenant_id)
+    await bind_session_scope(db, msp_id=msp_id, tenant_id=tenant_id)
+
+
 async def get_current_user(
     credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(security)],
     db: Annotated[AsyncSession, Depends(get_db)],
@@ -103,7 +116,7 @@ async def get_current_user(
     if x_service_token:
         principal = _service_principal(x_service_token.strip())
         if principal:
-            await bind_session_tenant(db, principal.tenant_id, bypass=False)
+            await _scope_request(db, principal.tenant_id)
             return principal
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -124,7 +137,7 @@ async def get_current_user(
         )
         user_id = UUID(payload["sub"])
         token_tenant_id = UUID(payload["tenant_id"])
-        await bind_session_tenant(db, token_tenant_id, bypass=False)
+        await _scope_request(db, token_tenant_id)
         account = (
             await db.execute(select(User).where(User.id == user_id))
         ).scalar_one_or_none()
@@ -175,7 +188,7 @@ async def get_current_user(
             if tenant is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
             principal.tenant_id = tenant.id
-            await bind_session_tenant(db, principal.tenant_id, bypass=False)
+            await _scope_request(db, principal.tenant_id)
         return principal
     except HTTPException:
         raise
