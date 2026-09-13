@@ -38,12 +38,16 @@ from __future__ import annotations
 import functools
 import pathlib
 import re
+import sys
 
 _SRC = pathlib.Path(__file__).resolve().parents[1] / "src" / "contextedge"
 _MODELS = _SRC / "models"
 
 # (model file, column) -> (owner, reason). Owner is an Epic F item where the
 # column is scheduled, or a category when no work is pending.
+
+
+
 EXPECTED_UNWRITTEN: dict[tuple[str, str], tuple[str, str]] = {
     # --- situations: schema landed in 0074 ahead of its writers, deliberately,
     # so the shape could be reviewed against a real schema. H3
@@ -266,6 +270,17 @@ EXPECTED_UNWRITTEN: dict[tuple[str, str], tuple[str, str]] = {
         "redaction runs but does not stamp the per-row marker",
     ),
     # --- db-generated / default-only / migration-seeded
+    # The MSP level (0097). `data_residency` is provisioned for the EU /
+    # enterprise deployment D6 defers, so nothing sets it yet; `msp` is the
+    # relationship, which has no writer by construction.
+    ("tenant.py", "data_residency"): (
+        "msp-residency",
+        "provisioned for regional deployment (plan D6); no writer until then",
+    ),
+    ("tenant.py", "msp"): (
+        "relationship",
+        "ORM relationship, not a column — populated via msp_id",
+    ),
     ("events.py", "recorded_at"): ("db-generated", "server_default now()"),
     ("evidence.py", "stored_at"): ("db-generated", "server_default now()"),
     **{

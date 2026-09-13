@@ -19,7 +19,7 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from contextedge.models.base import Base, TenantOwnedMixin, TenantScopedMixin
+from contextedge.models.base import Base, MspScopedMixin, TenantOwnedMixin, TenantScopedMixin
 
 if TYPE_CHECKING:
     from contextedge.models.evidence import EvidenceItem
@@ -88,7 +88,7 @@ class CanonicalIdentity(Base, TenantScopedMixin):
     evidence_links: Mapped[list["EvidenceIdentityLink"]] = relationship(back_populates="identity")
 
 
-class IdentityAlias(Base):
+class IdentityAlias(Base, MspScopedMixin):
     __tablename__ = "identity_aliases"
     # Mirrors migration 0033 (strong-alias tenant uniqueness + typed lookup
     # index) so metadata-built schemas enforce the same constraints the
@@ -151,7 +151,7 @@ class IdentityAlias(Base):
     canonical_identity: Mapped["CanonicalIdentity"] = relationship(back_populates="aliases")
 
 
-class EvidenceIdentityLink(Base):
+class EvidenceIdentityLink(Base, MspScopedMixin):
     __tablename__ = "evidence_identity_links"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -291,7 +291,7 @@ class EpisodeStep(Base, TenantOwnedMixin):
     episode: Mapped["Episode"] = relationship(back_populates="steps")
 
 
-class EpisodeEvidenceLink(Base):
+class EpisodeEvidenceLink(Base, MspScopedMixin):
     """Normalized episode↔evidence membership (migration 0037).
 
     The JSONB ``Episode.evidence_ids`` list remains for cheap reads; this

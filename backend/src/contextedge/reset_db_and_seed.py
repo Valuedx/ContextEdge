@@ -221,9 +221,10 @@ def _demo_id(kind: str, key: str) -> uuid.UUID:
 async def reset_and_seed():
     require_destructive_reset_allowed("reset_db_and_seed")
     async with async_session_factory() as db:
-        from contextedge.tenant_rls import bind_session_tenant
+        from contextedge.tenant_rls import bind_session_scope
 
-        await bind_session_tenant(db, None, bypass=True)
+        # Platform scope: a reset operates across every tenant by design.
+        await bind_session_scope(db, msp_id=None, tenant_id=None)
         print("1. Wiping all old pattern, playbook, episode, and evidence data...")
         tables_to_wipe = [
             "playbook_evidence_links",

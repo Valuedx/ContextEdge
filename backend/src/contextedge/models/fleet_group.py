@@ -9,10 +9,10 @@ from sqlalchemy import DateTime, ForeignKey, Integer, String, UniqueConstraint, 
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
-from contextedge.models.base import Base
+from contextedge.models.base import Base, MspScopedMixin
 
 
-class FleetGroupSuggestion(Base):
+class FleetGroupSuggestion(Base, MspScopedMixin):
     __tablename__ = "fleet_group_suggestions"
     __table_args__ = (
         UniqueConstraint("tenant_id", "change_ref", name="uq_fleet_group_change"),

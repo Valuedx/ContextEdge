@@ -5,10 +5,10 @@ from sqlalchemy import DateTime, ForeignKey, String, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
-from contextedge.models.base import Base
+from contextedge.models.base import Base, MspScopedMixin
 
 
-class AuditLog(Base):
+class AuditLog(Base, MspScopedMixin):
     __tablename__ = "audit_logs"
 
     id: Mapped[uuid.UUID] = mapped_column(

@@ -6,7 +6,7 @@ from sqlalchemy import Boolean, DateTime, Float, ForeignKey, String, Text, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from contextedge.models.base import Base, TenantScopedMixin
+from contextedge.models.base import Base, MspScopedMixin, TenantScopedMixin
 
 DECISION_TYPES = (
     "classify_issue",
@@ -172,7 +172,7 @@ class Decision(Base, TenantScopedMixin):
     )
 
 
-class DecisionOption(Base):
+class DecisionOption(Base, MspScopedMixin):
     __tablename__ = "decision_options"
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -205,7 +205,7 @@ class DecisionOption(Base):
     decision: Mapped["Decision"] = relationship(back_populates="options")
 
 
-class DecisionOutcome(Base):
+class DecisionOutcome(Base, MspScopedMixin):
     __tablename__ = "decision_outcomes"
 
     id: Mapped[uuid.UUID] = mapped_column(

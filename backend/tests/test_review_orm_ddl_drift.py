@@ -417,7 +417,12 @@ _EXPECTED_MARKERS: set[tuple[str, str]] = {('action_policy.py', 'ForeignKey("act
  ('playbook_quality.py',
   'UniqueConstraint("tenant_id", "version", name="uq_pov_tenant_version"),'),
  ('playbook_quality.py',
-  'UniqueConstraint("tenant_id", "version", name="uq_qpp_tenant_version"),')}
+  'UniqueConstraint("tenant_id", "version", name="uq_qpp_tenant_version"),'),
+ # 0097 puts msp_id on every tenant-scoped model, so each gains an FK to
+ # msps. Verified against the migration: the same loop that adds the column
+ # adds the constraint, guarded by _has_constraint so it is idempotent.
+ ('base.py', 'ForeignKey("msps.id", ondelete="CASCADE"),'),
+ ('tenant.py', 'ForeignKey("msps.id", ondelete="CASCADE"),')}
 
 
 def test_no_new_constraint_tightening_without_migration():

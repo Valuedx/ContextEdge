@@ -44,7 +44,7 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from contextedge.models.base import Base
+from contextedge.models.base import Base, MspScopedMixin
 
 # What a criterion looks at. ``*_absence`` are negative signals — evidence of
 # non-recurrence — and cannot on their own distinguish recovery from silence.
@@ -72,7 +72,7 @@ ASSESSMENT_RESULTS = (
 )
 
 
-class VerificationAssessment(Base):
+class VerificationAssessment(Base, MspScopedMixin):
     __tablename__ = "verification_assessments"
     __table_args__ = (
         CheckConstraint(
@@ -120,7 +120,7 @@ class VerificationAssessment(Base):
     )
 
 
-class VerificationObservation(Base):
+class VerificationObservation(Base, MspScopedMixin):
     __tablename__ = "verification_observations"
     __table_args__ = (
         CheckConstraint(

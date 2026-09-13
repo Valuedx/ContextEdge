@@ -16,12 +16,12 @@ from sqlalchemy import Boolean, DateTime, Float, ForeignKey, String, UniqueConst
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
-from contextedge.models.base import Base
+from contextedge.models.base import Base, MspScopedMixin
 
 TOPIC_SET_BY = ("anchor", "correction", "thread_seed")
 
 
-class ThreadTopic(Base):
+class ThreadTopic(Base, MspScopedMixin):
     __tablename__ = "thread_topics"
     __table_args__ = (
         UniqueConstraint("thread_id", name="uq_thread_topic"),

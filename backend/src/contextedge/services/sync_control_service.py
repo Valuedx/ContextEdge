@@ -109,9 +109,11 @@ def control_check_for(session_factory, run_id: uuid.UUID):
     async def _check() -> str | None:
         try:
             async with session_factory() as probe:
-                from contextedge.tenant_rls import bind_session_tenant
+                from contextedge.tenant_rls import bind_session_scope
 
-                await bind_session_tenant(probe, None, bypass=True)
+                # Platform scope: the probe reads sync state across tenants
+                # to decide what to schedule.
+                await bind_session_scope(probe, msp_id=None, tenant_id=None)
                 signal = (
                     await probe.execute(
                         select(SyncRun.control).where(SyncRun.id == run_id)

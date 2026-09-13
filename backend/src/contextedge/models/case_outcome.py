@@ -29,7 +29,7 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
-from contextedge.models.base import Base
+from contextedge.models.base import Base, MspScopedMixin
 
 OUTCOME_STATUSES = (
     "resolved",
@@ -57,7 +57,7 @@ CASE_STATUSES = (
 )
 
 
-class CaseOutcome(Base):
+class CaseOutcome(Base, MspScopedMixin):
     """Case-level outcome row. One per case at close time; reopen creates a new one."""
 
     __tablename__ = "case_outcomes"
@@ -107,7 +107,7 @@ class CaseOutcome(Base):
     )
 
 
-class CaseStateTransition(Base):
+class CaseStateTransition(Base, MspScopedMixin):
     """Append-only history of ``resolution_sessions.status`` transitions."""
 
     __tablename__ = "case_state_transitions"
@@ -133,7 +133,7 @@ class CaseStateTransition(Base):
     )
 
 
-class CaseOutcomeFixPattern(Base):
+class CaseOutcomeFixPattern(Base, MspScopedMixin):
     __tablename__ = "case_outcome_fix_patterns"
     __table_args__ = (
         UniqueConstraint(

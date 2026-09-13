@@ -33,6 +33,12 @@ from contextedge.models.claim import (
     DecisionClaim,
     DecisionEvidence,
 )
+from contextedge.models.copilot import (
+    CopilotConversation,
+    CopilotLoginEvent,
+    CopilotMessage,
+    CopilotUsageEvent,
+)
 from contextedge.models.correlation_suggestion import CorrelationSuggestion
 from contextedge.models.decision import Decision, DecisionOption, DecisionOutcome
 
@@ -48,18 +54,12 @@ from contextedge.models.episode import (
     IdentityAlias,
 )
 from contextedge.models.error_signature import ErrorSignature, FixPattern
-from contextedge.models.copilot import (
-    CopilotConversation,
-    CopilotLoginEvent,
-    CopilotMessage,
-    CopilotUsageEvent,
-)
 from contextedge.models.evaluation import (
     EvaluationDataset,
     EvaluationRun,
+    RankingCalibrationConfig,
     RetrievalFeedback,
     RuntimeMatchRecord,
-    RankingCalibrationConfig,
 )
 from contextedge.models.events import Notification, OperationalEvent
 from contextedge.models.evidence import AttachmentArtifact, EvidenceItem, RawEvidenceObject, Thread

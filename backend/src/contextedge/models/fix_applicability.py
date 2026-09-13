@@ -16,7 +16,7 @@ from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
-from contextedge.models.base import Base
+from contextedge.models.base import Base, MspScopedMixin
 
 APPLICABILITY_LEVELS = (
     "exact_ci",
@@ -29,7 +29,7 @@ APPLICABILITY_LEVELS = (
 )
 
 
-class FixApplicabilityRule(Base):
+class FixApplicabilityRule(Base, MspScopedMixin):
     __tablename__ = "fix_applicability_rules"
 
     id: Mapped[uuid.UUID] = mapped_column(

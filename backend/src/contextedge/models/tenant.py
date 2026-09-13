@@ -2,19 +2,72 @@ import uuid
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import BigInteger, DateTime, ForeignKey, Numeric, String, Text, UniqueConstraint, func
+from sqlalchemy import (
+    BigInteger,
+    DateTime,
+    ForeignKey,
+    Numeric,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from contextedge.models.base import Base, TenantScopedMixin, TimestampMixin
+from contextedge.models.base import Base, MspScopedMixin, TenantScopedMixin, TimestampMixin
+
+
+class Msp(Base, TimestampMixin):
+    """A managed service provider — the hard isolation boundary (plan D7).
+
+    SupportFlo sells to MSPs; an MSP serves many clients. A client sees only
+    itself; an MSP sees across its own clients and never across another's.
+    That asymmetry is encoded in two database roles rather than assumed in
+    application code (plan D8, migration ``0097``).
+
+    The platform operator is deliberately NOT a third row here. It is a role
+    (``platform_super_admin``) holding credentials that no policy admits,
+    because a platform tier expressed as data would be one more id an
+    application bug could set.
+    """
+
+    __tablename__ = "msps"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    slug: Mapped[str] = mapped_column(String(100), unique=True, nullable=False, index=True)
+    # Residency is a per-MSP attribute so a later EU or enterprise deal needs
+    # deployment work rather than a schema change (plan D6 tradeoff).
+    data_residency: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    config: Mapped[dict] = mapped_column(JSONB, server_default="{}", nullable=False)
+    is_active: Mapped[bool] = mapped_column(default=True, nullable=False)
+
+    tenants: Mapped[list["Tenant"]] = relationship(back_populates="msp")
 
 
 class Tenant(Base, TimestampMixin):
+    """A client of an MSP. Named ``Tenant`` for continuity, not accuracy.
+
+    ``tenants.msp_id`` is the tenant-to-MSP mapping D28 names. It is nullable
+    only so the migration can land on a populated database; ``0097`` backfills
+    it and the RLS policies treat NULL as no-access.
+    """
+
     __tablename__ = "tenants"
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
+    msp_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("msps.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+    )
+    msp: Mapped["Msp | None"] = relationship(back_populates="tenants")
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     slug: Mapped[str] = mapped_column(String(100), unique=True, nullable=False, index=True)
     config: Mapped[dict] = mapped_column(JSONB, server_default="{}", nullable=False)
@@ -130,7 +183,7 @@ class RoleNavAccess(Base, TimestampMixin):
 BUDGET_ACTIONS = ("block", "warn")
 
 
-class TenantLLMBudget(Base):
+class TenantLLMBudget(Base, MspScopedMixin):
     """Per-tenant daily cap on LLM spend.
 
     Rows are optional — tenants without a row have no cap. See

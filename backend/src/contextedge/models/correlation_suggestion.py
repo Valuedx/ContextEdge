@@ -16,12 +16,12 @@ from sqlalchemy import DateTime, Float, ForeignKey, String, UniqueConstraint, fu
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
-from contextedge.models.base import Base
+from contextedge.models.base import Base, MspScopedMixin
 
 SUGGESTION_STATUSES = ("pending", "accepted", "rejected")
 
 
-class CorrelationSuggestion(Base):
+class CorrelationSuggestion(Base, MspScopedMixin):
     __tablename__ = "correlation_suggestions"
     __table_args__ = (
         UniqueConstraint(

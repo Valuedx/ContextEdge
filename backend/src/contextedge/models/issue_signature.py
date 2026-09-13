@@ -24,10 +24,10 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
-from contextedge.models.base import Base
+from contextedge.models.base import Base, MspScopedMixin
 
 
-class IssueSignature(Base):
+class IssueSignature(Base, MspScopedMixin):
     __tablename__ = "issue_signatures"
     __table_args__ = (
         UniqueConstraint("tenant_id", "signature_key", name="uq_issue_signature_key"),
@@ -63,7 +63,7 @@ class IssueSignature(Base):
     )
 
 
-class EpisodeIssueSignature(Base):
+class EpisodeIssueSignature(Base, MspScopedMixin):
     __tablename__ = "episode_issue_signatures"
     __table_args__ = (
         UniqueConstraint(
