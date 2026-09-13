@@ -4,14 +4,25 @@ from sqlalchemy import event
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
-from contextedge.config import settings
 import contextedge.tenant_rls  # noqa: F401 — register Session.after_begin RLS rebind
+from contextedge.config import settings
 
 
 def _clear_rls_gucs(dbapi_connection) -> None:
+    """Wipe every scope GUC on pool checkout and checkin.
+
+    Both keys, not just the tenant. The MSP policy tests `app.msp_id` ALONE,
+    so a connection returned to the pool still carrying an msp_id would admit
+    that MSP's rows to whoever checks it out next — a cross-request leak that
+    clearing only `app.tenant_id` does not close. `bypass_rls` is dead after
+    `0097` and is cleared anyway: the downgrade path restores the policy that
+    reads it, and a stale 'on' surviving a downgrade would disable isolation
+    entirely.
+    """
     cursor = dbapi_connection.cursor()
     try:
         cursor.execute("SELECT set_config('app.bypass_rls', 'off', false)")
+        cursor.execute("SELECT set_config('app.msp_id', '', false)")
         cursor.execute("SELECT set_config('app.tenant_id', '', false)")
     finally:
         cursor.close()
