@@ -52,6 +52,22 @@ def _db_with(budget=None, usage_events=None):
     return db
 
 
+
+def _aggregation_calls(db) -> int:
+    """How many usage aggregations were issued.
+
+    `db.execute` now also carries `pg_advisory_xact_lock`, the cross-process
+    budget lock. Counting every execute would make these tests fail whenever
+    a non-aggregating statement is added, which measures plumbing rather than
+    the caching behaviour they exist to pin down.
+    """
+    return sum(
+        1
+        for call in db.execute.await_args_list
+        if "pg_advisory_xact_lock" not in str(call.args[0]).lower()
+    )
+
+
 @pytest.fixture(autouse=True)
 def _clean_cache():
     invalidate_cache()
@@ -221,9 +237,10 @@ async def test_cache_reuses_usage_within_ttl():
     await check_budget(db, tenant_id)
     await check_budget(db, tenant_id)
 
-    # db.get is called twice (once per check for the budget row) but
-    # db.execute (the expensive aggregation) only once thanks to cache.
-    assert db.execute.await_count == 1
+    # db.get is called twice (once per check for the budget row) but the
+    # expensive aggregation runs only once thanks to the cache. The
+    # advisory-lock statement is excluded: it is not an aggregation.
+    assert _aggregation_calls(db) == 1
 
 
 @pytest.mark.asyncio
@@ -236,7 +253,7 @@ async def test_invalidate_cache_forces_requery():
     await check_budget(db, tenant_id)
     invalidate_cache(tenant_id)
     await check_budget(db, tenant_id)
-    assert db.execute.await_count == 2
+    assert _aggregation_calls(db) == 2
 
 
 @pytest.mark.asyncio
@@ -246,7 +263,7 @@ async def test_get_current_day_usage_without_cache_always_queries():
     db = _db_with(usage_events=usage)
     await get_current_day_usage(db, tenant_id, use_cache=False)
     await get_current_day_usage(db, tenant_id, use_cache=False)
-    assert db.execute.await_count == 2
+    assert _aggregation_calls(db) == 2
 
 
 @pytest.mark.asyncio

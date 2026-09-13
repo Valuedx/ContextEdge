@@ -30,11 +30,14 @@ import asyncio
 import time
 import uuid
 import weakref
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Literal
 
+import sqlalchemy as sa
+import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -72,6 +75,9 @@ USAGE_CACHE_TTL_SECONDS = 60.0
 # task. Within one loop the serialisation semantics are unchanged (the
 # API server keeps its cross-request protection); across worker threads
 # the overshoot is bounded by concurrency, as documented in the RUNBOOK.
+logger = structlog.get_logger()
+
+
 _TENANT_LOCKS: weakref.WeakKeyDictionary[
     asyncio.AbstractEventLoop, dict[uuid.UUID, asyncio.Lock]
 ] = weakref.WeakKeyDictionary()
@@ -88,6 +94,64 @@ def _lock_for_tenant(tenant_id: uuid.UUID) -> asyncio.Lock:
         lock = asyncio.Lock()
         per_loop[tenant_id] = lock
     return lock
+
+
+def _advisory_key(tenant_id: uuid.UUID) -> int:
+    """A stable signed 64-bit key for this tenant's budget lock.
+
+    Postgres advisory locks are keyed by integers, not by a name, so the
+    tenant UUID is folded into one. Collisions across tenants would
+    over-serialise rather than under-serialise — two tenants queueing behind
+    each other is a latency cost, not a correctness one — which is the right
+    direction for the failure to go.
+
+    The first 8 bytes are enough: they are random in a v4 UUID.
+    """
+    raw = int.from_bytes(tenant_id.bytes[:8], "big", signed=False)
+    # Namespaced so this cannot collide with another feature's advisory lock.
+    return (raw ^ 0x4C4C4D42_55444745) - (1 << 63)
+
+
+@asynccontextmanager
+async def _tenant_budget_lock(db: AsyncSession, tenant_id: uuid.UUID):
+    """Serialise budget checks for one tenant ACROSS processes.
+
+    The asyncio.Lock above only ever served callers sharing one event loop.
+    In the API process that is real. In a Celery worker it was not: the
+    runtime gave every task its own loop, so the per-loop dict held one lock
+    with one waiter and serialised a caller against itself. Even now that
+    workers keep one loop per process, prefork means N processes and N
+    independent locks — so the cap could be overshot N times over.
+
+    ``pg_advisory_xact_lock`` is held by the database and released when the
+    transaction ends, so it works across processes and cannot be leaked by a
+    worker that dies mid-check. The in-process lock is kept as well: it is
+    free, and it keeps a burst of coroutines in one loop from each taking a
+    turn at the database.
+
+    Degrades to the in-process lock alone if the advisory lock cannot be
+    taken — a budget check must not become the reason an LLM call fails.
+    """
+    async with _lock_for_tenant(tenant_id):
+        acquired = False
+        try:
+            await db.execute(
+                sa.text("SELECT pg_advisory_xact_lock(:k)"),
+                {"k": _advisory_key(tenant_id)},
+            )
+            acquired = True
+        except Exception:  # noqa: BLE001 — never fail a call on the lock
+            logger.warning(
+                "llm.budget_advisory_lock_unavailable",
+                tenant_id=str(tenant_id),
+                detail="falling back to the in-process lock only",
+            )
+        try:
+            yield acquired
+        finally:
+            # pg_advisory_xact_lock releases on commit/rollback; there is no
+            # unlock call to make, and trying would be the bug.
+            pass
 
 
 @dataclass(frozen=True)
@@ -266,7 +330,7 @@ async def check_budget(
                 token_limit=None,
                 cost_cap_usd=None,
             )
-        async with _lock_for_tenant(tenant_id):
+        async with _tenant_budget_lock(db, tenant_id):
             return await _check_budget_locked(
                 db,
                 tenant_id,
@@ -278,8 +342,28 @@ async def check_budget(
                 use_cache=use_cache,
             )
 
-    async with _lock_for_tenant(tenant_id):
-        return await _check_budget_locked(db, tenant_id, budget, use_cache=use_cache)
+    async with _tenant_budget_lock(db, tenant_id):
+        return await _check_budget_locked(
+            db, tenant_id, budget, use_cache=use_cache
+        )
+
+
+
+
+# Fraction of a cap above which a cached usage figure is no longer good
+# enough. 0.9 is a judgement, not a measurement: it leaves a 10% band for a
+# TTL's worth of concurrent spend to land in, which is wide for the call
+# sizes seen here (a ~7k-token extraction against a daily cap).
+NEAR_CAP_FRACTION = 0.9
+
+
+def _near_cap(tokens: int, cost: float, budget) -> bool:
+    """Whether usage is close enough to a cap that staleness would matter."""
+    token_limit = getattr(budget, "daily_token_limit", None)
+    cost_cap = getattr(budget, "daily_cost_cap_usd", None)
+    if token_limit and tokens >= int(token_limit) * NEAR_CAP_FRACTION:
+        return True
+    return bool(cost_cap and float(cost) >= float(cost_cap) * NEAR_CAP_FRACTION)
 
 
 async def _check_budget_locked(
@@ -294,6 +378,15 @@ async def _check_budget_locked(
     )  # type: ignore[assignment]
 
     tokens, cost = await get_current_day_usage(db, tenant_id, use_cache=use_cache)
+
+    # A cached figure is 60s stale at worst. Far from the cap that is
+    # irrelevant; near it, it is the difference between enforcing and not.
+    # So pay for a fresh aggregation only in the band where it changes the
+    # answer, rather than on every call (which is what this module's cache
+    # exists to avoid) or never (which is what let the cap be overshot).
+    if use_cache and _near_cap(tokens, cost, budget):
+        tokens, cost = await get_current_day_usage(db, tenant_id, use_cache=False)
+
     cost_cap = (
         float(budget.daily_cost_cap_usd) if budget.daily_cost_cap_usd is not None else None
     )
