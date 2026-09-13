@@ -100,20 +100,36 @@ def test_a_fresh_database_has_the_isolation_a_migrated_one_has(freshly_migrated)
     )
     assert scoped > 50, f"suspiciously few tenant-scoped tables: {scoped}"
 
+    # Every tenant-scoped table, PLUS the two that define the hierarchy.
+    # `msps` and `tenants` are not reached by the policy loop — one has no
+    # tenant_id, the other is excluded by name — and are policed explicitly,
+    # so the expected count is scoped + 2 and both must be present by name.
     for policy in ("ce_msp_isolation", "ce_client_isolation"):
         count = _scalar(
             freshly_migrated,
             f"SELECT count(*) FROM pg_policies WHERE policyname='{policy}'",
         )
-        assert count == scoped, (
-            f"{policy} is on {count} tables but {scoped} carry tenant_id"
+        assert count == scoped + 2, (
+            f"{policy} is on {count} tables; expected {scoped} scoped tables "
+            "plus msps and tenants"
         )
+        for table in ("msps", "tenants"):
+            present = _scalar(
+                freshly_migrated,
+                "SELECT count(*) FROM pg_policies"
+                f" WHERE policyname='{policy}' AND tablename='{table}'",
+            )
+            assert present == 1, (
+                f"{table} has no {policy}; a client could read every row of it"
+            )
 
     forced = _scalar(
         freshly_migrated,
         "SELECT count(*) FROM pg_class WHERE relrowsecurity AND relforcerowsecurity",
     )
-    assert forced == scoped, f"FORCE RLS on {forced} of {scoped} scoped tables"
+    assert forced == scoped + 2, (
+        f"FORCE RLS on {forced} tables; expected {scoped} scoped plus msps and tenants"
+    )
 
     triggers = _scalar(
         freshly_migrated,

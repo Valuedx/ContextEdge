@@ -556,3 +556,45 @@ async def test_the_budget_advisory_lock_serialises_across_connections(pg, world)
     finally:
         await ea.dispose()
         await eb.dispose()
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_the_hierarchy_tables_are_not_readable_across_msps(pg, world):
+    """`msps` and `tenants` must be scoped like everything else.
+
+    They were the two tables the policy loop could not reach — `tenants` is
+    excluded by name and `msps` has no tenant_id to be caught by — while the
+    GRANT covers ALL TABLES. Measured before the fix: a client scoped to one
+    MSP read every row of both, which is the name and slug of every MSP on the
+    platform and every client of every MSP.
+
+    The tables that define the boundary are the ones most worth checking.
+    """
+    for role, msp, tenant, expect_msps, expect_tenants in (
+        (CLIENT_ROLE, world["msp_a"], world["c_a1"], 1, 1),
+        (MSP_ROLE, world["msp_a"], None, 1, 2),
+        (MSP_ROLE, world["msp_b"], None, 1, 1),
+    ):
+        engine = create_async_engine(_url_as(pg, role))
+        try:
+            async with AsyncSession(engine) as db:
+                await db.execute(
+                    sa.text(
+                        "SELECT set_config('app.msp_id', :m, true),"
+                        " set_config('app.tenant_id', :t, true)"
+                    ),
+                    {"m": str(msp), "t": str(tenant) if tenant else ""},
+                )
+                msps = (await db.execute(sa.text("SELECT count(*) FROM msps"))).scalar_one()
+                tenants = (
+                    await db.execute(sa.text("SELECT count(*) FROM tenants"))
+                ).scalar_one()
+            assert msps == expect_msps, (
+                f"{role} saw {msps} MSPs, expected {expect_msps} — a sibling "
+                "MSP is visible"
+            )
+            assert tenants == expect_tenants, (
+                f"{role} saw {tenants} tenants, expected {expect_tenants}"
+            )
+        finally:
+            await engine.dispose()
