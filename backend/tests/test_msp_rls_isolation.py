@@ -42,48 +42,29 @@ class AlembicUpgradeFailed(RuntimeError):
 
 
 def _build_schema(sync_url: str) -> None:
-    """Create the schema, then run `0097` on top of it.
+    """Build the schema the way a real deployment does: the migration chain.
 
-    The migration chain **cannot build a fresh database**. `0001` runs
-    `Base.metadata.create_all` against whatever the models declare today, so
-    every later ADD COLUMN then fails with DuplicateColumn — the first is
-    `0070`'s `episodes.ai_review`. That is a pre-existing defect, not one this
-    branch introduced, and it is the reason nothing else in this suite runs
-    against a real database.
-
-    So: build the tables the way `0001` would, stamp the chain as applied
-    through `0096`, and run `head` — which executes exactly `0097`. The
-    migration under test is the real one, unmodified; only the route to a
-    populated schema differs. `0097` is idempotent about its columns, so it
-    behaves correctly whether or not `create_all` already made them.
+    This used to create tables with `Base.metadata.create_all` and stamp the
+    chain to 0096, because the chain could not build a database from empty —
+    17 of 96 revisions failed on objects `0001`'s create_all had already made.
+    That is fixed (see `migration_guards` and
+    `test_migration_chain_fresh_install`), so the workaround is gone and these
+    tests now run against a database produced exactly as production's is.
     """
-    import contextedge.models  # noqa: F401 - registers every mapper
-    from contextedge.models.base import Base
-
-    engine = sa.create_engine(sync_url)
-    try:
-        with engine.begin() as conn:
-            conn.execute(sa.text("CREATE EXTENSION IF NOT EXISTS vector"))
-            conn.execute(sa.text('CREATE EXTENSION IF NOT EXISTS "pgcrypto"'))
-        Base.metadata.create_all(bind=engine)
-    finally:
-        engine.dispose()
-
     env = os.environ.copy()
     env["DATABASE_URL"] = sync_url.replace("postgresql://", "postgresql+asyncpg://", 1)
     env["DATABASE_URL_SYNC"] = sync_url
-    for args in (["stamp", "0096_clarification_regeneration"], ["upgrade", "head"]):
-        proc = subprocess.run(  # noqa: S603
-            [sys.executable, "-m", "alembic", *args],
-            cwd=BACKEND,
-            env=env,
-            capture_output=True,
-            text=True,
+    proc = subprocess.run(  # noqa: S603
+        [sys.executable, "-m", "alembic", "upgrade", "head"],
+        cwd=BACKEND,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0:
+        raise AlembicUpgradeFailed(
+            f"alembic upgrade head failed ({proc.returncode}): {proc.stderr[-4000:]}"
         )
-        if proc.returncode != 0:
-            raise AlembicUpgradeFailed(
-                f"alembic {' '.join(args)} failed ({proc.returncode}): {proc.stderr[-4000:]}"
-            )
 
 
 @pytest.fixture(scope="module")

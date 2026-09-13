@@ -43,6 +43,17 @@ def upgrade() -> None:
                   r.table_schema, r.table_name, r.constraint_name
                 );
                 new_name := left('fk_' || r.table_name || '_tenant_id', 63);
+                -- On a database built by 0001's create_all the target name can
+                -- already be taken by a DIFFERENT constraint row, because the
+                -- models declare their own FK and it is named the same way. The
+                -- drop above removed the one this loop found, not that one, so
+                -- the ADD below collided. Dropping the target name too makes the
+                -- rewrite idempotent; on the intended upgrade path the name does
+                -- not exist and this is a no-op.
+                EXECUTE format(
+                  'ALTER TABLE %I.%I DROP CONSTRAINT IF EXISTS %I',
+                  r.table_schema, r.table_name, new_name
+                );
                 EXECUTE format(
                   'ALTER TABLE %I.%I ADD CONSTRAINT %I
                    FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE',

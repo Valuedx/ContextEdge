@@ -2,20 +2,23 @@ import os
 import sys
 from logging.config import fileConfig
 
-from alembic import context
 from sqlalchemy import engine_from_config, pool
+
+from alembic import context
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from contextedge.models.base import Base  # noqa: E402
-import contextedge.models as _models_pkg  # noqa: E402
 import pkgutil  # noqa: E402
+
+import contextedge.models as _models_pkg  # noqa: E402
+from contextedge.models.base import Base  # noqa: E402
 
 # Load every model module so autogenerate and metadata stay complete.
 for _mod in pkgutil.iter_modules(_models_pkg.__path__):
     __import__(f"contextedge.models.{_mod.name}")
 
 from contextedge.config import settings  # noqa: E402
+from contextedge.migration_guards import install_idempotent_ddl_guards  # noqa: E402
 from contextedge.migration_support import widen_alembic_version_column  # noqa: E402
 
 config = context.config
@@ -33,6 +36,9 @@ if db_url:
 
 def run_migrations_offline() -> None:
     url = config.get_main_option("sqlalchemy.url")
+    # Offline mode emits SQL without a connection, so the guards cannot
+    # reflect anything and are deliberately NOT installed: a generated script
+    # must contain every statement, and let the operator decide.
     context.configure(url=url, target_metadata=target_metadata, literal_binds=True)
     with context.begin_transaction():
         context.run_migrations()
@@ -57,6 +63,13 @@ def run_migrations_online() -> None:
     with connectable.connect() as bootstrap:
         if widen_alembic_version_column(bootstrap):
             bootstrap.commit()
+
+    # `0001` creates the schema from today's models, so 17 later revisions meet
+    # objects they were written to create. The guards turn those collisions into
+    # a logged skip instead of a crash, which is what lets the chain build a
+    # database from nothing. See contextedge.migration_guards for what that
+    # cannot catch.
+    install_idempotent_ddl_guards()
 
     with connectable.connect() as connection:
         context.configure(connection=connection, target_metadata=target_metadata)
