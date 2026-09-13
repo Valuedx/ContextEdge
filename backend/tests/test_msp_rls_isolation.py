@@ -390,3 +390,103 @@ def test_every_tenant_scoped_table_carries_both_policies(pg):
         assert not legacy, f"0078's bypassable policy still present on: {legacy}"
     finally:
         engine.dispose()
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_a_pooled_connection_does_not_leak_scope_between_uses(pg, world):
+    """The risk that arrived with connection pooling.
+
+    Under NullPool every task got a brand-new connection, so scope could not
+    survive between tasks by construction. Connections are reused now, so
+    two things have to hold, and they are different mechanisms:
+
+    1. `bind_session_scope` uses `set_config(..., is_local => true)`, which
+       reverts at COMMIT. That is the primary guarantee and it is what this
+       first half exercises — note the engine here is a plain one with no
+       event hooks, so a pass proves transaction-locality alone.
+    2. A SESSION-level GUC (`is_local => false`) would persist on the
+       connection instead. Nothing in the app sets one today, but the
+       downgrade path and any future raw `SET` would; the checkin/checkout
+       hooks on `create_db_engine` are the backstop, covered below.
+
+    Because the MSP policy needs only msp_id, a leaked msp_id alone is enough
+    to leak data — which is why both halves matter.
+    """
+    from sqlalchemy.ext.asyncio import create_async_engine as _cae
+
+    engine = _cae(_url_as(pg, MSP_ROLE), pool_size=1, max_overflow=0)
+    try:
+        async with AsyncSession(engine) as db:
+            await db.execute(
+                sa.text(
+                    "SELECT set_config('app.msp_id', :m, true),"
+                    " set_config('app.tenant_id', '', true)"
+                ),
+                {"m": str(world["msp_a"])},
+            )
+            first = (
+                await db.execute(
+                    sa.text("SELECT count(*) FROM audit_logs WHERE action LIKE 'probe-%'")
+                )
+            ).scalar_one()
+            await db.commit()
+        assert first == 2, "sanity: MSP A must see its two clients on the first use"
+
+        # Same pooled connection, nothing bound. Must see nothing.
+        async with AsyncSession(engine) as db:
+            second = (
+                await db.execute(
+                    sa.text("SELECT count(*) FROM audit_logs WHERE action LIKE 'probe-%'")
+                )
+            ).scalar_one()
+        assert second == 0, (
+            "a pooled connection carried scope into the next use: "
+            "the checkin/checkout hooks are not clearing app.msp_id"
+        )
+    finally:
+        await engine.dispose()
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_the_pool_hooks_clear_a_session_level_scope(pg, world):
+    """The backstop, exercised directly.
+
+    `create_db_engine` attaches checkout/checkin handlers that wipe both scope
+    GUCs. This sets them SESSION-level — the one form transaction-locality
+    does not undo — returns the connection, and checks the next checkout of
+    the same single-connection pool starts clean.
+    """
+    from sqlalchemy import event as sa_event
+    from sqlalchemy.ext.asyncio import create_async_engine as _cae
+
+    from contextedge.database import _reset_rls_gucs_checkin, _reset_rls_gucs_checkout
+
+    engine = _cae(_url_as(pg, MSP_ROLE), pool_size=1, max_overflow=0)
+    sa_event.listen(engine.sync_engine, "checkout", _reset_rls_gucs_checkout)
+    sa_event.listen(engine.sync_engine, "checkin", _reset_rls_gucs_checkin)
+    try:
+        async with AsyncSession(engine) as db:
+            await db.execute(
+                sa.text("SELECT set_config('app.msp_id', :m, false)"),
+                {"m": str(world["msp_a"])},
+            )
+            leaked = (
+                await db.execute(
+                    sa.text("SELECT count(*) FROM audit_logs WHERE action LIKE 'probe-%'")
+                )
+            ).scalar_one()
+            assert leaked == 2, "sanity: a session-level GUC does scope the connection"
+            await db.commit()
+
+        async with AsyncSession(engine) as db:
+            after = (
+                await db.execute(
+                    sa.text("SELECT count(*) FROM audit_logs WHERE action LIKE 'probe-%'")
+                )
+            ).scalar_one()
+        assert after == 0, (
+            "the pool hooks did not clear a session-level app.msp_id; "
+            "a reused connection would serve the previous MSP's rows"
+        )
+    finally:
+        await engine.dispose()

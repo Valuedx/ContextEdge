@@ -205,10 +205,17 @@ _ACCESS_TOKEN_CACHE: dict[str, tuple[str, float, str]] = {}
 # Minting locks, per event loop and then per credential set.
 #
 # An asyncio.Lock binds to the loop it is first awaited on and raises if
-# awaited from another, and Celery runs every task under its own
-# asyncio.run(). A single process-global lock would therefore work for
-# the first task in a worker and fail for all the rest. Locking across
-# loops is not needed anyway — they do not run concurrently.
+# awaited from another. This used to be load-bearing: Celery ran every task
+# under its own asyncio.run(), so a single process-global lock would have
+# worked for the first task in a worker and failed for all the rest.
+#
+# Since the worker runtime moved to one loop per process, the per-loop dict
+# holds a single entry and this IS a process-global lock — which is what the
+# Zoho quota wants, because concurrent tasks in one worker now genuinely
+# serialise their token minting instead of each getting their own lock.
+# The keying stays: the API process, tests and CLI scripts still bring their
+# own loops, and a lock that raises across them would be worse than one that
+# is merely redundant.
 #
 # Weak-keyed so a finished loop takes its locks with it. Keying on
 # id(loop) instead would eventually hand a new loop the dead loop's lock
