@@ -98,12 +98,17 @@ async def bind_session_tenant(
     """Backwards-compatible shim for the pre-MSP call sites.
 
     ``bypass`` is accepted and **ignored**: there is no longer a value that
-    turns the policy off, which is the entire point of D8. It is not removed
-    from the signature yet because ~8 call sites pass it, and a silent
-    behaviour change is easier to review than a rename that also moves code.
-    Those call sites are migrated to ``bind_session_scope`` in this branch;
-    the shim stays one release for anything out of tree.
+    turns the policy off, which is the entire point of D8.
+
+    It resolves the MSP rather than binding the tenant alone. That is not a
+    convenience — the client policy requires BOTH keys, so binding only the
+    tenant fails closed and the caller sees an empty database. Today the app
+    connects as the owner, which its own policy admits regardless, so the
+    omission would have stayed invisible until the moment the restricted
+    roles were adopted and four endpoints started returning nothing.
     """
+    if msp_id is None and tenant_id is not None:
+        msp_id = await resolve_msp_for_tenant(session, tenant_id)
     await bind_session_scope(session, msp_id=msp_id, tenant_id=tenant_id)
 
 async def resolve_msp_for_tenant(session: AsyncSession, tenant_id: UUID | None) -> UUID | None:

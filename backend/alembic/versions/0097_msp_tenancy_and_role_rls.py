@@ -177,10 +177,16 @@ def upgrade() -> None:
             ),
             sa.Column("is_active", sa.Boolean, nullable=False, server_default=sa.true()),
             sa.Column(
-                "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+                "created_at",
+                sa.DateTime(timezone=True),
+                server_default=sa.func.now(),
+                nullable=False,
             ),
             sa.Column(
-                "updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+                "updated_at",
+                sa.DateTime(timezone=True),
+                server_default=sa.func.now(),
+                nullable=False,
             ),
         )
         op.create_index("ix_msps_slug", "msps", ["slug"], unique=True)
@@ -341,6 +347,69 @@ def upgrade() -> None:
         )
 
 
+    # --- 6. The hierarchy tables themselves --------------------------------
+    # `msps` has no tenant_id and `tenants` is excluded from the loop above, so
+    # neither is reached by the per-table policies — while the GRANTs below
+    # cover ALL TABLES. Measured before this block: a client scoped to one MSP
+    # could read every row of both, i.e. the name and slug of every MSP on the
+    # platform and every client of every MSP. The two tables that DEFINE the
+    # boundary were the two without one.
+    #
+    # `msps`: you may see your own MSP, never a sibling.
+    # `tenants`: an MSP sees its own clients; a client sees only itself.
+    op.execute(sa.text("ALTER TABLE msps ENABLE ROW LEVEL SECURITY"))
+    op.execute(sa.text("ALTER TABLE msps FORCE ROW LEVEL SECURITY"))
+    op.execute(sa.text("ALTER TABLE tenants ENABLE ROW LEVEL SECURITY"))
+    op.execute(sa.text("ALTER TABLE tenants FORCE ROW LEVEL SECURITY"))
+
+    msp_self = """
+      id = NULLIF(current_setting('app.msp_id', true), '')::uuid
+    """
+    tenant_of_msp = """
+      msp_id IS NOT NULL
+      AND msp_id = NULLIF(current_setting('app.msp_id', true), '')::uuid
+    """
+    tenant_self = tenant_of_msp + """
+      AND id = NULLIF(current_setting('app.tenant_id', true), '')::uuid
+    """
+
+    for table, msp_pred, client_pred in (
+        ("msps", msp_self, msp_self),
+        ("tenants", tenant_of_msp, tenant_self),
+    ):
+        for name in (
+            "ce_msp_isolation",
+            "ce_client_isolation",
+            "ce_platform_all",
+            "ce_owner_all",
+        ):
+            op.execute(sa.text(f"DROP POLICY IF EXISTS {name} ON {table}"))
+        op.execute(
+            sa.text(
+                f"CREATE POLICY ce_msp_isolation ON {table} TO {MSP_ROLE} "
+                f"USING ({msp_pred}) WITH CHECK ({msp_pred})"
+            )
+        )
+        op.execute(
+            sa.text(
+                f"CREATE POLICY ce_client_isolation ON {table} TO {CLIENT_ROLE} "
+                f"USING ({client_pred}) WITH CHECK ({client_pred})"
+            )
+        )
+        op.execute(
+            sa.text(
+                f"CREATE POLICY ce_platform_all ON {table} TO {PLATFORM_ROLE} "
+                "USING (true) WITH CHECK (true)"
+            )
+        )
+        op.execute(
+            sa.text(
+                f'CREATE POLICY ce_owner_all ON {table} TO "{_table_owner(conn, table)}" '
+                "USING (true) WITH CHECK (true)"
+            )
+        )
+
+
 def downgrade() -> None:
     conn = op.get_bind()
     tables = _scoped_tables(conn)
@@ -391,6 +460,17 @@ def downgrade() -> None:
         conn.execute(sa.text(f"DROP ROLE IF EXISTS {role}"))
 
     conn.execute(sa.text("DROP FUNCTION IF EXISTS ce_fill_msp_id()"))
+    for table in ("msps", "tenants"):
+        for name in (
+            "ce_msp_isolation",
+            "ce_client_isolation",
+            "ce_platform_all",
+            "ce_owner_all",
+        ):
+            op.execute(sa.text(f"DROP POLICY IF EXISTS {name} ON {table}"))
+        op.execute(sa.text(f"ALTER TABLE {table} NO FORCE ROW LEVEL SECURITY"))
+        op.execute(sa.text(f"ALTER TABLE {table} DISABLE ROW LEVEL SECURITY"))
+
     op.drop_index("ix_tenants_msp_id", table_name="tenants")
     op.drop_constraint("fk_tenants_msp_id", "tenants", type_="foreignkey")
     op.drop_column("tenants", "msp_id")
