@@ -72,6 +72,8 @@ class RankedPlaybook:
     confidence_calibrated: float | None = None
     selection_margin: float | None = None
     linear_score: float = 0.0
+    steps: list = field(default_factory=list)
+    trigger_conditions: dict | list | None = None
 
 
 async def _latest_published_versions(
@@ -455,6 +457,8 @@ async def rank_playbooks(
                 applicability_differences=verdict.differences or None,
                 confidence_calibrated=calibrated,
                 linear_score=linear,
+                steps=list(pv.steps or [])[:8],
+                trigger_conditions=pv.trigger_conditions,
                 breakdown={
                     "rrf": round(rrf_norm, 4),
                     "keyword": keyword,

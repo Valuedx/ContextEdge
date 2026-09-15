@@ -57,6 +57,10 @@ def _to_match_result(r: RankedPlaybook) -> RuntimeMatchResult:
             round(r.confidence_calibrated, 4) if r.confidence_calibrated is not None else None
         ),
         selection_margin=r.selection_margin,
+        lifecycle_state=getattr(r.playbook, "lifecycle_state", None) or "approved",
+        description=getattr(r.playbook, "description", None),
+        steps=list(getattr(r, "steps", None) or [])[:8],
+        trigger_conditions=getattr(r, "trigger_conditions", None),
     )
 
 

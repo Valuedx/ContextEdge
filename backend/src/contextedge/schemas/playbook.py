@@ -505,6 +505,10 @@ class RuntimeMatchResult(BaseModel):
     applicability_differences: list[str] | None = None
     confidence_calibrated: float | None = None
     selection_margin: float | None = None
+    lifecycle_state: str | None = None
+    description: str | None = None
+    steps: list = Field(default_factory=list)
+    trigger_conditions: dict | list | None = None
 
 
 class RuntimeMatchResponse(BaseModel):
