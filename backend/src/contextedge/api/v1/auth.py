@@ -21,10 +21,14 @@ pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 _DUMMY_PASSWORD_HASH = pwd_context.hash("contextedge-timing-equalizer")
 
 
-def _create_token(user: User, roles: list[str], workspace_ids: list) -> str:
-    expire = datetime.now(UTC) + timedelta(
-        minutes=settings.jwt_access_token_expire_minutes
-    )
+def _create_token(
+    user: User,
+    roles: list[str],
+    workspace_ids: list,
+    expire_minutes: int | None = None,
+) -> str:
+    minutes = expire_minutes if expire_minutes is not None else settings.jwt_access_token_expire_minutes
+    expire = datetime.now(UTC) + timedelta(minutes=minutes)
     payload = {
         "sub": str(user.id),
         "tenant_id": str(user.tenant_id),
@@ -155,7 +159,13 @@ async def login(body: LoginRequest, db: DbSession, request: Request):
         b.scope_id for b in bindings if b.scope_type == "workspace" and b.scope_id is not None
     ]
 
-    token = _create_token(user, roles, workspace_ids)
+    client_name = _client_name(request)
+    expire_minutes = (
+        max(settings.jwt_access_token_expire_minutes, 525600)
+        if client_name == "extension"
+        else settings.jwt_access_token_expire_minutes
+    )
+    token = _create_token(user, roles, workspace_ids, expire_minutes=expire_minutes)
     await _persist_login_event(
         tenant_id=user.tenant_id,
         user_id=user.id,
@@ -166,5 +176,5 @@ async def login(body: LoginRequest, db: DbSession, request: Request):
     )
     return TokenResponse(
         access_token=token,
-        expires_in=settings.jwt_access_token_expire_minutes * 60,
+        expires_in=expire_minutes * 60,
     )
