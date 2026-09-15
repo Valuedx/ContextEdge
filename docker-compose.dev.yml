@@ -18,7 +18,12 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    command: uvicorn contextedge.main:app --host 0.0.0.0 --port ${BACKEND_PORT:-8001} --reload
+    command: >
+      sh -c 'if [ "$${UVICORN_RELOAD:-false}" = "true" ]; then
+        exec uvicorn contextedge.main:app --host 0.0.0.0 --port $${BACKEND_PORT:-8001} --reload;
+      else
+        exec uvicorn contextedge.main:app --host 0.0.0.0 --port $${BACKEND_PORT:-8001} --workers $${UVICORN_WORKERS:-2} --timeout-keep-alive 75;
+      fi'
     ports:
       - "${BACKEND_PORT:-8001}:${BACKEND_PORT:-8001}"
     volumes:
@@ -38,6 +43,8 @@ services:
       CELERY_RESULT_BACKEND: redis://redis:6379/2
       MINIO_ENDPOINT: minio:9000
       GOOGLE_APPLICATION_CREDENTIALS: /run/secrets/google_creds.json
+      UVICORN_RELOAD: ${UVICORN_RELOAD:-false}
+      UVICORN_WORKERS: ${UVICORN_WORKERS:-2}
     depends_on:
       postgres:
         condition: service_healthy
@@ -50,7 +57,7 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    command: celery -A contextedge.workers.celery_app worker -l INFO -Q default,sync,hydration,extraction,correlation,embedding,pattern,evaluation
+    command: celery -A contextedge.workers.celery_app worker -l INFO -c ${CELERY_CONCURRENCY:-2} --prefetch-multiplier=1 -Q default,sync,hydration,extraction,correlation,embedding,pattern,evaluation
     volumes:
       - ./backend/src:/app/src
       - ./backend/data:/app/data
