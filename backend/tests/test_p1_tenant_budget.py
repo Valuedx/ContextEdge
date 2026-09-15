@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 from decimal import Decimal
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
 import pytest
@@ -11,6 +11,7 @@ import pytest
 from contextedge.services.tenant_budget_service import (
     BudgetCheckResult,
     TenantBudgetExceeded,
+    _tenant_budget_lock,
     check_budget,
     get_current_day_usage,
     invalidate_cache,
@@ -36,35 +37,48 @@ class _Rows:
         return self._rows
 
 
-def _db_with(budget=None, usage_events=None):
+def _db_with(budget=None, usage_events=None, *, lock_acquired=True):
     async def get(model, key):
         return budget
 
-    async def execute(stmt):
+    async def execute(stmt, *args, **kwargs):
         return _Rows(usage_events or [])
+
+    async def scalar(stmt, *args, **kwargs):
+        return lock_acquired
 
     db = SimpleNamespace(
         get=AsyncMock(side_effect=get),
         execute=AsyncMock(side_effect=execute),
+        scalar=AsyncMock(side_effect=scalar),
         add=lambda obj: None,
         flush=AsyncMock(),
     )
     return db
 
 
+def _sql_texts(db) -> list[str]:
+    texts = [str(call.args[0]).lower() for call in db.execute.await_args_list]
+    texts.extend(str(call.args[0]).lower() for call in db.scalar.await_args_list)
+    return texts
+
+
+def _is_advisory_sql(stmt) -> bool:
+    return "advisory" in str(stmt).lower()
+
 
 def _aggregation_calls(db) -> int:
     """How many usage aggregations were issued.
 
-    `db.execute` now also carries `pg_advisory_xact_lock`, the cross-process
-    budget lock. Counting every execute would make these tests fail whenever
-    a non-aggregating statement is added, which measures plumbing rather than
-    the caching behaviour they exist to pin down.
+    `db.execute` also carries the session-scoped advisory unlock. Counting
+    every execute would make these tests fail whenever a non-aggregating
+    statement is added, which measures plumbing rather than the caching
+    behaviour they exist to pin down.
     """
     return sum(
         1
         for call in db.execute.await_args_list
-        if "pg_advisory_xact_lock" not in str(call.args[0]).lower()
+        if not _is_advisory_sql(call.args[0])
     )
 
 
@@ -415,3 +429,122 @@ def test_tenant_lock_is_per_event_loop():
 
     b = asyncio.run(grab_and_use())
     assert b is not a1  # new loop -> its own lock, not the dead loop's
+
+
+def _lock_db(*, acquired: bool = True):
+    async def scalar(stmt, *args, **kwargs):
+        return acquired
+
+    async def execute(stmt, *args, **kwargs):
+        return None
+
+    return SimpleNamespace(
+        scalar=AsyncMock(side_effect=scalar),
+        execute=AsyncMock(side_effect=execute),
+    )
+
+
+@pytest.mark.asyncio
+async def test_budget_lock_uses_session_lock_and_unlocks_after_the_block():
+    """The lock must not be transaction-scoped: the caller's transaction
+    stays open across the provider call, so an xact lock would serialise
+    the tenant for seconds. Unlock happens when the block exits, before
+    commit.
+    """
+    db = _lock_db(acquired=True)
+    tenant_id = uuid4()
+
+    async with _tenant_budget_lock(db, tenant_id) as acquired:
+        assert acquired is True
+        during = _sql_texts(db)
+        assert any("pg_try_advisory_lock" in sql for sql in during)
+        assert not any("pg_advisory_unlock" in sql for sql in during)
+        assert not any("xact" in sql for sql in during)
+
+    after = _sql_texts(db)
+    assert any("pg_advisory_unlock" in sql for sql in after)
+    assert not any("xact" in sql for sql in after)
+
+
+@pytest.mark.asyncio
+async def test_budget_lock_unlocks_when_the_body_raises():
+    db = _lock_db(acquired=True)
+    with pytest.raises(RuntimeError, match="provider exploded"):
+        async with _tenant_budget_lock(db, uuid4()):
+            raise RuntimeError("provider exploded")
+    assert any("pg_advisory_unlock" in sql for sql in _sql_texts(db))
+
+
+@pytest.mark.asyncio
+async def test_budget_lock_contended_falls_back_without_unlock(monkeypatch):
+    from contextedge.services import tenant_budget_service as mod
+
+    monkeypatch.setattr(mod, "_LOCK_WAIT_SECONDS", 0.0)
+    db = _lock_db(acquired=False)
+    with patch.object(mod.logger, "warning") as warning:
+        async with mod._tenant_budget_lock(db, uuid4()) as acquired:
+            assert acquired is False
+    assert not any("unlock" in sql for sql in _sql_texts(db))
+    assert any(
+        call.args and call.args[0] == "llm.budget_advisory_lock_contended"
+        for call in warning.call_args_list
+    )
+
+
+@pytest.mark.asyncio
+async def test_check_budget_does_not_take_a_transaction_scoped_lock():
+    tenant_id = uuid4()
+    budget = _FakeBudget(
+        tenant_id, daily_token_limit=10_000, daily_cost_cap_usd=None, action_on_exceed="block",
+    )
+    usage = [{"model": "gpt-4o-mini", "prompt_tokens": 100, "completion_tokens": 0, "cached_tokens": 0}]
+    db = _db_with(budget=budget, usage_events=usage)
+    result = await check_budget(db, tenant_id)
+    assert result.allowed is True
+    texts = _sql_texts(db)
+    assert any("pg_try_advisory_lock" in sql for sql in texts)
+    assert any("pg_advisory_unlock" in sql for sql in texts)
+    assert not any("xact" in sql for sql in texts)
+
+
+def test_pooled_engine_recycles_and_sets_server_timeouts(monkeypatch):
+    from contextedge import database as dbmod
+
+    captured: dict = {}
+    fake = MagicMock()
+    fake.sync_engine = MagicMock()
+
+    def fake_create(url, **kwargs):
+        captured.update(kwargs)
+        return fake
+
+    monkeypatch.setattr(dbmod, "create_async_engine", fake_create)
+    monkeypatch.setattr(dbmod.event, "listen", lambda *args, **kwargs: None)
+    dbmod.create_db_engine()
+    assert captured["pool_recycle"] == 1800
+    assert captured["pool_pre_ping"] is True
+    settings = captured["connect_args"]["server_settings"]
+    assert settings["idle_in_transaction_session_timeout"] == "60000"
+    assert settings["statement_timeout"] == "30000"
+
+
+def test_null_pool_engine_still_sets_server_timeouts(monkeypatch):
+    from sqlalchemy.pool import NullPool
+    from contextedge import database as dbmod
+
+    captured: dict = {}
+    fake = MagicMock()
+    fake.sync_engine = MagicMock()
+
+    def fake_create(url, **kwargs):
+        captured.update(kwargs)
+        return fake
+
+    monkeypatch.setattr(dbmod, "create_async_engine", fake_create)
+    monkeypatch.setattr(dbmod.event, "listen", lambda *args, **kwargs: None)
+    dbmod.create_db_engine(use_null_pool=True)
+    assert captured["poolclass"] is NullPool
+    assert "pool_recycle" not in captured
+    settings = captured["connect_args"]["server_settings"]
+    assert settings["idle_in_transaction_session_timeout"] == "60000"
+    assert settings["statement_timeout"] == "30000"

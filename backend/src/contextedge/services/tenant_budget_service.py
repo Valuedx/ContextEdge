@@ -53,6 +53,13 @@ BudgetAction = Literal["block", "warn"]
 # before we catch up. Tighten later if needed.
 USAGE_CACHE_TTL_SECONDS = 60.0
 
+# How long a caller polls for the cross-process budget lock before giving up
+# and proceeding on the in-process lock alone. The lock now covers only the
+# budget read, so uncontended acquisition is immediate; this bound exists so a
+# stuck holder degrades the cap's precision instead of stalling the request.
+_LOCK_WAIT_SECONDS = 5.0
+_LOCK_POLL_SECONDS = 0.05
+
 # Review F-29: a per-tenant asyncio.Lock serialises check_budget calls
 # inside one worker process. Two concurrent HTTP / Celery calls on the
 # same tenant can otherwise both read the usage cache, both see room
@@ -123,23 +130,48 @@ async def _tenant_budget_lock(db: AsyncSession, tenant_id: uuid.UUID):
     workers keep one loop per process, prefork means N processes and N
     independent locks — so the cap could be overshot N times over.
 
-    ``pg_advisory_xact_lock`` is held by the database and released when the
-    transaction ends, so it works across processes and cannot be leaked by a
-    worker that dies mid-check. The in-process lock is kept as well: it is
-    free, and it keeps a burst of coroutines in one loop from each taking a
-    turn at the database.
+    A Postgres advisory lock is held by the database, so it works across
+    processes. The in-process lock is kept as well: it is free, and it keeps a
+    burst of coroutines in one loop from each taking a turn at the database.
+
+    The lock is SESSION-scoped (``pg_try_advisory_lock``) and released in
+    ``finally``. This is the important part, and it is why the previous
+    ``pg_advisory_xact_lock`` was wrong here. A transaction-scoped lock only
+    releases on commit or rollback, and the caller's transaction is the whole
+    HTTP request or Celery task: ``generate_embedding`` takes this lock at
+    ``provider.py:804`` and does not reach ``litellm.aembedding`` until
+    ``provider.py:826``. The lock was therefore held across the entire
+    multi-second provider round-trip, serialising every request for the tenant
+    behind it — and a hung provider call held it until the session was killed.
+    Scoping the lock to this block keeps it to the budget read, which is
+    milliseconds.
+
+    Acquisition is a bounded poll rather than a blocking wait, so a stuck
+    holder costs this caller ``_LOCK_WAIT_SECONDS``, not its whole request.
 
     Degrades to the in-process lock alone if the advisory lock cannot be
     taken — a budget check must not become the reason an LLM call fails.
     """
+    key = _advisory_key(tenant_id)
     async with _lock_for_tenant(tenant_id):
         acquired = False
         try:
-            await db.execute(
-                sa.text("SELECT pg_advisory_xact_lock(:k)"),
-                {"k": _advisory_key(tenant_id)},
-            )
-            acquired = True
+            deadline = time.monotonic() + _LOCK_WAIT_SECONDS
+            while True:
+                if await db.scalar(
+                    sa.text("SELECT pg_try_advisory_lock(:k)"), {"k": key}
+                ):
+                    acquired = True
+                    break
+                if time.monotonic() >= deadline:
+                    logger.warning(
+                        "llm.budget_advisory_lock_contended",
+                        tenant_id=str(tenant_id),
+                        waited_seconds=_LOCK_WAIT_SECONDS,
+                        detail="falling back to the in-process lock only",
+                    )
+                    break
+                await asyncio.sleep(_LOCK_POLL_SECONDS)
         except Exception:  # noqa: BLE001 — never fail a call on the lock
             logger.warning(
                 "llm.budget_advisory_lock_unavailable",
@@ -149,9 +181,19 @@ async def _tenant_budget_lock(db: AsyncSession, tenant_id: uuid.UUID):
         try:
             yield acquired
         finally:
-            # pg_advisory_xact_lock releases on commit/rollback; there is no
-            # unlock call to make, and trying would be the bug.
-            pass
+            if acquired:
+                # A session-scoped lock outlives this block unless released,
+                # and a pooled connection would carry it back into the pool.
+                try:
+                    await db.execute(
+                        sa.text("SELECT pg_advisory_unlock(:k)"), {"k": key}
+                    )
+                except Exception:  # noqa: BLE001
+                    logger.warning(
+                        "llm.budget_advisory_unlock_failed",
+                        tenant_id=str(tenant_id),
+                        detail="pool_recycle drops the connection holding it",
+                    )
 
 
 @dataclass(frozen=True)

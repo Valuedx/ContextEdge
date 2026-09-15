@@ -519,43 +519,52 @@ async def test_scope_survives_a_released_connection(pg, world):
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_the_budget_advisory_lock_serialises_across_connections(pg, world):
-    """Two separate connections must not hold the tenant budget lock at once.
+async def test_the_budget_advisory_lock_releases_when_the_block_exits(pg, world):
+    """The budget lock must not outlive `_tenant_budget_lock`.
 
-    This is the property the asyncio.Lock never had. Held on connection A,
-    connection B's attempt must block — asserted with a short timeout, since
-    "it blocked" cannot be observed directly.
+    Session-scoped: another connection can take the key as soon as the
+    block exits, even though the holder's transaction is still open.
+    A transaction-scoped lock would still be held here, which is the
+    outage: `check_budget` at provider.py:804 would serialise the tenant
+    across the embedding call at :826.
     """
-    import asyncio as _asyncio
+    from contextedge.services.tenant_budget_service import _advisory_key, _tenant_budget_lock
 
-    from contextedge.services.tenant_budget_service import _advisory_key
-
-    key = _advisory_key(world["c_a1"])
+    tenant_id = world["c_a1"]
+    key = _advisory_key(tenant_id)
     ea = create_async_engine(_url_as(pg, MSP_ROLE))
     eb = create_async_engine(_url_as(pg, MSP_ROLE))
     try:
         async with AsyncSession(ea) as a:
-            await a.execute(sa.text("SELECT pg_advisory_xact_lock(:k)"), {"k": key})
-
-            async def contend():
+            async with _tenant_budget_lock(a, tenant_id) as acquired:
+                assert acquired is True
                 async with AsyncSession(eb) as b:
-                    await b.execute(sa.text("SELECT pg_advisory_xact_lock(:k)"), {"k": key})
+                    held_elsewhere = await b.scalar(
+                        sa.text("SELECT pg_try_advisory_lock(:k)"), {"k": key}
+                    )
+                    assert held_elsewhere is False
 
-            with pytest.raises(_asyncio.TimeoutError):
-                await _asyncio.wait_for(contend(), timeout=2.0)
-
-            await a.rollback()  # releases the xact lock
-
-        # Once released, the same key is immediately takeable.
-        async with AsyncSession(eb) as b:
-            await _asyncio.wait_for(
-                b.execute(sa.text("SELECT pg_advisory_xact_lock(:k)"), {"k": key}),
-                timeout=5.0,
-            )
-            await b.rollback()
+            # Block exited; A's transaction is still open. If this were
+            # pg_advisory_xact_lock, B would still be blocked.
+            async with AsyncSession(eb) as b:
+                taken = await b.scalar(
+                    sa.text("SELECT pg_try_advisory_lock(:k)"), {"k": key}
+                )
+                assert taken is True, (
+                    "budget lock was still held after the block exited "
+                    "(transaction-scoped lock would do this)"
+                )
+                await b.execute(sa.text("SELECT pg_advisory_unlock(:k)"), {"k": key})
+                await b.commit()
     finally:
-        await ea.dispose()
-        await eb.dispose()
+        for engine in (ea, eb):
+            try:
+                async with AsyncSession(engine) as session:
+                    await session.execute(sa.text("SELECT pg_advisory_unlock_all()"))
+                    await session.commit()
+            except Exception:
+                pass
+            await engine.dispose()
 
 @pytest.mark.integration
 @pytest.mark.asyncio

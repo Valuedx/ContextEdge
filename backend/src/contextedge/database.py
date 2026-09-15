@@ -42,6 +42,23 @@ def create_db_engine(use_null_pool: bool = False):
     kwargs = {
         "echo": False,
         "pool_pre_ping": True,
+        # Server-side guards, set here so every environment inherits them
+        # rather than depending on an ALTER DATABASE someone ran by hand.
+        #
+        # idle_in_transaction_session_timeout: a request's transaction stays
+        # open across provider calls, so a hung provider used to leave a
+        # session idle-in-transaction indefinitely, holding whatever locks it
+        # had. Observed live at 16+ minutes, blocking every other request for
+        # the tenant. 60s is far above any legitimate idle gap.
+        #
+        # statement_timeout: bounds a single runaway query. Raise it, or unset
+        # it for the worker role, if a legitimate ingestion query needs longer.
+        "connect_args": {
+            "server_settings": {
+                "idle_in_transaction_session_timeout": "60000",
+                "statement_timeout": "30000",
+            }
+        },
     }
     if use_null_pool:
         kwargs["poolclass"] = NullPool
@@ -49,6 +66,10 @@ def create_db_engine(use_null_pool: bool = False):
         kwargs["pool_size"] = 20
         kwargs["max_overflow"] = 10
         kwargs["pool_timeout"] = 30
+        # Recycle connections every 30 minutes. Session-scoped advisory locks
+        # belong to the connection, so if an unlock is ever missed, recycling
+        # bounds how long a pooled connection can carry one.
+        kwargs["pool_recycle"] = 1800
 
     engine = create_async_engine(settings.database_url, **kwargs)
     event.listen(engine.sync_engine, "checkout", _reset_rls_gucs_checkout)
