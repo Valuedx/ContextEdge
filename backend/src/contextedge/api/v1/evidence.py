@@ -26,22 +26,32 @@ from contextedge.services.policy_assignment import assert_policy_assignment
 router = APIRouter()
 
 
-@router.get("/zoho-ticket/{ticket_id}/live-context")
-async def get_live_zoho_ticket_context(
-    ticket_id: str,
-    db: DbSession,
-    user: AuthUser,
-):
-    """Read one exact Zoho ticket and its conversation using tenant credentials."""
+def _ok_source_type(value: str) -> bool:
+    if not value or len(value) > 64:
+        return False
+    return all(("a" <= ch <= "z") or ("0" <= ch <= "9") or ch == "_" for ch in value.lower())
+
+
+def _ok_external_id(value: str) -> bool:
+    text = (value or "").strip()
+    if not text or len(text) > 64:
+        return False
+    return "/" not in text and "\\" not in text and "\x00" not in text
+
+
+async def _live_ticket_context(db: DbSession, user: AuthUser, source_type: str, external_id: str):
+    """Read one exact ticket and its conversation using tenant credentials."""
     user.require_role("domain_admin")
-    if not ticket_id.isdigit() or len(ticket_id) > 64:
-        raise HTTPException(status_code=400, detail="Invalid Zoho ticket id")
+    source_type = (source_type or "").strip().lower()
+    external_id = (external_id or "").strip()
+    if not _ok_source_type(source_type) or not _ok_external_id(external_id):
+        raise HTTPException(status_code=400, detail="Invalid ticket identity")
 
     source_result = await db.execute(
         select(Source)
         .where(
             Source.tenant_id == user.tenant_id,
-            Source.source_type == "zoho_desk",
+            Source.source_type == source_type,
             Source.is_active.is_(True),
         )
         .order_by(Source.created_at.desc())
@@ -49,7 +59,7 @@ async def get_live_zoho_ticket_context(
     )
     source = source_result.scalar_one_or_none()
     if source is None:
-        raise HTTPException(status_code=404, detail="Zoho Desk source is not configured")
+        raise HTTPException(status_code=404, detail="Source is not configured")
 
     from contextedge.models.source import SourceCredential
     from contextedge.connectors.registry import get_connector
@@ -63,7 +73,7 @@ async def get_live_zoho_ticket_context(
     )
     credential = credential_result.scalar_one_or_none()
     if credential is None:
-        raise HTTPException(status_code=409, detail="Zoho Desk credentials are unavailable")
+        raise HTTPException(status_code=409, detail="Source credentials are unavailable")
 
     try:
         decrypted = await decrypt_credentials(credential.encrypted_credentials)
@@ -74,28 +84,56 @@ async def get_live_zoho_ticket_context(
             raise HTTPException(
                 status_code=409,
                 detail=(
-                    "Zoho Desk credentials cannot be decrypted with the current "
+                    "Source credentials cannot be decrypted with the current "
                     "ENCRYPTION_KEY; rotate or re-save the source credentials."
                 ),
             ) from exc
         raise
-    connector = get_connector(source.source_type, source.config, decrypted)
+    try:
+        connector = get_connector(source.source_type, source.config, decrypted)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=501, detail="Live ticket retrieval is unsupported"
+        ) from exc
     fetch = getattr(connector, "fetch_ticket_context", None)
     if fetch is None:
         raise HTTPException(status_code=501, detail="Live ticket retrieval is unsupported")
     try:
-        return await fetch(ticket_id)
+        return await fetch(external_id)
     except HTTPException:
         raise
     except Exception as exc:
         import httpx
 
         if isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code == 404:
-            raise HTTPException(status_code=404, detail="Zoho ticket not found") from exc
+            raise HTTPException(status_code=404, detail="Ticket not found") from exc
         raise HTTPException(
             status_code=502,
-            detail=f"Zoho live ticket retrieval failed ({type(exc).__name__})",
+            detail=f"Live ticket retrieval failed ({type(exc).__name__})",
         ) from exc
+
+
+@router.get("/by-source/{source_type}/{external_id}/live-context")
+async def get_live_ticket_context_by_source(
+    source_type: str,
+    external_id: str,
+    db: DbSession,
+    user: AuthUser,
+):
+    return await _live_ticket_context(db, user, source_type, external_id)
+
+
+@router.get("/zoho-ticket/{ticket_id}/live-context")
+async def get_live_zoho_ticket_context(
+    ticket_id: str,
+    db: DbSession,
+    user: AuthUser,
+):
+    """Alias kept for one release. Digit-only ids still required on this path."""
+    user.require_role("domain_admin")
+    if not ticket_id.isdigit() or len(ticket_id) > 64:
+        raise HTTPException(status_code=400, detail="Invalid Zoho ticket id")
+    return await _live_ticket_context(db, user, "zoho_desk", ticket_id)
 
 
 @router.get("", response_model=list[EvidenceItemResponse])

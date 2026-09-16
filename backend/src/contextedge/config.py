@@ -101,7 +101,7 @@ class Settings(BaseSettings):
     # ``enforcing`` blocks ``approved`` when ``publication_readiness`` is false.
     playbook_quality_mode: str = "shadow"
 
-    # Runtime retrieval (SupportCopilot): drop playbooks whose latest assessment
+    # Runtime retrieval: drop playbooks whose latest assessment
     # is fail, error, stale, or out of date with live content.
     playbook_runtime_quality_filter: bool = True
 
@@ -292,14 +292,11 @@ class Settings(BaseSettings):
     tenant_prompt_variants_json: str = "{}"
 
     # Serve the fused ranker (always) and optionally log a shadow copy of
-    # the result. Dual-path serving of the pre-RRF ranker is gone; the
-    # flag is a cutover/observe switch for SupportCopilot adoption.
+    # the result. Dual-path serving of the pre-RRF ranker is gone.
     ranking_shadow_mode: bool = False
-    # New surface; nothing in SupportCopilot consumes it. Default on so
-    # evals and integration tests can hit it; disable in production if
-    # the tenant is not ready.
+    # Agent diagnose endpoint. Default on so evals and integration tests
+    # can hit it; disable in production if the tenant is not ready.
     agent_diagnose_enabled: bool = True
-    copilot_message_retention_days: int = Field(default=180, ge=1, le=3650)
 
     # Weekly public KB / official-version catalog refresh. Article bodies
     # still come from Zoho Desk incremental sync; this flag only gates the

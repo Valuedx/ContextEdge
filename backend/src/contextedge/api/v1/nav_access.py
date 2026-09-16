@@ -36,7 +36,6 @@ NAV_TABS: tuple[tuple[str, str], ...] = (
     ("Policies", "/policies"),
     ("Audit Log", "/audit"),
     ("LLM Cost", "/admin/cost"),
-    ("Copilot Usage", "/admin/copilot"),
     ("Pipeline Health", "/admin/pipeline"),
     ("Settings", "/settings"),
 )

@@ -34,7 +34,7 @@ def assessment_excludes_runtime(
     *,
     live_content_hash: str | None,
 ) -> bool:
-    """True when this assessment must not appear in SupportCopilot retrieval.
+    """True when this assessment must not appear in runtime retrieval.
 
     ``live_content_hash`` of ``None`` means "we could not work out what the
     playbook currently says". That is not a mismatch and must not exclude:

@@ -917,8 +917,8 @@ export default function PlaybookDetailPage() {
             <DialogTitle>Edit as a new draft</DialogTitle>
           </DialogHeader>
           <p className="text-sm text-muted-foreground">
-            The published version stays the live procedure. Runtime, search embeddings, and
-            Support Copilot keep using it until this new draft is approved. The new draft
+            The published version stays the live procedure. Runtime and search embeddings
+            keep using it until this new draft is approved. The new draft
             becomes the main version for editing.
           </p>
           <DialogFooter>

@@ -33,12 +33,6 @@ from contextedge.models.claim import (
     DecisionClaim,
     DecisionEvidence,
 )
-from contextedge.models.copilot import (
-    CopilotConversation,
-    CopilotLoginEvent,
-    CopilotMessage,
-    CopilotUsageEvent,
-)
 from contextedge.models.correlation_suggestion import CorrelationSuggestion
 from contextedge.models.decision import Decision, DecisionOption, DecisionOutcome
 
@@ -164,7 +158,6 @@ __all__ = [
     "Base", "TenantScopedMixin",
     "Tenant", "Workspace", "Domain", "User", "RoleBinding", "RoleNavAccess",
     "AuditLog",
-    "CopilotLoginEvent", "CopilotUsageEvent", "CopilotConversation", "CopilotMessage",
     "OperationalEvent", "Notification",
     "Source", "SourceObject", "SourceCredential", "SyncCheckpoint", "SyncRun",
     "RawEvidenceObject", "EvidenceItem", "Thread", "AttachmentArtifact",

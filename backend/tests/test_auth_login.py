@@ -66,17 +66,6 @@ def _request(headers=None, client_host="203.0.113.9"):
     return Request(scope)
 
 
-@pytest.fixture(autouse=True)
-def login_events(monkeypatch):
-    events = []
-
-    async def capture(**kwargs):
-        events.append(kwargs)
-
-    monkeypatch.setattr("contextedge.api.v1.auth._persist_login_event", capture)
-    return events
-
-
 @pytest.mark.asyncio
 async def test_login_success_returns_token():
     user = _user()
@@ -129,43 +118,17 @@ async def test_login_user_without_password_hash_rejected():
 
 
 @pytest.mark.asyncio
-async def test_login_success_records_extension_event(login_events):
+async def test_login_success_from_extension_returns_token():
     user = _user()
     db, _ = _db([user])
     request = _request(
         {
             "X-Client": "extension",
             "X-Extension-Version": "0.4.0",
-            "X-Forwarded-For": "198.51.100.10",
-            "User-Agent": "Chrome",
         }
     )
 
-    await login(LoginRequest(username="ops-acme", password="pw"), db, request)
+    response = await login(LoginRequest(username="ops-acme", password="pw"), db, request)
 
-    assert login_events
-    event = login_events[-1]
-    assert event["success"] is True
-    assert event["user_id"] == user.id
-    assert event["tenant_id"] == user.tenant_id
-    assert event["client"] == "extension"
-    assert event["extension_version"] == "0.4.0"
-    assert event["ip_address"] == "198.51.100.10"
-
-
-@pytest.mark.asyncio
-async def test_login_failure_records_event(login_events):
-    db, _ = _db([_user(password="correct")])
-
-    with pytest.raises(HTTPException):
-        await login(
-            LoginRequest(username="ops-acme", password="wrong"),
-            db,
-            _request({"X-Client": "extension"}),
-        )
-
-    assert login_events
-    event = login_events[-1]
-    assert event["success"] is False
-    assert event["failure_reason"] == "invalid_credentials"
-    assert event["client"] == "extension"
+    assert response.access_token
+    assert response.expires_in >= 525600 * 60

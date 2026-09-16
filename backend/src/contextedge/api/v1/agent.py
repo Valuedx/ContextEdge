@@ -1,4 +1,4 @@
-"""Agent host surface. Nothing in SupportCopilot consumes this yet."""
+"""Agent host surface."""
 
 from __future__ import annotations
 

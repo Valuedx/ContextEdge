@@ -6,11 +6,9 @@ from passlib.context import CryptContext
 from sqlalchemy import select
 
 from contextedge.config import settings
-from contextedge.database import async_session_factory
 from contextedge.deps import DbSession
 from contextedge.models.tenant import RoleBinding, Tenant, User
 from contextedge.schemas.tenant import LoginRequest, TokenResponse
-from contextedge.services.copilot_audit_service import record_login_event
 from contextedge.tenant_rls import bind_session_scope
 
 router = APIRouter()
@@ -48,37 +46,12 @@ def _client_name(request: Request) -> str:
     return "extension" if raw else "dashboard"
 
 
-def _login_meta(request: Request) -> dict[str, str | None]:
-    forwarded = (request.headers.get("x-forwarded-for") or "").split(",")[0].strip()
-    ip_address = forwarded or (request.client.host if request.client else None)
-    return {
-        "client": _client_name(request),
-        "extension_version": (request.headers.get("x-extension-version") or "").strip() or None,
-        "ip_address": ip_address,
-        "user_agent": (request.headers.get("user-agent") or "").strip() or None,
-    }
-
-
-async def _persist_login_event(**kwargs) -> None:
-    try:
-        async with async_session_factory() as session:
-            # Platform scope: login resolves a user before it knows which
-            # client they belong to, so it cannot be client-scoped.
-            await bind_session_scope(session, msp_id=None, tenant_id=None)
-            await record_login_event(session, **kwargs)
-            await session.commit()
-    except Exception:
-        import structlog
-
-        structlog.get_logger().warning("copilot.login_event_failed", exc_info=True)
-
-
 @router.post("/login", response_model=TokenResponse)
 async def login(body: LoginRequest, db: DbSession, request: Request):
     import anyio
 
-    meta = _login_meta(request)
-    # Platform scope, same reason as above: the tenant is the answer.
+    # Platform scope: login resolves a user before it knows which client
+    # they belong to, so it cannot be client-scoped.
     await bind_session_scope(db, msp_id=None, tenant_id=None)
     stmt = select(User).where(User.username == body.username, User.status == "active")
     if body.tenant_slug:
@@ -97,20 +70,6 @@ async def login(body: LoginRequest, db: DbSession, request: Request):
         await anyio.to_thread.run_sync(
             pwd_context.verify, body.password, _DUMMY_PASSWORD_HASH
         )
-        tenant_id = None
-        if body.tenant_slug:
-            tenant = (
-                await db.execute(select(Tenant).where(Tenant.slug == body.tenant_slug))
-            ).scalar_one_or_none()
-            tenant_id = tenant.id if tenant else None
-        await _persist_login_event(
-            tenant_id=tenant_id,
-            user_id=None,
-            username=body.username,
-            success=False,
-            failure_reason="invalid_credentials",
-            **meta,
-        )
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
 
     matching = []
@@ -121,14 +80,6 @@ async def login(body: LoginRequest, db: DbSession, request: Request):
         if verified:
             matching.append(candidate)
     if not matching:
-        await _persist_login_event(
-            tenant_id=candidates[0].tenant_id,
-            user_id=candidates[0].id if len(candidates) == 1 else None,
-            username=body.username,
-            success=False,
-            failure_reason="invalid_credentials",
-            **meta,
-        )
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
     if len(matching) > 1:
         import structlog
@@ -137,14 +88,6 @@ async def login(body: LoginRequest, db: DbSession, request: Request):
             "auth.ambiguous_login_rejected",
             username=body.username,
             tenant_ids=[str(u.tenant_id) for u in matching],
-        )
-        await _persist_login_event(
-            tenant_id=matching[0].tenant_id,
-            user_id=None,
-            username=body.username,
-            success=False,
-            failure_reason="ambiguous_account",
-            **meta,
         )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -166,14 +109,6 @@ async def login(body: LoginRequest, db: DbSession, request: Request):
         else settings.jwt_access_token_expire_minutes
     )
     token = _create_token(user, roles, workspace_ids, expire_minutes=expire_minutes)
-    await _persist_login_event(
-        tenant_id=user.tenant_id,
-        user_id=user.id,
-        username=user.username,
-        success=True,
-        failure_reason=None,
-        **meta,
-    )
     return TokenResponse(
         access_token=token,
         expires_in=expire_minutes * 60,
